@@ -1,0 +1,117 @@
+from __future__ import annotations
+
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import Select, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.api.crud import InvalidQuery, QuerySpec, apply_query, parse_query
+from src.api.deps import get_container, get_current_user
+from src.db.session import get_db
+from src.models.core import Notification
+from src.models.workspace import Workspace
+from src.schemas.api import NotificationAck
+from src.services.notifications import NotificationService
+from src.services.serializers import notification_to_dict
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/notifications", tags=["notifications"])
+
+_NOTIFICATION_FILTERABLE = {"type", "acknowledged_at", "acknowledged", "workspace_id"}
+_NOTIFICATION_SORTABLE = {"created_at", "type", "acknowledged_at"}
+
+
+def _row_dict(n: Notification, workspace_name: str | None = None) -> dict:
+    data = notification_to_dict(n, workspace_name=workspace_name)
+    data["acknowledged"] = data["acknowledged_at"] is not None
+    return data
+
+
+def _apply_notification_spec(stmt, spec: QuerySpec) -> Select:
+    """Rewrite the convenience `acknowledged` filter (read/unread) onto the
+    nullable `acknowledged_at` column before applying the whitelisted query."""
+    rewritten = []
+    for field, op, value in spec.filters:
+        if field == "acknowledged":
+            is_read = str(value).strip().lower() in ("true", "1")
+            rewritten.append(("acknowledged_at", "isnotnull" if is_read else "isnull", ""))
+        else:
+            rewritten.append((field, op, value))
+    spec.filters = rewritten
+    return apply_query(
+        stmt,
+        Notification,
+        spec,
+        sortable=_NOTIFICATION_SORTABLE,
+        filterable=_NOTIFICATION_FILTERABLE,
+    )
+
+
+@router.get("")
+async def list_notifications(
+    request: Request,
+    response: Response,
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(Notification, Workspace.name)
+        .outerjoin(Workspace, Workspace.id == Notification.workspace_id)
+        .where(Notification.user_id == user.id)
+    )
+    try:
+        spec = parse_query(request)
+        stmt = _apply_notification_spec(stmt, spec)
+    except InvalidQuery as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
+    total = count.scalar_one()
+    stmt = stmt.offset(spec.offset).limit(spec.limit)
+    rows = await db.execute(stmt)
+    response.headers["X-Total-Count"] = str(total)
+    return [_row_dict(n, workspace_name=name) for n, name in rows.all()]
+
+
+@router.get("/unread-count")
+async def unread_count(
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = await NotificationService(db).list_for_user(user.id, acknowledged=False)
+    return {"count": len(rows)}
+
+
+@router.patch("/{notification_id}")
+async def acknowledge(
+    notification_id: str,
+    body: NotificationAck,
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    service = NotificationService(db, container.bus)
+    if body.acknowledged:
+        n = await service.acknowledge(user.id, notification_id)
+    else:
+        n = await service.unacknowledge(user.id, notification_id)
+    if n is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "notification not found")
+    name = (
+        await db.execute(select(Workspace.name).where(Workspace.id == n.workspace_id))
+    ).scalar_one_or_none()
+    return _row_dict(n, workspace_name=name)
+
+
+@router.delete("/{notification_id}", status_code=204)
+async def delete_notification(
+    notification_id: str,
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    n = await db.get(Notification, notification_id)
+    if n is None or n.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "notification not found")
+    await db.delete(n)
+    await db.commit()

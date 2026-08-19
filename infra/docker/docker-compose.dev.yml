@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tenantflex
+      POSTGRES_PASSWORD: tenantflex
+      POSTGRES_DB: tenantflex
+    ports:
+      - "5432:5432"
+    volumes:
+      - tenantflex_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tenantflex"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222", "--server_name", "tenantflex"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+volumes:
+  tenantflex_pg:

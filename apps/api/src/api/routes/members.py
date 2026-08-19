@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.api.crud import InvalidQuery, apply_query, parse_query
+from src.api.deps import (
+    get_current_user,
+    get_current_workspace_id,
+    require_permission,
+)
+from src.core.permissions import MEMBER_MANAGE, MEMBER_READ
+from src.db.session import get_db
+from src.models.workspace import Role, User, WorkspaceMember
+from src.schemas.api import MemberRoleUpdate
+from src.services.serializers import user_to_dict
+from src.services.workspaces import (
+    WorkspaceConflict,
+    WorkspaceError,
+    WorkspaceForbidden,
+    WorkspaceService,
+)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/members", tags=["members"])
+
+_MEMBER_FILTERABLE = {"status", "role_id"}
+_MEMBER_SORTABLE = {"created_at", "status"}
+
+
+def _member_dict(member: WorkspaceMember, user: User, role: Role) -> dict:
+    data = user_to_dict(user)
+    data.update(
+        {
+            "membership_id": member.id,
+            "role_id": role.id,
+            "role": role.name,
+            "status": member.status,
+            "joined_at": member.created_at.isoformat() if member.created_at else None,
+        }
+    )
+    return data
+
+
+@router.get("")
+async def list_members(
+    request: Request,
+    response: Response,
+    workspace_id: str = Depends(get_current_workspace_id),
+    _=Depends(require_permission(MEMBER_READ)),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(WorkspaceMember, User, Role)
+        .join(User, User.id == WorkspaceMember.user_id)
+        .join(Role, Role.id == WorkspaceMember.role_id)
+        .where(WorkspaceMember.workspace_id == workspace_id)
+    )
+    try:
+        spec = parse_query(request)
+        stmt = apply_query(
+            stmt, WorkspaceMember, spec, sortable=_MEMBER_SORTABLE, filterable=_MEMBER_FILTERABLE
+        )
+    except InvalidQuery as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
+    total = count.scalar_one()
+    stmt = stmt.offset(spec.offset).limit(spec.limit)
+    rows = await db.execute(stmt)
+    response.headers["X-Total-Count"] = str(total)
+    return [_member_dict(m, u, r) for m, u, r in rows.all()]
+
+
+@router.patch("/{membership_id}")
+async def set_member_role(
+    membership_id: str,
+    body: MemberRoleUpdate,
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    _=Depends(require_permission(MEMBER_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        member = await WorkspaceService(db).set_member_role(
+            workspace_id, membership_id, body.role_id, actor=user
+        )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    except WorkspaceConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    except WorkspaceError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    return {"id": member.id, "role_id": member.role_id}
+
+
+@router.delete("/{membership_id}", status_code=204)
+async def remove_member(
+    membership_id: str,
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    _=Depends(require_permission(MEMBER_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        await WorkspaceService(db).remove_member(workspace_id, membership_id, actor=user)
+    except WorkspaceError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None

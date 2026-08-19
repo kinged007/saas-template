@@ -1,0 +1,61 @@
+# TenantFlex Helm values
+replicaCount: 2
+
+image:
+  repository: tenantflex
+  apiTag: api
+  webTag: web
+  pullPolicy: IfNotPresent
+
+api:
+  port: 8000
+  replicas: 2
+  # resources:
+  #   requests: { cpu: 100m, memory: 256Mi }
+  #   limits:   { cpu: 500m, memory: 512Mi }
+  oauth:
+    microsoftClientId: ""
+    microsoftClientSecret: ""
+    microsoftAuthority: "https://login.microsoftonline.com/consumers"
+    oktaClientId: ""
+    oktaClientSecret: ""
+    oktaDomain: ""
+  readinessProbe:
+    path: /api/v1/readyz
+  livenessProbe:
+    path: /api/v1/healthz
+
+web:
+  port: 80
+
+# Existing secrets — set via values or a pre-created secret `tenantflex-secrets`
+# with keys: SECRET_KEY, FERNET_KEYS, DATABASE_URL, NATS_URL
+existingSecret: ""
+secretKey: "change-me"
+fernetKeys: "change-me"
+databaseUrl: "postgresql+asyncpg://tenantflex:change-me@postgres:5432/tenantflex"
+natsUrl: "nats://nats:4222"
+eventBusDriver: "nats"
+corsOrigins: "https://tenantflex.example.com"
+frontendUrl: "https://tenantflex.example.com"
+
+# Deploy postgres + nats as part of the chart (production-grade external
+# instances are recommended; set postgres.enabled=false / nats.enabled=false
+# and point databaseUrl/natsUrl at them).
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  password: change-me
+  persistence:
+    size: 8Gi
+nats:
+  enabled: true
+  image: nats:2.10-alpine
+
+ingress:
+  enabled: true
+  className: nginx
+  host: tenantflex.example.com
+  tls:
+    enabled: true
+    secretName: tenantflex-tls

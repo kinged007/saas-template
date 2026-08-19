@@ -1,0 +1,90 @@
+# Libraries
+
+- `apps/api/alembic/env.py`
+  - function run_migrations_offline: () -> None
+  - function do_run_migrations: (connection) -> None
+  - function run_migrations_online: () -> None
+- `apps/api/alembic/versions/0001_initial.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/src/api/crud.py`
+  - function parse_query: (request, *, max_limit) -> QuerySpec
+  - function apply_query: (stmt, model, spec, *, sortable, filterable) -> Select
+  - function run_list: (session, stmt, model, request, *, sortable, filterable) -> tuple[list[Any], int]
+  - class QuerySpec
+  - class InvalidQuery
+- `apps/api/src/api/deps.py` — function get_container: (request), function require_permission: (permission)
+- `apps/api/src/container.py` — class Container
+- `apps/api/src/core/cache.py` — class TtlCache
+- `apps/api/src/core/dates.py` — function ensure_utc: (value) -> datetime, function now_utc: () -> datetime
+- `apps/api/src/core/permissions.py` — function permissions_for_role: (role_name) -> list[str]
+- `apps/api/src/core/security/crypto.py` — class SecretCipher
+- `apps/api/src/core/security/password.py` — class PasswordHasher
+- `apps/api/src/core/security/tokens.py`
+  - function create_access_token: (user_id, *, expires_minutes) -> str
+  - function decode_access_token: (token) -> dict[str, Any]
+  - class OpaqueToken
+- `apps/api/src/db/base.py`
+  - class StringUUID
+  - class Base
+  - class TimestampMixin
+  - class StrEnum
+- `apps/api/src/db/embedded.py`
+  - function data_dir: () -> Path
+  - function ensure_started: ()
+  - function embedded_uri: () -> str
+- `apps/api/src/db/session.py` — function get_db: () -> AsyncGenerator[AsyncSession, None]
+- `apps/api/src/events/bus.py`
+  - class EventMetadata
+  - class EventEnvelope
+  - class EventBus
+  - class PublishError
+  - class SubscriptionError
+- `apps/api/src/events/factory.py` — function build_event_bus: () -> EventBus, class WorkflowRegistry
+- `apps/api/src/events/inprocess.py` — class InProcessEventBus
+- `apps/api/src/events/nats.py` — class NatsEventBus
+- `apps/api/src/events/subjects.py` — class EventBusDriver, class Subjects
+- `apps/api/src/main.py` — function lifespan: (app), function root: () -> dict
+- `apps/api/src/models/audit.py` — class AuditLogEntry
+- `apps/api/src/models/core.py` — class Invitation, class Notification
+- `apps/api/src/models/secret.py` — class StoredSecret
+- `apps/api/src/models/workspace.py`
+  - class User
+  - class RefreshToken
+  - class Workspace
+  - class Role
+  - class WorkspaceMember
+- `apps/api/src/realtime/manager.py` — class ConnectionManager
+- `apps/api/src/schemas/api.py`
+  - class LoginRequest
+  - class RegisterRequest
+  - class TokenResponse
+  - class RefreshRequest
+  - class WorkspaceCreate
+  - class WorkspaceUpdate
+  - _...5 more_
+- `apps/api/src/secrets/base.py` — class SecretRecord, class SecretStore
+- `apps/api/src/secrets/db_store.py` — class DbSecretStore
+- `apps/api/src/secrets/factory.py` — function build_secret_store: () -> SecretStore
+- `apps/api/src/seed.py` — function main: () -> None
+- `apps/api/src/services/audit.py` — function audit_log_to_dict: (entry) -> dict[str, Any], class AuditService
+- `apps/api/src/services/auth.py`
+  - class AuthError
+  - class TokenPair
+  - class AuthService
+- `apps/api/src/services/notifications.py` — class NotificationService
+- `apps/api/src/services/serializers.py`
+  - function notification_to_dict: (n, *, workspace_name) -> dict
+  - function user_to_dict: (u) -> dict
+  - function workspace_to_dict: (w, *, role, permissions) -> dict
+- `apps/api/src/services/workspaces.py`
+  - class WorkspaceError
+  - class WorkspaceForbidden
+  - class WorkspaceConflict
+  - class WorkspaceService
+- `apps/api/src/settings.py` — class Settings
+- `apps/api/src/workflows/__init__.py` — function build_workflows: (registry, bus, connection_manager) -> None
+- `apps/web/src/lib/utils.ts` — function cn: (...inputs) => void, function oktaAdminConsoleFix: (value?) => string | null
+- `apps/web/src/utils/permissions.ts` — function activeWorkspacePermissions: (identity?) => string[]
+- `scripts/dev.py`
+  - function main: () -> int
+  - function kill_all: (procs, sig) -> None
+  - function wait_all: (procs, timeout) -> None

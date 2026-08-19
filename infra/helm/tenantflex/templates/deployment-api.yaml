@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tenantflex.fullname" . }}-api
+  labels:
+    app.kubernetes.io/name: tenantflex
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tenantflex
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tenantflex
+        app.kubernetes.io/component: api
+    spec:
+      serviceAccountName: {{ include "tenantflex.fullname" . }}
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.apiTag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.api.port }}
+              name: http
+          env:
+            - name: ENVIRONMENT
+              value: "production"
+            - name: EVENT_BUS_DRIVER
+              value: {{ .Values.eventBusDriver | quote }}
+            - name: CORS_ORIGINS
+              value: {{ .Values.corsOrigins | quote }}
+            - name: FRONTEND_URL
+              value: {{ .Values.frontendUrl | quote }}
+            - name: MICROSOFT_REDIRECT_URI
+              value: "{{ .Values.frontendUrl }}/api/v1/auth/oauth/microsoft/callback"
+            - name: OKTA_REDIRECT_URI
+              value: "{{ .Values.frontendUrl }}/api/v1/auth/oauth/okta/callback"
+          {{- if .Values.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.existingSecret }}
+          {{- else }}
+          envFrom:
+            - secretRef:
+                name: {{ include "tenantflex.fullname" . }}-secrets
+          {{- end }}
+          {{- with .Values.api.resources }}
+          resources: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.api.readinessProbe.path }}
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.api.livenessProbe.path }}
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 15
+      initContainers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.apiTag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["sh", "-c", "alembic upgrade head"]
+          {{- if .Values.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.existingSecret }}
+          {{- else }}
+          envFrom:
+            - secretRef:
+                name: {{ include "tenantflex.fullname" . }}-secrets
+          {{- end }}

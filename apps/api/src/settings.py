@@ -1,0 +1,67 @@
+import os
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from src.events.subjects import EventBusDriver
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=(".env", os.path.expanduser("~/.config/saas-template/.env")),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    environment: str = "development"
+    app_name: str = "saas-template-api"
+    debug: bool = False
+
+    # Database. Empty → embedded PostgreSQL (pgserver; dev, no external deps).
+    # Set DATABASE_URL (e.g. managed postgres) to override in production.
+    database_url: str = ""
+
+    # Security
+    secret_key: str = "dev-secret-change-me"
+    access_token_expire_minutes: int = 15
+    refresh_token_expire_days: int = 7
+    # Comma-separated Fernet keys (encryption key chosen by
+    # SECRET_ENCRYPT_VERSION, rest = decryption/rotation history)
+    fernet_keys: str = "dev-fernet-key-change-me-00000"
+    # 1-based index into FERNET_KEYS used to encrypt NEW secrets. Rotation:
+    # append the new key to FERNET_KEYS and bump this to its position — old
+    # envelopes keep their version and still decrypt.
+    secret_encrypt_version: int = 1
+    # Secret store driver: "db" (encrypted table) | "vault" (future adapter)
+    secret_store_driver: str = "db"
+
+    # Events
+    event_bus_driver: EventBusDriver = EventBusDriver.INPROCESS
+    nats_url: str = "nats://localhost:4222"
+
+    # CORS / frontend (comma-separated)
+    cors_origins: str = "http://localhost:5173"
+    frontend_url: str = "http://localhost:5173"
+
+    @property
+    def database_url_sqlite(self) -> bool:
+        return self.resolved_database_url.startswith("sqlite")
+
+    @property
+    def resolved_database_url(self) -> str:
+        """Effective DB URL: explicit DATABASE_URL or embedded postgres."""
+        if self.database_url:
+            return self.database_url
+        from src.db.embedded import embedded_uri
+
+        return embedded_uri()
+
+    @property
+    def fernet_key_list(self) -> list[str]:
+        return [k.strip() for k in self.fernet_keys.split(",") if k.strip()]
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+
+settings = Settings()

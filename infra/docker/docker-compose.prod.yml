@@ -1,0 +1,68 @@
+# Full production-like stack: postgres, nats, api (with NATS event bus), web (nginx).
+# Usage: docker compose -f infra/docker/docker-compose.prod.yml up --build
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tenantflex
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: tenantflex
+    volumes:
+      - tenantflex_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tenantflex"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222", "--server_name", "tenantflex"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.api
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+asyncpg://tenantflex:${POSTGRES_PASSWORD:-change-me}@postgres:5432/tenantflex
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
+      FERNET_KEYS: ${FERNET_KEYS:?set FERNET_KEYS in .env}
+      EVENT_BUS_DRIVER: nats
+      NATS_URL: nats://nats:4222
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8080}
+      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
+      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
+      MICROSOFT_AUTHORITY: ${MICROSOFT_AUTHORITY:-https://login.microsoftonline.com/consumers}
+      MICROSOFT_REDIRECT_URI: ${MICROSOFT_REDIRECT_URI:-http://localhost:8080/api/v1/auth/oauth/microsoft/callback}
+      OKTA_CLIENT_ID: ${OKTA_CLIENT_ID:-}
+      OKTA_CLIENT_SECRET: ${OKTA_CLIENT_SECRET:-}
+      OKTA_DOMAIN: ${OKTA_DOMAIN:-}
+      OKTA_REDIRECT_URI: ${OKTA_REDIRECT_URI:-http://localhost:8080/api/v1/auth/oauth/okta/callback}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn tenantflex.main:app --host 0.0.0.0 --port 8000"
+
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.web
+    environment:
+      VITE_API_URL: http://localhost:8080/api/v1
+      VITE_WS_URL: ws://localhost:8080/api/v1/ws
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  tenantflex_pg:
