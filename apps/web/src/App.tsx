@@ -18,7 +18,7 @@ import { WorkspaceCreatePage } from "./pages/WorkspaceCreatePage";
 import { MembersPage } from "./pages/MembersPage";
 import { ReceivedInvitationsPage } from "./pages/ReceivedInvitationsPage";
 import { RolesPage } from "./pages/RolesPage";
-import { NotificationsPage } from "./pages/NotificationsPage";
+import { InboxPage } from "./pages/InboxPage";
 
 export function App() {
   return (
@@ -39,7 +39,8 @@ export function App() {
           { name: "workspaces", list: "/", create: "/workspaces/create" },
           { name: "members", list: "/members" },
           { name: "roles", list: "/roles" },
-          { name: "notifications", list: "/notifications" },
+          { name: "invitations", list: "/invitations" },
+          { name: "notifications", list: "/inbox", meta: { label: "Inbox" } },
         ]}
       >
         <WorkspaceProvider>
@@ -59,7 +60,7 @@ export function App() {
               <Route path="members" element={<MembersPage />} />
               <Route path="invitations" element={<ReceivedInvitationsPage />} />
               <Route path="roles" element={<RolesPage />} />
-              <Route path="notifications" element={<NotificationsPage />} />
+              <Route path="inbox" element={<InboxPage />} />
             </Route>
             <Route
               path="/login"

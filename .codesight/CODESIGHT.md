@@ -3,9 +3,9 @@
 > **Stack:** fastapi | sqlalchemy | react | typescript
 > **Monorepo:** api, saas-template-web
 
-> 24 routes | 9 models | 23 components | 40 lib files | 17 env vars | 2 middleware | 27% test coverage
-> **Token savings:** this file is ~4,100 tokens. Without it, AI exploration would cost ~45,700 tokens. **Saves ~41,600 tokens per conversation.**
-> **Last scanned:** 2026-08-19 16:09 — re-run after significant changes
+> 26 routes | 10 models | 26 components | 43 lib files | 17 env vars | 2 middleware | 28% test coverage
+> **Token savings:** this file is ~4,400 tokens. Without it, AI exploration would cost ~48,900 tokens. **Saves ~44,500 tokens per conversation.**
+> **Last scanned:** 2026-08-20 08:29 — re-run after significant changes
 
 ---
 
@@ -17,6 +17,7 @@
 
 ## Other Routes
 
+- `GET` `/effective-permissions` params()
 - `POST` `/register` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/login` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/refresh` params() → in: RegisterRequest, out: TokenResponse [auth]
@@ -34,6 +35,17 @@
 ---
 
 # Schema
+
+### ApiKey
+- id: str (pk, default)
+- workspace_id: str (index)
+- name: String
+- key_prefix: String
+- key_hash: String (unique, index)
+- permissions: JSON (default)
+- created_by_user_id: str (index)
+- last_used_at: DateTime (nullable)
+- revoked_at: DateTime (nullable)
 
 ### AuditLogEntry
 - id: str (pk, default)
@@ -126,6 +138,7 @@
 - **DeleteButton** [client] — props: resource, recordItemId — `apps/web/src/components/refine-ui/buttons/delete.tsx`
 - **EditButton** [client] — props: resource, recordItemId — `apps/web/src/components/refine-ui/buttons/edit.tsx`
 - **InputPassword** [client] — props: className — `apps/web/src/components/refine-ui/form/input-password.tsx`
+- **PageHeader** [client] — props: resource, title, subtitle, actions, className, headerClassName — `apps/web/src/components/refine-ui/layout/page-header.tsx`
 - **UndoableNotification** — props: message, description, undoableTimeout, cancelMutation, onClose — `apps/web/src/components/refine-ui/notification/undoable-notification.tsx`
 - **ThemeProvider** [client] — props: defaultTheme, storageKey — `apps/web/src/components/refine-ui/theme/theme-provider.tsx`
 - **ThemeSelect** [client] — `apps/web/src/components/refine-ui/theme/theme-select.tsx`
@@ -134,7 +147,9 @@
 - **StatusBadge** — props: status — `apps/web/src/components/ui.tsx`
 - **WorkspaceProvider** — `apps/web/src/contexts/WorkspaceContext.tsx`
 - **MOBILE_BREAKPOINT** — `apps/web/src/hooks/use-mobile.tsx`
+- **ApiKeysPage** — `apps/web/src/pages/ApiKeysPage.tsx`
 - **DashboardPage** — `apps/web/src/pages/DashboardPage.tsx`
+- **InboxPage** — `apps/web/src/pages/InboxPage.tsx`
 - **LoginPage** — `apps/web/src/pages/LoginPage.tsx`
 - **MembersPage** — `apps/web/src/pages/MembersPage.tsx`
 - **NotificationsPage** — `apps/web/src/pages/NotificationsPage.tsx`
@@ -152,13 +167,17 @@
   - function do_run_migrations: (connection) -> None
   - function run_migrations_online: () -> None
 - `apps/api/alembic/versions/0001_initial.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0002_api_keys.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/src/api/crud.py`
   - function parse_query: (request, *, max_limit) -> QuerySpec
   - function apply_query: (stmt, model, spec, *, sortable, filterable) -> Select
   - function run_list: (session, stmt, model, request, *, sortable, filterable) -> tuple[list[Any], int]
   - class QuerySpec
   - class InvalidQuery
-- `apps/api/src/api/deps.py` — function get_container: (request), function require_permission: (permission)
+- `apps/api/src/api/deps.py`
+  - function get_container: (request)
+  - function require_permission: (permission)
+  - class AuthPrincipal
 - `apps/api/src/container.py` — class Container
 - `apps/api/src/core/cache.py` — class TtlCache
 - `apps/api/src/core/dates.py` — function ensure_utc: (value) -> datetime, function now_utc: () -> datetime
@@ -190,6 +209,7 @@
 - `apps/api/src/events/nats.py` — class NatsEventBus
 - `apps/api/src/events/subjects.py` — class EventBusDriver, class Subjects
 - `apps/api/src/main.py` — function lifespan: (app), function root: () -> dict
+- `apps/api/src/models/api_key.py` — class ApiKey
 - `apps/api/src/models/audit.py` — class AuditLogEntry
 - `apps/api/src/models/core.py` — class Invitation, class Notification
 - `apps/api/src/models/secret.py` — class StoredSecret
@@ -207,11 +227,16 @@
   - class RefreshRequest
   - class WorkspaceCreate
   - class WorkspaceUpdate
-  - _...5 more_
+  - _...6 more_
 - `apps/api/src/secrets/base.py` — class SecretRecord, class SecretStore
 - `apps/api/src/secrets/db_store.py` — class DbSecretStore
 - `apps/api/src/secrets/factory.py` — function build_secret_store: () -> SecretStore
 - `apps/api/src/seed.py` — function main: () -> None
+- `apps/api/src/services/api_keys.py`
+  - class ApiKeyError
+  - class ApiKeyForbidden
+  - class ApiKeyNotFound
+  - class ApiKeyService
 - `apps/api/src/services/audit.py` — function audit_log_to_dict: (entry) -> dict[str, Any], class AuditService
 - `apps/api/src/services/auth.py`
   - class AuthError
@@ -281,46 +306,46 @@
 
 ## Most Imported Files (change these carefully)
 
-- `apps/api/src/db/session.py` — imported by **14** files
-- `apps/api/src/models/workspace.py` — imported by **10** files
-- `apps/web/src/types.ts` — imported by **10** files
+- `apps/api/src/db/session.py` — imported by **16** files
+- `apps/api/src/models/workspace.py` — imported by **12** files
+- `apps/web/src/types.ts` — imported by **12** files
 - `apps/api/src/settings.py` — imported by **9** files
-- `apps/api/src/api/deps.py` — imported by **8** files
+- `apps/api/src/services/workspaces.py` — imported by **9** files
+- `apps/api/src/api/deps.py` — imported by **9** files
 - `apps/api/src/models/core.py` — imported by **8** files
-- `apps/api/src/services/workspaces.py` — imported by **7** files
+- `apps/api/src/db/base.py` — imported by **7** files
+- `apps/api/src/core/permissions.py` — imported by **7** files
+- `apps/api/src/schemas/api.py` — imported by **7** files
 - `apps/api/src/events/bus.py` — imported by **7** files
-- `apps/api/src/db/base.py` — imported by **6** files
-- `apps/api/src/schemas/api.py` — imported by **6** files
-- `apps/web/src/contexts/WorkspaceContext.tsx` — imported by **6** files
+- `apps/web/src/contexts/WorkspaceContext.tsx` — imported by **7** files
+- `apps/api/src/api/crud.py` — imported by **6** files
+- `apps/api/src/core/dates.py` — imported by **6** files
+- `apps/web/src/components/ui.tsx` — imported by **6** files
 - `apps/web/src/utils/storage.ts` — imported by **6** files
+- `apps/api/src/models/api_key.py` — imported by **5** files
 - `apps/api/src/services/auth.py` — imported by **5** files
 - `apps/api/src/services/serializers.py` — imported by **5** files
-- `apps/api/src/api/crud.py` — imported by **5** files
-- `apps/api/src/core/dates.py` — imported by **5** files
-- `apps/api/src/core/permissions.py` — imported by **5** files
 - `apps/api/src/events/subjects.py` — imported by **5** files
-- `apps/api/tests/conftest.py` — imported by **5** files
-- `apps/api/src/core/security/crypto.py` — imported by **4** files
 
 ## Import Map (who imports what)
 
-- `apps/api/src/db/session.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py`, `apps/api/src/api/routes/notifications.py` +9 more
-- `apps/api/src/models/workspace.py` ← `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py`, `apps/api/src/api/routes/notifications.py`, `apps/api/src/api/routes/roles.py`, `apps/api/src/api/routes/workspaces.py` +5 more
-- `apps/web/src/types.ts` ← `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/NotificationCenter.tsx`, `apps/web/src/contexts/WorkspaceContext.tsx`, `apps/web/src/pages/MembersPage.tsx`, `apps/web/src/pages/NotificationsPage.tsx` +5 more
+- `apps/api/src/db/session.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py` +11 more
+- `apps/api/src/models/workspace.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py`, `apps/api/src/api/routes/notifications.py`, `apps/api/src/api/routes/roles.py` +7 more
+- `apps/web/src/types.ts` ← `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/NotificationCenter.tsx`, `apps/web/src/contexts/WorkspaceContext.tsx`, `apps/web/src/pages/ApiKeysPage.tsx`, `apps/web/src/pages/InboxPage.tsx` +7 more
 - `apps/api/src/settings.py` ← `apps/api/alembic/env.py`, `apps/api/src/container.py`, `apps/api/src/core/security/tokens.py`, `apps/api/src/db/session.py`, `apps/api/src/events/factory.py` +4 more
-- `apps/api/src/api/deps.py` ← `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py`, `apps/api/src/api/routes/notifications.py`, `apps/api/src/api/routes/roles.py` +3 more
+- `apps/api/src/services/workspaces.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py` +4 more
+- `apps/api/src/api/deps.py` ← `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py`, `apps/api/src/api/routes/notifications.py` +4 more
 - `apps/api/src/models/core.py` ← `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/notifications.py`, `apps/api/src/models/__init__.py`, `apps/api/src/seed.py`, `apps/api/src/services/notifications.py` +3 more
-- `apps/api/src/services/workspaces.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py`, `apps/api/src/api/routes/roles.py` +2 more
-- `apps/api/src/events/bus.py` ← `apps/api/src/container.py`, `apps/api/src/events/factory.py`, `apps/api/src/events/inprocess.py`, `apps/api/src/events/nats.py`, `apps/api/src/services/notifications.py` +2 more
-- `apps/api/src/db/base.py` ← `apps/api/alembic/env.py`, `apps/api/src/models/audit.py`, `apps/api/src/models/core.py`, `apps/api/src/models/secret.py`, `apps/api/src/models/workspace.py` +1 more
-- `apps/api/src/schemas/api.py` ← `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py`, `apps/api/src/api/routes/notifications.py`, `apps/api/src/api/routes/roles.py` +1 more
+- `apps/api/src/db/base.py` ← `apps/api/alembic/env.py`, `apps/api/src/models/api_key.py`, `apps/api/src/models/audit.py`, `apps/api/src/models/core.py`, `apps/api/src/models/secret.py` +2 more
+- `apps/api/src/core/permissions.py` ← `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py`, `apps/api/src/api/routes/roles.py`, `apps/api/src/api/routes/workspaces.py` +2 more
+- `apps/api/src/schemas/api.py` ← `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py`, `apps/api/src/api/routes/notifications.py` +2 more
 
 ---
 
 # Test Coverage
 
-> **27%** of routes and models are covered by tests
-> 9 test files found
+> **28%** of routes and models are covered by tests
+> 10 test files found
 
 ## Covered Routes
 
@@ -330,6 +355,7 @@
 
 ## Covered Models
 
+- ApiKey
 - Invitation
 - Notification
 - StoredSecret

@@ -6,6 +6,7 @@
 
 ## Other Routes
 
+- `GET` `/effective-permissions` params()
 - `POST` `/register` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/login` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/refresh` params() → in: RegisterRequest, out: TokenResponse [auth]

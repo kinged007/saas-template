@@ -7,6 +7,7 @@
 - **DeleteButton** [client] — props: resource, recordItemId — `apps/web/src/components/refine-ui/buttons/delete.tsx`
 - **EditButton** [client] — props: resource, recordItemId — `apps/web/src/components/refine-ui/buttons/edit.tsx`
 - **InputPassword** [client] — props: className — `apps/web/src/components/refine-ui/form/input-password.tsx`
+- **PageHeader** [client] — props: resource, title, subtitle, actions, className, headerClassName — `apps/web/src/components/refine-ui/layout/page-header.tsx`
 - **UndoableNotification** — props: message, description, undoableTimeout, cancelMutation, onClose — `apps/web/src/components/refine-ui/notification/undoable-notification.tsx`
 - **ThemeProvider** [client] — props: defaultTheme, storageKey — `apps/web/src/components/refine-ui/theme/theme-provider.tsx`
 - **ThemeSelect** [client] — `apps/web/src/components/refine-ui/theme/theme-select.tsx`
@@ -15,7 +16,9 @@
 - **StatusBadge** — props: status — `apps/web/src/components/ui.tsx`
 - **WorkspaceProvider** — `apps/web/src/contexts/WorkspaceContext.tsx`
 - **MOBILE_BREAKPOINT** — `apps/web/src/hooks/use-mobile.tsx`
+- **ApiKeysPage** — `apps/web/src/pages/ApiKeysPage.tsx`
 - **DashboardPage** — `apps/web/src/pages/DashboardPage.tsx`
+- **InboxPage** — `apps/web/src/pages/InboxPage.tsx`
 - **LoginPage** — `apps/web/src/pages/LoginPage.tsx`
 - **MembersPage** — `apps/web/src/pages/MembersPage.tsx`
 - **NotificationsPage** — `apps/web/src/pages/NotificationsPage.tsx`

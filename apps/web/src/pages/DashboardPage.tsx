@@ -53,12 +53,12 @@ export function DashboardPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Notifications</CardTitle>
+            <CardTitle>Inbox</CardTitle>
             <CardDescription>View your notifications and updates</CardDescription>
           </CardHeader>
           <CardContent>
-            <Link to="/notifications">
-              <Button variant="outline">View Notifications</Button>
+            <Link to="/inbox">
+              <Button variant="outline">Open Inbox</Button>
             </Link>
           </CardContent>
         </Card>

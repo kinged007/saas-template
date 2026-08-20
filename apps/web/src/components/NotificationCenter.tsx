@@ -8,13 +8,18 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
-import { Bell, Check, ExternalLink } from "lucide-react";
+import { Bell, ExternalLink, Inbox } from "lucide-react";
 import { useList, useUpdate } from "@refinedev/core";
-import { Link, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 
 import type { Notification } from "../types";
 import { useWorkspace } from "../contexts/WorkspaceContext";
 import { formatDate } from "./ui";
+
+function truncate(text: string | undefined, max: number): string {
+  if (!text) return "";
+  return text.length > max ? text.slice(0, max) + "…" : text;
+}
 
 function workspaceName(n: Notification): string {
   return n.workspace_name || "Unknown workspace";
@@ -49,8 +54,6 @@ export function NotificationCenter() {
   const linkUrl = (n: Notification) =>
     (n.payload as Record<string, unknown> | undefined)?.url as string | undefined;
 
-  // A notification's link is only actionable when it belongs to the current
-  // workspace or the user still has access to its workspace.
   const canOpen = (n: Notification) => {
     if (!linkUrl(n)) return false;
     if (!n.workspace_id || n.workspace_id === workspace?.id) return true;
@@ -62,7 +65,7 @@ export function NotificationCenter() {
     if (!url) return;
     if (n.workspace_id && n.workspace_id !== workspace?.id) {
       const target = workspaces.find((w) => w.id === n.workspace_id);
-      if (!target) return; // no access to that workspace anymore
+      if (!target) return;
       setOpen(false);
       setWorkspace(target);
     }
@@ -70,8 +73,6 @@ export function NotificationCenter() {
     navigate(url);
   };
 
-  // Group: the current workspace first, then every other workspace under a
-  // clearly separated header naming it.
   const current: Notification[] = [];
   const others = new Map<string, Notification[]>();
   for (const n of items) {
@@ -87,34 +88,39 @@ export function NotificationCenter() {
   const renderItem = (n: Notification) => {
     const url = linkUrl(n);
     return (
-      <div key={n.id} className="border-border flex flex-col gap-1 rounded-lg border p-3">
-        <div className="flex items-start justify-between gap-2">
-          <p className="text-sm font-semibold">{n.title}</p>
+      <div key={n.id} className="border-border flex flex-col gap-2 rounded-lg border p-3">
+        <p className="text-sm font-semibold">{n.title}</p>
+        {n.body && (
+          <p className="text-muted-foreground text-sm">{truncate(n.body, 100)}</p>
+        )}
+        <div className="flex items-center gap-2">
+          {url && canOpen(n) && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2"
+              onClick={() => {
+                openNotification(n);
+                acknowledge(n.id);
+              }}
+            >
+              <ExternalLink className="mr-1 h-3.5 w-3.5" />
+              Open
+            </Button>
+          )}
           <Button
             size="sm"
             variant="ghost"
             className="h-7 px-2"
-            onClick={() => acknowledge(n.id)}
-          >
-            <Check className="mr-1 h-3.5 w-3.5" />
-            Mark read
-          </Button>
-        </div>
-        {n.body && <p className="text-muted-foreground text-sm">{n.body}</p>}
-        {url && canOpen(n) && (
-          <Link
-            to={url}
-            className="text-primary inline-flex items-center gap-1 text-sm hover:underline"
-            onClick={(e) => {
-              e.preventDefault();
-              openNotification(n);
-              acknowledge(n.id);
+            onClick={() => {
+              setOpen(false);
+              navigate("/inbox");
             }}
           >
-            <ExternalLink className="h-3.5 w-3.5" />
-            Open
-          </Link>
-        )}
+            <Inbox className="mr-1 h-3.5 w-3.5" />
+            Read in Inbox
+          </Button>
+        </div>
         <p className="text-muted-foreground text-xs">{formatDate(n.created_at)}</p>
       </div>
     );
@@ -165,10 +171,11 @@ export function NotificationCenter() {
               className="w-full"
               onClick={() => {
                 setOpen(false);
-                navigate("/notifications");
+                navigate("/inbox");
               }}
             >
-              View all notifications
+              <Inbox className="mr-2 h-4 w-4" />
+              Go to Inbox
             </Button>
           </div>
         </div>

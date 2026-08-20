@@ -3,10 +3,12 @@ import { useCreate, useGetIdentity } from "@refinedev/core";
 import { useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+
+import { PageHeader } from "../components/refine-ui/layout/page-header";
 
 export function WorkspaceCreatePage() {
   const navigate = useNavigate();
@@ -34,11 +36,10 @@ export function WorkspaceCreatePage() {
   };
 
   return (
-    <Card className="max-w-lg">
-      <CardHeader>
-        <CardTitle>Create workspace</CardTitle>
-      </CardHeader>
-      <CardContent>
+    <div className="flex flex-col gap-4">
+      <PageHeader title="Create workspace" />
+      <Card className="max-w-lg">
+        <CardContent>
         <form onSubmit={submit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <Label htmlFor="name">Name</Label>
@@ -74,6 +75,7 @@ export function WorkspaceCreatePage() {
           </Button>
         </form>
       </CardContent>
-    </Card>
+      </Card>
+    </div>
   );
 }

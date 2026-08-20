@@ -1,5 +1,16 @@
 # Schema
 
+### ApiKey
+- id: str (pk, default)
+- workspace_id: str (index)
+- name: String
+- key_prefix: String
+- key_hash: String (unique, index)
+- permissions: JSON (default)
+- created_by_user_id: str (index)
+- last_used_at: DateTime (nullable)
+- revoked_at: DateTime (nullable)
+
 ### AuditLogEntry
 - id: str (pk, default)
 - workspace_id: str (index)

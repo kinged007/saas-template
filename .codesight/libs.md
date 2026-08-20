@@ -5,13 +5,17 @@
   - function do_run_migrations: (connection) -> None
   - function run_migrations_online: () -> None
 - `apps/api/alembic/versions/0001_initial.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0002_api_keys.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/src/api/crud.py`
   - function parse_query: (request, *, max_limit) -> QuerySpec
   - function apply_query: (stmt, model, spec, *, sortable, filterable) -> Select
   - function run_list: (session, stmt, model, request, *, sortable, filterable) -> tuple[list[Any], int]
   - class QuerySpec
   - class InvalidQuery
-- `apps/api/src/api/deps.py` — function get_container: (request), function require_permission: (permission)
+- `apps/api/src/api/deps.py`
+  - function get_container: (request)
+  - function require_permission: (permission)
+  - class AuthPrincipal
 - `apps/api/src/container.py` — class Container
 - `apps/api/src/core/cache.py` — class TtlCache
 - `apps/api/src/core/dates.py` — function ensure_utc: (value) -> datetime, function now_utc: () -> datetime
@@ -43,6 +47,7 @@
 - `apps/api/src/events/nats.py` — class NatsEventBus
 - `apps/api/src/events/subjects.py` — class EventBusDriver, class Subjects
 - `apps/api/src/main.py` — function lifespan: (app), function root: () -> dict
+- `apps/api/src/models/api_key.py` — class ApiKey
 - `apps/api/src/models/audit.py` — class AuditLogEntry
 - `apps/api/src/models/core.py` — class Invitation, class Notification
 - `apps/api/src/models/secret.py` — class StoredSecret
@@ -60,11 +65,16 @@
   - class RefreshRequest
   - class WorkspaceCreate
   - class WorkspaceUpdate
-  - _...5 more_
+  - _...6 more_
 - `apps/api/src/secrets/base.py` — class SecretRecord, class SecretStore
 - `apps/api/src/secrets/db_store.py` — class DbSecretStore
 - `apps/api/src/secrets/factory.py` — function build_secret_store: () -> SecretStore
 - `apps/api/src/seed.py` — function main: () -> None
+- `apps/api/src/services/api_keys.py`
+  - class ApiKeyError
+  - class ApiKeyForbidden
+  - class ApiKeyNotFound
+  - class ApiKeyService
 - `apps/api/src/services/audit.py` — function audit_log_to_dict: (entry) -> dict[str, Any], class AuditService
 - `apps/api/src/services/auth.py`
   - class AuthError

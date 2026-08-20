@@ -2,14 +2,10 @@
 
 > **Navigation aid.** Route list and file locations extracted via AST. Read the source files listed below before implementing or modifying this subsystem.
 
-The Invitations subsystem handles **6 routes** and touches: db, auth.
+The Invitations subsystem handles **4 routes** and touches: db, auth.
 
 ## Routes
 
-- `GET` `` [db]
-  `apps/api/src/api/routes/invitations.py`
-- `POST` `` → in: InvitationCreate
-  `apps/api/src/api/routes/invitations.py`
 - `DELETE` `/{invitation_id}` params(invitation_id) [db]
   `apps/api/src/api/routes/invitations.py`
 - `POST` `/accept` → in: InvitationCreate [auth]

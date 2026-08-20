@@ -34,10 +34,10 @@ import { useGetIdentity, useLogout } from "@refinedev/core";
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import {
-  Bell,
   Building2,
   ChevronsUpDown,
   CircleUser,
+  Inbox,
   LayoutDashboard,
   LogOut,
   Mail,
@@ -55,6 +55,7 @@ import type { Identity } from "../types";
 
 const MENU_ITEMS = [
   { key: "/", label: "Dashboard", icon: LayoutDashboard, permission: "workspace:read" },
+  { key: "/inbox", label: "Inbox", icon: Inbox, permission: "notification:read" },
   { key: "/members", label: "Members", icon: Users, permission: "member:read" },
 ];
 
@@ -172,10 +173,6 @@ function UserMenu() {
           {identity?.display_name ?? ""}
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => navigate("/notifications")}>
-          <Bell />
-          Notifications
-        </DropdownMenuItem>
         <DropdownMenuItem onClick={() => navigate("/invitations")}>
           <Mail />
           Invitations
@@ -254,7 +251,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             <ThemeToggle />
           </div>
         </header>
-        <main className="container mx-auto flex flex-1 flex-col gap-4 p-4 md:p-6">{children}</main>
+        <main className="container mx-auto flex min-h-0 flex-1 flex-col gap-4 p-4 md:p-6">{children}</main>
       </SidebarInset>
     </SidebarProvider>
   );
