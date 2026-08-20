@@ -53,12 +53,19 @@ Copy `apps/api/.env.example` → `apps/api/.env` and `apps/web/.env.example` →
 ## Tests
 
 ```bash
-make api-test     # pytest (sqlite in-memory, no docker required)
+make api-test     # pytest (sqlite, in-process event bus, no docker required)
+make api-test-nats  # pytest incl. real-NATS integration (skips if NATS is down)
 ```
 
 ## Production-like stack (optional, docker)
 
+NATS JetStream runs as a plain docker container (no docker compose needed):
+
 ```bash
-make infra-up     # postgres + nats in docker
-EVENT_BUS_DRIVER=nats DATABASE_URL=postgresql+asyncpg://tenantflex:tenantflex@localhost:5432/tenantflex make api
+make nats-up       # start NATS JetStream (also: nats-down / nats-status / nats-logs)
+make api-migrate   # alembic migrations (embedded postgres or DATABASE_URL)
+EVENT_BUS_DRIVER=nats NATS_URL=nats://localhost:4222 make api
 ```
+
+With a remote docker daemon (`DOCKER_HOST=tcp://…`) the published ports live on
+the daemon's host — `scripts/nats.sh` prints the right `NATS_URL` to use.

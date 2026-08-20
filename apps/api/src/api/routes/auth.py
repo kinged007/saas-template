@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user
+from src.api.deps import get_container, get_current_user
 from src.db.session import get_db
 from src.schemas.api import (
     LoginRequest,
@@ -22,12 +22,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
 @router.post("/register", response_model=TokenResponse, status_code=201)
-async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
-    service = AuthService(db)
+async def register(
+    body: RegisterRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+) -> TokenResponse:
+    service = AuthService(db, container.bus)
     try:
         user = await service.register(
-            email=body.email, password=body.password, display_name=body.display_name
+            email=body.email,
+            password=body.password,
+            display_name=body.display_name,
+            ip_address=_client_ip(request),
         )
     except AuthError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
@@ -36,10 +48,17 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)) ->
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
-    service = AuthService(db)
+async def login(
+    body: LoginRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+) -> TokenResponse:
+    service = AuthService(db, container.bus)
     try:
-        user = await service.login_password(body.email, body.password)
+        user = await service.login_password(
+            body.email, body.password, ip_address=_client_ip(request)
+        )
     except AuthError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
     pair = await service.issue_tokens(user)
@@ -47,18 +66,30 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)) -> Token
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
-    service = AuthService(db)
+async def refresh(
+    body: RefreshRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+) -> TokenResponse:
+    service = AuthService(db, container.bus)
     try:
-        pair = await service.rotate_refresh(body.refresh_token)
+        pair = await service.rotate_refresh(body.refresh_token, ip_address=_client_ip(request))
     except AuthError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
     return TokenResponse(**pair.__dict__)
 
 
 @router.post("/logout", status_code=204)
-async def logout(body: RefreshRequest, db: AsyncSession = Depends(get_db)) -> None:
-    await AuthService(db).revoke_refresh(body.refresh_token)
+async def logout(
+    body: RefreshRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+) -> None:
+    await AuthService(db, container.bus).revoke_refresh(
+        body.refresh_token, ip_address=_client_ip(request)
+    )
 
 
 @router.get("/me")

@@ -8,7 +8,7 @@ The Invitations subsystem handles **4 routes** and touches: db, auth.
 
 - `DELETE` `/{invitation_id}` params(invitation_id) [db]
   `apps/api/src/api/routes/invitations.py`
-- `POST` `/accept` → in: InvitationCreate [auth]
+- `POST` `/accept` → in: InvitationCreate [auth, db]
   `apps/api/src/api/routes/invitations.py`
 - `GET` `/mine`
   `apps/api/src/api/routes/invitations.py`

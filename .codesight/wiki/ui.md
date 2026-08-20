@@ -2,7 +2,7 @@
 
 > **Navigation aid.** Component inventory and prop signatures extracted via AST. Read the source files before adding props or modifying component logic.
 
-**26 components** (react)
+**28 components** (react)
 
 ## Client Components
 
@@ -14,6 +14,7 @@
 - **ThemeProvider** — props: defaultTheme, storageKey — `apps/web/src/components/refine-ui/theme/theme-provider.tsx`
 - **ThemeSelect** — `apps/web/src/components/refine-ui/theme/theme-select.tsx`
 - **ThemeToggle** — props: className — `apps/web/src/components/refine-ui/theme/theme-toggle.tsx`
+- **CreateView** — props: className — `apps/web/src/components/refine-ui/views/create-view.tsx`
 - **ListView** — props: className — `apps/web/src/components/refine-ui/views/list-view.tsx`
 
 ## Components
@@ -25,6 +26,7 @@
 - **StatusBadge** — props: status — `apps/web/src/components/ui.tsx`
 - **WorkspaceProvider** — `apps/web/src/contexts/WorkspaceContext.tsx`
 - **MOBILE_BREAKPOINT** — `apps/web/src/hooks/use-mobile.tsx`
+- **ApiKeyCreatePage** — `apps/web/src/pages/ApiKeyCreatePage.tsx`
 - **ApiKeysPage** — `apps/web/src/pages/ApiKeysPage.tsx`
 - **DashboardPage** — `apps/web/src/pages/DashboardPage.tsx`
 - **InboxPage** — `apps/web/src/pages/InboxPage.tsx`

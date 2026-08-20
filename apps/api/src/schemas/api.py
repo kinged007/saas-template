@@ -51,6 +51,11 @@ class RoleCreate(BaseModel):
     permissions: list[str] = Field(default_factory=list)
 
 
+class ApiKeyCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=150)
+    permissions: list[str] = Field(default_factory=list)
+
+
 class NotificationAck(BaseModel):
     acknowledged: bool = True
 

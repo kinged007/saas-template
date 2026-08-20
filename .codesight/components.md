@@ -12,10 +12,12 @@
 - **ThemeProvider** [client] — props: defaultTheme, storageKey — `apps/web/src/components/refine-ui/theme/theme-provider.tsx`
 - **ThemeSelect** [client] — `apps/web/src/components/refine-ui/theme/theme-select.tsx`
 - **ThemeToggle** [client] — props: className — `apps/web/src/components/refine-ui/theme/theme-toggle.tsx`
+- **CreateView** [client] — props: className — `apps/web/src/components/refine-ui/views/create-view.tsx`
 - **ListView** [client] — props: className — `apps/web/src/components/refine-ui/views/list-view.tsx`
 - **StatusBadge** — props: status — `apps/web/src/components/ui.tsx`
 - **WorkspaceProvider** — `apps/web/src/contexts/WorkspaceContext.tsx`
 - **MOBILE_BREAKPOINT** — `apps/web/src/hooks/use-mobile.tsx`
+- **ApiKeyCreatePage** — `apps/web/src/pages/ApiKeyCreatePage.tsx`
 - **ApiKeysPage** — `apps/web/src/pages/ApiKeysPage.tsx`
 - **DashboardPage** — `apps/web/src/pages/DashboardPage.tsx`
 - **InboxPage** — `apps/web/src/pages/InboxPage.tsx`

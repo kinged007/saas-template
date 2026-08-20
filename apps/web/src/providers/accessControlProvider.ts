@@ -28,6 +28,11 @@ const PERMISSION_MAP: Record<string, Record<string, string>> = {
     create: "role:manage",
     show: "role:read",
   },
+  "api-keys": {
+    list: "apikey:read",
+    create: "apikey:manage",
+    delete: "apikey:manage",
+  },
   connections: {
     list: "connection:read",
     create: "connection:create",

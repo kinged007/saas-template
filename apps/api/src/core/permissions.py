@@ -14,6 +14,9 @@ MEMBER_MANAGE = "member:manage"  # change roles, remove members
 ROLE_READ = "role:read"
 ROLE_MANAGE = "role:manage"
 
+APIKEY_READ = "apikey:read"
+APIKEY_MANAGE = "apikey:manage"
+
 NOTIFICATION_READ = "notification:read"
 NOTIFICATION_ACK = "notification:acknowledge"
 
@@ -26,6 +29,8 @@ ALL_PERMISSIONS = [
     MEMBER_MANAGE,
     ROLE_READ,
     ROLE_MANAGE,
+    APIKEY_READ,
+    APIKEY_MANAGE,
     NOTIFICATION_READ,
     NOTIFICATION_ACK,
 ]
@@ -45,6 +50,8 @@ def permissions_for_role(role_name: str) -> list[str]:
                 WORKSPACE_READ,
                 MEMBER_READ,
                 ROLE_READ,
+                APIKEY_READ,
+                APIKEY_MANAGE,
                 NOTIFICATION_READ,
                 NOTIFICATION_ACK,
             ]

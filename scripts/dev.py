@@ -26,7 +26,7 @@ SERVERS = [
     {
         "name": "api",
         "cwd": os.path.join(ROOT, "apps", "api"),
-        "cmd": ["uv", "run", "uvicorn", "tenantflex.main:app", "--reload", "--port", "8000"],
+        "cmd": ["uv", "run", "uvicorn", "src.main:app", "--reload", "--port", "8000"],
     },
     {
         "name": "web",

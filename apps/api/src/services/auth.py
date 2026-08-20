@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.dates import ensure_utc, now_utc
 from src.core.security.password import PasswordHasher
 from src.core.security.tokens import OpaqueToken, create_access_token
+from src.events.bus import EventBus
+from src.events.publisher import publish_audit
 from src.models.workspace import RefreshToken, User
 from src.settings import settings
 
@@ -29,8 +31,9 @@ class TokenPair:
 
 
 class AuthService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, bus: EventBus | None = None) -> None:
         self._session = session
+        self._bus = bus
 
     # ----------------------------------------------------------------- users
 
@@ -42,7 +45,14 @@ class AuthService:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def register(self, *, email: str, password: str | None, display_name: str) -> User:
+    async def register(
+        self,
+        *,
+        email: str,
+        password: str | None,
+        display_name: str,
+        ip_address: str | None = None,
+    ) -> User:
         email = email.lower()
         if await self.get_by_email(email):
             raise AuthError("an account with this email already exists")
@@ -53,6 +63,16 @@ class AuthService:
         )
         self._session.add(user)
         await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=None,
+            resource_type="user",
+            resource_id=user.id,
+            action="user.register",
+            actor_user_id=user.id,
+            details={"email": user.email, "display_name": user.display_name},
+            ip_address=ip_address,
+        )
         return user
 
     async def upsert_oauth_user(
@@ -64,11 +84,22 @@ class AuthService:
             user = User(email=email.lower(), password_hash=None, display_name=display_name)
             self._session.add(user)
             await self._session.commit()
+            await publish_audit(
+                self._bus,
+                workspace_id=None,
+                resource_type="user",
+                resource_id=user.id,
+                action="user.register",
+                actor_user_id=user.id,
+                details={"email": user.email, "provider": provider, "subject": subject},
+            )
         return user
 
     # ------------------------------------------------------------------ auth
 
-    async def login_password(self, email: str, password: str) -> User:
+    async def login_password(
+        self, email: str, password: str, *, ip_address: str | None = None
+    ) -> User:
         user = await self.get_by_email(email)
         if user is None or user.password_hash is None:
             raise AuthError("invalid credentials")
@@ -78,6 +109,16 @@ class AuthService:
             raise AuthError("account is disabled")
         user.last_login_at = now_utc()
         await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=None,
+            resource_type="user",
+            resource_id=user.id,
+            action="user.login",
+            actor_user_id=user.id,
+            details={"email": user.email},
+            ip_address=ip_address,
+        )
         return user
 
     async def issue_tokens(self, user: User) -> TokenPair:
@@ -95,7 +136,9 @@ class AuthService:
             refresh_token=refresh,
         )
 
-    async def rotate_refresh(self, refresh_token: str) -> TokenPair:
+    async def rotate_refresh(
+        self, refresh_token: str, *, ip_address: str | None = None
+    ) -> TokenPair:
         """Rotate a refresh token: revoke the presented one, issue a new pair."""
         stmt = select(RefreshToken).where(
             RefreshToken.token_hash == OpaqueToken.hash(refresh_token)
@@ -111,14 +154,35 @@ class AuthService:
             raise AuthError("account is disabled")
         row.revoked_at = now_utc()
         await self._session.commit()
-        return await self.issue_tokens(user)
+        pair = await self.issue_tokens(user)
+        await publish_audit(
+            self._bus,
+            workspace_id=None,
+            resource_type="user",
+            resource_id=user.id,
+            action="user.token_refresh",
+            actor_user_id=user.id,
+            details={"email": user.email},
+            ip_address=ip_address,
+        )
+        return pair
 
-    async def revoke_refresh(self, refresh_token: str) -> None:
+    async def revoke_refresh(self, refresh_token: str, *, ip_address: str | None = None) -> None:
         stmt = select(RefreshToken).where(
             RefreshToken.token_hash == OpaqueToken.hash(refresh_token)
         )
         result = await self._session.execute(stmt)
         row = result.scalar_one_or_none()
         if row is not None:
+            user_id = row.user_id
             row.revoked_at = now_utc()
             await self._session.commit()
+            await publish_audit(
+                self._bus,
+                workspace_id=None,
+                resource_type="user",
+                resource_id=user_id,
+                action="user.logout",
+                actor_user_id=user_id,
+                ip_address=ip_address,
+            )

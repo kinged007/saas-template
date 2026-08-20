@@ -13,7 +13,7 @@
 
 ### AuditLogEntry
 - id: str (pk, default)
-- workspace_id: str (index)
+- workspace_id: unknown (index, nullable)
 - actor_user_id: unknown (nullable)
 - resource_type: String
 - resource_id: str

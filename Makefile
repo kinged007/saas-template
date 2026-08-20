@@ -3,7 +3,7 @@ SHELL := /bin/bash
 
 SUDO := $(shell [ "$$(id -u)" -eq 0 ] 2>/dev/null && echo "" || echo sudo)
 
-.PHONY: help setup dev api api-install api-migrate api-seed api-test api-lint web web-install web-build infra-up infra-down
+.PHONY: help setup dev api api-install api-migrate api-seed api-test api-lint web web-install web-build infra-up infra-down nats-up nats-down nats-status nats-logs
 
 help:
 	@echo "SaaS Template targets (development runs from the terminal — no docker needed):"
@@ -18,9 +18,12 @@ help:
 	@echo "  make web          run frontend (vite, :5173)"
 	@echo "  make web-build    type-check + build frontend"
 	@echo ""
-	@echo "Optional (prod-like testing with NATS, requires docker):"
-	@echo "  make infra-up     start postgres + nats in docker"
-	@echo "  make infra-down   stop docker infra"
+	@echo "Optional (prod-like testing with NATS, requires docker — no compose needed):"
+	@echo "  make nats-up      start a NATS JetStream container (plain docker run)"
+	@echo "  make nats-down    stop + remove the NATS container"
+	@echo "  make nats-status  show NATS container + JetStream state"
+	@echo "  make nats-logs    tail NATS container logs"
+	@echo "  make api-test-nats run backend tests against a real NATS (skips if nats not up)"
 
 setup:
 	@if command -v uv >/dev/null 2>&1; then \
@@ -111,7 +114,23 @@ web-build:
 	cd apps/web && npm run build
 
 infra-up:
-	docker compose -f infra/docker/docker-compose.dev.yml up -d
+	./scripts/nats.sh start
 
 infra-down:
-	docker compose -f infra/docker/docker-compose.dev.yml down
+	./scripts/nats.sh stop
+
+nats-up:
+	./scripts/nats.sh start
+
+nats-down:
+	./scripts/nats.sh stop
+
+nats-status:
+	./scripts/nats.sh status
+
+nats-logs:
+	./scripts/nats.sh logs
+
+api-test-nats:
+	./scripts/nats.sh start
+	cd apps/api && uv run pytest tests/test_nats_integration.py -v

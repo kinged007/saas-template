@@ -8,6 +8,8 @@ export const ALL_PERMISSIONS = [
   "member:manage",
   "role:read",
   "role:manage",
+  "apikey:read",
+  "apikey:manage",
   "notification:read",
   "notification:acknowledge",
 ];

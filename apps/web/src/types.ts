@@ -73,6 +73,24 @@ export type Notification = {
   created_at?: string;
 };
 
+export type ApiKey = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  /** Display prefix of the secret (e.g. `sk_live_AbCdEfGh`). */
+  key_prefix: string;
+  permissions: string[];
+  created_by_user_id?: string;
+  last_used_at?: string;
+  revoked_at?: string;
+  created_at?: string;
+};
+
+/** POST /api-keys response — the raw `key` is only returned once. */
+export type ApiKeyCreated = ApiKey & {
+  key: string;
+};
+
 export type AuditLogEntry = {
   id: string;
   workspace_id: string;

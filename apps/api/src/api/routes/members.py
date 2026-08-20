@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, apply_query, parse_query
 from src.api.deps import (
+    get_container,
     get_current_user,
     get_current_workspace_id,
     require_permission,
@@ -79,14 +80,20 @@ async def list_members(
 async def set_member_role(
     membership_id: str,
     body: MemberRoleUpdate,
+    request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
     _=Depends(require_permission(MEMBER_MANAGE)),
     db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
 ):
     try:
-        member = await WorkspaceService(db).set_member_role(
-            workspace_id, membership_id, body.role_id, actor=user
+        member = await WorkspaceService(db, container.bus).set_member_role(
+            workspace_id,
+            membership_id,
+            body.role_id,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
         )
     except WorkspaceForbidden as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
@@ -100,12 +107,19 @@ async def set_member_role(
 @router.delete("/{membership_id}", status_code=204)
 async def remove_member(
     membership_id: str,
+    request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
     _=Depends(require_permission(MEMBER_MANAGE)),
     db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
 ):
     try:
-        await WorkspaceService(db).remove_member(workspace_id, membership_id, actor=user)
+        await WorkspaceService(db, container.bus).remove_member(
+            workspace_id,
+            membership_id,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None

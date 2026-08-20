@@ -23,7 +23,7 @@ pk: `id` (str)
 pk: `id` (str)
 
 - `id`: str _(pk, default)_
-- `workspace_id`: str _(index)_
+- `workspace_id`: unknown _(index, nullable)_
 - `actor_user_id`: unknown _(nullable)_
 - `resource_type`: String
 - `resource_id`: str
@@ -129,12 +129,12 @@ pk: `id` (str)
 
 Read and edit these files when adding columns, creating migrations, or changing relations:
 
-- `apps/api/src/db/session.py` — imported by **16** files
-- `apps/api/src/models/workspace.py` — imported by **12** files
-- `apps/api/src/models/core.py` — imported by **8** files
+- `apps/api/src/db/session.py` — imported by **21** files
+- `apps/api/src/models/workspace.py` — imported by **14** files
+- `apps/api/src/models/core.py` — imported by **10** files
 - `apps/api/src/db/base.py` — imported by **7** files
+- `apps/api/src/models/api_key.py` — imported by **7** files
 - `apps/api/src/schemas/api.py` — imported by **7** files
-- `apps/api/src/models/api_key.py` — imported by **5** files
 
 ---
 _Back to [overview.md](./overview.md)_

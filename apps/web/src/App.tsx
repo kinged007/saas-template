@@ -18,6 +18,8 @@ import { WorkspaceCreatePage } from "./pages/WorkspaceCreatePage";
 import { MembersPage } from "./pages/MembersPage";
 import { ReceivedInvitationsPage } from "./pages/ReceivedInvitationsPage";
 import { RolesPage } from "./pages/RolesPage";
+import { ApiKeyCreatePage } from "./pages/ApiKeyCreatePage";
+import { ApiKeysPage } from "./pages/ApiKeysPage";
 import { InboxPage } from "./pages/InboxPage";
 
 export function App() {
@@ -39,6 +41,7 @@ export function App() {
           { name: "workspaces", list: "/", create: "/workspaces/create" },
           { name: "members", list: "/members" },
           { name: "roles", list: "/roles" },
+          { name: "api-keys", list: "/api-keys", create: "/api-keys/create" },
           { name: "invitations", list: "/invitations" },
           { name: "notifications", list: "/inbox", meta: { label: "Inbox" } },
         ]}
@@ -60,6 +63,8 @@ export function App() {
               <Route path="members" element={<MembersPage />} />
               <Route path="invitations" element={<ReceivedInvitationsPage />} />
               <Route path="roles" element={<RolesPage />} />
+              <Route path="api-keys/create" element={<ApiKeyCreatePage />} />
+              <Route path="api-keys" element={<ApiKeysPage />} />
               <Route path="inbox" element={<InboxPage />} />
             </Route>
             <Route

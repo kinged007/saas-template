@@ -7,8 +7,16 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, QuerySpec, apply_query, parse_query
-from src.api.deps import get_container, get_current_user
+from src.api.deps import (
+    get_container,
+    get_current_user,
+    get_optional_workspace_id,
+    require_key_permission,
+    resolve_auth_principal,
+)
+from src.core.permissions import NOTIFICATION_ACK, NOTIFICATION_READ
 from src.db.session import get_db
+from src.events.publisher import publish_audit
 from src.models.core import Notification
 from src.models.workspace import Workspace
 from src.schemas.api import NotificationAck
@@ -54,6 +62,9 @@ async def list_notifications(
     request: Request,
     response: Response,
     user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
+    _=Depends(require_key_permission(NOTIFICATION_READ)),
+    workspace_id: str | None = Depends(get_optional_workspace_id),
     db: AsyncSession = Depends(get_db),
 ):
     stmt = (
@@ -61,6 +72,9 @@ async def list_notifications(
         .outerjoin(Workspace, Workspace.id == Notification.workspace_id)
         .where(Notification.user_id == user.id)
     )
+    if principal.api_key is not None:
+        # API keys are workspace-scoped: only ever surface the key's workspace.
+        stmt = stmt.where(Notification.workspace_id == workspace_id)
     try:
         spec = parse_query(request)
         stmt = _apply_notification_spec(stmt, spec)
@@ -77,9 +91,16 @@ async def list_notifications(
 @router.get("/unread-count")
 async def unread_count(
     user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
+    _=Depends(require_key_permission(NOTIFICATION_READ)),
+    workspace_id: str | None = Depends(get_optional_workspace_id),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = await NotificationService(db).list_for_user(user.id, acknowledged=False)
+    rows = await NotificationService(db).list_for_user(
+        user.id,
+        acknowledged=False,
+        workspace_id=workspace_id if principal.api_key is not None else None,
+    )
     return {"count": len(rows)}
 
 
@@ -87,15 +108,21 @@ async def unread_count(
 async def acknowledge(
     notification_id: str,
     body: NotificationAck,
+    request: Request,
     user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
+    _=Depends(require_key_permission(NOTIFICATION_ACK)),
+    workspace_id: str | None = Depends(get_optional_workspace_id),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
     service = NotificationService(db, container.bus)
+    ip = request.client.host if request.client else None
+    ws = workspace_id if principal.api_key is not None else None
     if body.acknowledged:
-        n = await service.acknowledge(user.id, notification_id)
+        n = await service.acknowledge(user.id, notification_id, workspace_id=ws, ip_address=ip)
     else:
-        n = await service.unacknowledge(user.id, notification_id)
+        n = await service.unacknowledge(user.id, notification_id, workspace_id=ws, ip_address=ip)
     if n is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "notification not found")
     name = (
@@ -107,11 +134,30 @@ async def acknowledge(
 @router.delete("/{notification_id}", status_code=204)
 async def delete_notification(
     notification_id: str,
+    request: Request,
     user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
+    _=Depends(require_key_permission(NOTIFICATION_ACK)),
+    workspace_id: str | None = Depends(get_optional_workspace_id),
     db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
 ):
-    n = await db.get(Notification, notification_id)
-    if n is None or n.user_id != user.id:
+    stmt = select(Notification).where(
+        Notification.id == notification_id, Notification.user_id == user.id
+    )
+    if principal.api_key is not None:
+        stmt = stmt.where(Notification.workspace_id == workspace_id)
+    n = (await db.execute(stmt)).scalar_one_or_none()
+    if n is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "notification not found")
     await db.delete(n)
     await db.commit()
+    await publish_audit(
+        container.bus,
+        workspace_id=n.workspace_id,
+        resource_type="notification",
+        resource_id=n.id,
+        action="notification.deleted",
+        actor_user_id=user.id,
+        ip_address=request.client.host if request.client else None,
+    )

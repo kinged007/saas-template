@@ -9,33 +9,48 @@ from dataclasses import asdict
 import nats
 from nats.aio.msg import Msg
 from nats.js import JetStreamContext
+from nats.js.api import ConsumerConfig
 
 from src.events.bus import (
     EventBus,
     EventEnvelope,
     EventMetadata,
+    PublishError,
     SubscriberHandler,
     SubscriptionError,
 )
-from src.events.subjects import Subjects
+from src.events.subjects import TRANSIENT_SUBJECTS, Subjects
 
 logger = logging.getLogger(__name__)
 
 STREAM_NAME = "SAAS_TEMPLATE"
 STREAM_SUBJECTS = [
-    f"{Subjects.NOTIFICATIONS}.>",
     f"{Subjects.WORKSPACES}.>",
+    f"{Subjects.APIKEYS}.>",
+    f"{Subjects.AUDIT}.>",
 ]
+MAX_DELIVER = 10
+ACK_WAIT_SECONDS = 30.0
 
 
 class NatsEventBus(EventBus):
     """Production event bus backed by NATS JetStream.
 
-    - One stream (SAAS_TEMPLATE) with subjects for each namespace.
-    - Each subscription is a durable consumer, so events survive restarts and
-      are delivered exactly once per consumer with acks.
-    - Handlers run as asyncio tasks; messages are acked after the handler
-      completes (or nacked on failure so they are redelivered).
+    - One stream (SAAS_TEMPLATE, workqueue retention) with subjects for each
+      durable namespace (workspaces.>, apikeys.>, audit.>).
+    - Each durable subscription is a durable consumer: events survive
+      restarts, are delivered with acks, and load-balance across replicas
+      (shared durable name = queue-group semantics). Messages are acked after
+      the handler completes, nacked on failure (bounded by MAX_DELIVER).
+    - Fanout subscriptions (`fanout=True`) use core NATS: every replica
+      receives the event, which is what realtime WebSocket push needs.
+    - Transient publishes (see Subjects.TRANSIENT_SUBJECTS) go over core
+      NATS without persistence; durable subscriptions on transient subjects
+      are rejected so a silent "consumer never receives anything" cannot
+      happen.
+    - Publishes issued before start() are buffered and flushed after the
+      stream and subscriptions are ready (same buffering contract as the
+      in-process bus).
     """
 
     name = "nats"
@@ -46,22 +61,36 @@ class NatsEventBus(EventBus):
         self._nc: nats.NATS | None = None
         self._js: JetStreamContext | None = None
         self._subscriptions: dict[str, tuple[SubscriberHandler, object]] = {}
-        self._pending: list[tuple[str, SubscriberHandler, bool]] = []
+        self._pending_subs: list[tuple[str, SubscriberHandler, bool]] = []
+        self._pending_publishes: list[tuple[str, dict, str | None, bool]] = []
         self._tasks: list[asyncio.Task] = []
 
     async def publish(
-        self, subject: str, payload: dict, *, correlation_id: str | None = None
+        self,
+        subject: str,
+        payload: dict,
+        *,
+        correlation_id: str | None = None,
+        transient: bool = False,
     ) -> None:
-        js = self._require_js()
+        if self._nc is None:
+            # Not connected yet (startup window): buffer, like the in-process
+            # bus buffers until its consumer tasks are running.
+            self._pending_publishes.append((subject, payload, correlation_id, transient))
+            return
         metadata = EventMetadata(
             subject=subject,
             correlation_id=correlation_id or "",
         )
         envelope = EventEnvelope(metadata=metadata, payload=payload)
+        data = json.dumps(asdict(envelope)).encode()
         try:
-            await js.publish(subject, json.dumps(asdict(envelope)).encode())
-        except Exception as exc:  # pragma: no cover - network layer
-            raise RuntimeError(f"nats publish failed: {exc}") from exc
+            if transient or subject in TRANSIENT_SUBJECTS:
+                await self._require_nc().publish(subject, data)
+            else:
+                await self._require_js().publish(subject, data)
+        except Exception as exc:
+            raise PublishError(f"nats publish failed for {subject}: {exc}") from exc
 
     async def subscribe(
         self, subject: str, handler: SubscriberHandler, *, fanout: bool = False
@@ -69,29 +98,44 @@ class NatsEventBus(EventBus):
         sub_id = str(uuid.uuid4())
         if self._nc is None:
             # Not connected yet (workflows are wired before start()): defer.
-            self._pending.append((subject, handler, fanout))
+            self._pending_subs.append((subject, handler, fanout))
             return sub_id
         await self._apply_subscription(subject, handler, fanout, sub_id)
         return sub_id
 
     async def unsubscribe(self, subscription_id: str) -> None:
-        self._subscriptions.pop(subscription_id, None)
+        entry = self._subscriptions.pop(subscription_id, None)
+        if entry is None:
+            return
+        _, sub = entry
+        try:
+            await sub.unsubscribe()
+        except Exception as exc:
+            logger.warning("unsubscribe failed for %s: %s", subscription_id, exc)
 
     async def start(self) -> None:
+        if self._nc is not None:
+            return
         logger.info("connecting to NATS at %s", self._url)
         self._nc = await nats.connect(self._url)
         self._js = self._nc.jetstream()
         await self._ensure_stream()
-        pending, self._pending = self._pending, []
-        for subject, handler, fanout in pending:
+        pending_subs, self._pending_subs = self._pending_subs, []
+        for subject, handler, fanout in pending_subs:
             await self._apply_subscription(subject, handler, fanout)
-        logger.info("nats event bus started")
+        pending_publishes, self._pending_publishes = self._pending_publishes, []
+        for subject, payload, correlation_id, transient in pending_publishes:
+            await self.publish(subject, payload, correlation_id=correlation_id, transient=transient)
+        logger.info("nats event bus started (%d subscriptions)", len(self._subscriptions))
 
     async def stop(self) -> None:
         if self._nc:
             await self._nc.drain()
             self._nc = None
             self._js = None
+        if self._pending_publishes:
+            logger.warning("dropping %d buffered publishes at stop", len(self._pending_publishes))
+            self._pending_publishes.clear()
 
     async def _apply_subscription(
         self, subject: str, handler: SubscriberHandler, fanout: bool, sub_id: str | None = None
@@ -101,20 +145,29 @@ class NatsEventBus(EventBus):
             # Core NATS fan-out: every replica receives the event and pushes to
             # its local WebSocket sessions. Perfect for realtime push (no
             # persistence needed — only live connections consume it).
-            await self._require_nc().subscribe(subject, cb=self._deliver_core(subject, handler))
-            self._subscriptions[sub_id] = (handler, subject)
+            sub = await self._require_nc().subscribe(
+                subject, cb=self._deliver_core(subject, handler)
+            )
+            self._subscriptions[sub_id] = (handler, sub)
             return
+        if subject in TRANSIENT_SUBJECTS:
+            raise SubscriptionError(
+                f"durable subscription on transient subject {subject} would never receive "
+                "messages; subscribe with fanout=True or move the subject to the durable set"
+            )
         js = self._require_js()
         durable_name = f"st-{subject.replace('.', '-')}"
         try:
-            # Durable consumers sharing a name across replicas are
-            # load-balanced by the server (round-robin delivery), which gives
-            # queue-group semantics without an explicit queue binding.
             sub = await js.subscribe(
                 subject,
                 durable=durable_name,
                 stream=STREAM_NAME,
                 manual_ack=True,
+                config=ConsumerConfig(
+                    ack_wait=ACK_WAIT_SECONDS,
+                    max_deliver=MAX_DELIVER,
+                    max_ack_pending=500,
+                ),
                 cb=self._deliver_js(handler),
             )
         except Exception as exc:
@@ -125,6 +178,11 @@ class NatsEventBus(EventBus):
                     durable=durable_name,
                     stream=STREAM_NAME,
                     manual_ack=True,
+                    config=ConsumerConfig(
+                        ack_wait=ACK_WAIT_SECONDS,
+                        max_deliver=MAX_DELIVER,
+                        max_ack_pending=500,
+                    ),
                     cb=self._deliver_js(handler),
                 )
             except Exception as exc2:
@@ -164,7 +222,7 @@ class NatsEventBus(EventBus):
     async def _ensure_stream(self) -> None:
         js = self._require_js()
         try:
-            await js.stream_info(STREAM_NAME)
+            info = await js.stream_info(STREAM_NAME)
         except Exception:
             await js.add_stream(
                 name=STREAM_NAME,
@@ -173,6 +231,15 @@ class NatsEventBus(EventBus):
                 max_msgs=10_000,
             )
             logger.info("created jetstream stream %s", STREAM_NAME)
+            return
+        if set(info.config.subjects) != set(STREAM_SUBJECTS):
+            await js.update_stream(
+                name=STREAM_NAME,
+                subjects=STREAM_SUBJECTS,
+                retention="workqueue",
+                max_msgs=10_000,
+            )
+            logger.info("reconciled stream %s subjects", STREAM_NAME)
 
     def _deliver_js(self, handler: SubscriberHandler):
         async def callback(msg: Msg) -> None:

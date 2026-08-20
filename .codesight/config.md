@@ -7,6 +7,7 @@
 - `CORS_ORIGINS` (has default) — apps/api/.env.example
 - `DATABASE_URL` **required** — apps/api/tests/conftest.py
 - `DEBUG` (has default) — apps/api/.env.example
+- `DOCKER_HOST` (has default) — apps/api/tests/test_nats_integration.py
 - `EMBEDDED_DB_DIR` (has default) — apps/api/.env
 - `ENVIRONMENT` (has default) — apps/api/.env.example
 - `EVENT_BUS_DRIVER` (has default) — apps/api/.env.example

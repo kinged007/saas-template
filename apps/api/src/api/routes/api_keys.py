@@ -1,0 +1,127 @@
+from __future__ import annotations
+
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.api.crud import InvalidQuery, apply_query, parse_query
+from src.api.deps import (
+    get_container,
+    get_current_user,
+    get_current_workspace_id,
+    require_permission,
+)
+from src.core.permissions import APIKEY_MANAGE, APIKEY_READ
+from src.db.session import get_db
+from src.models.api_key import ApiKey
+from src.schemas.api import ApiKeyCreate
+from src.services.api_keys import ApiKeyError, ApiKeyForbidden, ApiKeyNotFound, ApiKeyService
+from src.services.workspaces import WorkspaceService
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api-keys", tags=["api-keys"])
+
+_APIKEY_FILTERABLE = {"name"}
+_APIKEY_SORTABLE = {"name", "created_at", "last_used_at"}
+
+
+def _key_dict(k: ApiKey) -> dict:
+    return {
+        "id": k.id,
+        "workspace_id": k.workspace_id,
+        "name": k.name,
+        "key_prefix": k.key_prefix,
+        "permissions": k.permissions,
+        "created_by_user_id": k.created_by_user_id,
+        "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
+        "revoked_at": k.revoked_at.isoformat() if k.revoked_at else None,
+        "created_at": k.created_at.isoformat() if k.created_at else None,
+    }
+
+
+@router.get("")
+async def list_api_keys(
+    request: Request,
+    response: Response,
+    workspace_id: str = Depends(get_current_workspace_id),
+    _=Depends(require_permission(APIKEY_READ)),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(ApiKey).where(ApiKey.workspace_id == workspace_id)
+    try:
+        spec = parse_query(request)
+        stmt = apply_query(
+            stmt, ApiKey, spec, sortable=_APIKEY_SORTABLE, filterable=_APIKEY_FILTERABLE
+        )
+    except InvalidQuery as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
+    total = count.scalar_one()
+    stmt = stmt.offset(spec.offset).limit(spec.limit)
+    rows = await db.execute(stmt)
+    response.headers["X-Total-Count"] = str(total)
+    return [_key_dict(k) for k in rows.scalars().all()]
+
+
+@router.get("/effective-permissions")
+async def effective_permissions(
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    _=Depends(require_permission(APIKEY_READ)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Permissions this user can assign to an API key in the active workspace."""
+    membership = await WorkspaceService(db).get_membership(workspace_id, user.id)
+    if membership is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
+    _, role = membership
+    return {"permissions": sorted(role.permissions)}
+
+
+@router.post("", status_code=201)
+async def create_api_key(
+    body: ApiKeyCreate,
+    request: Request,
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    _=Depends(require_permission(APIKEY_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    try:
+        key, raw = await ApiKeyService(db, container.bus).create_api_key(
+            workspace_id=workspace_id,
+            name=body.name,
+            permissions=body.permissions,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
+    except ApiKeyForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    return {**_key_dict(key), "key": raw}
+
+
+@router.delete("/{api_key_id}", status_code=204)
+async def revoke_api_key(
+    api_key_id: str,
+    request: Request,
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    _=Depends(require_permission(APIKEY_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    try:
+        await ApiKeyService(db, container.bus).revoke_api_key(
+            workspace_id,
+            api_key_id,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
+    except ApiKeyNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    except ApiKeyError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None

@@ -1,7 +1,7 @@
 # Test Coverage
 
-> **28%** of routes and models are covered by tests
-> 10 test files found
+> **31%** of routes and models are covered by tests
+> 16 test files found
 
 ## Covered Routes
 
@@ -12,6 +12,7 @@
 ## Covered Models
 
 - ApiKey
+- AuditLogEntry
 - Invitation
 - Notification
 - StoredSecret

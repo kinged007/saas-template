@@ -11,29 +11,41 @@ os.environ["CORS_ORIGINS"] = "http://localhost:5173"
 import pytest  # noqa: E402
 from asgi_lifespan import LifespanManager  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
+from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 
 from src import models as _models  # noqa: E402,F401  (register tables on Base.metadata)
 from src.db.base import Base  # noqa: E402
 from src.db.session import engine  # noqa: E402
+from src.settings import settings  # noqa: E402
 
 
-async def _drop_all_with_retry(tries: int = 10, delay: float = 0.5) -> None:
+async def _drop_all_with_retry(tries: int = 15, delay: float = 0.2) -> None:
     """Drop all tables, retrying transient sqlite locks.
 
     Background bus workers may still be draining their last transactions when a
     test ends; a fresh engine connection then blocks on the file lock. Dispose
     pooled connections first, then retry briefly.
+
+    The drop runs on a dedicated engine with a *short* busy timeout: the
+    background worker holding the lock always finishes within a few seconds, so
+    waiting 30s (the app engine's timeout) per attempt only turns a transient
+    contention into a multi-minute stall.
     """
-    for attempt in range(tries):
-        try:
-            await engine.dispose()  # force-close any leaked pooled connections
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.drop_all)
-            return
-        except Exception:
-            if attempt == tries - 1:
-                raise
-            await asyncio.sleep(delay)
+    drop_engine = create_async_engine(settings.resolved_database_url, connect_args={"timeout": 2})
+    try:
+        for attempt in range(tries):
+            try:
+                await engine.dispose()  # force-close any leaked pooled connections
+                await drop_engine.dispose()
+                async with drop_engine.begin() as conn:
+                    await conn.run_sync(Base.metadata.drop_all)
+                return
+            except Exception:
+                if attempt == tries - 1:
+                    raise
+                await asyncio.sleep(delay)
+    finally:
+        await drop_engine.dispose()
 
 
 @pytest.fixture(autouse=True)

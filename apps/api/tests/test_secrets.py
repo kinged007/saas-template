@@ -1,8 +1,6 @@
 """Tests for the encrypted secret store: versioned encryption (rotation),
 DbSecretStore, and basic CRUD operations."""
 
-from tests.conftest import create_workspace, register_user, ws_headers
-
 
 # ------------------------------------------------------------ crypto
 
@@ -27,9 +25,11 @@ def test_legacy_unversioned_token_still_decrypts():
 
     from src.core.security.crypto import _normalize_key
 
-    legacy = Fernet(_normalize_key("legacy-key-0000000000000000000000000000")).encrypt(
-        b"old-secret"
-    ).decode()
+    legacy = (
+        Fernet(_normalize_key("legacy-key-0000000000000000000000000000"))
+        .encrypt(b"old-secret")
+        .decode()
+    )
     cipher = _cipher(["legacy-key-0000000000000000000000000000", "extra-key-0000000000000"])
     assert not legacy.startswith("v")
     assert cipher.decrypt(legacy) == "old-secret"
@@ -138,6 +138,4 @@ async def test_store_roundtrip_upsert_delete_and_list():
     assert await store.list_for_workspace(str(uuid.uuid4()), prefix="app:myapp:") == []
 
     await store.delete(workspace_id=ws_id, key="app:myapp:password_secret:keyid-1")
-    assert (
-        await store.get(workspace_id=ws_id, key="app:myapp:password_secret:keyid-1") is None
-    )
+    assert await store.get(workspace_id=ws_id, key="app:myapp:password_secret:keyid-1") is None

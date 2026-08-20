@@ -12,7 +12,7 @@
 - `POST` `/refresh` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/logout` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `GET` `/me` params() → out: TokenResponse
-- `POST` `/accept` params() → in: InvitationCreate [auth]
+- `POST` `/accept` params() → in: InvitationCreate [auth, db]
 - `GET` `/mine` params()
 - `POST` `/{invitation_id}/decline` params(invitation_id) → in: InvitationCreate
 - `GET` `/healthz` params()

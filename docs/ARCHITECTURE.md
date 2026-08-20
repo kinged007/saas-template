@@ -36,7 +36,8 @@ infra/          docker-compose, Dockerfiles, Helm chart, Terraform.
 ```
 
 In development everything runs from the terminal (`uvicorn`, `vite dev`);
-PostgreSQL and NATS run in docker-compose. In production the API scales
+the API embeds PostgreSQL (pgserver) and NATS runs as a plain docker
+container (`make nats-up`, `scripts/nats.sh`). In production the API scales
 horizontally behind an ingress; NATS JetStream is the event backbone.
 
 ## 4. Domain model
@@ -179,10 +180,15 @@ workflows/*.py         subscribers orchestrated by a small WorkflowRegistry
   bookkeeping. The real migration workflow will replace the simulated calls
   without touching the event contract, the state machine or the UI.
 - `NatsEventBus` uses JetStream:
-  - One workqueue stream (`TENANTFLEX`); durable consumers are **shared by
-    name across replicas** — the server load-balances delivery (queue-group
-    semantics without explicit bindings, which workqueue streams reject).
-  - Handlers ack after success / nack on failure (redelivery).
+  - One workqueue stream (`SAAS_TEMPLATE`) with subjects `workspaces.>`,
+    `apikeys.>`, `audit.>`; durable consumers are **shared by name across
+    replicas** — the server load-balances delivery (queue-group semantics
+    without explicit bindings, which workqueue streams reject).
+  - Handlers ack after success / nack on failure (redelivery, bounded by
+    `max_deliver`). Publishes issued before the bus connects are buffered and
+    flushed on start.
+  - Durable subscriptions on transient subjects are rejected (a durable
+    consumer there would never receive anything and would silently accumulate).
   - Deploy upgrades can strand stale consumers (workqueue streams allow one
     consumer per filter subject); the bus detects this and recovers by
     removing consumers bound to the subject before retrying.
@@ -190,6 +196,34 @@ workflows/*.py         subscribers orchestrated by a small WorkflowRegistry
     replica receives the event and pushes to its local WebSocket sessions, so
     the push reaches the user regardless of which replica holds their socket.
 - Config flag: `EVENT_BUS_DRIVER=inprocess|nats`.
+
+### Event contract (`src/events/subjects.py`)
+
+Durable subjects (persisted, one workflow per subject, load-balanced):
+
+| Subject | Workflow |
+| --- | --- |
+| `workspaces.member.invited` | persist a Notification row for the invitee |
+| `workspaces.member.joined` | notify the inviter + other active members |
+| `workspaces.member.role_changed` | notify the member whose role changed |
+| `workspaces.member.removed` | notify the removed member |
+| `workspaces.invitation.created` | email hook for unregistered invites (TODO) |
+| `workspaces.created` | provisioning/analytics hook (TODO) |
+| `audit.entry.created` | persist an AuditLogEntry row |
+| `apikeys.created` / `apikeys.revoked` | security/monitoring hook (TODO) |
+
+Transient subject (core NATS, realtime fan-out, no persistence):
+
+| Subject | Workflow |
+| --- | --- |
+| `notifications.created` | push to the user's WebSocket sessions |
+
+Every user/automatic action publishes an audit event (`audit.entry.created`):
+`user.register/login/token_refresh/logout`, `workspace.created/updated/deleted`,
+`member.role_changed/removed`, `invitation.created/accepted/declined/revoked`,
+`role.created`, `apikey.created/revoked`, `notification.acknowledged/
+unacknowledged`. The audit workflow persists them (committed) to
+`audit_log_entries`.
 
 ## 9. Refine compliance (API contract)
 

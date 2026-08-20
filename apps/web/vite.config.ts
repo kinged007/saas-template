@@ -14,7 +14,7 @@ export default defineConfig({
     port: 5173,
     allowedHosts: [".coder.munyard.biz"],
     proxy: {
-      "/api": {
+      "/api/": {
         target: "http://localhost:8000",
         changeOrigin: true,
         ws: true,

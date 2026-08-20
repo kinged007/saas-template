@@ -10,7 +10,10 @@ from src.api.crud import InvalidQuery, apply_query, parse_query
 from src.api.deps import (
     get_container,
     get_current_user,
+    get_optional_workspace_id,
+    require_key_permission,
     require_permission,
+    resolve_auth_principal,
 )
 from src.core.permissions import WORKSPACE_DELETE, WORKSPACE_READ, WORKSPACE_UPDATE
 from src.db.session import get_db
@@ -32,9 +35,21 @@ async def list_workspaces(
     request: Request,
     response: Response,
     user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
+    _=Depends(require_key_permission(WORKSPACE_READ)),
+    workspace_id: str | None = Depends(get_optional_workspace_id),
     db: AsyncSession = Depends(get_db),
 ):
     service = WorkspaceService(db)
+    if principal.api_key is not None:
+        # API keys are workspace-scoped: surface exactly the key's workspace.
+        workspace = await service.get_workspace(workspace_id)
+        if workspace is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
+        membership = await service.get_membership(workspace_id, user.id)
+        role = membership[1] if membership else None
+        response.headers["X-Total-Count"] = "1"
+        return [workspace_to_dict(workspace, role=role.name if role else None)]
     stmt = (
         select(Workspace)
         .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
@@ -60,14 +75,24 @@ async def list_workspaces(
 @router.post("", response_model=dict, status_code=201)
 async def create_workspace(
     body: WorkspaceCreate,
+    request: Request,
     user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    if principal.api_key is not None:
+        # API keys are workspace-scoped by definition; creating a brand-new
+        # workspace is outside their scope and requires an interactive session.
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "api keys cannot create workspaces")
     service = WorkspaceService(db, container.bus)
     try:
         workspace = await service.create_workspace(
-            name=body.name, slug=body.slug, description=body.description, owner=user
+            name=body.name,
+            slug=body.slug,
+            description=body.description,
+            owner=user,
+            ip_address=request.client.host if request.client else None,
         )
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
@@ -94,30 +119,41 @@ async def get_workspace(
 async def update_workspace(
     workspace_id: str,
     body: WorkspaceUpdate,
-    user=Depends(require_permission(WORKSPACE_UPDATE)),
+    request: Request,
+    user=Depends(get_current_user),
+    _=Depends(require_permission(WORKSPACE_UPDATE)),
     db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
 ):
-    service = WorkspaceService(db)
-    workspace = await service.get_workspace(workspace_id)
-    if workspace is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
-    if body.name is not None:
-        workspace.name = body.name
-    if body.description is not None:
-        workspace.description = body.description
-    await db.commit()
+    service = WorkspaceService(db, container.bus)
+    try:
+        workspace = await service.update_workspace(
+            workspace_id,
+            name=body.name,
+            description=body.description,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     return workspace_to_dict(workspace)
 
 
 @router.delete("/{workspace_id}", status_code=204)
 async def delete_workspace(
     workspace_id: str,
-    user=Depends(require_permission(WORKSPACE_DELETE)),
+    request: Request,
+    user=Depends(get_current_user),
+    _=Depends(require_permission(WORKSPACE_DELETE)),
     db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
 ):
-    service = WorkspaceService(db)
-    workspace = await service.get_workspace(workspace_id)
-    if workspace is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
-    await db.delete(workspace)
-    await db.commit()
+    service = WorkspaceService(db, container.bus)
+    try:
+        await service.delete_workspace(
+            workspace_id,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None

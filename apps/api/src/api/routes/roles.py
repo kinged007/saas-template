@@ -7,7 +7,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, apply_query, parse_query
-from src.api.deps import get_current_workspace_id, require_permission
+from src.api.deps import (
+    get_container,
+    get_current_user,
+    get_current_workspace_id,
+    require_permission,
+)
 from src.core.permissions import ALL_PERMISSIONS, ROLE_MANAGE, ROLE_READ
 from src.db.session import get_db
 from src.models.workspace import Role
@@ -64,15 +69,20 @@ async def permission_catalog() -> dict:
 @router.post("", status_code=201)
 async def create_role(
     body: RoleCreate,
+    request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
     _=Depends(require_permission(ROLE_MANAGE)),
     db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
 ):
-    role = await WorkspaceService(db).create_custom_role(
+    role = await WorkspaceService(db, container.bus).create_custom_role(
         workspace_id,
         name=body.name,
         description=body.description,
         permissions=body.permissions,
+        actor=user,
+        ip_address=request.client.host if request.client else None,
     )
     return _role_dict(role)
 

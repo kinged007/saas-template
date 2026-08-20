@@ -11,7 +11,10 @@ from src.api.deps import (
     get_container,
     get_current_user,
     get_current_workspace_id,
+    get_optional_workspace_id,
+    require_key_permission,
     require_permission,
+    resolve_auth_principal,
 )
 from src.core.dates import ensure_utc, now_utc
 from src.core.permissions import MEMBER_INVITE
@@ -79,6 +82,7 @@ async def list_invitations(
 @router.post("", status_code=201)
 async def create_invitation(
     body: InvitationCreate,
+    request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
     _=Depends(require_permission(MEMBER_INVITE)),
@@ -94,7 +98,11 @@ async def create_invitation(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "unknown role for this workspace")
     try:
         invite = await service.create_invitation(
-            workspace=workspace, email=body.email, role=role, invited_by=user
+            workspace=workspace,
+            email=body.email,
+            role=role,
+            invited_by=user,
+            ip_address=request.client.host if request.client else None,
         )
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
@@ -104,12 +112,20 @@ async def create_invitation(
 @router.delete("/{invitation_id}", status_code=204)
 async def revoke_invitation(
     invitation_id: str,
+    request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
     _=Depends(require_permission(MEMBER_INVITE)),
     db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
 ):
     try:
-        await WorkspaceService(db).revoke_invitation(workspace_id, invitation_id)
+        await WorkspaceService(db, container.bus).revoke_invitation(
+            workspace_id,
+            invitation_id,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
 
@@ -117,12 +133,27 @@ async def revoke_invitation(
 @router.post("/accept")
 async def accept_invitation(
     token: str,
+    request: Request,
     user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
+    _=Depends(require_key_permission(MEMBER_INVITE)),
+    workspace_id: str | None = Depends(get_optional_workspace_id),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    if principal.api_key is not None:
+        # API keys may only act on invitations inside their own workspace.
+        invite = (
+            await db.execute(select(Invitation).where(Invitation.token == token))
+        ).scalar_one_or_none()
+        if invite is None or invite.workspace_id != workspace_id:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "invitation not found in this workspace"
+            )
     try:
-        workspace = await WorkspaceService(db, container.bus).accept_invitation(token, user)
+        workspace = await WorkspaceService(db, container.bus).accept_invitation(
+            token, user, ip_address=request.client.host if request.client else None
+        )
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
     return {"workspace_id": workspace.id, "workspace_name": workspace.name}
@@ -131,9 +162,15 @@ async def accept_invitation(
 @router.get("/mine")
 async def my_invitations(
     user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
+    _=Depends(require_key_permission(MEMBER_INVITE)),
+    workspace_id: str | None = Depends(get_optional_workspace_id),
     db: AsyncSession = Depends(get_db),
 ):
     rows = await WorkspaceService(db).list_received_invitations(user)
+    if principal.api_key is not None:
+        # API keys are workspace-scoped: only their workspace's invitations.
+        rows = [(i, w, u) for i, w, u in rows if i.workspace_id == workspace_id]
     return [
         {
             **_invite_dict(i),
@@ -147,11 +184,24 @@ async def my_invitations(
 @router.post("/{invitation_id}/decline")
 async def decline_invitation(
     invitation_id: str,
+    request: Request,
     user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
+    _=Depends(require_key_permission(MEMBER_INVITE)),
+    workspace_id: str | None = Depends(get_optional_workspace_id),
     db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
 ):
+    if principal.api_key is not None:
+        invite = await db.get(Invitation, invitation_id)
+        if invite is None or invite.workspace_id != workspace_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "invitation not found in this workspace")
     try:
-        invite = await WorkspaceService(db).decline_invitation(invitation_id, user)
+        invite = await WorkspaceService(db, container.bus).decline_invitation(
+            invitation_id,
+            user,
+            ip_address=request.client.host if request.client else None,
+        )
     except WorkspaceConflict as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
     except WorkspaceError as exc:

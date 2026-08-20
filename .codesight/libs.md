@@ -6,6 +6,7 @@
   - function run_migrations_online: () -> None
 - `apps/api/alembic/versions/0001_initial.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0002_api_keys.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0003_audit_nullable_workspace.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/src/api/crud.py`
   - function parse_query: (request, *, max_limit) -> QuerySpec
   - function apply_query: (stmt, model, spec, *, sortable, filterable) -> Select
@@ -14,6 +15,7 @@
   - class InvalidQuery
 - `apps/api/src/api/deps.py`
   - function get_container: (request)
+  - function require_key_permission: (permission)
   - function require_permission: (permission)
   - class AuthPrincipal
 - `apps/api/src/container.py` — class Container
@@ -45,6 +47,10 @@
 - `apps/api/src/events/factory.py` — function build_event_bus: () -> EventBus, class WorkflowRegistry
 - `apps/api/src/events/inprocess.py` — class InProcessEventBus
 - `apps/api/src/events/nats.py` — class NatsEventBus
+- `apps/api/src/events/publisher.py`
+  - function audit_payload: (*, workspace_id, resource_type, resource_id, action, actor_user_id, details, ip_address) -> dict
+  - function publish_event: (bus, subject, payload, *, correlation_id, transient) -> None
+  - function publish_audit: (bus, *, correlation_id, **kwargs) -> None
 - `apps/api/src/events/subjects.py` — class EventBusDriver, class Subjects
 - `apps/api/src/main.py` — function lifespan: (app), function root: () -> dict
 - `apps/api/src/models/api_key.py` — class ApiKey

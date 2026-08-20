@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routes import (
+    api_keys,
     auth,
     invitations,
     members,
@@ -77,5 +78,6 @@ app.include_router(workspaces.router, prefix=API)
 app.include_router(members.router, prefix=API)
 app.include_router(invitations.router, prefix=API)
 app.include_router(roles.router, prefix=API)
+app.include_router(api_keys.router, prefix=API)
 app.include_router(notifications.router, prefix=API)
 app.include_router(ws.router, prefix=API)

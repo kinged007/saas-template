@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.dates import ensure_utc, now_utc
 from src.core.permissions import permissions_for_role
 from src.events.bus import EventBus
+from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
 from src.models.core import Invitation
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
@@ -38,7 +39,13 @@ class WorkspaceService:
     # ------------------------------------------------------------- workspaces
 
     async def create_workspace(
-        self, *, name: str, slug: str | None, description: str | None, owner: User
+        self,
+        *,
+        name: str,
+        slug: str | None,
+        description: str | None,
+        owner: User,
+        ip_address: str | None = None,
     ) -> Workspace:
         slug = slug or _slugify(name)
         exists = await self._session.execute(select(Workspace).where(Workspace.slug == slug))
@@ -69,7 +76,85 @@ class WorkspaceService:
             )
         )
         await self._session.commit()
+
+        await publish_event(
+            self._bus,
+            Subjects.WORKSPACE_CREATED,
+            {
+                "workspace_id": workspace.id,
+                "name": workspace.name,
+                "slug": workspace.slug,
+                "created_by_user_id": owner.id,
+            },
+        )
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace.id,
+            resource_type="workspace",
+            resource_id=workspace.id,
+            action="workspace.created",
+            actor_user_id=owner.id,
+            details={"name": workspace.name, "slug": workspace.slug},
+            ip_address=ip_address,
+        )
         return workspace
+
+    async def update_workspace(
+        self,
+        workspace_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        actor: User | None = None,
+        ip_address: str | None = None,
+    ) -> Workspace:
+        workspace = await self._session.get(Workspace, workspace_id)
+        if workspace is None:
+            raise WorkspaceError("workspace not found")
+        changes: dict = {}
+        if name is not None and name != workspace.name:
+            changes["name"] = {"from": workspace.name, "to": name}
+            workspace.name = name
+        if description is not None and description != workspace.description:
+            changes["description"] = {"from": workspace.description, "to": description}
+            workspace.description = description
+        await self._session.commit()
+        if changes:
+            await publish_audit(
+                self._bus,
+                workspace_id=workspace_id,
+                resource_type="workspace",
+                resource_id=workspace_id,
+                action="workspace.updated",
+                actor_user_id=actor.id if actor else None,
+                details=changes,
+                ip_address=ip_address,
+            )
+        return workspace
+
+    async def delete_workspace(
+        self,
+        workspace_id: str,
+        *,
+        actor: User | None = None,
+        ip_address: str | None = None,
+    ) -> None:
+        workspace = await self._session.get(Workspace, workspace_id)
+        if workspace is None:
+            raise WorkspaceError("workspace not found")
+        name = workspace.name
+        await self._session.delete(workspace)
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="workspace",
+            resource_id=workspace_id,
+            action="workspace.deleted",
+            actor_user_id=actor.id if actor else None,
+            details={"name": name},
+            ip_address=ip_address,
+        )
 
     async def list_workspaces(self, user_id: str) -> list[tuple[Workspace, Role, WorkspaceMember]]:
         stmt = (
@@ -113,7 +198,13 @@ class WorkspaceService:
         return list(result.all())
 
     async def set_member_role(
-        self, workspace_id: str, member_id: str, role_id: str, *, actor: User
+        self,
+        workspace_id: str,
+        member_id: str,
+        role_id: str,
+        *,
+        actor: User,
+        ip_address: str | None = None,
     ) -> WorkspaceMember:
         membership = await self.get_membership(workspace_id, actor.id)
         if membership is None:
@@ -132,11 +223,49 @@ class WorkspaceService:
             raise WorkspaceError("role not found in workspace")
         if role.name == "owner":
             raise WorkspaceConflict("cannot assign the owner role")
+        from_role = current_role.name if current_role is not None else None
         member.role_id = role.id
         await self._session.commit()
+
+        workspace = await self._session.get(Workspace, workspace_id)
+        await publish_event(
+            self._bus,
+            Subjects.WORKSPACE_MEMBER_ROLE_CHANGED,
+            {
+                "workspace_id": workspace_id,
+                "workspace_name": workspace.name if workspace else "workspace",
+                "user_id": member.user_id,
+                "from_role": from_role,
+                "to_role": role.name,
+                "changed_by_user_id": actor.id,
+                "changed_by_name": actor.display_name,
+            },
+        )
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="member",
+            resource_id=member.id,
+            action="member.role_changed",
+            actor_user_id=actor.id,
+            details={
+                "user_id": member.user_id,
+                "from_role": from_role,
+                "to_role": role.name,
+                "changed_by_name": actor.display_name,
+            },
+            ip_address=ip_address,
+        )
         return member
 
-    async def remove_member(self, workspace_id: str, member_id: str, *, actor: User) -> None:
+    async def remove_member(
+        self,
+        workspace_id: str,
+        member_id: str,
+        *,
+        actor: User,
+        ip_address: str | None = None,
+    ) -> None:
         member = await self._session.get(WorkspaceMember, member_id)
         if member is None or member.workspace_id != workspace_id:
             raise WorkspaceError("member not found in workspace")
@@ -145,8 +274,33 @@ class WorkspaceService:
         role = await self._session.get(Role, member.role_id)
         if role and role.name == "owner":
             raise WorkspaceError("cannot remove the workspace owner")
+        user_id = member.user_id
+        workspace = await self._session.get(Workspace, workspace_id)
+        workspace_name = workspace.name if workspace else "workspace"
         await self._session.delete(member)
         await self._session.commit()
+
+        await publish_event(
+            self._bus,
+            Subjects.WORKSPACE_MEMBER_REMOVED,
+            {
+                "workspace_id": workspace_id,
+                "workspace_name": workspace_name,
+                "user_id": user_id,
+                "removed_by_user_id": actor.id,
+                "removed_by_name": actor.display_name,
+            },
+        )
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="member",
+            resource_id=member_id,
+            action="member.removed",
+            actor_user_id=actor.id,
+            details={"user_id": user_id, "workspace_name": workspace_name},
+            ip_address=ip_address,
+        )
 
     # ------------------------------------------------------------- invitations
 
@@ -158,6 +312,7 @@ class WorkspaceService:
         role: Role,
         invited_by: User,
         expires_in_hours: int = 72,
+        ip_address: str | None = None,
     ) -> Invitation:
         email = email.lower()
         if role.name == "owner":
@@ -183,9 +338,30 @@ class WorkspaceService:
         self._session.add(invite)
         await self._session.commit()
 
-        # Notify an existing user with that email via the event bus.
         existing = await AuthService(self._session).get_by_email(email)
-        if existing and existing.id != invited_by.id and self._bus is not None:
+        is_registered = existing is not None
+
+        # Fired for every invitation. The workflow currently only handles
+        # unregistered recipients; email delivery is not implemented yet.
+        await publish_event(
+            self._bus,
+            Subjects.WORKSPACE_INVITATION_CREATED,
+            {
+                "invitation_id": invite.id,
+                "workspace_id": workspace.id,
+                "workspace_name": workspace.name,
+                "email": email,
+                "role": role.name,
+                "invited_by_user_id": invited_by.id,
+                "invited_by_name": invited_by.display_name,
+                "is_registered": is_registered,
+                # TODO(events): include an accept URL when email delivery is
+                # implemented, e.g.
+                # "accept_url": f"{settings.frontend_url}/invitations/accept?token={invite.token}",
+            },
+        )
+        # Notify an existing user with that email via the event bus.
+        if is_registered and existing.id != invited_by.id and self._bus is not None:
             await self._bus.publish(
                 Subjects.WORKSPACE_MEMBER_INVITED,
                 {
@@ -200,6 +376,21 @@ class WorkspaceService:
                     ),
                 },
             )
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace.id,
+            resource_type="invitation",
+            resource_id=invite.id,
+            action="invitation.created",
+            actor_user_id=invited_by.id,
+            details={
+                "email": email,
+                "role": role.name,
+                "workspace_name": workspace.name,
+                "expires_in_hours": expires_in_hours,
+            },
+            ip_address=ip_address,
+        )
         return invite
 
     async def list_invitations(self, workspace_id: str) -> list[Invitation]:
@@ -225,7 +416,9 @@ class WorkspaceService:
         result = await self._session.execute(stmt)
         return list(result.all())
 
-    async def decline_invitation(self, invitation_id: str, user: User) -> Invitation:
+    async def decline_invitation(
+        self, invitation_id: str, user: User, *, ip_address: str | None = None
+    ) -> Invitation:
         invite = await self._session.get(Invitation, invitation_id)
         if invite is None or invite.email != user.email.lower():
             raise WorkspaceError("invitation not found")
@@ -237,9 +430,26 @@ class WorkspaceService:
             raise WorkspaceConflict("invitation has expired")
         invite.status = "declined"
         await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=invite.workspace_id,
+            resource_type="invitation",
+            resource_id=invite.id,
+            action="invitation.declined",
+            actor_user_id=user.id,
+            details={"email": invite.email},
+            ip_address=ip_address,
+        )
         return invite
 
-    async def revoke_invitation(self, workspace_id: str, invitation_id: str) -> Invitation:
+    async def revoke_invitation(
+        self,
+        workspace_id: str,
+        invitation_id: str,
+        *,
+        actor: User | None = None,
+        ip_address: str | None = None,
+    ) -> Invitation:
         invite = await self._session.get(Invitation, invitation_id)
         if invite is None or invite.workspace_id != workspace_id:
             raise WorkspaceError("invitation not found")
@@ -247,9 +457,21 @@ class WorkspaceService:
             raise WorkspaceError("invitation is no longer pending")
         invite.status = "revoked"
         await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="invitation",
+            resource_id=invite.id,
+            action="invitation.revoked",
+            actor_user_id=actor.id if actor else None,
+            details={"email": invite.email},
+            ip_address=ip_address,
+        )
         return invite
 
-    async def accept_invitation(self, token: str, user: User) -> Workspace:
+    async def accept_invitation(
+        self, token: str, user: User, *, ip_address: str | None = None
+    ) -> Workspace:
         stmt = select(Invitation).where(Invitation.token == token)
         result = await self._session.execute(stmt)
         invite = result.scalar_one_or_none()
@@ -286,10 +508,22 @@ class WorkspaceService:
                 Subjects.WORKSPACE_MEMBER_JOINED,
                 {
                     "workspace_id": workspace.id,
-                    "user_id": user.id,
                     "workspace_name": workspace.name,
+                    "user_id": user.id,
+                    "user_name": user.display_name,
+                    "invited_by_user_id": invite.invited_by_user_id,
                 },
             )
+        await publish_audit(
+            self._bus,
+            workspace_id=invite.workspace_id,
+            resource_type="invitation",
+            resource_id=invite.id,
+            action="invitation.accepted",
+            actor_user_id=user.id,
+            details={"workspace_name": workspace.name, "email": user.email},
+            ip_address=ip_address,
+        )
         return workspace
 
     # ------------------------------------------------------------------ roles
@@ -308,7 +542,14 @@ class WorkspaceService:
         return role
 
     async def create_custom_role(
-        self, workspace_id: str, *, name: str, description: str | None, permissions: list[str]
+        self,
+        workspace_id: str,
+        *,
+        name: str,
+        description: str | None,
+        permissions: list[str],
+        actor: User | None = None,
+        ip_address: str | None = None,
     ) -> Role:
         role = Role(
             workspace_id=workspace_id,
@@ -319,6 +560,16 @@ class WorkspaceService:
         )
         self._session.add(role)
         await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="role",
+            resource_id=role.id,
+            action="role.created",
+            actor_user_id=actor.id if actor else None,
+            details={"name": name, "permissions": permissions},
+            ip_address=ip_address,
+        )
         return role
 
 

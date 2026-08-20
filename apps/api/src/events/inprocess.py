@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 
 from src.events.bus import (
     EventBus,
@@ -31,87 +32,107 @@ class InProcessEventBus(EventBus):
     """Development event bus: async in-process pub/sub.
 
     Deliveries are enqueued per subscription so a slow handler never blocks
-    publishers. Subscribers registered *before* start() will receive events.
+    publishers. Subscribers registered *before* start() will receive events;
+    publishes issued before start() are buffered in the per-subscription
+    queues and delivered once start() spawns the consumer tasks.
+
+    Lifecycle semantics:
+    - `start()` may be called once per run (idempotent); buffered publishes
+      are delivered after it returns.
+    - `unsubscribe()` cancels the consumer task; re-registering the same
+      subject replaces the handler and cancels the stale task.
+    - `stop()` cancels all consumer tasks; publishes after stop are dropped
+      with a warning.
     """
 
     name = "inprocess"
 
     def __init__(self) -> None:
         self._handlers: dict[str, SubscriberHandler] = {}
-        self._queues: dict[str, asyncio.Queue] = {}
-        self._tasks: list[asyncio.Task] = []
+        self._queues: dict[str, asyncio.Queue[EventEnvelope]] = {}
+        self._tasks: dict[str, asyncio.Task] = {}
         self._started = False
+        self._stopped = False
 
     async def publish(
-        self, subject: str, payload: dict, *, correlation_id: str | None = None
+        self,
+        subject: str,
+        payload: dict,
+        *,
+        correlation_id: str | None = None,
+        transient: bool = False,
     ) -> None:
+        if self._stopped:
+            logger.warning("dropping publish to %s: bus is stopped", subject)
+            return
         envelope = EventEnvelope(
             metadata=EventMetadata(subject=subject, correlation_id=correlation_id or ""),
             payload=payload,
         )
-        if not self._started:
-            # Buffered until start(): events published during startup are kept.
-            pass
+        matched = 0
         for sub, queue in list(self._queues.items()):
             if _subject_matches(sub, subject):
                 queue.put_nowait(envelope)
-        logger.debug("published %s (%d subscribers)", subject, len(self._queues))
+                matched += 1
+        logger.debug("published %s (%d subscriber queues)", subject, matched)
 
     async def subscribe(
         self, subject: str, handler: SubscriberHandler, *, fanout: bool = False
     ) -> str:
-        # Idempotent: re-registration (e.g. app restart, repeated lifespans)
-        # replaces the previous handler for the same subject.
-        if subject in self._handlers:
+        stale = self._tasks.pop(subject, None)
+        if stale is not None:
+            stale.cancel()
             logger.warning("replacing existing handler for %s", subject)
-        subscription_id = f"{subject}:{len(self._handlers)}"
         self._handlers[subject] = handler
-        queue: asyncio.Queue[EventEnvelope] = asyncio.Queue()
-        self._queues[subject] = queue
+        self._queues[subject] = asyncio.Queue()
+        subscription_id = f"{subject}:{uuid.uuid4().hex[:8]}"
         if self._started:
-            self._tasks.append(asyncio.create_task(self._consume(subscription_id, queue, handler)))
+            self._tasks[subject] = asyncio.create_task(
+                self._consume(subject, self._queues[subject], handler)
+            )
         return subscription_id
 
     async def unsubscribe(self, subscription_id: str) -> None:
         subject, _ = subscription_id.rsplit(":", 1)
         self._handlers.pop(subject, None)
         self._queues.pop(subject, None)
+        task = self._tasks.pop(subject, None)
+        if task is not None:
+            task.cancel()
 
     async def start(self) -> None:
+        if self._started:
+            return
         self._started = True
-        for subscription_id, queue, handler in self._pairs():
-            self._tasks.append(asyncio.create_task(self._consume(subscription_id, queue, handler)))
-        logger.info("in-process event bus started")
+        self._stopped = False
+        for subject, handler in self._handlers.items():
+            self._tasks[subject] = asyncio.create_task(
+                self._consume(subject, self._queues[subject], handler)
+            )
+        logger.info("in-process event bus started (%d subscriptions)", len(self._tasks))
 
     async def stop(self) -> None:
         self._started = False
-        for task in self._tasks:
+        self._stopped = True
+        tasks = list(self._tasks.values())
+        self._tasks.clear()
+        for task in tasks:
             task.cancel()
-        for task in self._tasks:
+        for task in tasks:
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-        self._tasks.clear()
-
-    def _pairs(self):
-        return [
-            (f"{subject}:{i}", queue, handler)
-            for i, (subject, handler) in enumerate(self._handlers.items())
-            for queue in [self._queues[subject]]
-        ]
 
     async def _consume(
-        self, subscription_id: str, queue: asyncio.Queue[EventEnvelope], handler: SubscriberHandler
+        self, subject: str, queue: asyncio.Queue[EventEnvelope], handler: SubscriberHandler
     ) -> None:
-        logger.debug("subscriber %s consuming", subscription_id)
+        logger.debug("subscriber %s consuming", subject)
         while True:
             envelope = await queue.get()
             try:
                 await handler(envelope.payload, envelope.metadata)
             except Exception:
-                logger.exception(
-                    "subscriber %s failed for %s", subscription_id, envelope.metadata.subject
-                )
+                logger.exception("subscriber %s failed for %s", subject, envelope.metadata.subject)
             finally:
                 queue.task_done()

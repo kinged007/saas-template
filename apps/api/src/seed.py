@@ -1,4 +1,4 @@
-"""Dev seed: demo users, workspaces, memberships, invitations, notifications.
+"""Dev seed: demo users, workspaces, memberships, invitations, notifications, api keys.
 
 Idempotent — safe to run repeatedly.
 """
@@ -13,8 +13,10 @@ from sqlalchemy import select
 
 from src.core.dates import now_utc
 from src.db.session import SessionFactory
+from src.models.api_key import ApiKey
 from src.models.core import Invitation, Notification
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
+from src.services.api_keys import ApiKeyService
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
 
@@ -51,6 +53,48 @@ MEMBERSHIPS = [
 INVITATIONS = [
     ("acme-corp", "user2@example.com", "viewer"),
     ("globex", "user2@example.com", "editor"),
+]
+
+# (workspace slug, creator email, name, permissions).
+# Permissions are validated against the creator's role by ApiKeyService —
+# they must be a subset of what the creator can do. Raw secrets are printed
+# once, at creation time; re-running the seed keeps existing keys untouched.
+API_KEYS = [
+    (
+        "acme-corp",
+        "admin@example.com",
+        "ci-deploy",
+        ["member:read", "role:read"],
+    ),
+    (
+        "acme-corp",
+        "admin@example.com",
+        "automation",
+        [
+            "workspace:read",
+            "workspace:update",
+            "member:read",
+            "member:manage",
+            "role:read",
+            "role:manage",
+            "apikey:read",
+            "apikey:manage",
+            "notification:read",
+            "notification:acknowledge",
+        ],
+    ),
+    (
+        "acme-corp",
+        "user1@example.com",
+        "editor-script",
+        ["member:read", "role:read", "notification:read"],
+    ),
+    (
+        "globex",
+        "user1@example.com",
+        "viewer-read",
+        ["member:read"],
+    ),
 ]
 
 
@@ -170,6 +214,25 @@ async def main() -> None:
             )
             logger.info("added %s to %s as %s", email, slug, role_name)
 
+        api_keys: list[tuple[str, str, str]] = []
+        api_service = ApiKeyService(session)
+        for slug, email, name, permissions in API_KEYS:
+            workspace = workspaces[slug]
+            user = users[email]
+            existing = await session.execute(
+                select(ApiKey).where(ApiKey.workspace_id == workspace.id, ApiKey.name == name)
+            )
+            if existing.scalar_one_or_none() is not None:
+                continue
+            key, raw = await api_service.create_api_key(
+                workspace_id=workspace.id,
+                name=name,
+                permissions=permissions,
+                actor=user,
+            )
+            api_keys.append((name, slug, raw))
+            logger.info("created api key %s in %s", name, slug)
+
         invitations: dict[tuple[str, str], Invitation] = {}
         for slug, email, role_name in INVITATIONS:
             workspace = workspaces[slug]
@@ -231,6 +294,10 @@ async def main() -> None:
     print(f"  password: {DEMO_PASSWORD}")
     for email, display_name in DEMO_USERS:
         print(f"  {email:<28} {display_name}")
+    if api_keys:
+        print("  api keys (secrets shown once, at creation):")
+        for name, slug, raw in api_keys:
+            print(f"    {name:<16} ({slug}) {raw}")
 
 
 async def _role_by_name(session, workspace_id: str, name: str) -> Role:

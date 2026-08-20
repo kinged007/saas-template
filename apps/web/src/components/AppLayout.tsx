@@ -38,6 +38,7 @@ import {
   ChevronsUpDown,
   CircleUser,
   Inbox,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   Mail,
@@ -150,6 +151,7 @@ function UserMenu() {
   const initial = (identity?.display_name ?? "U").slice(0, 2).toUpperCase();
   const permissions = activeWorkspacePermissions(identity);
   const canManageRoles = permissions.includes("*") || permissions.includes("role:manage");
+  const canViewApiKeys = permissions.includes("*") || permissions.includes("apikey:read");
 
   return (
     <DropdownMenu>
@@ -181,6 +183,12 @@ function UserMenu() {
           <DropdownMenuItem onClick={() => navigate("/roles")}>
             <ShieldCheck />
             Roles
+          </DropdownMenuItem>
+        )}
+        {canViewApiKeys && (
+          <DropdownMenuItem onClick={() => navigate("/api-keys")}>
+            <KeyRound />
+            API Keys
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />

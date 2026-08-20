@@ -8,7 +8,7 @@
 
 ## Scale
 
-26 API routes · 10 database models · 26 UI components · 43 library files · 2 middleware layers · 17 environment variables
+26 API routes · 10 database models · 28 UI components · 45 library files · 2 middleware layers · 18 environment variables
 
 ## Subsystems
 
@@ -23,20 +23,20 @@
 
 **Database:** sqlalchemy, 10 models — see [database.md](./database.md)
 
-**UI:** 26 components (react) — see [ui.md](./ui.md)
+**UI:** 28 components (react) — see [ui.md](./ui.md)
 
-**Libraries:** 43 files — see [libraries.md](./libraries.md)
+**Libraries:** 45 files — see [libraries.md](./libraries.md)
 
 ## High-Impact Files
 
 Changes to these files have the widest blast radius across the codebase:
 
-- `apps/api/src/db/session.py` — imported by **16** files
-- `apps/api/src/models/workspace.py` — imported by **12** files
-- `apps/web/src/types.ts` — imported by **12** files
-- `apps/api/src/settings.py` — imported by **9** files
-- `apps/api/src/services/workspaces.py` — imported by **9** files
-- `apps/api/src/api/deps.py` — imported by **9** files
+- `apps/api/src/db/session.py` — imported by **21** files
+- `apps/api/src/models/workspace.py` — imported by **14** files
+- `apps/web/src/types.ts` — imported by **13** files
+- `apps/api/src/events/bus.py` — imported by **12** files
+- `apps/api/src/settings.py` — imported by **11** files
+- `apps/api/src/services/workspaces.py` — imported by **10** files
 
 ## Required Environment Variables
 

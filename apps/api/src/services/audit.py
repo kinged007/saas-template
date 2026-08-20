@@ -26,7 +26,7 @@ class AuditService:
     async def record(
         self,
         *,
-        workspace_id: str,
+        workspace_id: str | None,
         resource_type: str,
         resource_id: str,
         action: str,
@@ -38,7 +38,8 @@ class AuditService:
         """Append one audit entry and commit it immediately.
 
         Committed on its own so the record survives even if a later step of
-        the calling transaction fails.
+        the calling transaction fails. `workspace_id` is optional: user-scoped
+        actions (auth, ...) have no workspace.
         """
         entry = AuditLogEntry(
             workspace_id=workspace_id,
@@ -51,7 +52,7 @@ class AuditService:
             created_at=created_at or datetime.now(UTC),
         )
         self._session.add(entry)
-        await self._session.flush()
+        await self._session.commit()
         return entry
 
     async def list_for_resource(

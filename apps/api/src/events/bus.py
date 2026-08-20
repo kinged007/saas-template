@@ -44,9 +44,20 @@ class EventBus(ABC):
 
     @abstractmethod
     async def publish(
-        self, subject: str, payload: dict, *, correlation_id: str | None = None
+        self,
+        subject: str,
+        payload: dict,
+        *,
+        correlation_id: str | None = None,
+        transient: bool = False,
     ) -> None:
-        """Publish an event to a subject."""
+        """Publish an event to a subject.
+
+        `transient=True` marks the event as realtime-only: the NATS backend
+        sends it over core NATS without JetStream persistence (used for
+        fan-out / publish-only subjects; see Subjects.TRANSIENT_SUBJECTS).
+        The in-process backend treats transient and durable identically.
+        """
 
     @abstractmethod
     async def subscribe(
