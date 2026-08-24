@@ -1,23 +1,28 @@
 # syntax=docker/dockerfile:1
-FROM python:3.12-slim AS base
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
+# --- builder: resolve deps from uv.lock (reproducible) ---
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
 WORKDIR /srv/api
+COPY apps/api/pyproject.toml apps/api/uv.lock ./
+RUN uv sync --frozen --no-install-project --no-editable
 
-FROM base AS builder
-COPY apps/api/pyproject.toml ./
-COPY apps/api/src ./src
-RUN pip install --no-cache-dir . 
-
-FROM base AS runtime
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin/uvicorn /usr/local/bin/uvicorn
-COPY --from=builder /usr/local/bin/alembic /usr/local/bin/alembic
+# --- runtime: venv + app code (app runs via PYTHONPATH, like `make api`) ---
+FROM python:3.12-slim AS runtime
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/srv/api \
+    PATH="/srv/api/.venv/bin:$PATH"
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /srv/api
+COPY --from=builder /srv/api/.venv /srv/api/.venv
 COPY apps/api/alembic.ini ./
 COPY apps/api/alembic ./alembic
 COPY apps/api/src ./src
-ENV PYTHONPATH=/srv/api
 EXPOSE 8000
-HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -fsS http://localhost:8000/api/v1/healthz || exit 1
-CMD ["uvicorn", "tenantflex.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,68 +1,90 @@
-# Full production-like stack: postgres, nats, api (with NATS event bus), web (nginx).
-# Usage: docker compose -f infra/docker/docker-compose.prod.yml up --build
+# Production stack: postgres, nats (JetStream), api (FastAPI + migrations), web (nginx).
+#
+# First-time setup:
+#   cp infra/docker/.env.production.example infra/docker/.env   # then edit the secrets
+#
+# Deploy / update:
+#   docker compose -f infra/docker/docker-compose.prod.yml up --build -d
+#
+# Only the web service publishes a port (${WEB_PORT:-8080} → 80). It serves the
+# SPA and reverse-proxies /api/* to the api service, so the whole app is
+# same-origin (no CORS) and postgres/nats stay off the host network.
+#
+# Migrations run automatically before each api start (`alembic upgrade head`).
+# Demo seed data is NOT applied — create the first user via /api/v1/register.
+name: saas-template
+
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: tenantflex
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
-      POSTGRES_DB: tenantflex
+      POSTGRES_USER: saas_template
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in infra/docker/.env}
+      POSTGRES_DB: saas_template
     volumes:
-      - tenantflex_pg:/var/lib/postgresql/data
+      - saas_template_pg:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U tenantflex"]
+      test: ["CMD-SHELL", "pg_isready -U saas_template -d saas_template"]
       interval: 5s
-      timeout: 3s
-      retries: 10
+      timeout: 5s
+      retries: 12
 
   nats:
     image: nats:2.10-alpine
-    command: ["-js", "-m", "8222", "--server_name", "tenantflex"]
-    ports:
-      - "4222:4222"
-      - "8222:8222"
+    restart: unless-stopped
+    command: ["-js", "-sd", "/data", "-m", "8222", "--server_name", "saas-template"]
+    volumes:
+      - saas_template_nats:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
   api:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.api
+    restart: unless-stopped
     environment:
       ENVIRONMENT: production
-      DATABASE_URL: postgresql+asyncpg://tenantflex:${POSTGRES_PASSWORD:-change-me}@postgres:5432/tenantflex
-      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
-      FERNET_KEYS: ${FERNET_KEYS:?set FERNET_KEYS in .env}
+      DEBUG: "false"
+      DATABASE_URL: postgresql+asyncpg://saas_template:${POSTGRES_PASSWORD}@postgres:5432/saas_template
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in infra/docker/.env}
+      FERNET_KEYS: ${FERNET_KEYS:?set FERNET_KEYS in infra/docker/.env}
+      SECRET_ENCRYPT_VERSION: ${SECRET_ENCRYPT_VERSION:-1}
       EVENT_BUS_DRIVER: nats
       NATS_URL: nats://nats:4222
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+      # Public origin of the app (used for links in emails etc.). CORS is only
+      # relevant for split-origin deployments; same-origin proxying needs none.
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8080}
-      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
-      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
-      MICROSOFT_AUTHORITY: ${MICROSOFT_AUTHORITY:-https://login.microsoftonline.com/consumers}
-      MICROSOFT_REDIRECT_URI: ${MICROSOFT_REDIRECT_URI:-http://localhost:8080/api/v1/auth/oauth/microsoft/callback}
-      OKTA_CLIENT_ID: ${OKTA_CLIENT_ID:-}
-      OKTA_CLIENT_SECRET: ${OKTA_CLIENT_SECRET:-}
-      OKTA_DOMAIN: ${OKTA_DOMAIN:-}
-      OKTA_REDIRECT_URI: ${OKTA_REDIRECT_URI:-http://localhost:8080/api/v1/auth/oauth/okta/callback}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
     depends_on:
       postgres:
         condition: service_healthy
       nats:
-        condition: service_started
+        condition: service_healthy
     command: >
       sh -c "alembic upgrade head &&
-             uvicorn tenantflex.main:app --host 0.0.0.0 --port 8000"
+             exec uvicorn src.main:app --host 0.0.0.0 --port 8000
+                  --proxy-headers --forwarded-allow-ips='*'"
 
   web:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.web
-    environment:
-      VITE_API_URL: http://localhost:8080/api/v1
-      VITE_WS_URL: ws://localhost:8080/api/v1/ws
+      args:
+        # Leave unset for same-origin relative URLs (default, recommended).
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_WS_URL: ${VITE_WS_URL:-}
+    restart: unless-stopped
     ports:
-      - "8080:80"
+      - "${WEB_PORT:-8080}:80"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
-  tenantflex_pg:
+  saas_template_pg:
+  saas_template_nats:

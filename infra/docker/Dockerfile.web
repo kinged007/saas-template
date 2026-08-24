@@ -4,8 +4,10 @@ WORKDIR /app
 COPY apps/web/package.json apps/web/package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 COPY apps/web/ ./
-ARG VITE_API_URL=http://localhost:8080/api/v1
-ARG VITE_WS_URL=ws://localhost:8080/api/v1/ws
+# Empty by default → the app uses same-origin relative URLs ("/api/v1"),
+# which is correct behind the nginx proxy. Set only for split-origin deploys.
+ARG VITE_API_URL=
+ARG VITE_WS_URL=
 ENV VITE_API_URL=$VITE_API_URL VITE_WS_URL=$VITE_WS_URL
 RUN npm run build
 

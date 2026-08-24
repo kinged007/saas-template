@@ -43,4 +43,4 @@ Changes to these files have the widest blast radius across the codebase:
 - `DATABASE_URL` — `apps/api/tests/conftest.py`
 
 ---
-_Back to [index.md](./index.md) · Generated 2026-08-20_
+_Back to [index.md](./index.md) · Generated 2026-08-24_
