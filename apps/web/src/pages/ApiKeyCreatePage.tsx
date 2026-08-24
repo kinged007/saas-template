@@ -34,6 +34,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   CreateView,
   CreateViewHeader,
@@ -68,6 +69,9 @@ export function ApiKeyCreatePage() {
     refineCoreProps: {
       resource: "api-keys",
       action: "create",
+      // Stay on the page so the created key can be shown in the dialog below —
+      // otherwise refine redirects to the list and the raw key is lost.
+      redirect: false,
       successNotification: {
         message: "API key created",
         description: "Copy the key now — it won't be shown again.",
@@ -192,7 +196,7 @@ export function ApiKeyCreatePage() {
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-2">
-            <FormLabel htmlFor="new-key">Key</FormLabel>
+            <Label htmlFor="new-key">Key</Label>
             <div className="flex gap-2">
               <Input
                 id="new-key"
