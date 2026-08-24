@@ -2,7 +2,7 @@
 
 > **Navigation aid.** Schema shapes and field types extracted via AST. Read the actual schema source files before writing migrations or query logic.
 
-**sqlalchemy** — 10 models
+**sqlalchemy** — 13 models
 
 ### ApiKey
 
@@ -58,6 +58,53 @@ pk: `id` (str)
 - `payload`: JSON _(default)_
 - `acknowledged_at`: DateTime _(nullable)_
 
+### JobDefinition
+
+pk: `id` (str)
+
+- `id`: str _(pk, default)_
+- `key`: String _(index)_
+- `workspace_id`: unknown _(index, nullable)_
+- `name`: String
+- `description`: Text _(default)_
+- `cron_schedule`: String
+- `params_schema`: JSON _(default)_
+- `params`: JSON _(default)_
+- `enabled`: bool _(default)_
+- `missed_policy`: String _(default)_
+- `timeout_seconds`: Integer _(default)_
+- `next_run_at`: DateTime _(nullable)_
+- `last_run_at`: DateTime _(nullable)_
+
+### JobRun
+
+pk: `id` (str)
+
+- `id`: str _(pk, default)_
+- `definition_id`: str _(index)_
+- `workspace_id`: unknown _(index, nullable)_
+- `status`: String _(default, index)_
+- `trigger`: String _(default)_
+- `actor_user_id`: unknown _(index, nullable)_
+- `params`: JSON _(default)_
+- `scheduled_at`: DateTime
+- `started_at`: DateTime _(nullable)_
+- `finished_at`: DateTime _(nullable)_
+- `duration_ms`: Integer _(nullable)_
+- `error`: Text _(nullable)_
+- `correlation_id`: String _(nullable)_
+
+### JobLogEntry
+
+pk: `id` (str)
+
+- `id`: str _(pk, default)_
+- `run_id`: str _(index)_
+- `seq`: Integer _(default)_
+- `ts`: DateTime
+- `level`: String _(default)_
+- `message`: Text
+
 ### StoredSecret
 
 pk: `id` (str)
@@ -82,6 +129,7 @@ pk: `id` (str)
 - `display_name`: String
 - `avatar_url`: String _(nullable)_
 - `is_active`: Boolean _(default)_
+- `is_superuser`: Boolean _(default)_
 - `last_login_at`: DateTime _(nullable)_
 
 ### RefreshToken
@@ -129,12 +177,13 @@ pk: `id` (str)
 
 Read and edit these files when adding columns, creating migrations, or changing relations:
 
-- `apps/api/src/db/session.py` — imported by **21** files
-- `apps/api/src/models/workspace.py` — imported by **14** files
-- `apps/api/src/models/core.py` — imported by **10** files
-- `apps/api/src/db/base.py` — imported by **7** files
+- `apps/api/src/db/session.py` — imported by **28** files
+- `apps/api/src/models/workspace.py` — imported by **15** files
+- `apps/api/src/models/core.py` — imported by **11** files
+- `apps/api/src/db/base.py` — imported by **8** files
+- `apps/api/src/schemas/api.py` — imported by **8** files
 - `apps/api/src/models/api_key.py` — imported by **7** files
-- `apps/api/src/schemas/api.py` — imported by **7** files
+- `apps/api/src/models/jobs.py` — imported by **7** files
 
 ---
 _Back to [overview.md](./overview.md)_

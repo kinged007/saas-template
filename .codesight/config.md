@@ -13,11 +13,15 @@
 - `EVENT_BUS_DRIVER` (has default) — apps/api/.env.example
 - `FERNET_KEYS` (has default) — apps/api/.env.example
 - `FRONTEND_URL` (has default) — apps/api/.env.example
+- `JOBS_DEFAULT_TIMEOUT_SECONDS` (has default) — apps/api/.env.example
+- `JOBS_RUN_RETENTION` (has default) — apps/api/.env.example
+- `JOBS_SCHEDULER_TICK_SECONDS` (has default) — apps/api/.env.example
 - `NATS_URL` (has default) — apps/api/.env.example
 - `REFRESH_TOKEN_EXPIRE_DAYS` (has default) — apps/api/.env.example
 - `SECRET_ENCRYPT_VERSION` (has default) — apps/api/.env.example
 - `SECRET_KEY` (has default) — apps/api/.env.example
 - `SECRET_STORE_DRIVER` (has default) — apps/api/.env.example
+- `SUPERADMIN_EMAIL` **required** — apps/api/.env.example
 - `VITE_API_URL` (has default) — apps/web/src/providers/dataProvider.ts
 - `VITE_WS_URL` (has default) — apps/web/src/providers/liveProvider.ts
 

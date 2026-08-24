@@ -7,6 +7,7 @@
 - `apps/api/alembic/versions/0001_initial.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0002_api_keys.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0003_audit_nullable_workspace.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0004_jobs.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/src/api/crud.py`
   - function parse_query: (request, *, max_limit) -> QuerySpec
   - function apply_query: (stmt, model, spec, *, sortable, filterable) -> Select
@@ -52,10 +53,40 @@
   - function publish_event: (bus, subject, payload, *, correlation_id, transient) -> None
   - function publish_audit: (bus, *, correlation_id, **kwargs) -> None
 - `apps/api/src/events/subjects.py` — class EventBusDriver, class Subjects
+- `apps/api/src/jobs/builtin.py`
+  - function system_heartbeat: (ctx) -> None
+  - function expire_stale_invitations: (ctx) -> None
+  - function demo_global_daily_report: (ctx) -> None
+- `apps/api/src/jobs/capture.py`
+  - function run_log_collector: () -> RunLogCollector | None
+  - function set_run_log_collector: (collector)
+  - function reset_run_log_collector: (token) -> None
+  - function install_run_capture: () -> None
+  - function uninstall_run_capture: () -> None
+  - class CapturedEntry
+  - _...3 more_
+- `apps/api/src/jobs/executor.py` — function execute_run: (run_id) -> None
+- `apps/api/src/jobs/registry.py`
+  - function validate_cron_schedule: (expr) -> None
+  - function next_cron_occurrence: (expr, after) -> datetime
+  - function validate_params: (schema, dict[str, Any]], values, Any]) -> dict[str, Any]
+  - function default_params: (schema, dict[str, Any]]) -> dict[str, Any]
+  - function register_builtin_jobs: () -> None
+  - class ValidationError
+  - _...4 more_
+- `apps/api/src/jobs/scheduler.py` — class JobScheduler
 - `apps/api/src/main.py` — function lifespan: (app), function root: () -> dict
 - `apps/api/src/models/api_key.py` — class ApiKey
 - `apps/api/src/models/audit.py` — class AuditLogEntry
 - `apps/api/src/models/core.py` — class Invitation, class Notification
+- `apps/api/src/models/jobs.py`
+  - class JobScope
+  - class JobRunStatus
+  - class JobTrigger
+  - class MissedJobPolicy
+  - class JobDefinition
+  - class JobRun
+  - _...1 more_
 - `apps/api/src/models/secret.py` — class StoredSecret
 - `apps/api/src/models/workspace.py`
   - class User
@@ -71,7 +102,7 @@
   - class RefreshRequest
   - class WorkspaceCreate
   - class WorkspaceUpdate
-  - _...6 more_
+  - _...7 more_
 - `apps/api/src/secrets/base.py` — class SecretRecord, class SecretStore
 - `apps/api/src/secrets/db_store.py` — class DbSecretStore
 - `apps/api/src/secrets/factory.py` — function build_secret_store: () -> SecretStore
@@ -86,6 +117,12 @@
   - class AuthError
   - class TokenPair
   - class AuthService
+- `apps/api/src/services/jobs.py`
+  - function job_to_dict: (d) -> dict
+  - function job_run_to_dict: (r, *, schema) -> dict
+  - function job_log_to_dict: (e) -> dict
+  - class JobError
+  - class JobService
 - `apps/api/src/services/notifications.py` — class NotificationService
 - `apps/api/src/services/serializers.py`
   - function notification_to_dict: (n, *, workspace_name) -> dict
@@ -97,7 +134,7 @@
   - class WorkspaceConflict
   - class WorkspaceService
 - `apps/api/src/settings.py` — class Settings
-- `apps/api/src/workflows/__init__.py` — function build_workflows: (registry, bus, connection_manager) -> None
+- `apps/api/src/workflows/__init__.py` — function build_workflows: (registry, bus, connection_manager, cipher) -> None
 - `apps/web/src/lib/utils.ts` — function cn: (...inputs) => void, function oktaAdminConsoleFix: (value?) => string | null
 - `apps/web/src/utils/permissions.ts` — function activeWorkspacePermissions: (identity?) => string[]
 - `scripts/dev.py`

@@ -1,7 +1,7 @@
 # Test Coverage
 
-> **31%** of routes and models are covered by tests
-> 16 test files found
+> **28%** of routes and models are covered by tests
+> 18 test files found
 
 ## Covered Routes
 
@@ -15,6 +15,9 @@
 - AuditLogEntry
 - Invitation
 - Notification
+- JobDefinition
+- JobRun
+- JobLogEntry
 - StoredSecret
 - User
 - Workspace

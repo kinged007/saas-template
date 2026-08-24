@@ -2,7 +2,7 @@
 
 > **Navigation aid.** Component inventory and prop signatures extracted via AST. Read the source files before adding props or modifying component logic.
 
-**28 components** (react)
+**31 components** (react)
 
 ## Client Components
 
@@ -30,6 +30,9 @@
 - **ApiKeysPage** — `apps/web/src/pages/ApiKeysPage.tsx`
 - **DashboardPage** — `apps/web/src/pages/DashboardPage.tsx`
 - **InboxPage** — `apps/web/src/pages/InboxPage.tsx`
+- **JobDetailPage** — `apps/web/src/pages/JobDetailPage.tsx`
+- **JobRunPage** — `apps/web/src/pages/JobRunPage.tsx`
+- **JobsPage** — `apps/web/src/pages/JobsPage.tsx`
 - **LoginPage** — `apps/web/src/pages/LoginPage.tsx`
 - **MembersPage** — `apps/web/src/pages/MembersPage.tsx`
 - **NotificationsPage** — `apps/web/src/pages/NotificationsPage.tsx`

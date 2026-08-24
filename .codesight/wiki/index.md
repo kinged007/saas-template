@@ -13,6 +13,7 @@ Structural map compiled from source code via AST. No LLM — deterministic, 200m
 - [Auth](./auth.md)
 - [Api_keys](./api_keys.md)
 - [Invitations](./invitations.md)
+- [Jobs](./jobs.md)
 - [Members](./members.md)
 - [Notifications](./notifications.md)
 - [Roles](./roles.md)
@@ -23,10 +24,10 @@ Structural map compiled from source code via AST. No LLM — deterministic, 200m
 
 ## Quick Stats
 
-- Routes: **26**
-- Models: **10**
-- Components: **28**
-- Env vars: **1** required, **17** with defaults
+- Routes: **37**
+- Models: **13**
+- Components: **31**
+- Env vars: **2** required, **20** with defaults
 
 ## How to Use
 
@@ -53,4 +54,4 @@ These exist in your codebase but are **not** reflected in wiki articles:
 When in doubt, search the source. The wiki is a starting point, not a complete inventory.
 
 ---
-_Last compiled: 2026-08-24 · 13 articles · [codesight](https://github.com/Houseofmvps/codesight)_
+_Last compiled: 2026-08-24 · 14 articles · [codesight](https://github.com/Houseofmvps/codesight)_

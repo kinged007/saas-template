@@ -42,6 +42,44 @@
 - payload: JSON (default)
 - acknowledged_at: DateTime (nullable)
 
+### JobDefinition
+- id: str (pk, default)
+- key: String (index)
+- workspace_id: unknown (index, nullable)
+- name: String
+- description: Text (default)
+- cron_schedule: String
+- params_schema: JSON (default)
+- params: JSON (default)
+- enabled: bool (default)
+- missed_policy: String (default)
+- timeout_seconds: Integer (default)
+- next_run_at: DateTime (nullable)
+- last_run_at: DateTime (nullable)
+
+### JobRun
+- id: str (pk, default)
+- definition_id: str (index)
+- workspace_id: unknown (index, nullable)
+- status: String (default, index)
+- trigger: String (default)
+- actor_user_id: unknown (index, nullable)
+- params: JSON (default)
+- scheduled_at: DateTime
+- started_at: DateTime (nullable)
+- finished_at: DateTime (nullable)
+- duration_ms: Integer (nullable)
+- error: Text (nullable)
+- correlation_id: String (nullable)
+
+### JobLogEntry
+- id: str (pk, default)
+- run_id: str (index)
+- seq: Integer (default)
+- ts: DateTime
+- level: String (default)
+- message: Text
+
 ### StoredSecret
 - id: str (pk, default)
 - workspace_id: str (index)
@@ -60,6 +98,7 @@
 - display_name: String
 - avatar_url: String (nullable)
 - is_active: Boolean (default)
+- is_superuser: Boolean (default)
 - last_login_at: DateTime (nullable)
 
 ### RefreshToken

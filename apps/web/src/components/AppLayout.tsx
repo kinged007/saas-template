@@ -218,7 +218,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             <img
               src="/favicon.svg"
               alt="SaaS Template"
-              className="hidden w-auto shrink-0 group-data-[collapsible=icon]:block"
+              className="hidden w-auto max-w-8 shrink-0 group-data-[collapsible=icon]:block"
             />
           </div>
           <WorkspaceSwitcher />
