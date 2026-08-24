@@ -1,17 +1,22 @@
-# Okta provider (OKTA)
+# Example: connecting an external service (Okta)
 
-Provider that connects a SaaS template workspace to an **Okta Workforce Identity
-org** so admins can review the org's application catalog the same way they
-review an Entra tenant. The provider is also the foundation for creating
-applications in the target org during a migration.
+A worked example of integrating an external OAuth service into the template:
+connecting an Okta **Workforce Identity org** so admins can review the org's
+application catalog. This documents the OAuth service-app pattern, the
+encrypted secret store, and the error-handling conventions you'd reuse for
+any external provider integration.
 
 - Provider code: `OKTA`
-- Implementation: `apps/api/src/providers/okta.py`
 - Tests: `apps/api/tests/test_okta.py`
 - Docs (Okta): [Implement OAuth for Okta with a service app](https://developer.okta.com/docs/guides/implement-oauth-for-okta-serviceapp/main/),
   [Apps API](https://developer.okta.com/docs/api/openapi/okta-management/management/tags/application/other/listapplications),
   [OAuth 2.0 scopes](https://developer.okta.com/docs/api/oauth2/),
   [Roles](https://developer.okta.com/docs/api/openapi/okta-management/guides/roles/)
+
+> **Note:** the Okta provider integration was part of an earlier iteration of
+> this template. The API surface it used (connections / applications routes)
+> has since been removed — this doc is kept as a reference for the OAuth
+> service-app + encrypted-secret pattern.
 
 ## What it does today
 
@@ -20,13 +25,9 @@ applications in the target org during a migration.
 | Test connection (token + catalog reachability) | ✅ |
 | List all applications (incl. inactive) | ✅ |
 | Application detail review (OIDC redirect URIs, SAML ACS URL, signing key, OAuth client) | ✅ |
-| Create / manage applications (migration target) | 🔜 needs `okta.apps.manage` scope + APP_ADMIN role |
+| Create / manage applications | 🔜 needs `okta.apps.manage` scope + APP_ADMIN role |
 
 ## Okta-side setup (one-time, per tenant) — verified end-to-end
-
-These steps were verified live against a trial org. **All of them are
-required** — missing any one produces a specific, confusing failure (see the
-[error guide](#error-guide-what-each-failure-means) below).
 
 ### 1. Create the app
 Okta Admin Console → **Applications → Create App Integration** → **API Services**.
@@ -65,7 +66,7 @@ connection (see `demo/okta-fresh-public-key.json` /
 ### 4. Grant API scopes
 App → **Okta API Scopes** tab → **Grant**:
 - `okta.apps.read` — view the application catalog
-- `okta.apps.manage` — create/update apps and their credentials/keys (migration)
+- `okta.apps.manage` — create/update apps and their credentials/keys
 - (optional) `okta.orgs.read` — lets connection tests show the org display name
 
 Only a **Super Admin** can grant scopes.
@@ -78,7 +79,7 @@ Service apps get **no admin role automatically**, and without one the API
 rejects every request with `403 You do not have permission to perform the
 requested action` even when the token carries the right scopes.
 
-**Least privilege for migration:** `APP_ADMIN` (Application Administrator) is
+**Least privilege:** `APP_ADMIN` (Application Administrator) is
 the minimum **standard** role for reading, creating, and managing all
 applications (settings, credentials, signing keys). For tighter control,
 create a **custom admin role** containing only the `okta.apps.read` and
@@ -166,9 +167,9 @@ Orgs that enforce DPoP (and bound tokens) are handled transparently:
 ### Normalized mapping (canonical application schema)
 
 Every provider maps its payload onto the **canonical schema** defined in
-`providers/base.py` (`ApplicationSummary` / `ApplicationDetail`) — the UI and
-future migration logic consume only these fields, and the provider's original
-payload is preserved unmodified in `raw`.
+`providers/base.py` (`ApplicationSummary` / `ApplicationDetail`) — the UI
+consumes only these fields, and the provider's original payload is preserved
+unmodified in `raw`.
 
 | SaaS template shape | Okta source |
 |---|---|
@@ -182,7 +183,7 @@ payload is preserved unmodified in `raw`.
 | `app_roles` | none (empty; Entra maps `appRoles`) |
 | `permissions` | none (empty; Entra maps `requiredResourceAccess` → `{resource_app_id, scopes}`) |
 | `credentials` | `credentials.signing.kid` → `{key_id, type: "signing_key"}`; `credentials.oauthClient` → `{client_id, token_endpoint_auth_method, type: "oauth_client"}` |
-| `raw` | full original app object (JSON view / migration input) |
+| `raw` | full original app object (JSON view / reference) |
 
 ## Error guide: what each failure means
 

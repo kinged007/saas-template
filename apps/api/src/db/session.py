@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from src.settings import settings
 
 # Busy-wait (instead of failing immediately) when another connection holds a
-# write lock — the in-process migration worker writes from a second session.
+# write lock — e.g. the job scheduler writes from a second session.
 # NOTE: do NOT switch the journal to WAL here; WAL makes readers non-blocking,
 # which silently changes reader-after-writer semantics relied on by tests and
 # callers that expect a fresh read to see committed writes.

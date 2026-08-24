@@ -1,16 +1,12 @@
 """Encrypted secret store entries.
 
-Temporary storage for credential material that a provider only reveals ONCE
-at creation time (e.g. Microsoft Graph's `addPassword` response carries the
-plaintext `secretText`, but every later read returns `secretText: null`).
-These are the values app developers need to point their applications at the
-migrated apps.
-
+Temporary storage for credential material that an integration only reveals
+ONCE at creation time (e.g. a generated API token or OAuth client secret).
 Every payload is stored VERSION-ENCRYPTED at rest via `SecretCipher` (Fernet,
 key chosen by `SECRET_ENCRYPT_VERSION`) — the raw secret never touches the
 database. The store is behind the `SecretStore` interface so a dedicated
-secret-vault adapter can replace the DB implementation without touching the
-worker or the API.
+secret-vault adapter can replace the DB implementation without touching
+callers.
 """
 
 from __future__ import annotations
@@ -28,8 +24,8 @@ class StoredSecret(Base, TimestampMixin):
     """One encrypted secret value, namespaced per workspace.
 
     `secret_key` is the caller-chosen logical id (e.g.
-    `migration:<job_id>:<app_id>:password_secret:<key_id>`), unique per
-    workspace. `ciphertext` is a versioned Fernet envelope (`vN.<token>`);
+    `integrations:<id>:client_secret:<key_id>`), unique per workspace.
+    `ciphertext` is a versioned Fernet envelope (`vN.<token>`);
     `kind` describes the material (password_secret | client_secret | ...) so
     future vault adapters can route by type.
     """

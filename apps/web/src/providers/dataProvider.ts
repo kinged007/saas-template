@@ -120,7 +120,7 @@ const baseDataProvider = dataProviderModule(API_URL, httpClient);
 /**
  * simple-rest's `custom` uses the url verbatim — it never prepends the API
  * base URL. Resolve relative custom urls against API_URL so useCustom /
- * useCustomMutation calls (e.g. `connections/providers`, `connections/{id}/test`)
+ * useCustomMutation calls (e.g. `jobs/{id}/trigger`)
  * hit the backend instead of resolving against the current page.
  */
 export const dataProvider: DataProvider = {

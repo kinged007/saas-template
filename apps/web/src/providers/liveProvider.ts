@@ -29,14 +29,6 @@ function connect() {
         listeners?.forEach((cb) =>
           cb({ type: "created", payload: { ids: id ? [id] : [], data: message.data } }),
         );
-      } else if (message.event === "migration.updated") {
-        // job state changed (queued/running/completed/failed/stopped…) — push
-        // an "updated" live event so list/detail views invalidate themselves.
-        const id = message.data?.id;
-        const listeners = callbacks.get("resources/migrations");
-        listeners?.forEach((cb) =>
-          cb({ type: "updated", payload: { ids: id ? [id] : [], data: message.data } }),
-        );
       }
     } catch {
       /* ignore malformed frames */

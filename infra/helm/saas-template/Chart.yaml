@@ -1,13 +1,13 @@
 apiVersion: v2
 name: saas-template
-description: SaaS template — multi-tenant SaaS for IAM provider migrations
+description: SaaS template — multi-tenant SaaS starter (auth, RBAC, jobs, events)
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
 keywords:
-  - iam
   - saas
-  - migration
   - multi-tenant
+  - starter
+  - template
 maintainers:
   - name: SaaS template team

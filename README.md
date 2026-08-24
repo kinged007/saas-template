@@ -1,8 +1,10 @@
 # SaaS Template
 
-Multi-tenant SaaS for IAM provider-to-provider migrations.
+A production-oriented multi-tenant SaaS starter: FastAPI + SQLAlchemy backend
+and a Refine.dev (React) frontend, with workspaces, RBAC, invitations, API
+keys, notifications, an event bus and framework-level scheduled jobs.
 
-- **apps/api** — FastAPI backend (auth, workspaces, RBAC, provider connections, migration jobs, notifications, events, WebSocket)
+- **apps/api** — FastAPI backend (auth, workspaces, members, roles, invitations, API keys, notifications, scheduled jobs, events, WebSocket)
 - **apps/web** — Refine.dev + Ant Design frontend
 - **infra** — Dockerfiles, Helm chart, Terraform (for production / prod-like testing)
 
@@ -10,14 +12,22 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
 
 ## What's here
 
-- Connect any IAM provider tenant (Entra, Okta) with encrypted credentials
-- Review applications/service principals through one standardized schema
-- **Migration jobs**: hand-pick applications, stage drafts, submit → approve →
-  start (or reject), stop and retry, per-application ignore/retry, execution
-  logs, migration attempts and a full immutable audit trail
-- Execution is event-driven: `saas_template.migrations.started` is consumed by a
-  mock worker (in-process bus in dev, NATS JetStream in prod) that simulates
-  the per-application migration work until the real provider workflow lands.
+- **Multi-tenant workspaces** — every resource is workspace-scoped; JWT auth
+  plus `X-Workspace-ID` on every request
+- **RBAC** — first-class roles with a permission catalog, enforced server-side
+  on every workspace-scoped route; default `owner` / `admin` / `editor` /
+  `viewer` roles
+- **Members & invitations** — invite by email, accept/decline/revoke, role
+  changes; email invitations work for unregistered users
+- **API keys** — per-user keys with assignable permissions for machine access
+- **Notifications** — persisted per user, pushed in realtime over WebSockets
+- **Scheduled jobs** — framework-level scheduler with DB-backed definitions,
+  cron schedules, missed-run policy, atomic execution, per-run params
+  snapshots, and captured run logs; global and per-workspace jobs
+- **Event-driven core** — domain events over an in-process bus (dev) or NATS
+  JetStream (prod), with an immutable audit trail
+- **Encrypted secret store** — Fernet-encrypted values at rest, behind an
+  interface so a vault adapter can replace the DB implementation
 
 ## Quick start (development — all terminal, no docker)
 
@@ -36,14 +46,15 @@ Or run each step individually:
 ```bash
 make api-install  # uv sync in apps/api
 make api-migrate  # alembic migrations (starts embedded postgres automatically)
-make api-seed     # demo user + workspace
+make api-seed     # demo users + workspaces
 make api          # uvicorn on :8000
 make web          # vite dev on :5173 (open http://localhost:5173)
 ```
 
 OpenAPI docs: http://localhost:8000/docs
 
-Demo login (from `make api-seed`): `admin@saas-template.dev` / `Saas-template1!`
+Demo logins (from `make api-seed`): all seeded users share the password
+`password` — e.g. `admin@example.com` / `password`.
 
 ## Env
 

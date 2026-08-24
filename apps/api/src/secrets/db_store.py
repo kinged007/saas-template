@@ -2,7 +2,7 @@
 
 This is the reference implementation behind the `SecretStore` interface. A
 secret-vault adapter can replace it later (same interface, different
-backend) without touching the worker or the API.
+backend) without touching callers.
 
 Each value is encrypted with `SecretCipher` into a versioned Fernet envelope
 (`vN.<token>`); the version is stored alongside so a future vault migration

@@ -1,15 +1,14 @@
 """Secret store contract: where one-time credential material is kept.
 
-Migration providers only reveal some secrets ONCE, at creation time (e.g.
-Microsoft Graph's `addPassword` returns the plaintext `secretText`, and every
-later read returns `secretText: null`). The migration worker captures that
-material and stores it through this interface — encrypted at rest, versioned,
-workspace-scoped.
+Some integrations only reveal a secret ONCE, at creation time (e.g. a
+generated API token or an OAuth client secret), and never return it again.
+This interface stores that material — encrypted at rest, versioned,
+workspace-scoped — so callers can persist and later fetch it.
 
 The reference implementation is `DbSecretStore` (encrypted `stored_secrets`
 table). A future secret-vault adapter (HashiCorp Vault, AWS Secrets Manager,
 ...) implements the same interface and is selected via
-`SECRET_STORE_DRIVER` — the worker and API never know which backend is used.
+`SECRET_STORE_DRIVER` — callers never know which backend is used.
 """
 
 from __future__ import annotations
@@ -64,5 +63,4 @@ class SecretStore(ABC):
     async def list_for_workspace(
         self, workspace_id: str, *, prefix: str | None = None
     ) -> list[SecretRecord]:
-        """List all secrets for a workspace, optionally filtered by key prefix
-        (e.g. `migration:<job_id>:<app_id>:`)."""
+        """List all secrets for a workspace, optionally filtered by key prefix."""
