@@ -1,16 +1,15 @@
-# TenantFlex — Architecture
+# SaaS Template — Architecture
 
 ## 1. Purpose
 
-TenantFlex is a multi-tenant SaaS for IAM migration: migrating applications and
-configurations between **identity provider tenants** (e.g. Microsoft Entra →
-Okta, Okta → Entra). It is a rebuild of the legacy Laravel/Wave monolith
-(`~/tenant-flex`) with a modern, service-oriented architecture.
+This is a multi-tenant SaaS template for IAM migration: migrating applications
+and configurations between **identity provider tenants** (e.g. Microsoft Entra
+→ Okta, Okta → Entra) — a modern, service-oriented reference architecture.
 
-## 2. Legacy review (what we are replacing)
+## 2. Reference review (what this template improves on)
 
-| Area | Legacy (`~/tenant-flex`) | New |
-|---|---|---|
+| Area | Typical legacy SaaS | This template |
+|---|---|---|---|
 | Backend | Laravel 11 + Livewire + Filament | FastAPI (async) |
 | Frontend | Blade/Livewire/Filament panels | Refine.dev + Ant Design (React) |
 | Tenancy | `organisations` (single level) | `workspaces` + per-workspace roles/permissions |
@@ -150,7 +149,7 @@ recreated on the destination as part of the (future) real migration workflow.
 ## 8. Events & pub/sub
 
 ```
-events/subjects.py     subject constants (tenantflex.notifications.*, tenantflex.migrations.*)
+events/subjects.py     subject constants (workspaces.*, apikeys.*, audit.*, notifications.*, jobs.*)
 events/bus.py          EventBus ABC: publish, subscribe, start, stop
 events/inprocess.py    InProcessEventBus  (dev: asyncio in-process)
 events/nats.py         NatsEventBus       (prod: NATS JetStream, streams + durable consumers)
@@ -159,19 +158,12 @@ workflows/*.py         subscribers orchestrated by a small WorkflowRegistry
 
 - Domain events (e.g. `WorkspaceMemberInvited`, `NotificationCreated`) are
   published with a `CorrelationId`.
-- The **notification workflow** subscribes to `tenantflex.notifications.*`,
-  persists a `Notification` row for the target user, then pushes a realtime
-  event over WebSockets. Notifications persist until the user acknowledges them
+- The **notification workflow** subscribes to `notifications.*`, persists a
+  `Notification` row for the target user, then pushes a realtime event over
+  WebSockets. Notifications persist until the user acknowledges them
   (`PATCH /notifications/{id}` → `acknowledged_at`).
-- **Migration subjects** (`tenantflex.migrations.*`):
-  - `tenantflex.migrations.started` (durable) — published when an approved job
-    is started/retried; consumed by the **migration worker**.
-  - `tenantflex.migrations.stop_requested` (durable) — observability; the
-    worker also polls `stop_requested_at` in the DB so a stop is honored across
-    processes even if the event is delayed.
-  - `tenantflex.migrations.updated` (fanout) — every job state change pushes a
-    realtime `migration.updated` WebSocket event to all workspace members and,
-    on terminal states, creates a notification for the job creator.
+- **Job subjects** (`jobs.*`): `jobs.execute` (durable) — published when a
+  scheduled job should run; consumed by the framework-level job scheduler.
 - **Migration worker (mock)** — `workflows/migrations.py` opens its own DB
   session per event, records a `MigrationAttempt`, simulates a pre-flight pause
   (`MOCK_MIGRATION_PREFLIGHT_SECONDS`, default 60) and then per-application
@@ -252,7 +244,7 @@ A shared `crud` helper turns Refine params into safe SQLAlchemy queries
 - `POST /migrations/{id}/submit|approve|reject` — approval workflow
   (approval requires `migration:approve`; approver + timestamp recorded)
 - `POST /migrations/{id}/start|stop|retry` — execution control; start/retry
-  publish `tenantflex.migrations.started`
+  publish a migration-start event
 - `GET /migrations/{id}/attempts`, `/logs` (incremental `after_id` for
   polling), `/audit` — monitoring + audit trail
 
@@ -267,7 +259,7 @@ A shared `crud` helper turns Refine params into safe SQLAlchemy queries
 
 - **Dev**: docker-compose → postgres + nats; run `make api` / `make web` from terminal
 - **Container**: `infra/docker/` (multi-stage Dockerfiles)
-- **Kubernetes**: `infra/helm/tenantflex` (api, web, postgres optional, nats optional, ingress, secrets)
+- **Kubernetes**: `infra/helm/saas-template` (api, web, postgres optional, nats optional, ingress, secrets)
 - **Cloud**: `infra/terraform/` example — AWS EKS + RDS + NATS on EKS via Helm
   (same chart used for GCP GKE / Azure AKS)
 - All services 12-factor: config via env, structured logs, `/healthz` + `/readyz`

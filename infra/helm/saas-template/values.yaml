@@ -1,8 +1,8 @@
-# TenantFlex Helm values
+# SaaS template Helm values
 replicaCount: 2
 
 image:
-  repository: tenantflex
+  repository: saas-template
   apiTag: api
   webTag: web
   pullPolicy: IfNotPresent
@@ -28,16 +28,16 @@ api:
 web:
   port: 80
 
-# Existing secrets — set via values or a pre-created secret `tenantflex-secrets`
+# Existing secrets — set via values or a pre-created secret `saas-template-secrets`
 # with keys: SECRET_KEY, FERNET_KEYS, DATABASE_URL, NATS_URL
 existingSecret: ""
 secretKey: "change-me"
 fernetKeys: "change-me"
-databaseUrl: "postgresql+asyncpg://tenantflex:change-me@postgres:5432/tenantflex"
+databaseUrl: "postgresql+asyncpg://saas_template:change-me@postgres:5432/saas_template"
 natsUrl: "nats://nats:4222"
 eventBusDriver: "nats"
-corsOrigins: "https://tenantflex.example.com"
-frontendUrl: "https://tenantflex.example.com"
+corsOrigins: "https://saas-template.example.com"
+frontendUrl: "https://saas-template.example.com"
 
 # Deploy postgres + nats as part of the chart (production-grade external
 # instances are recommended; set postgres.enabled=false / nats.enabled=false
@@ -55,7 +55,7 @@ nats:
 ingress:
   enabled: true
   className: nginx
-  host: tenantflex.example.com
+  host: saas-template.example.com
   tls:
     enabled: true
-    secretName: tenantflex-tls
+    secretName: saas-template-tls

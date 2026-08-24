@@ -1,12 +1,12 @@
 # Okta provider (OKTA)
 
-Provider that connects a TenantFlex workspace to an **Okta Workforce Identity
+Provider that connects a SaaS template workspace to an **Okta Workforce Identity
 org** so admins can review the org's application catalog the same way they
 review an Entra tenant. The provider is also the foundation for creating
 applications in the target org during a migration.
 
 - Provider code: `OKTA`
-- Implementation: `apps/api/src/tenantflex/providers/okta.py`
+- Implementation: `apps/api/src/providers/okta.py`
 - Tests: `apps/api/tests/test_okta.py`
 - Docs (Okta): [Implement OAuth for Okta with a service app](https://developer.okta.com/docs/guides/implement-oauth-for-okta-serviceapp/main/),
   [Apps API](https://developer.okta.com/docs/api/openapi/okta-management/management/tags/application/other/listapplications),
@@ -45,7 +45,7 @@ Client authentication → **Public key/Private key** (this is what
 ### 3. Register the public key (JWK JSON only)
 With **Public key/Private key** selected, **Add key** → paste your public key.
 **Okta's paste dialog only accepts JWK JSON — not PEM — and the JSON must
-include a `kid` field.** Example (from a TenantFlex-generated keypair):
+include a `kid` field.** Example (from a keypair generated for the app):
 
 ```json
 {
@@ -59,7 +59,7 @@ include a `kid` field.** Example (from a TenantFlex-generated keypair):
 ```
 
 Generate the JWK from the same keypair whose private half goes into the
-TenantFlex connection (see `demo/okta-fresh-public-key.json` /
+connection (see `demo/okta-fresh-public-key.json` /
 `demo/okta-fresh-private-key.pem` for a ready-made pair).
 
 ### 4. Grant API scopes
@@ -102,24 +102,24 @@ curl -X PUT  "https://{tenant}.okta.com/api/v1/apps/{clientId}" \
 ```
 
 ### 7. Test the connection
-In TenantFlex: connection → **Test**. Expected: `Connected to Okta org.`
+In the app: connection → **Test**. Expected: `Connected to Okta org.`
 with the org name as the tenant hint.
 
-## TenantFlex connection fields
+## Connection fields
 
 | Field | Required | Value |
 |---|---|---|
 | Provider | — | `OKTA` |
 | Authority | ✅ | `https://<tenant>.okta.com` (the org API domain, **not** the `-admin` console URL) |
 | Client ID | ✅ | from the app's General tab |
-| Client secret | ✅ | the app's **private key (PEM)** — TenantFlex auto-detects PEM and uses private_key_jwt assertions; a plain secret uses client_secret_post |
+| Client secret | ✅ | the app's **private key (PEM)** — the app auto-detects PEM and uses private_key_jwt assertions; a plain secret uses client_secret_post |
 | Key ID (kid) | for PEM | the Key ID shown in the app's **Public keys** table (must match the registered JWK's kid) |
 | Scope | defaulted | `okta.apps.manage` if left empty |
 | Endpoint | ✅ | `https://<tenant>.okta.com` |
 
 > ⚠️ **Common mistakes:** `https://your-tenant-admin.okta.com` is the console,
 > not the API — requests to it return HTML and fail. An **empty scope** makes
-> the token request fail with `consent_required` — TenantFlex now falls back to
+> the token request fail with `consent_required` — the app now falls back to
 > the provider default, but keep the scope field populated.
 
 ### Validation on save
@@ -170,7 +170,7 @@ Every provider maps its payload onto the **canonical schema** defined in
 future migration logic consume only these fields, and the provider's original
 payload is preserved unmodified in `raw`.
 
-| TenantFlex shape | Okta source |
+| SaaS template shape | Okta source |
 |---|---|
 | `id` | `id` (e.g. `0oa…`) |
 | `display_name` | `label` (falls back to `name`) |

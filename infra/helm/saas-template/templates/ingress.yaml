@@ -2,7 +2,7 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "tenantflex.fullname" . }}
+  name: {{ include "saas-template.fullname" . }}
   annotations:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
@@ -24,21 +24,21 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "tenantflex.fullname" . }}-api
+                name: {{ include "saas-template.fullname" . }}-api
                 port:
                   number: 80
           - path: /api
             pathType: Prefix
             backend:
               service:
-                name: {{ include "tenantflex.fullname" . }}-api
+                name: {{ include "saas-template.fullname" . }}-api
                 port:
                   number: 80
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ include "tenantflex.fullname" . }}-web
+                name: {{ include "saas-template.fullname" . }}-web
                 port:
                   number: 80
 {{- end }}

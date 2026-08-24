@@ -1,4 +1,4 @@
-# TenantFlex
+# SaaS Template
 
 Multi-tenant SaaS for IAM provider-to-provider migrations.
 
@@ -15,14 +15,14 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
 - **Migration jobs**: hand-pick applications, stage drafts, submit → approve →
   start (or reject), stop and retry, per-application ignore/retry, execution
   logs, migration attempts and a full immutable audit trail
-- Execution is event-driven: `tenantflex.migrations.started` is consumed by a
+- Execution is event-driven: `saas_template.migrations.started` is consumed by a
   mock worker (in-process bus in dev, NATS JetStream in prod) that simulates
   the per-application migration work until the real provider workflow lands.
 
 ## Quick start (development — all terminal, no docker)
 
 The dev stack is self-contained: the API embeds PostgreSQL (via `pgserver`,
-real Postgres 16 binaries, data in `~/.local/share/tenantflex/pgdata`) and
+real Postgres 16 binaries, data in `~/.local/share/saas-template/pgdata`) and
 consumes events asynchronously in-process. Switching to NATS JetStream is a
 single env var swap (`EVENT_BUS_DRIVER=nats`).
 
@@ -43,7 +43,7 @@ make web          # vite dev on :5173 (open http://localhost:5173)
 
 OpenAPI docs: http://localhost:8000/docs
 
-Demo login (from `make api-seed`): `admin@tenantflex.dev` / `Tenantflex1!`
+Demo login (from `make api-seed`): `admin@saas-template.dev` / `Saas-template1!`
 
 ## Env
 

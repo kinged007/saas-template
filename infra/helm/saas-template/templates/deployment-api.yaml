@@ -1,23 +1,23 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "tenantflex.fullname" . }}-api
+  name: {{ include "saas-template.fullname" . }}-api
   labels:
-    app.kubernetes.io/name: tenantflex
+    app.kubernetes.io/name: saas-template
     app.kubernetes.io/component: api
 spec:
   replicas: {{ .Values.api.replicas }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: tenantflex
+      app.kubernetes.io/name: saas-template
       app.kubernetes.io/component: api
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: tenantflex
+        app.kubernetes.io/name: saas-template
         app.kubernetes.io/component: api
     spec:
-      serviceAccountName: {{ include "tenantflex.fullname" . }}
+      serviceAccountName: {{ include "saas-template.fullname" . }}
       containers:
         - name: api
           image: "{{ .Values.image.repository }}:{{ .Values.image.apiTag }}"
@@ -45,7 +45,7 @@ spec:
           {{- else }}
           envFrom:
             - secretRef:
-                name: {{ include "tenantflex.fullname" . }}-secrets
+                name: {{ include "saas-template.fullname" . }}-secrets
           {{- end }}
           {{- with .Values.api.resources }}
           resources: {{ toYaml . | nindent 12 }}
@@ -74,5 +74,5 @@ spec:
           {{- else }}
           envFrom:
             - secretRef:
-                name: {{ include "tenantflex.fullname" . }}-secrets
+                name: {{ include "saas-template.fullname" . }}-secrets
           {{- end }}

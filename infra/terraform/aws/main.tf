@@ -1,11 +1,11 @@
-# TenantFlex on AWS EKS — reference deployment (same chart works on GKE/AKS).
+# SaaS template on AWS EKS — reference deployment (same chart works on GKE/AKS).
 #
 # Usage:
 #   terraform init
-#   terraform plan -var="domain=tenantflex.example.com" -var="secret_key=..." -var="fernet_keys=..."
+#   terraform plan -var="domain=saas-template.example.com" -var="secret_key=..." -var="fernet_keys=..."
 #   terraform apply
 #
-# Creates: VPC + EKS cluster + node group, then installs the TenantFlex Helm
+# Creates: VPC + EKS cluster + node group, then installs the SaaS template Helm
 # chart (API + Web + optional postgres/NATS) behind an ALB ingress.
 
 variable "region" {
@@ -13,11 +13,11 @@ variable "region" {
 }
 
 variable "cluster_name" {
-  default = "tenantflex"
+  default = "saas-template"
 }
 
 variable "domain" {
-  description = "Ingress host, e.g. tenantflex.example.com"
+  description = "Ingress host, e.g. saas-template.example.com"
 }
 
 variable "secret_key" {
@@ -83,42 +83,42 @@ module "eks" {
 }
 
 # ----------------------------------------------------------------------------
-# TenantFlex Helm release
+# SaaS template Helm release
 # ----------------------------------------------------------------------------
 
-resource "kubernetes_namespace" "tenantflex" {
+resource "kubernetes_namespace" "saas_template" {
   metadata {
-    name = "tenantflex"
+    name = "saas-template"
   }
 }
 
-resource "kubernetes_secret" "tenantflex_secrets" {
+resource "kubernetes_secret" "saas_template_secrets" {
   metadata {
-    name      = "tenantflex-secrets"
-    namespace = kubernetes_namespace.tenantflex.metadata[0].name
+    name      = "saas-template-secrets"
+    namespace = kubernetes_namespace.saas_template.metadata[0].name
   }
 
   data = {
     SECRET_KEY   = var.secret_key
     FERNET_KEYS  = var.fernet_keys
-    DATABASE_URL = "postgresql+asyncpg://tenantflex:change-me@tenantflex-postgres.tenantflex.svc.cluster.local:5432/tenantflex"
-    NATS_URL     = "nats://tenantflex-nats.tenantflex.svc.cluster.local:4222"
+    DATABASE_URL = "postgresql+asyncpg://saas_template:change-me@saas-template-postgres.saas-template.svc.cluster.local:5432/saas_template"
+    NATS_URL     = "nats://saas-template-nats.saas-template.svc.cluster.local:4222"
   }
 }
 
-resource "helm_release" "tenantflex" {
-  name       = "tenantflex"
-  namespace  = kubernetes_namespace.tenantflex.metadata[0].name
-  chart      = "../../infra/helm/tenantflex"
-  depends_on = [kubernetes_secret.tenantflex_secrets]
+resource "helm_release" "saas_template" {
+  name       = "saas-template"
+  namespace  = kubernetes_namespace.saas_template.metadata[0].name
+  chart      = "../../infra/helm/saas-template"
+  depends_on = [kubernetes_secret.saas_template_secrets]
 
   values = [
     <<-EOT
     image:
-      repository: <your-registry>/tenantflex
+      repository: <your-registry>/saas-template
       apiTag: latest
       webTag: latest
-    existingSecret: tenantflex-secrets
+    existingSecret: saas-template-secrets
     corsOrigins: "https://${var.domain}"
     frontendUrl: "https://${var.domain}"
     ingress:
@@ -164,7 +164,7 @@ module "aws_lb_iam_role" {
   source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
   version = "5.39.0"
 
-  role_name                              = "tenantflex-lb-controller"
+  role_name                              = "saas-template-lb-controller"
   attach_load_balancer_controller_policy = true
 
   oidc_providers = {

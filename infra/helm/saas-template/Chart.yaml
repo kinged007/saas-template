@@ -1,6 +1,6 @@
 apiVersion: v2
-name: tenantflex
-description: TenantFlex — multi-tenant SaaS for IAM provider migrations
+name: saas-template
+description: SaaS template — multi-tenant SaaS for IAM provider migrations
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
@@ -10,4 +10,4 @@ keywords:
   - migration
   - multi-tenant
 maintainers:
-  - name: TenantFlex team
+  - name: SaaS template team
