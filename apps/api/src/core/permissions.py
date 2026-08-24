@@ -20,6 +20,9 @@ APIKEY_MANAGE = "apikey:manage"
 NOTIFICATION_READ = "notification:read"
 NOTIFICATION_ACK = "notification:acknowledge"
 
+JOB_VIEW = "jobs:view"
+JOB_EDIT = "jobs:edit"
+
 ALL_PERMISSIONS = [
     WORKSPACE_READ,
     WORKSPACE_UPDATE,
@@ -33,6 +36,8 @@ ALL_PERMISSIONS = [
     APIKEY_MANAGE,
     NOTIFICATION_READ,
     NOTIFICATION_ACK,
+    JOB_VIEW,
+    JOB_EDIT,
 ]
 
 
@@ -60,6 +65,8 @@ def permissions_for_role(role_name: str) -> list[str]:
                 WORKSPACE_READ,
                 MEMBER_READ,
                 ROLE_READ,
+                APIKEY_READ,
+                APIKEY_MANAGE,
                 NOTIFICATION_READ,
                 NOTIFICATION_ACK,
             ]

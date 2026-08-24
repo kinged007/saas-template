@@ -1,0 +1,395 @@
+"""Scheduled jobs API.
+
+Permission model:
+- Workspace-scoped jobs follow the workspace permission system
+  (`jobs:view` to read history/config, `jobs:edit` to modify or trigger).
+- Global jobs are deployment-wide: every `/global*` route requires the
+  superuser (SUPERADMIN_EMAIL bootstrap account). Superusers do NOT get an
+  automatic bypass for workspace jobs — those stay governed by the
+  workspace's roles.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.api.crud import InvalidQuery, apply_query, parse_query
+from src.api.deps import (
+    AuthPrincipal,
+    get_container,
+    get_current_user,
+    get_current_workspace_id,
+    require_permission,
+    require_superuser,
+    resolve_auth_principal,
+)
+from src.core.permissions import JOB_EDIT, JOB_VIEW
+from src.db.session import get_db
+from src.events.publisher import publish_audit
+from src.models.jobs import JobDefinition, JobRun, JobTrigger
+from src.schemas.api import JobUpdate
+from src.services.jobs import (
+    JobError,
+    JobService,
+    ValidationError,
+    job_log_to_dict,
+    job_run_to_dict,
+    job_to_dict,
+)
+from src.services.workspaces import WorkspaceService
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+_RUN_SORTABLE = {"scheduled_at", "started_at", "duration_ms", "status"}
+_RUN_FILTERABLE = {"status", "trigger"}
+
+
+async def _get_definition_or_404(
+    definition_id: str,
+    workspace_id: str | None,
+    db: AsyncSession,
+) -> JobDefinition:
+    definition = await JobService(db).get_definition(definition_id)
+    if definition is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    if workspace_id is not None and definition.workspace_id != workspace_id:
+        # Do not leak cross-workspace existence.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    return definition
+
+
+def _validate_patch(body: JobUpdate) -> None:
+    if (
+        body.cron_schedule is None
+        and body.params is None
+        and body.enabled is None
+        and body.missed_policy is None
+    ):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "no editable fields supplied")
+
+
+# --------------------------------------------------------------------- global
+
+
+@router.get("/global")
+async def list_global_jobs(
+    _=Depends(require_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    return [job_to_dict(d) for d in await JobService(db).list_definitions(None)]
+
+
+@router.get("/global/{definition_id}")
+async def get_global_job(
+    definition_id: str,
+    _=Depends(require_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    return job_to_dict(await _get_definition_or_404(definition_id, None, db))
+
+
+@router.patch("/global/{definition_id}")
+async def update_global_job(
+    definition_id: str,
+    body: JobUpdate,
+    request: Request,
+    user=Depends(require_superuser),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    _validate_patch(body)
+    definition = await _get_definition_or_404(definition_id, None, db)
+    try:
+        updated = await JobService(db, container.bus, container.cipher).update_definition(
+            definition,
+            cron_schedule=body.cron_schedule,
+            params=body.params,
+            enabled=body.enabled,
+            missed_policy=body.missed_policy,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    except JobError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    await publish_audit(
+        container.bus,
+        workspace_id=None,
+        resource_type="job",
+        resource_id=updated.id,
+        action="job.updated",
+        actor_user_id=user.id,
+        details={
+            "key": updated.key,
+            "scope": "global",
+            "enabled": updated.enabled,
+            "cron_schedule": updated.cron_schedule,
+        },
+        ip_address=request.client.host if request.client else None,
+    )
+    return job_to_dict(updated)
+
+
+@router.post("/global/{definition_id}/execute", status_code=201)
+async def execute_global_job(
+    definition_id: str,
+    request: Request,
+    user=Depends(require_superuser),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    return await _execute_now(definition_id, None, user.id, db, container)
+
+
+@router.get("/global/{definition_id}/runs")
+async def list_global_job_runs(
+    request: Request,
+    response: Response,
+    definition_id: str,
+    _=Depends(require_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _list_runs(request, response, definition_id, None, db)
+
+
+# ------------------------------------------------------------------ run detail
+# Declared BEFORE the dynamic /{definition_id} routes so "runs" is never
+# captured as a definition id.
+
+
+@router.get("/runs/{run_id}")
+async def get_job_run(
+    run_id: str,
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    run = await JobService(db).get_run(run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
+    await _require_run_access(db, user, run)
+    schema = {}
+    definition = await JobService(db).get_definition(run.definition_id)
+    if definition is not None:
+        schema = definition.params_schema or {}
+    return job_run_to_dict(run, schema=schema)
+
+
+@router.get("/runs/{run_id}/logs")
+async def get_job_run_logs(
+    run_id: str,
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = JobService(db)
+    run = await service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
+    await _require_run_access(db, user, run)
+    return [job_log_to_dict(e) for e in await service.list_run_logs(run_id)]
+
+
+async def _require_run_access(db: AsyncSession, user, run: JobRun) -> None:
+    """Global runs are superuser-only; workspace runs need jobs:view there."""
+    if run.workspace_id is None:
+        if not user.is_superuser:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "superuser access required")
+        return
+    membership = await WorkspaceService(db).get_membership(run.workspace_id, user.id)
+    if membership is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
+    _, role = membership
+    if not ("*" in role.permissions or JOB_VIEW in role.permissions):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"missing permission: {JOB_VIEW}")
+
+
+async def _require_job_access(
+    db: AsyncSession,
+    principal: AuthPrincipal,
+    definition: JobDefinition,
+    *,
+    need_edit: bool = False,
+) -> None:
+    """Unified check: global → superuser, workspace → jobs:view/edit."""
+    required = JOB_EDIT if need_edit else JOB_VIEW
+    if definition.workspace_id is None:
+        if not principal.user.is_superuser:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "superuser access required")
+        return
+    # workspace-scoped job — check the workspace of the definition, not the header
+    if principal.api_key is not None:
+        api_key = principal.api_key
+        if api_key.workspace_id != definition.workspace_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+        if "*" in api_key.permissions or required in api_key.permissions:
+            return
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"missing permission: {required}") from None
+    membership = await WorkspaceService(db).get_membership(
+        definition.workspace_id, principal.user.id
+    )
+    if membership is None:
+        # Hide cross-workspace existence (isolation test expects 404, not 403)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    _, role = membership
+    if "*" in role.permissions or required in role.permissions:
+        return
+    raise HTTPException(status.HTTP_403_FORBIDDEN, f"missing permission: {required}") from None
+
+
+# ------------------------------------------------------------ workspace-scoped
+
+
+@router.get("")
+async def list_workspace_jobs(
+    workspace_id: str = Depends(get_current_workspace_id),
+    _=Depends(require_permission(JOB_VIEW)),
+    db: AsyncSession = Depends(get_db),
+):
+    return [job_to_dict(d) for d in await JobService(db).list_definitions(workspace_id)]
+
+
+@router.get("/{definition_id}")
+async def get_job(
+    definition_id: str,
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
+    db: AsyncSession = Depends(get_db),
+):
+    definition = await JobService(db).get_definition(definition_id)
+    if definition is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    await _require_job_access(db, principal, definition, need_edit=False)
+    return job_to_dict(definition)
+
+
+@router.patch("/{definition_id}")
+async def update_job(
+    definition_id: str,
+    body: JobUpdate,
+    request: Request,
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    _validate_patch(body)
+    definition = await JobService(db).get_definition(definition_id)
+    if definition is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    await _require_job_access(db, principal, definition, need_edit=True)
+    try:
+        updated = await JobService(db, container.bus, container.cipher).update_definition(
+            definition,
+            cron_schedule=body.cron_schedule,
+            params=body.params,
+            enabled=body.enabled,
+            missed_policy=body.missed_policy,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    except JobError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    await publish_audit(
+        container.bus,
+        workspace_id=updated.workspace_id,
+        resource_type="job",
+        resource_id=updated.id,
+        action="job.updated",
+        actor_user_id=principal.user.id,
+        details={
+            "key": updated.key,
+            "enabled": updated.enabled,
+            "cron_schedule": updated.cron_schedule,
+        },
+        ip_address=request.client.host if request.client else None,
+    )
+    return job_to_dict(updated)
+
+
+@router.post("/{definition_id}/execute", status_code=201)
+async def execute_job(
+    definition_id: str,
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    definition = await JobService(db).get_definition(definition_id)
+    if definition is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    await _require_job_access(db, principal, definition, need_edit=True)
+    return await _execute_now(
+        definition.id, definition.workspace_id, principal.user.id, db, container
+    )
+
+
+@router.get("/{definition_id}/runs")
+async def list_job_runs(
+    request: Request,
+    response: Response,
+    definition_id: str,
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
+    db: AsyncSession = Depends(get_db),
+):
+    definition = await JobService(db).get_definition(definition_id)
+    if definition is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    await _require_job_access(db, principal, definition, need_edit=False)
+    return await _list_runs(request, response, definition_id, definition.workspace_id, db)
+
+
+# -------------------------------------------------------------------- internal
+
+
+async def _execute_now(
+    definition_id: str,
+    workspace_id: str | None,
+    actor_user_id: str,
+    db: AsyncSession,
+    container,
+) -> dict:
+    definition = await _get_definition_or_404(definition_id, workspace_id, db)
+    run = await JobService(db, container.bus).create_run(
+        definition,
+        trigger=JobTrigger.MANUAL,
+        actor_user_id=actor_user_id,
+    )
+    await publish_audit(
+        container.bus,
+        workspace_id=definition.workspace_id,
+        resource_type="job",
+        resource_id=definition.id,
+        action="job.executed_manually",
+        actor_user_id=actor_user_id,
+        details={"run_id": run.id},
+        ip_address=None,
+    )
+    logger.info("manual execution of job %s queued (run %s)", definition.key, run.id)
+    return job_run_to_dict(run, schema=definition.params_schema or {})
+
+
+async def _list_runs(
+    request: Request,
+    response: Response,
+    definition_id: str,
+    workspace_id: str | None,
+    db: AsyncSession,
+) -> list[dict]:
+    from sqlalchemy import func, select
+
+    stmt = select(JobRun).where(JobRun.definition_id == definition_id)
+    if workspace_id is not None:
+        stmt = stmt.where(JobRun.workspace_id == workspace_id)
+    try:
+        spec = parse_query(request)
+        stmt = apply_query(stmt, JobRun, spec, sortable=_RUN_SORTABLE, filterable=_RUN_FILTERABLE)
+    except InvalidQuery as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
+    total = count.scalar_one()
+    stmt = stmt.offset(spec.offset).limit(spec.limit)
+    rows = await db.execute(stmt)
+    response.headers["X-Total-Count"] = str(total)
+    definition = await JobService(db).get_definition(definition_id)
+    schema = (definition.params_schema if definition else None) or {}
+    return [job_run_to_dict(r, schema=schema) for r in rows.scalars().all()]

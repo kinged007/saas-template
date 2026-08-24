@@ -37,6 +37,7 @@ import {
   Building2,
   ChevronsUpDown,
   CircleUser,
+  Clock,
   Inbox,
   KeyRound,
   LayoutDashboard,
@@ -152,6 +153,12 @@ function UserMenu() {
   const permissions = activeWorkspacePermissions(identity);
   const canManageRoles = permissions.includes("*") || permissions.includes("role:manage");
   const canViewApiKeys = permissions.includes("*") || permissions.includes("apikey:read");
+  // Global jobs are superuser-only; workspace jobs need the permission in the
+  // active workspace.
+  const canViewJobs =
+    identity?.is_superuser === true ||
+    permissions.includes("*") ||
+    permissions.includes("jobs:view");
 
   return (
     <DropdownMenu>
@@ -189,6 +196,12 @@ function UserMenu() {
           <DropdownMenuItem onClick={() => navigate("/api-keys")}>
             <KeyRound />
             API Keys
+          </DropdownMenuItem>
+        )}
+        {canViewJobs && (
+          <DropdownMenuItem onClick={() => navigate("/jobs")}>
+            <Clock />
+            Scheduled Jobs
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />

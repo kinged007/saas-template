@@ -17,6 +17,7 @@ dependencies = [
     "bcrypt>=4.2",
     "cryptography>=43.0",
     "nats-py>=2.9",
+    "croniter>=3.0",
     "python-multipart>=0.0.12",
     "email-validator>=2.2",
     "pgserver>=0.1.4",

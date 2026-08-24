@@ -17,6 +17,8 @@ export type Identity = {
   avatar_url?: string;
   workspaces: Workspace[];
   permissions: string[];
+  /** Bootstrap superuser (SUPERADMIN_EMAIL): manages global scheduled jobs. */
+  is_superuser?: boolean;
 };
 
 export type Role = {
@@ -103,4 +105,63 @@ export type AuditLogEntry = {
   details?: Record<string, unknown>;
   ip_address?: string | null;
   created_at?: string;
+};
+
+export type JobParamSpec = {
+  type: "int" | "float" | "string" | "password" | "date";
+  default?: unknown;
+  min?: number;
+  max?: number;
+  max_length?: number;
+  label?: string;
+  help?: string;
+};
+
+export type ScheduledJob = {
+  id: string;
+  key: string;
+  workspace_id: string | null;
+  scope: "workspace" | "global";
+  name: string;
+  description: string;
+  cron_schedule: string;
+  params_schema: Record<string, JobParamSpec>;
+  params: Record<string, unknown>;
+  enabled: boolean;
+  missed_policy: "single" | "ignore";
+  timeout_seconds: number;
+  next_run_at?: string | null;
+  last_run_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type JobRunStatus =
+  | "pending"
+  | "running"
+  | "success"
+  | "failed"
+  | "timed_out";
+
+export type JobRun = {
+  id: string;
+  definition_id: string;
+  workspace_id: string | null;
+  status: JobRunStatus;
+  trigger: "scheduled" | "manual";
+  actor_user_id?: string | null;
+  scheduled_at?: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  duration_ms?: number | null;
+  error?: string | null;
+  params?: Record<string, unknown>;
+  created_at?: string;
+};
+
+export type JobLogEntry = {
+  seq: number;
+  ts: string;
+  level: string;
+  message: string;
 };

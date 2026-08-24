@@ -33,6 +33,7 @@ def user_to_dict(u: User) -> dict:
         "email": u.email,
         "display_name": u.display_name,
         "avatar_url": u.avatar_url,
+        "is_superuser": bool(u.is_superuser),
     }
 
 

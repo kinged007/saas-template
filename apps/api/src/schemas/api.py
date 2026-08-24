@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, Literal
+
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -58,6 +60,15 @@ class ApiKeyCreate(BaseModel):
 
 class NotificationAck(BaseModel):
     acknowledged: bool = True
+
+
+class JobUpdate(BaseModel):
+    """Editable job configuration. All fields optional (partial patch)."""
+
+    cron_schedule: str | None = Field(default=None, max_length=100)
+    params: dict[str, Any] | None = None
+    enabled: bool | None = None
+    missed_policy: Literal["single", "ignore"] | None = None
 
 
 class GenericMessage(BaseModel):

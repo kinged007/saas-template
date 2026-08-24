@@ -21,6 +21,9 @@ import { RolesPage } from "./pages/RolesPage";
 import { ApiKeyCreatePage } from "./pages/ApiKeyCreatePage";
 import { ApiKeysPage } from "./pages/ApiKeysPage";
 import { InboxPage } from "./pages/InboxPage";
+import { JobsPage } from "./pages/JobsPage";
+import { JobDetailPage } from "./pages/JobDetailPage";
+import { JobRunPage } from "./pages/JobRunPage";
 
 export function App() {
   return (
@@ -44,6 +47,12 @@ export function App() {
           { name: "api-keys", list: "/api-keys", create: "/api-keys/create" },
           { name: "invitations", list: "/invitations" },
           { name: "notifications", list: "/inbox", meta: { label: "Inbox" } },
+          {
+            name: "jobs",
+            list: "/jobs",
+            show: "/jobs/:id",
+            meta: { label: "Scheduled Jobs" },
+          },
         ]}
       >
         <WorkspaceProvider>
@@ -66,6 +75,9 @@ export function App() {
               <Route path="api-keys/create" element={<ApiKeyCreatePage />} />
               <Route path="api-keys" element={<ApiKeysPage />} />
               <Route path="inbox" element={<InboxPage />} />
+              <Route path="jobs" element={<JobsPage />} />
+              <Route path="jobs/:id" element={<JobDetailPage />} />
+              <Route path="jobs/:id/runs/:runId" element={<JobRunPage />} />
             </Route>
             <Route
               path="/login"

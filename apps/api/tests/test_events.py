@@ -158,6 +158,7 @@ async def test_workflow_registry_wiring(app_client):
         "audit.entry.created",
         "apikeys.created",
         "apikeys.revoked",
+        "jobs.execute",
         "notifications.created",
     }
     await registry.wire()

@@ -38,6 +38,9 @@ class Subjects:
     AUDIT = "audit"
     AUDIT_ENTRY_CREATED = "audit.entry.created"
 
+    JOBS = "jobs"
+    JOBS_EXECUTE = "jobs.execute"
+
 
 # Subjects published over core NATS (realtime fan-out / publish-only).
 # TODO(events): when a durable consumer is added for one of these, move the
@@ -58,4 +61,5 @@ ALL = [
     Subjects.APIKEY_CREATED,
     Subjects.APIKEY_REVOKED,
     Subjects.AUDIT_ENTRY_CREATED,
+    Subjects.JOBS_EXECUTE,
 ]

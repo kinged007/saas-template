@@ -10,6 +10,7 @@ from src.api.routes import (
     api_keys,
     auth,
     invitations,
+    jobs,
     members,
     meta,
     notifications,
@@ -18,7 +19,11 @@ from src.api.routes import (
     ws,
 )
 from src.container import Container
+from src.db.session import SessionFactory
 from src.events.factory import WorkflowRegistry
+from src.jobs.capture import install_run_capture, uninstall_run_capture
+from src.jobs.scheduler import JobScheduler
+from src.services.jobs import JobService
 from src.settings import settings
 from src.workflows import build_workflows
 
@@ -33,9 +38,19 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     container: Container = app.state.container
     registry = WorkflowRegistry(container.bus)
-    build_workflows(registry, container.bus, container.connection_manager)
+    build_workflows(registry, container.bus, container.connection_manager, container.cipher)
     await registry.wire()
     await registry.start()
+
+    # Provision job definitions from the in-code registry (idempotent), then
+    # start the due-job scheduler loop. Log capture must be installed before
+    # any run can execute.
+    async with SessionFactory() as session:
+        await JobService(session, container.bus, container.cipher).sync_definitions()
+    install_run_capture()
+    scheduler = JobScheduler()
+    app.state.job_scheduler = scheduler
+    await scheduler.start()
     logger.info(
         "event bus (%s) started; workflows: %s",
         container.bus.name,
@@ -44,6 +59,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await scheduler.stop()
+        uninstall_run_capture()
         await registry.stop()
 
 
@@ -79,5 +96,6 @@ app.include_router(members.router, prefix=API)
 app.include_router(invitations.router, prefix=API)
 app.include_router(roles.router, prefix=API)
 app.include_router(api_keys.router, prefix=API)
+app.include_router(jobs.router, prefix=API)
 app.include_router(notifications.router, prefix=API)
 app.include_router(ws.router, prefix=API)

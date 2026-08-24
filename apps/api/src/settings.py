@@ -42,6 +42,15 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     frontend_url: str = "http://localhost:5173"
 
+    # Superadmin. The user who registers with this email becomes the
+    # superuser (global jobs, etc.). Empty disables the bootstrap.
+    superadmin_email: str = ""
+
+    # Scheduled jobs
+    jobs_scheduler_tick_seconds: float = 10.0
+    jobs_default_timeout_seconds: int = 600
+    jobs_run_retention: int = 1000  # per definition; pruned by scheduler housekeeping
+
     @property
     def database_url_sqlite(self) -> bool:
         return self.resolved_database_url.startswith("sqlite")

@@ -182,13 +182,24 @@ async def test_api_key_management_requires_permissions(app_client):
     owner = await register_user(client, "quinn@example.com")
     ws = await create_workspace(client, owner)
     headers = ws_headers(owner, ws["id"])
-    roles = await client.get("/api/v1/roles", headers=headers)
-    viewer = next(r for r in roles.json() if r["name"] == "viewer")
+
+    # a custom role without any apikey permissions may not manage keys at all
+    resp = await client.post(
+        "/api/v1/roles",
+        json={
+            "name": "no-keys",
+            "description": "role without apikey access",
+            "permissions": ["workspace:read"],
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    no_keys_role_id = resp.json()["id"]
 
     guest = await register_user(client, "rita@example.com")
     invite = await client.post(
         "/api/v1/invitations",
-        json={"email": "rita@example.com", "role_id": viewer["id"]},
+        json={"email": "rita@example.com", "role_id": no_keys_role_id},
         headers=headers,
     )
     invite = invite.json()
@@ -200,15 +211,56 @@ async def test_api_key_management_requires_permissions(app_client):
 
     guest_headers = ws_headers(guest, ws["id"])
 
-    # viewer cannot list API keys
+    # a role without apikey:read cannot list API keys
     resp = await client.get("/api/v1/api-keys", headers=guest_headers)
     assert resp.status_code == 403
 
-    # viewer cannot create API keys
+    # a role without apikey:manage cannot create API keys
     resp = await client.post(
         "/api/v1/api-keys", json={"name": "nope", "permissions": []}, headers=guest_headers
     )
     assert resp.status_code == 403
+
+
+async def test_viewer_can_manage_their_own_api_keys(app_client):
+    """Every system role — including the weakest, viewer — may manage its own
+    keys; creation stays capped by the creator's own permissions."""
+    client = app_client
+    owner = await register_user(client, "sven@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    roles = await client.get("/api/v1/roles", headers=headers)
+    viewer_role = next(r for r in roles.json() if r["name"] == "viewer")
+
+    guest = await register_user(client, "tora@example.com")
+    invite = await client.post(
+        "/api/v1/invitations",
+        json={"email": "tora@example.com", "role_id": viewer_role["id"]},
+        headers=headers,
+    )
+    await client.post(
+        "/api/v1/invitations/accept",
+        params={"token": invite.json()["token"]},
+        headers=auth_headers(guest),
+    )
+    guest_headers = ws_headers(guest, ws["id"])
+
+    # starts with an empty personal list
+    resp = await client.get("/api/v1/api-keys", headers=guest_headers)
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+    # may mint a key capped at viewer-level permissions
+    resp = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "mine", "permissions": ["member:read"]},
+        headers=guest_headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+    # and sees exactly that key afterwards
+    resp = await client.get("/api/v1/api-keys", headers=guest_headers)
+    assert [k["name"] for k in resp.json()] == ["mine"]
 
 
 async def test_effective_permissions_matches_role(app_client):

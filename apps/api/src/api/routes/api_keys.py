@@ -12,6 +12,7 @@ from src.api.deps import (
     get_current_user,
     get_current_workspace_id,
     require_permission,
+    resolve_auth_principal,
 )
 from src.core.permissions import APIKEY_MANAGE, APIKEY_READ
 from src.db.session import get_db
@@ -47,10 +48,16 @@ async def list_api_keys(
     request: Request,
     response: Response,
     workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
     _=Depends(require_permission(APIKEY_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(ApiKey).where(ApiKey.workspace_id == workspace_id)
+    # API keys are personal credentials: each caller sees exactly their own
+    # keys, never another member's — regardless of role or "*" permission.
+    stmt = select(ApiKey).where(
+        ApiKey.workspace_id == workspace_id,
+        ApiKey.created_by_user_id == user.id,
+    )
     try:
         spec = parse_query(request)
         stmt = apply_query(
@@ -87,6 +94,7 @@ async def create_api_key(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
     _=Depends(require_permission(APIKEY_MANAGE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
@@ -98,6 +106,10 @@ async def create_api_key(
             permissions=body.permissions,
             actor=user,
             ip_address=request.client.host if request.client else None,
+            # When the caller is itself an API key, the new key's permissions
+            # are capped by the minting key's own list as well as the owner's
+            # role — a key can never grant what it does not hold.
+            minting_key=principal.api_key,
         )
     except ApiKeyForbidden as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None

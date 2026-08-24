@@ -1,0 +1,614 @@
+"""Scheduled jobs framework: provisioning, permissions, execution, capture."""
+
+import asyncio
+import logging
+
+from src.core.dates import ensure_utc
+from src.jobs.registry import JobSpec, job_registry
+from tests.conftest import (
+    auth_headers,
+    create_workspace,
+    login,
+    register_user,
+    ws_headers,
+)
+
+# ---------------------------------------------------------------------------
+# Test jobs. Registered once at collection; every app_client startup
+# provisions their definition rows via sync_definitions.
+# ---------------------------------------------------------------------------
+
+
+@job_registry.register(
+    JobSpec(
+        key="test.echo",
+        name="Echo (test)",
+        description="Writes the configured greeting to stdout and logging.",
+        scope="workspace",
+        schedule="0 6 * * *",
+        params_schema={
+            "greeting": {"type": "string", "default": "hello", "max_length": 50},
+            "retries": {"type": "int", "default": 3, "min": 1, "max": 10},
+            "ratio": {"type": "float", "default": 0.5},
+            "start_day": {"type": "date", "default": "2026-01-01"},
+            "secret": {"type": "password", "default": None},
+        },
+        default_enabled=False,
+        missed_policy="single",
+        timeout_seconds=60,
+    )
+)
+async def _echo(ctx) -> None:
+    print(f"echo: {ctx.params.get('greeting')}")
+    logging.getLogger("test.echo").info("logged line from echo")
+    await asyncio.sleep(0.05)
+
+
+@job_registry.register(
+    JobSpec(
+        key="test.boom",
+        name="Boom (test)",
+        description="Always fails.",
+        scope="global",
+        schedule="0 7 * * *",
+        params_schema={},
+        default_enabled=False,
+        missed_policy="ignore",
+        timeout_seconds=60,
+    )
+)
+async def _boom(ctx) -> None:
+    raise RuntimeError("boom!")
+
+
+async def wait_for_terminal(client, headers, run_id, timeout_s=10.0):
+    for _ in range(int(timeout_s * 10)):
+        resp = await client.get(f"/api/v1/jobs/runs/{run_id}", headers=headers)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        if data["status"] in ("success", "failed", "timed_out"):
+            return data
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"run {run_id} did not finish in time")
+
+
+def _by_key(jobs, key):
+    return next(j for j in jobs if j["key"] == key)
+
+
+# --------------------------------------------------------------------- setup
+
+
+async def setup_workspace(client, email, *, ws_name=None):
+    owner = await register_user(client, email)
+    ws = await create_workspace(client, owner, name=ws_name or f"WS {email.split('@')[0]}")
+    headers = ws_headers(owner, ws["id"])
+    roles = await client.get("/api/v1/roles", headers=headers)
+    # Workspace-scoped definitions arrive asynchronously via the
+    # workspaces.created workflow — wait for the provisioning to land.
+    for _ in range(50):
+        resp = await client.get("/api/v1/jobs", headers=headers)
+        if any(j["key"] == "test.echo" for j in resp.json()):
+            break
+        await asyncio.sleep(0.1)
+    return owner, ws, headers, {r["name"]: r["id"] for r in roles.json()}
+
+
+async def invite_and_accept(client, owner_headers, owner_ws, roles, role_name, email):
+    invite = await client.post(
+        "/api/v1/invitations",
+        json={"email": email, "role_id": roles[role_name]},
+        headers=owner_headers,
+    )
+    invite = invite.json()
+    member = await register_user(client, email)
+    await client.post(
+        "/api/v1/invitations/accept",
+        params={"token": invite["token"]},
+        headers=auth_headers(member),
+    )
+    return member
+
+
+# -------------------------------------------------------------------- tests
+
+
+async def test_startup_provisions_workspace_and_global_jobs(app_client):
+    client = app_client
+    owner, ws, headers, _ = await setup_workspace(client, "jobs-owner@example.com")
+
+    resp = await client.get("/api/v1/jobs", headers=headers)
+    assert resp.status_code == 200
+    keys = {j["key"] for j in resp.json()}
+    assert "test.echo" in keys
+    assert "invitations.expire_stale" in keys
+    # workspace list never contains global jobs
+    assert "system.heartbeat" not in keys
+    assert all(j["scope"] == "workspace" for j in resp.json())
+    assert all(j["workspace_id"] == ws["id"] for j in resp.json())
+
+    # a second workspace gets its own independent rows
+    other = await create_workspace(client, owner, name="Second")
+    other_headers = ws_headers(owner, other["id"])
+    other_jobs = []
+    for _ in range(50):
+        other_jobs = (await client.get("/api/v1/jobs", headers=other_headers)).json()
+        if any(j["key"] == "test.echo" for j in other_jobs):
+            break
+        await asyncio.sleep(0.1)
+    other_echo = _by_key(other_jobs, "test.echo")
+    first_echo = _by_key(resp.json(), "test.echo")
+    assert other_echo["id"] != first_echo["id"]
+    assert other_echo["workspace_id"] == other["id"]
+
+
+async def test_global_jobs_require_superuser(app_client):
+    client = app_client
+    await register_user(client, "plain@example.com")
+    tokens = await register_user(client, "root@example.com")  # SUPERADMIN_EMAIL account
+
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert me.json()["is_superuser"] is True
+
+    resp = await client.get("/api/v1/jobs/global", headers=auth_headers(tokens))
+    assert resp.status_code == 200
+    keys = {j["key"] for j in resp.json()}
+    assert "system.heartbeat" in keys
+    assert "test.boom" in keys
+    assert all(j["workspace_id"] is None for j in resp.json())
+
+    # non-superusers are rejected
+    plain = await login(client, "plain@example.com")
+    denied = await client.get("/api/v1/jobs/global", headers=auth_headers(plain))
+    assert denied.status_code == 403
+
+
+async def test_registration_grants_superuser_only_to_configured_email(app_client):
+    client = app_client
+    tokens = await register_user(client, "root@example.com")
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert me.json()["is_superuser"] is True
+    other = await register_user(client, "not-root@example.com")
+    me2 = await client.get("/api/v1/auth/me", headers=auth_headers(other))
+    assert me2.json()["is_superuser"] is False
+
+
+async def test_job_permission_matrix(app_client):
+    client = app_client
+    _, ws, owner_headers, roles = await setup_workspace(client, "matrix-owner@example.com")
+    editor = await invite_and_accept(
+        client, owner_headers, ws, roles, "editor", "matrix-editor@example.com"
+    )
+    viewer = await invite_and_accept(
+        client, owner_headers, ws, roles, "viewer", "matrix-viewer@example.com"
+    )
+    editor_headers = ws_headers(editor, ws["id"])
+    viewer_headers = ws_headers(viewer, ws["id"])
+
+    job = _by_key((await client.get("/api/v1/jobs", headers=owner_headers)).json(), "test.echo")
+
+    # viewer has no jobs:view: cannot read...
+    assert (
+        await client.get("/api/v1/jobs", headers=viewer_headers)
+    ).status_code == 403
+    assert (
+        await client.get(f"/api/v1/jobs/{job['id']}", headers=viewer_headers)
+    ).status_code == 403
+    # ...edit or execute
+    patch = await client.patch(
+        f"/api/v1/jobs/{job['id']}", json={"enabled": True}, headers=viewer_headers
+    )
+    assert patch.status_code == 403
+    execute = await client.post(f"/api/v1/jobs/{job['id']}/execute", headers=viewer_headers)
+    assert execute.status_code == 403
+
+    # editor also lacks jobs:view by default
+    assert (
+        await client.get("/api/v1/jobs", headers=editor_headers)
+    ).status_code == 403
+    patch = await client.patch(
+        f"/api/v1/jobs/{job['id']}", json={"enabled": True}, headers=editor_headers
+    )
+    assert patch.status_code == 403
+
+    # owner can edit and execute
+    patch = await client.patch(
+        f"/api/v1/jobs/{job['id']}",
+        json={"enabled": True, "cron_schedule": "*/10 * * * *"},
+        headers=owner_headers,
+    )
+    assert patch.status_code == 200
+    body = patch.json()
+    assert body["enabled"] is True
+    assert body["cron_schedule"] == "*/10 * * * *"
+    assert body["next_run_at"] is not None
+
+
+async def test_admin_can_view_and_edit_jobs(app_client):
+    """Admins are the default role holding jobs:view / jobs:edit."""
+    from src.core.permissions import JOB_EDIT, JOB_VIEW
+
+    client = app_client
+    _, ws, owner_headers, roles = await setup_workspace(client, "adminjobs-owner@example.com")
+    admin = await invite_and_accept(
+        client, owner_headers, ws, roles, "admin", "adminjobs-admin@example.com"
+    )
+    admin_headers = ws_headers(admin, ws["id"])
+
+    membership_role = next(
+        r for r in (await client.get("/api/v1/roles", headers=admin_headers)).json()
+        if r["name"] == "admin"
+    )
+    assert JOB_VIEW in membership_role["permissions"]
+    assert JOB_EDIT in membership_role["permissions"]
+
+    job = _by_key((await client.get("/api/v1/jobs", headers=admin_headers)).json(), "test.echo")
+    assert (
+        await client.get(f"/api/v1/jobs/{job['id']}", headers=admin_headers)
+    ).status_code == 200
+    patch = await client.patch(
+        f"/api/v1/jobs/{job['id']}", json={"enabled": True}, headers=admin_headers
+    )
+    assert patch.status_code == 200
+    execute = await client.post(
+        f"/api/v1/jobs/{job['id']}/execute", json={}, headers=admin_headers
+    )
+    assert execute.status_code == 201
+
+
+async def test_patch_validates_params_and_cron(app_client):
+    client = app_client
+    _, ws, headers, _ = await setup_workspace(client, "validate-owner@example.com")
+    job = _by_key((await client.get("/api/v1/jobs", headers=headers)).json(), "test.echo")
+
+    bad_cron = await client.patch(
+        f"/api/v1/jobs/{job['id']}", json={"cron_schedule": "not a cron"}, headers=headers
+    )
+    assert bad_cron.status_code == 422
+
+    bad_int = await client.patch(
+        f"/api/v1/jobs/{job['id']}",
+        json={"params": {"retries": "many"}},
+        headers=headers,
+    )
+    assert bad_int.status_code == 422
+
+    out_of_range = await client.patch(
+        f"/api/v1/jobs/{job['id']}", json={"params": {"retries": 99}}, headers=headers
+    )
+    assert out_of_range.status_code == 422
+
+    unknown = await client.patch(
+        f"/api/v1/jobs/{job['id']}", json={"params": {"nope": 1}}, headers=headers
+    )
+    assert unknown.status_code == 422
+
+    bad_date = await client.patch(
+        f"/api/v1/jobs/{job['id']}", json={"params": {"start_day": "tomorrow"}}, headers=headers
+    )
+    assert bad_date.status_code == 422
+
+    ok = await client.patch(
+        f"/api/v1/jobs/{job['id']}",
+        json={"params": {"retries": 5, "ratio": "0.75"}},
+        headers=headers,
+    )
+    assert ok.status_code == 200
+    params = ok.json()["params"]
+    assert params["retries"] == 5
+    assert params["ratio"] == 0.75  # coerced from string
+    assert params["greeting"] == "hello"  # unspecified keeps stored value
+
+
+async def test_password_param_roundtrip_is_masked(app_client):
+    client = app_client
+    _, ws, headers, _ = await setup_workspace(client, "secret-owner@example.com")
+    job = _by_key((await client.get("/api/v1/jobs", headers=headers)).json(), "test.echo")
+
+    patched = await client.patch(
+        f"/api/v1/jobs/{job['id']}",
+        json={"params": {"secret": "hunter2"}},
+        headers=headers,
+    )
+    assert patched.status_code == 200
+    masked = patched.json()["params"]["secret"]
+    assert masked not in (None, "", "hunter2")  # mask sentinel, never plaintext
+
+    # sending the mask back keeps the stored value; detail view stays masked
+    again = await client.patch(
+        f"/api/v1/jobs/{job['id']}",
+        json={"params": {"secret": masked}},
+        headers=headers,
+    )
+    assert again.status_code == 200
+    assert again.json()["params"]["secret"] == masked
+
+    from src.core.security.crypto import SecretCipher
+    from src.db.session import SessionFactory
+    from src.models.jobs import JobDefinition
+    from src.settings import settings
+
+    cipher = SecretCipher(settings.fernet_key_list)
+    async with SessionFactory() as session:
+        row = await session.get(JobDefinition, job["id"])
+        stored = row.params["secret"]
+        assert stored != "hunter2"
+        assert cipher.decrypt(stored) == "hunter2"
+
+
+async def test_execute_now_runs_and_captures_logs(app_client):
+    client = app_client
+    _, ws, headers, _ = await setup_workspace(client, "exec-owner@example.com")
+    job = _by_key((await client.get("/api/v1/jobs", headers=headers)).json(), "test.echo")
+
+    resp = await client.post(
+        f"/api/v1/jobs/{job['id']}/execute",
+        json={},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    run = resp.json()
+    assert run["trigger"] == "manual"
+    assert run["status"] == "pending"
+
+    finished = await wait_for_terminal(client, headers, run["id"])
+    assert finished["status"] == "success"
+    assert finished["duration_ms"] is not None
+    assert finished["actor_user_id"] is not None
+
+    # last_run_at reflects the actual execution start (manual runs included)
+    detail = await client.get(f"/api/v1/jobs/{job['id']}", headers=headers)
+    assert detail.json()["last_run_at"] is not None
+
+    logs = await client.get(f"/api/v1/jobs/runs/{run['id']}/logs", headers=headers)
+    assert logs.status_code == 200
+    messages = [e["message"] for e in logs.json()]
+    assert any("echo: hello" in m for m in messages), messages  # print() captured
+    assert any("logged line from echo" in m for m in messages), messages  # logging captured
+
+
+async def test_failed_run_records_error(app_client):
+    client = app_client
+    tokens = await register_user(client, "root@example.com")
+    headers = auth_headers(tokens)
+    jobs = (await client.get("/api/v1/jobs/global", headers=headers)).json()
+    boom = _by_key(jobs, "test.boom")
+
+    resp = await client.post(f"/api/v1/jobs/global/{boom['id']}/execute", json={}, headers=headers)
+    run = resp.json()
+    finished = await wait_for_terminal(client, headers, run["id"])
+    assert finished["status"] == "failed"
+    assert "RuntimeError" in finished["error"]
+    assert "boom!" in finished["error"]
+
+
+async def test_double_claim_is_prevented(app_client):
+    """A run already terminal must not be re-executed by a redelivered message."""
+    from sqlalchemy import select
+
+    from src.db.session import SessionFactory
+    from src.jobs.executor import execute_run
+    from src.models.jobs import JobDefinition, JobRun
+
+    client = app_client
+    _, ws, headers, _ = await setup_workspace(client, "claim-owner@example.com")
+    job = _by_key((await client.get("/api/v1/jobs", headers=headers)).json(), "test.echo")
+
+    run_resp = await client.post(f"/api/v1/jobs/{job['id']}/execute", json={}, headers=headers)
+    run_id = run_resp.json()["id"]
+    finished = await wait_for_terminal(client, headers, run_id)
+    assert finished["status"] == "success"
+
+    async with SessionFactory() as session:
+        count_before = len(
+            (await session.execute(select(JobRun).where(JobRun.definition_id == job["id"])))
+            .scalars()
+            .all()
+        )
+
+    # redelivery: claim CAS fails because the run is no longer pending
+    await execute_run(run_id)
+
+    async with SessionFactory() as session:
+        runs = (
+            (await session.execute(select(JobRun).where(JobRun.definition_id == job["id"])))
+            .scalars()
+            .all()
+        )
+        assert len(runs) == count_before
+        row = next(r for r in runs if r.id == run_id)
+        assert row.status == "success"
+
+    # also: an already-claimed (running) run cannot be claimed twice
+    async with SessionFactory() as session:
+        definition = await session.get(JobDefinition, job["id"])
+        session.add(
+            JobRun(
+                definition_id=definition.id,
+                workspace_id=None,
+                status="running",
+                scheduled_at=definition.created_at,
+            )
+        )
+        await session.commit()
+
+
+async def test_scheduler_claims_due_occurrence_atomically(app_client):
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from src.db.session import SessionFactory
+    from src.models.jobs import JobDefinition, JobRun
+    from src.services.jobs import JobService
+
+    client = app_client
+    _, ws, headers, _ = await setup_workspace(client, "sched-owner@example.com")
+    job = _by_key((await client.get("/api/v1/jobs", headers=headers)).json(), "test.echo")
+
+    async with SessionFactory() as session:
+        definition = await session.get(JobDefinition, job["id"])
+        definition.enabled = True
+        from src.core.dates import now_utc
+
+        definition.next_run_at = now_utc() - timedelta(seconds=5)
+        await session.commit()
+
+    async with SessionFactory() as session:
+        scheduled = await JobService(session).schedule_due()
+    assert scheduled == 1
+
+    async with SessionFactory() as session:
+        runs = (
+            (await session.execute(select(JobRun).where(JobRun.definition_id == job["id"])))
+            .scalars()
+            .all()
+        )
+        assert len(runs) == 1
+        refreshed = await session.get(JobDefinition, job["id"])
+        assert ensure_utc(refreshed.next_run_at) > now_utc()
+
+    # second tick for the same occurrence must NOT schedule again
+    async with SessionFactory() as session:
+        scheduled_again = await JobService(session).schedule_due()
+    assert scheduled_again == 0
+    async with SessionFactory() as session:
+        runs = (
+            (await session.execute(select(JobRun).where(JobRun.definition_id == job["id"])))
+            .scalars()
+            .all()
+        )
+        assert len(runs) == 1
+
+
+async def test_missed_ignore_policy_skips_catchup(app_client):
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from src.core.dates import now_utc
+    from src.db.session import SessionFactory
+    from src.models.jobs import JobDefinition, JobRun
+    from src.services.jobs import JobService
+
+    client = app_client
+    tokens = await register_user(client, "root@example.com")
+    headers = auth_headers(tokens)
+    jobs = (await client.get("/api/v1/jobs/global", headers=headers)).json()
+    boom = _by_key(jobs, "test.boom")  # registered with missed_policy=ignore
+
+    async with SessionFactory() as session:
+        definition = await session.get(JobDefinition, boom["id"])
+        definition.enabled = True
+        definition.next_run_at = now_utc() - timedelta(hours=3)  # clearly missed
+        await session.commit()
+
+    async with SessionFactory() as session:
+        scheduled = await JobService(session).schedule_due()
+    assert scheduled == 0
+
+    async with SessionFactory() as session:
+        runs = (
+            (await session.execute(select(JobRun).where(JobRun.definition_id == boom["id"])))
+            .scalars()
+            .all()
+        )
+        assert runs == []
+        refreshed = await session.get(JobDefinition, boom["id"])
+        assert refreshed.next_run_at is not None  # still advanced
+
+
+async def test_missed_single_policy_fires_once(app_client):
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from src.core.dates import now_utc
+    from src.db.session import SessionFactory
+    from src.models.jobs import JobDefinition, JobRun
+    from src.services.jobs import JobService
+
+    client = app_client
+    _, ws, headers, _ = await setup_workspace(client, "catchup-owner@example.com")
+    job = _by_key((await client.get("/api/v1/jobs", headers=headers)).json(), "test.echo")
+
+    async with SessionFactory() as session:
+        definition = await session.get(JobDefinition, job["id"])
+        definition.enabled = True
+        definition.next_run_at = now_utc() - timedelta(hours=3)
+        await session.commit()
+
+    async with SessionFactory() as session:
+        scheduled = await JobService(session).schedule_due()
+    assert scheduled == 1
+    async with SessionFactory() as session:
+        runs = (
+            (await session.execute(select(JobRun).where(JobRun.definition_id == job["id"])))
+            .scalars()
+            .all()
+        )
+        assert len(runs) == 1
+        assert ensure_utc(runs[0].scheduled_at) < now_utc() - timedelta(hours=2)
+
+
+async def test_workspace_isolation_on_definitions_and_runs(app_client):
+    client = app_client
+    owner_a, ws_a, headers_a, _ = await setup_workspace(client, "iso-a@example.com")
+    owner_b, ws_b, headers_b, _ = await setup_workspace(client, "iso-b@example.com")
+
+    job_a = _by_key((await client.get("/api/v1/jobs", headers=headers_a)).json(), "test.echo")
+
+    # B cannot see or mutate A's definition
+    assert (await client.get(f"/api/v1/jobs/{job_a['id']}", headers=headers_b)).status_code == 404
+    assert (
+        await client.patch(f"/api/v1/jobs/{job_a['id']}", json={"enabled": True}, headers=headers_b)
+    ).status_code == 404
+    assert (
+        await client.post(f"/api/v1/jobs/{job_a['id']}/execute", json={}, headers=headers_b)
+    ).status_code == 404
+
+    # B's own list shows a different row with the same key
+    job_b = _by_key((await client.get("/api/v1/jobs", headers=headers_b)).json(), "test.echo")
+    assert job_a["id"] != job_b["id"]
+
+    # non-members get 403 on run endpoints (membership check, not 404 leak)
+    run = await client.post(f"/api/v1/jobs/{job_a['id']}/execute", json={}, headers=headers_a)
+    run_id = run.json()["id"]
+    outsider = await register_user(client, "iso-outsider@example.com")
+    resp = await client.get(f"/api/v1/jobs/runs/{run_id}", headers=auth_headers(outsider))
+    assert resp.status_code == 403
+
+
+async def test_new_workspace_gets_jobs_via_event(app_client):
+    """Creating a workspace provisions its job rows through workspaces.created."""
+    import asyncio
+
+    client = app_client
+    owner = await register_user(client, "provision@example.com")
+    ws = await create_workspace(client, owner, name="Provisioned")
+    headers = ws_headers(owner, ws["id"])
+
+    for _ in range(30):  # wait for the event-driven provisioning to land
+        resp = await client.get("/api/v1/jobs", headers=headers)
+        if any(j["key"] == "test.echo" for j in resp.json()):
+            break
+        await asyncio.sleep(0.1)
+    assert any(j["key"] == "test.echo" for j in resp.json())
+
+
+async def test_runs_history_pagination(app_client):
+    client = app_client
+    _, ws, headers, _ = await setup_workspace(client, "history-owner@example.com")
+    job = _by_key((await client.get("/api/v1/jobs", headers=headers)).json(), "test.echo")
+
+    for _ in range(3):
+        resp = await client.post(f"/api/v1/jobs/{job['id']}/execute", json={}, headers=headers)
+        assert resp.status_code == 201
+
+    resp = await client.get(
+        f"/api/v1/jobs/{job['id']}/runs?limit=2&offset=0",
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.headers["X-Total-Count"] == "3"
+    assert len(resp.json()) == 2

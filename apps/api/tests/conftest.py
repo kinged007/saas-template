@@ -7,6 +7,7 @@ os.environ["FERNET_KEYS"] = "test-fernet-key-value"
 os.environ["EVENT_BUS_DRIVER"] = "inprocess"
 os.environ["ENVIRONMENT"] = "test"
 os.environ["CORS_ORIGINS"] = "http://localhost:5173"
+os.environ["SUPERADMIN_EMAIL"] = "root@example.com"
 
 import pytest  # noqa: E402
 from asgi_lifespan import LifespanManager  # noqa: E402
@@ -19,7 +20,7 @@ from src.db.session import engine  # noqa: E402
 from src.settings import settings  # noqa: E402
 
 
-async def _drop_all_with_retry(tries: int = 15, delay: float = 0.2) -> None:
+async def _drop_all_with_retry(tries: int = 24, delay: float = 0.25) -> None:
     """Drop all tables, retrying transient sqlite locks.
 
     Background bus workers may still be draining their last transactions when a
@@ -30,6 +31,10 @@ async def _drop_all_with_retry(tries: int = 15, delay: float = 0.2) -> None:
     background worker holding the lock always finishes within a few seconds, so
     waiting 30s (the app engine's timeout) per attempt only turns a transient
     contention into a multi-minute stall.
+
+    The budget is ~6s: workspace provisioning (workspaces.created workflow)
+    and scheduled-job workers add a little more post-test drain time than the
+    notification workflows alone.
     """
     drop_engine = create_async_engine(settings.resolved_database_url, connect_args={"timeout": 2})
     try:

@@ -167,6 +167,10 @@ async def main() -> None:
         auth = AuthService(session)
         ws_service = WorkspaceService(session)
 
+        changed_roles = await ws_service.sync_system_role_permissions()
+        if changed_roles:
+            logger.info("updated %d system role(s) to current defaults", changed_roles)
+
         users: dict[str, User] = {}
         for email, display_name in DEMO_USERS:
             user = await auth.get_by_email(email)

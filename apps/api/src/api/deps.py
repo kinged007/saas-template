@@ -79,6 +79,15 @@ async def get_current_user(
     return principal.user
 
 
+async def require_superuser(
+    user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """Gate deployment-wide administration (e.g. global scheduled jobs)."""
+    if not user.is_superuser:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "superuser access required")
+    return user
+
+
 async def get_current_workspace_id(
     x_workspace_id: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
 ) -> str:

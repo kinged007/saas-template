@@ -33,7 +33,14 @@ class ApiKeyService:
     Keys are granted an explicit permission list (like a role) but can never
     exceed the creator's own permissions: the effective permission set of the
     creating user is always enforced server-side, so a user cannot mint a key
-    that escalates beyond what they personally can do.
+    that escalates beyond what they personally can do. When the creator is
+    itself an API key, the cap is the intersection of the owner's role and the
+    minting key's own permission list — a key can never grant a permission it
+    does not hold itself.
+
+    Keys are personal credentials: every read and write is scoped to the
+    owning user (`created_by_user_id`). Even workspace admins see and manage
+    only their own keys.
     """
 
     PREFIX = "sk_live_"
@@ -67,10 +74,14 @@ class ApiKeyService:
         permissions: list[str],
         actor: User,
         ip_address: str | None = None,
+        minting_key: ApiKey | None = None,
     ) -> tuple[ApiKey, str]:
         """Create a key whose permissions are capped by the actor's own.
 
-        Returns (key, raw_secret). The raw secret is only ever returned once.
+        When the request was authenticated with an API key, the cap is the
+        intersection of the owner's role permissions and the minting key's
+        own permission list. Returns (key, raw_secret); the raw secret is
+        only ever returned once.
         """
         membership = await WorkspaceService(self._session).get_membership(workspace_id, actor.id)
         if membership is None:
@@ -79,6 +90,8 @@ class ApiKeyService:
 
         requested = set(permissions)
         allowed = set(role.permissions)
+        if minting_key is not None and "*" not in minting_key.permissions:
+            allowed &= set(minting_key.permissions)
         if "*" not in allowed and not requested <= allowed:
             denied = sorted(requested - allowed)
             raise ApiKeyForbidden(f"cannot grant permissions you do not have: {', '.join(denied)}")
@@ -124,10 +137,16 @@ class ApiKeyService:
         )
         return key, raw
 
-    async def list_api_keys(self, workspace_id: str) -> list[ApiKey]:
+    async def list_api_keys(
+        self, workspace_id: str, created_by_user_id: str
+    ) -> list[ApiKey]:
+        """Keys owned by one user in one workspace — never anyone else's."""
         stmt = (
             select(ApiKey)
-            .where(ApiKey.workspace_id == workspace_id)
+            .where(
+                ApiKey.workspace_id == workspace_id,
+                ApiKey.created_by_user_id == created_by_user_id,
+            )
             .order_by(ApiKey.created_at.desc())
         )
         result = await self._session.execute(stmt)
@@ -143,6 +162,10 @@ class ApiKeyService:
     ) -> ApiKey:
         key = await self._session.get(ApiKey, api_key_id)
         if key is None or key.workspace_id != workspace_id:
+            raise ApiKeyNotFound("api key not found")
+        # Keys are personal: not even workspace admins may revoke another
+        # user's key. 404 (not 403) so the id's existence is not leaked.
+        if actor is not None and key.created_by_user_id != actor.id:
             raise ApiKeyNotFound("api key not found")
         if key.revoked_at is None:
             key.revoked_at = now_utc()

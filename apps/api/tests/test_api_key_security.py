@@ -2,12 +2,17 @@
 
 Covers, end to end over the HTTP API:
   * creation caps — a key can never be minted with a permission its creator
-    does not hold (every escalation vector, wildcard, non-member callers)
+    does not hold (every escalation vector, wildcard, non-member callers);
+    a key minted BY another key is additionally capped by the minting key's
+    own permission list
   * read access — a key can read exactly the resources its permission list
     grants, and nothing else
   * edit access — PATCH/POST mutations require the matching permission
   * delete access — DELETE mutations require the matching permission
   * workspace scoping — a key minted in one workspace can never touch another
+  * ownership scoping — users see and manage ONLY their own keys; neither
+    listing nor revoking ever crosses the creator boundary, not even for
+    wildcard-permission admins
   * authentication hygiene — garbage/revoked keys, zero-permission keys,
     and proof that key permissions never inherit the creator's role
 """
@@ -409,6 +414,116 @@ async def test_delete_operations_require_matching_key_permission(app_client):
         f"/api/v1/workspaces/{del_ws['id']}", headers=_key_headers(read_key["key"], del_ws["id"])
     )
     assert resp.status_code == 403
+
+
+# ------------------------------------------------------- ownership scoping
+
+
+async def test_users_only_see_their_own_api_keys(app_client):
+    """The reported leak: user1 must never see keys created by the admin."""
+    client = app_client
+    owner = await register_user(client, "tina@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+
+    editor = await _add_member(client, owner_headers, ws["id"], "ursula@example.com", "editor")
+
+    admin_a = await _create_key(client, owner_headers, "admin-key-a", ["member:read"])
+    admin_b = await _create_key(client, owner_headers, "admin-key-b", ["role:read"])
+    editor_key = await _create_key(
+        client, ws_headers(editor, ws["id"]), "editor-key", ["member:read"]
+    )
+
+    seen_by_owner = await client.get("/api/v1/api-keys", headers=owner_headers)
+    assert seen_by_owner.status_code == 200
+    owner_ids = {k["id"] for k in seen_by_owner.json()}
+    assert owner_ids == {admin_a["id"], admin_b["id"]}
+    assert editor_key["id"] not in owner_ids
+    assert "editor-key" not in {k["name"] for k in seen_by_owner.json()}
+
+    seen_by_editor = await client.get("/api/v1/api-keys", headers=ws_headers(editor, ws["id"]))
+    assert seen_by_editor.status_code == 200
+    editor_ids = {k["id"] for k in seen_by_editor.json()}
+    assert editor_ids == {editor_key["id"]}
+    assert {admin_a["id"], admin_b["id"]}.isdisjoint(editor_ids)
+    assert {"admin-key-a", "admin-key-b"}.isdisjoint({k["name"] for k in seen_by_editor.json()})
+
+
+async def test_user_cannot_revoke_anothers_api_key(app_client):
+    """Revoking someone else's key 404s — even for wildcard-permission admins."""
+    client = app_client
+    owner = await register_user(client, "vera@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+
+    editor = await _add_member(client, owner_headers, ws["id"], "walt@example.com", "editor")
+    editor_headers = ws_headers(editor, ws["id"])
+
+    admin_key = await _create_key(client, owner_headers, "admins", ["member:read"])
+    editor_key = await _create_key(client, editor_headers, "editors", ["member:read"])
+
+    # editor has apikey:manage (passes the permission gate) but not ownership → 404
+    resp = await client.delete(f"/api/v1/api-keys/{admin_key['id']}", headers=editor_headers)
+    assert resp.status_code == 404, resp.text
+
+    # the reverse direction: an "*" admin still cannot revoke the editor's key
+    resp = await client.delete(f"/api/v1/api-keys/{editor_key['id']}", headers=owner_headers)
+    assert resp.status_code == 404, resp.text
+
+    # neither key was actually revoked — both still appear unrevoked to their owners
+    owner_listing = (await client.get("/api/v1/api-keys", headers=owner_headers)).json()
+    editor_listing = (await client.get("/api/v1/api-keys", headers=editor_headers)).json()
+    assert next(k for k in owner_listing if k["id"] == admin_key["id"])["revoked_at"] is None
+    assert next(k for k in editor_listing if k["id"] == editor_key["id"])["revoked_at"] is None
+
+    # each user revokes their own key without trouble
+    assert (
+        await client.delete(f"/api/v1/api-keys/{admin_key['id']}", headers=owner_headers)
+    ).status_code == 204
+    assert (
+        await client.delete(f"/api/v1/api-keys/{editor_key['id']}", headers=editor_headers)
+    ).status_code == 204
+
+
+async def test_key_minted_by_a_key_is_capped_by_the_minting_key(app_client):
+    """A key can never mint a new key carrying a permission it doesn't hold,
+    even though its human owner's role is broader."""
+    client = app_client
+    owner = await register_user(client, "xena@example.com")  # owner role: "*"
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+
+    automation = await _create_key(
+        client, owner_headers, "automation", ["apikey:manage", "apikey:read"]
+    )
+    auto_kh = _key_headers(automation["key"], ws["id"])
+
+    # owner's role includes everything via "*", but the minting key does not:
+    # requesting a permission outside the key's own list must be rejected
+    resp = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "escalated", "permissions": ["member:manage"]},
+        headers=auto_kh,
+    )
+    assert resp.status_code == 403, resp.text
+    assert "member:manage" in resp.json()["detail"]
+
+    # wildcard escalation via the same route
+    resp = await client.post(
+        "/api/v1/api-keys", json={"name": "wild", "permissions": ["*"]}, headers=auto_kh
+    )
+    assert resp.status_code == 403
+
+    # within its own list it may still mint
+    child = await _create_key(client, auto_kh, "child", ["apikey:read"])
+    assert child["permissions"] == ["apikey:read"]
+
+    # a "*" key acts with its owner's full authority and may grant broadly
+    superkey = await _create_key(client, owner_headers, "superkey", ["*"])
+    broad = await _create_key(
+        client, _key_headers(superkey["key"], ws["id"]), "broad", ["member:manage"]
+    )
+    assert broad["permissions"] == ["member:manage"]
 
 
 # ------------------------------------------------------- workspace scoping

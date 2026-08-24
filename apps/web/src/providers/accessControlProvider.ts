@@ -61,6 +61,11 @@ const PERMISSION_MAP: Record<string, Record<string, string>> = {
     list: "notification:read",
     edit: "notification:acknowledge",
   },
+  jobs: {
+    list: "jobs:view",
+    show: "jobs:view",
+    edit: "jobs:edit",
+  },
 };
 
 export const accessControlProvider: AccessControlBindings = {

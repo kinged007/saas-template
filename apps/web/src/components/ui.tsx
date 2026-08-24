@@ -14,6 +14,18 @@ export function StatusBadge({ status }: { status: string }) {
   return <Badge variant={variant as "secondary"}>{status}</Badge>;
 }
 
+export function JobRunStatusBadge({ status }: { status: string }) {
+  const variant =
+    status === "success"
+      ? "success"
+      : status === "failed" || status === "timed_out"
+        ? "destructive"
+        : status === "running" || status === "pending"
+          ? "warning"
+          : "secondary";
+  return <Badge variant={variant as "secondary"}>{status.replace("_", " ")}</Badge>;
+}
+
 export function PageHeader({
   title,
   subtitle,
@@ -50,4 +62,13 @@ export function formatDate(value?: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
+}
+
+export function formatDuration(ms?: number | null): string {
+  if (ms === null || ms === undefined) return "—";
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = Math.round((ms % 60_000) / 1000);
+  return `${minutes}m ${seconds}s`;
 }

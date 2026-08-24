@@ -28,6 +28,7 @@ STREAM_SUBJECTS = [
     f"{Subjects.WORKSPACES}.>",
     f"{Subjects.APIKEYS}.>",
     f"{Subjects.AUDIT}.>",
+    f"{Subjects.JOBS}.>",
 ]
 MAX_DELIVER = 10
 ACK_WAIT_SECONDS = 30.0

@@ -15,6 +15,7 @@ Registered subscriptions (subject → handler, fanout flag):
     audit.entry.created             → persist AuditLogEntry row
     apikeys.created                 → security/monitoring hook (TODO)
     apikeys.revoked                 → security/monitoring hook (TODO)
+    jobs.execute                    → execute one scheduled-job run
 
   Fanout (every replica receives the event, realtime push):
     notifications.created           → push to the user's WebSocket sessions
@@ -30,13 +31,16 @@ import logging
 
 from sqlalchemy import select
 
+from src.core.security.crypto import SecretCipher
 from src.db.session import SessionFactory
 from src.events.bus import EventBus
 from src.events.factory import WorkflowRegistry
 from src.events.subjects import Subjects
+from src.jobs.executor import execute_run
 from src.models.workspace import WorkspaceMember
 from src.realtime.manager import ConnectionManager
 from src.services.audit import AuditService
+from src.services.jobs import JobService
 from src.services.notifications import NotificationService
 
 logger = logging.getLogger(__name__)
@@ -54,6 +58,7 @@ def build_workflows(
     registry: WorkflowRegistry,
     bus: EventBus,
     connection_manager: ConnectionManager,
+    cipher: SecretCipher | None = None,
 ) -> None:
     async def on_member_invited(payload: dict, metadata) -> None:
         user_id = payload.get("user_id")
@@ -200,13 +205,18 @@ def build_workflows(
             )
 
     async def on_workspace_created(payload: dict, metadata) -> None:
-        """Placeholder for workspace provisioning / analytics.
+        """Provision workspace-scoped scheduled jobs for the new workspace.
 
-        TODO(events): consume workspaces.created (e.g. provision resources,
-        emit analytics, seed integrations). Currently logs only.
+        TODO(events): other provisioning/analytics hooks can live here too.
         """
-        logger.info(
-            "workspace.created: %s (%s) by %s",
+        workspace_id = payload.get("workspace_id")
+        if not workspace_id:
+            return
+        async with SessionFactory() as session:
+            await JobService(session, bus, cipher).sync_definitions(
+                workspace_ids=[workspace_id]
+            )
+        logger.info("workspace.created: %s (%s) by %s",
             payload.get("workspace_id"),
             payload.get("name"),
             payload.get("created_by_user_id"),
@@ -260,6 +270,17 @@ def build_workflows(
             return
         await connection_manager.push(user_id=user_id, payload=payload)
 
+    async def on_job_execute(payload: dict, metadata) -> None:
+        """Execute one scheduled-job run (durable, load-balanced consumer).
+
+        The executor claims the run atomically before running it, so bus
+        redeliveries or extra replicas never duplicate an execution.
+        """
+        run_id = payload.get("run_id")
+        if not run_id:
+            return
+        await execute_run(run_id)
+
     registry.register(Subjects.WORKSPACE_MEMBER_INVITED, on_member_invited)
     registry.register(Subjects.WORKSPACE_MEMBER_JOINED, on_member_joined)
     registry.register(Subjects.WORKSPACE_MEMBER_ROLE_CHANGED, on_member_role_changed)
@@ -269,4 +290,5 @@ def build_workflows(
     registry.register(Subjects.AUDIT_ENTRY_CREATED, on_audit_entry)
     registry.register(Subjects.APIKEY_CREATED, on_apikey_created)
     registry.register(Subjects.APIKEY_REVOKED, on_apikey_revoked)
+    registry.register(Subjects.JOBS_EXECUTE, on_job_execute)
     registry.register(Subjects.NOTIFICATIONS_CREATED, on_notification_created, fanout=True)

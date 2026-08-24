@@ -528,6 +528,29 @@ class WorkspaceService:
 
     # ------------------------------------------------------------------ roles
 
+    async def sync_system_role_permissions(self) -> int:
+        """Converge every workspace's system roles on the code defaults.
+
+        Only rows with `system=True` are touched — custom roles are never
+        modified. Idempotent; returns the number of roles whose permission
+        list changed. Used when a default role's permission set evolves
+        (e.g. granting apikey management to viewers) so existing workspaces
+        pick up the change on re-seed instead of only new ones.
+        """
+        result = await self._session.execute(select(Role).where(Role.system.is_(True)))
+        changed = 0
+        for role in result.scalars().all():
+            try:
+                defaults = permissions_for_role(role.name)
+            except ValueError:
+                continue  # system flag on a renamed/custom role — leave it alone
+            if sorted(role.permissions) != sorted(defaults):
+                role.permissions = defaults
+                changed += 1
+        if changed:
+            await self._session.commit()
+        return changed
+
     async def list_roles(self, workspace_id: str) -> list[Role]:
         stmt = select(Role).where(Role.workspace_id == workspace_id).order_by(Role.created_at.asc())
         result = await self._session.execute(stmt)

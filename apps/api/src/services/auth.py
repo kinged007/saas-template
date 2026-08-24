@@ -60,6 +60,7 @@ class AuthService:
             email=email,
             password_hash=PasswordHasher.hash(password) if password else None,
             display_name=display_name,
+            is_superuser=self._is_superadmin_email(email),
         )
         self._session.add(user)
         await self._session.commit()
@@ -81,7 +82,13 @@ class AuthService:
         """Find or create a user for an OAuth identity. Links by verified email."""
         user = await self.get_by_email(email)
         if user is None:
-            user = User(email=email.lower(), password_hash=None, display_name=display_name)
+            email = email.lower()
+            user = User(
+                email=email,
+                password_hash=None,
+                display_name=display_name,
+                is_superuser=self._is_superadmin_email(email),
+            )
             self._session.add(user)
             await self._session.commit()
             await publish_audit(
@@ -94,6 +101,11 @@ class AuthService:
                 details={"email": user.email, "provider": provider, "subject": subject},
             )
         return user
+
+    def _is_superadmin_email(self, email: str) -> bool:
+        """The SUPERADMIN_EMAIL account bootstraps as superuser on registration."""
+        configured = settings.superadmin_email.strip().lower()
+        return bool(configured) and email == configured
 
     # ------------------------------------------------------------------ auth
 
