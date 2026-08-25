@@ -33,7 +33,7 @@
 Changes to these files have the widest blast radius across the codebase:
 
 - `apps/api/src/db/session.py` — imported by **28** files
-- `apps/web/src/types.ts` — imported by **16** files
+- `apps/web/src/types.ts` — imported by **17** files
 - `apps/api/src/models/workspace.py` — imported by **15** files
 - `apps/api/src/settings.py` — imported by **14** files
 - `apps/api/src/events/bus.py` — imported by **13** files
@@ -45,4 +45,4 @@ Changes to these files have the widest blast radius across the codebase:
 - `SUPERADMIN_EMAIL` — `apps/api/.env.example`
 
 ---
-_Back to [index.md](./index.md) · Generated 2026-08-24_
+_Back to [index.md](./index.md) · Generated 2026-08-25_

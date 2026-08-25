@@ -5,7 +5,7 @@
 
 > 37 routes | 13 models | 31 components | 53 lib files | 22 env vars | 2 middleware | 28% test coverage
 > **Token savings:** this file is ~5,600 tokens. Without it, AI exploration would cost ~60,600 tokens. **Saves ~55,100 tokens per conversation.**
-> **Last scanned:** 2026-08-24 20:39 — re-run after significant changes
+> **Last scanned:** 2026-08-25 13:29 — re-run after significant changes
 
 ---
 
@@ -406,7 +406,7 @@
 ## Most Imported Files (change these carefully)
 
 - `apps/api/src/db/session.py` — imported by **28** files
-- `apps/web/src/types.ts` — imported by **16** files
+- `apps/web/src/types.ts` — imported by **17** files
 - `apps/api/src/models/workspace.py` — imported by **15** files
 - `apps/api/src/settings.py` — imported by **14** files
 - `apps/api/src/events/bus.py` — imported by **13** files
@@ -420,16 +420,16 @@
 - `apps/api/src/db/base.py` — imported by **8** files
 - `apps/api/src/schemas/api.py` — imported by **8** files
 - `apps/api/src/core/security/crypto.py` — imported by **8** files
+- `apps/web/src/contexts/WorkspaceContext.tsx` — imported by **8** files
 - `apps/api/src/models/api_key.py` — imported by **7** files
 - `apps/api/src/services/auth.py` — imported by **7** files
 - `apps/api/src/api/crud.py` — imported by **7** files
 - `apps/api/src/models/jobs.py` — imported by **7** files
-- `apps/web/src/contexts/WorkspaceContext.tsx` — imported by **7** files
 
 ## Import Map (who imports what)
 
 - `apps/api/src/db/session.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/jobs.py` +23 more
-- `apps/web/src/types.ts` ← `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/NotificationCenter.tsx`, `apps/web/src/contexts/WorkspaceContext.tsx`, `apps/web/src/pages/ApiKeyCreatePage.tsx`, `apps/web/src/pages/ApiKeysPage.tsx` +11 more
+- `apps/web/src/types.ts` ← `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/NotificationCenter.tsx`, `apps/web/src/contexts/WorkspaceContext.tsx`, `apps/web/src/pages/ApiKeyCreatePage.tsx`, `apps/web/src/pages/ApiKeysPage.tsx` +12 more
 - `apps/api/src/models/workspace.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py`, `apps/api/src/api/routes/notifications.py`, `apps/api/src/api/routes/roles.py` +10 more
 - `apps/api/src/settings.py` ← `apps/api/alembic/env.py`, `apps/api/src/container.py`, `apps/api/src/core/security/tokens.py`, `apps/api/src/db/session.py`, `apps/api/src/events/factory.py` +9 more
 - `apps/api/src/events/bus.py` ← `apps/api/src/container.py`, `apps/api/src/events/factory.py`, `apps/api/src/events/inprocess.py`, `apps/api/src/events/nats.py`, `apps/api/src/events/publisher.py` +8 more

@@ -9,11 +9,14 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
 import { PageHeader } from "../components/refine-ui/layout/page-header";
+import { useWorkspace } from "../contexts/WorkspaceContext";
+import type { Workspace } from "../types";
 
 export function WorkspaceCreatePage() {
   const navigate = useNavigate();
   const { mutate, mutation } = useCreate();
   const { refetch } = useGetIdentity();
+  const { setWorkspace } = useWorkspace();
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
@@ -27,7 +30,11 @@ export function WorkspaceCreatePage() {
         successNotification: { message: "Workspace created", type: "success" },
       },
       {
-        onSuccess: () => {
+        onSuccess: (data) => {
+          // Jump straight into the new workspace: record it as current
+          // before the identity refetch lands, so neither the provider nor
+          // the previous workspace's stored id can re-select an old one.
+          setWorkspace(data.data as Workspace);
           refetch();
           navigate("/");
         },
