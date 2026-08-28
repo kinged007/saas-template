@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.api.routes import (
     api_keys,
     auth,
+    conversations,
     invitations,
     jobs,
     members,
@@ -98,4 +99,5 @@ app.include_router(roles.router, prefix=API)
 app.include_router(api_keys.router, prefix=API)
 app.include_router(jobs.router, prefix=API)
 app.include_router(notifications.router, prefix=API)
+app.include_router(conversations.router, prefix=API)
 app.include_router(ws.router, prefix=API)

@@ -29,6 +29,32 @@ function connect() {
         listeners?.forEach((cb) =>
           cb({ type: "created", payload: { ids: id ? [id] : [], data: message.data } }),
         );
+      } else if (message.event === "message.created") {
+        const cid = message.data?.conversation_id as string | undefined;
+        const mid = message.data?.message_id as string | undefined;
+        // Invalidate conversation list (preview/unread) and the specific message stream.
+        const convListeners = callbacks.get("resources/conversations");
+        convListeners?.forEach((cb) =>
+          cb({ type: "updated", payload: { ids: cid ? [cid] : [], data: message.data } }),
+        );
+        if (cid) {
+          const msgChannel = `resources/conversations/${cid}/messages`;
+          const msgListeners = callbacks.get(msgChannel);
+          msgListeners?.forEach((cb) =>
+            cb({ type: "created", payload: { ids: mid ? [mid] : [], data: message.data } }),
+          );
+          // Also generic messages channel
+          const generic = callbacks.get("resources/messages");
+          generic?.forEach((cb) =>
+            cb({ type: "created", payload: { ids: mid ? [mid] : [], data: message.data } }),
+          );
+        }
+      } else if (message.event === "conversation.renamed") {
+        const cid = message.data?.conversation_id as string | undefined;
+        const convListeners = callbacks.get("resources/conversations");
+        convListeners?.forEach((cb) =>
+          cb({ type: "updated", payload: { ids: cid ? [cid] : [], data: message.data } }),
+        );
       }
     } catch {
       /* ignore malformed frames */

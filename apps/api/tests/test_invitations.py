@@ -16,7 +16,7 @@ async def _wait_for_notifications(
     deadline = asyncio.get_running_loop().time() + deadline_seconds
     while True:
         resp = await client.get("/api/v1/notifications", headers=headers)
-        assert resp.status_code == 200
+        assert resp.status_code == 200, resp.text
         items = resp.json()
         if len(items) >= expected:
             return items
@@ -45,7 +45,7 @@ async def test_invite_creates_notification_for_existing_user(app_client):
 
     # The notification workflow persisted a notification for the invitee
     # (in-process bus: publish → subscriber → row insert + fanout).
-    items = await _wait_for_notifications(client, auth_headers(invitee))
+    items = await _wait_for_notifications(client, ws_headers(invitee, ws["id"]))
     assert len(items) == 1
     assert items[0]["type"] == "workspace_invitation"
     assert items[0]["acknowledged"] is False
@@ -280,19 +280,19 @@ async def test_notification_acknowledge_persists(app_client):
         headers=ws_headers(owner, ws["id"]),
     )
 
-    notes = await _wait_for_notifications(client, auth_headers(invitee))
+    notes = await _wait_for_notifications(client, ws_headers(invitee, ws["id"]))
     nid = notes[0]["id"]
 
     resp = await client.patch(
         f"/api/v1/notifications/{nid}",
         json={"acknowledged": True},
-        headers=auth_headers(invitee),
+        headers=ws_headers(invitee, ws["id"]),
     )
     assert resp.status_code == 200
     assert resp.json()["acknowledged"] is True
 
     # persisted — still acknowledged after re-fetch
-    notes = await client.get("/api/v1/notifications", headers=auth_headers(invitee))
+    notes = await client.get("/api/v1/notifications", headers=ws_headers(invitee, ws["id"]))
     assert notes.json()[0]["acknowledged"] is True
 
 
@@ -309,22 +309,22 @@ async def test_notification_unacknowledge_and_filter(app_client):
         headers=ws_headers(owner, ws["id"]),
     )
 
-    notes = await _wait_for_notifications(client, auth_headers(invitee))
+    notes = await _wait_for_notifications(client, ws_headers(invitee, ws["id"]))
     nid = notes[0]["id"]
 
     # mark read, then back to unread
     await client.patch(
-        f"/api/v1/notifications/{nid}", json={"acknowledged": True}, headers=auth_headers(invitee)
+        f"/api/v1/notifications/{nid}", json={"acknowledged": True}, headers=ws_headers(invitee, ws["id"])
     )
     resp = await client.patch(
-        f"/api/v1/notifications/{nid}", json={"acknowledged": False}, headers=auth_headers(invitee)
+        f"/api/v1/notifications/{nid}", json={"acknowledged": False}, headers=ws_headers(invitee, ws["id"])
     )
     assert resp.status_code == 200
     assert resp.json()["acknowledged"] is False
 
     # bare `acknowledged=false` filter (simple-rest flat style) → unread only
     resp = await client.get(
-        "/api/v1/notifications?acknowledged=false", headers=auth_headers(invitee)
+        "/api/v1/notifications?acknowledged=false", headers=ws_headers(invitee, ws["id"])
     )
     assert resp.status_code == 200
     assert len(resp.json()) == 1
@@ -332,10 +332,10 @@ async def test_notification_unacknowledge_and_filter(app_client):
 
     # legacy `filter[acknowledged]=true` style → read only
     await client.patch(
-        f"/api/v1/notifications/{nid}", json={"acknowledged": True}, headers=auth_headers(invitee)
+        f"/api/v1/notifications/{nid}", json={"acknowledged": True}, headers=ws_headers(invitee, ws["id"])
     )
     resp = await client.get(
-        "/api/v1/notifications?filter[acknowledged]=true", headers=auth_headers(invitee)
+        "/api/v1/notifications?filter[acknowledged]=true", headers=ws_headers(invitee, ws["id"])
     )
     assert resp.status_code == 200
     assert len(resp.json()) == 1

@@ -16,9 +16,11 @@ Registered subscriptions (subject → handler, fanout flag):
     apikeys.created                 → security/monitoring hook (TODO)
     apikeys.revoked                 → security/monitoring hook (TODO)
     jobs.execute                    → execute one scheduled-job run
+    conversations.message.created   → persist notification pointers + realtime push
 
   Fanout (every replica receives the event, realtime push):
     notifications.created           → push to the user's WebSocket sessions
+    conversations.renamed           → push title change to participants
 
 The durable subscriptions run once per deployment (JetStream queue group);
 the fanout subscription runs in *every* replica so the WS push reaches the
@@ -270,6 +272,92 @@ def build_workflows(
             return
         await connection_manager.push(user_id=user_id, payload=payload)
 
+    async def on_conversation_message(payload: dict, metadata) -> None:
+        """Durable consumer: create notification pointers + realtime push."""
+
+        workspace_id = payload.get("workspace_id")
+        conversation_id = payload.get("conversation_id")
+        message_id = payload.get("message_id")
+        sender_id = payload.get("sender_id")
+        sender_type = payload.get("sender_type", "user")
+        sender_name = payload.get("sender_name", "Someone")
+        body_preview = payload.get("body_preview", "")
+        title = payload.get("title") or payload.get("workspace_name") or "New message"
+        workspace_name = payload.get("workspace_name", "workspace")
+        participant_ids: list[str] = payload.get("participant_user_ids") or []
+
+        if not workspace_id or not conversation_id or not participant_ids:
+            return
+
+        # Create notification pointer for every other participant
+        for uid in participant_ids:
+            if uid == sender_id and sender_type == "user":
+                continue
+            async with SessionFactory() as session:
+                await _create_notification(
+                    session,
+                    bus,
+                    user_id=uid,
+                    workspace_id=workspace_id,
+                    type="conversation_message",
+                    title=title if title else f"New message in {workspace_name}",
+                    body=body_preview,
+                    metadata={
+                        "workspace_id": workspace_id,
+                        "workspace_name": workspace_name,
+                        "conversation_id": conversation_id,
+                        "message_id": message_id,
+                        "sender_id": sender_id,
+                        "sender_name": sender_name,
+                    },
+                    correlation_id=metadata.correlation_id,
+                )
+
+        # Realtime fan-out for the message itself (thread live-update)
+        for uid in participant_ids:
+            try:
+                await connection_manager.push(
+                    user_id=uid,
+                    payload=payload,
+                    event="message.created",
+                )
+            except Exception:
+                logger.warning("failed to push message.created to %s", uid, exc_info=True)
+
+    async def on_conversation_renamed(payload: dict, metadata) -> None:
+        """Fan-out conversation rename to participants."""
+
+        participant_ids: list[str] | None = payload.get("participant_user_ids")
+        # If payload does not contain participant list (legacy service path with just workspace_id), fall back to no fan-out
+        # New service publishes without participant list for rename; we need to resolve participants from DB.
+        if participant_ids is None:
+            conversation_id = payload.get("conversation_id")
+            workspace_id = payload.get("workspace_id")
+            if not conversation_id:
+                return
+            async with SessionFactory() as session:
+                from src.models.conversation import ConversationParticipant
+
+                result = await session.execute(
+                    select(ConversationParticipant.participant_id).where(
+                        ConversationParticipant.conversation_id == conversation_id,
+                        ConversationParticipant.participant_type == "user",
+                    )
+                )
+                participant_ids = [r[0] for r in result.all()]
+
+        if not participant_ids:
+            return
+        for uid in participant_ids:
+            try:
+                await connection_manager.push(
+                    user_id=uid,
+                    payload=payload,
+                    event="conversation.renamed",
+                )
+            except Exception:
+                logger.warning("failed to push conversation.renamed to %s", uid, exc_info=True)
+
     async def on_job_execute(payload: dict, metadata) -> None:
         """Execute one scheduled-job run (durable, load-balanced consumer).
 
@@ -292,3 +380,5 @@ def build_workflows(
     registry.register(Subjects.APIKEY_REVOKED, on_apikey_revoked)
     registry.register(Subjects.JOBS_EXECUTE, on_job_execute)
     registry.register(Subjects.NOTIFICATIONS_CREATED, on_notification_created, fanout=True)
+    registry.register(Subjects.CONVERSATION_MESSAGE_CREATED, on_conversation_message)
+    registry.register(Subjects.CONVERSATION_RENAMED, on_conversation_renamed, fanout=True)

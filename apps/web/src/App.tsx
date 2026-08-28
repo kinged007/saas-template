@@ -9,6 +9,7 @@ import { dataProvider } from "./providers/dataProvider";
 import { authProvider } from "./providers/authProvider";
 import { liveProvider } from "./providers/liveProvider";
 import { accessControlProvider } from "./providers/accessControlProvider";
+import { queryClient } from "./providers/queryClient";
 import { WorkspaceProvider } from "./contexts/WorkspaceContext";
 import { AppLayout } from "./components/AppLayout";
 import { LoginPage } from "./pages/LoginPage";
@@ -39,6 +40,9 @@ export function App() {
         options={{
           syncWithLocation: true,
           liveMode: "auto",
+          reactQuery: {
+            clientConfig: queryClient,
+          },
         }}
         resources={[
           { name: "workspaces", list: "/", create: "/workspaces/create" },
@@ -47,6 +51,8 @@ export function App() {
           { name: "api-keys", list: "/api-keys", create: "/api-keys/create" },
           { name: "invitations", list: "/invitations" },
           { name: "notifications", list: "/inbox", meta: { label: "Inbox" } },
+          { name: "conversations", list: "/inbox", meta: { hide: true } },
+          { name: "messages", list: "/inbox", meta: { hide: true } },
           {
             name: "jobs",
             list: "/jobs",

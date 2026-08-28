@@ -62,6 +62,28 @@ class NotificationAck(BaseModel):
     acknowledged: bool = True
 
 
+class ConversationCreate(BaseModel):
+    title: str | None = Field(default=None, max_length=300)
+    participant_user_ids: list[str] = Field(min_length=1, max_length=19)
+    initial_message: str = Field(min_length=1, max_length=5000)
+
+
+class ConversationUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+
+
+class ConversationArchive(BaseModel):
+    archived: bool
+
+
+class MessageCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=5000)
+
+
+class ConversationRead(BaseModel):
+    last_read_message_id: str | None = None
+
+
 class JobUpdate(BaseModel):
     """Editable job configuration. All fields optional (partial patch)."""
 

@@ -37,6 +37,17 @@ const PERMISSION_MAP: Record<string, Record<string, string>> = {
     list: "notification:read",
     edit: "notification:acknowledge",
   },
+  conversations: {
+    list: "message:read",
+    create: "message:send",
+    edit: "message:send",
+    show: "message:read",
+  },
+  messages: {
+    list: "message:read",
+    create: "message:send",
+    show: "message:read",
+  },
   jobs: {
     list: "jobs:view",
     show: "jobs:view",
@@ -46,6 +57,12 @@ const PERMISSION_MAP: Record<string, Record<string, string>> = {
 
 export const accessControlProvider: AccessControlBindings = {
   can: async ({ resource, action }) => {
+    // Inbox messaging (notifications / conversations / messages) is always available to session users.
+    // Only API keys are gated on their own permission list; the backend enforces that.
+    // Return true here so the UI (Inbox, Compose) is never hidden by role permissions.
+    if (resource === "notifications" || resource === "conversations" || resource === "messages") {
+      return { can: true };
+    }
     const identity = identityStore.get() as Identity | null;
     const permissions = activeWorkspacePermissions(identity);
     const actionKey = action ?? "";

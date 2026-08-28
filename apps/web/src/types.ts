@@ -75,6 +75,41 @@ export type Notification = {
   created_at?: string;
 };
 
+export type Conversation = {
+  id: string;
+  workspace_id: string;
+  title: string | null;
+  created_by_user_id: string;
+  last_message_at: string | null;
+  last_message_preview: string | null;
+  unread_count: number;
+  is_archived: boolean;
+  participants: Array<{
+    type: "user" | "agent";
+    id: string;
+    display_name: string;
+    avatar_url?: string | null;
+  }>;
+  message_count?: number;
+  created_at: string;
+  updated_at: string;
+  /** Embedded first message when the conversation was just created */
+  first_message?: Message;
+};
+
+export type Message = {
+  id: string;
+  conversation_id: string;
+  sender_type: "user" | "agent";
+  sender_id: string;
+  sender_name: string;
+  sender_avatar_url?: string | null;
+  body: string;
+  body_html?: string | null;
+  created_at: string;
+  updated_at?: string;
+};
+
 export type ApiKey = {
   id: string;
   workspace_id: string;
