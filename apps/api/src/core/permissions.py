@@ -20,6 +20,9 @@ APIKEY_MANAGE = "apikey:manage"
 NOTIFICATION_READ = "notification:read"
 NOTIFICATION_ACK = "notification:acknowledge"
 
+MESSAGE_READ = "message:read"
+MESSAGE_SEND = "message:send"
+
 JOB_VIEW = "jobs:view"
 JOB_EDIT = "jobs:edit"
 
@@ -36,6 +39,8 @@ ALL_PERMISSIONS = [
     APIKEY_MANAGE,
     NOTIFICATION_READ,
     NOTIFICATION_ACK,
+    MESSAGE_READ,
+    MESSAGE_SEND,
     JOB_VIEW,
     JOB_EDIT,
 ]
@@ -59,6 +64,8 @@ def permissions_for_role(role_name: str) -> list[str]:
                 APIKEY_MANAGE,
                 NOTIFICATION_READ,
                 NOTIFICATION_ACK,
+                MESSAGE_READ,
+                MESSAGE_SEND,
             ]
         case "viewer":
             return [
@@ -69,6 +76,8 @@ def permissions_for_role(role_name: str) -> list[str]:
                 APIKEY_MANAGE,
                 NOTIFICATION_READ,
                 NOTIFICATION_ACK,
+                MESSAGE_READ,
+                MESSAGE_SEND,
             ]
         case _:
             raise ValueError(f"unknown role {role_name}")

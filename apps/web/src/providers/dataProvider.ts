@@ -3,6 +3,7 @@ import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import dataProviderModule from "@refinedev/simple-rest";
 
 import { tokenStore, workspaceStore } from "../utils/storage";
+import { clearAllCaches, queryClient } from "./queryClient";
 
 // Same-origin API path: the vite dev proxy (and nginx in production) forwards
 // /api → backend, so no CORS/absolute-URL issues regardless of how the app is
@@ -107,6 +108,7 @@ httpClient.interceptors.response.use(
     }
     if (error.response?.status === 401) {
       tokenStore.clear();
+      clearAllCaches(queryClient);
       if (window.location.pathname !== "/login") {
         window.location.assign("/login");
       }
