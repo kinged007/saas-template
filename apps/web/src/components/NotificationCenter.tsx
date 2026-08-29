@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Sheet,
   SheetContent,
@@ -15,24 +15,50 @@ import { useNavigate } from "react-router";
 
 import type { Notification } from "../types";
 import { formatDate } from "./ui";
+import { stripMarkdown, truncate } from "@/lib/markdown";
+import { liveChannels, subscribeLive } from "../providers/liveProvider";
 
-function truncate(text: string | undefined, max: number): string {
-  if (!text) return "";
-  return text.length > max ? text.slice(0, max) + "…" : text;
+function truncateEscaped(text: string | undefined, max: number): string {
+  return truncate(stripMarkdown(text), max);
 }
 
 export function NotificationCenter() {
   const [open, setOpen] = useState(false);
   const { result, query } = useList<Notification>({
     resource: "notifications",
-    pagination: { pageSize: 20 },
+    pagination: { pageSize: 100 },
     sorters: [{ field: "created_at", order: "desc" }],
     filters: [{ field: "acknowledged", operator: "eq", value: "false" }],
   });
   const { mutate } = useUpdate();
   const navigate = useNavigate();
 
-  const items = result?.data ?? [];
+  const rawItems = result?.data ?? [];
+  // Group conversation_message pointers by conversation_id – show only the latest per conversation
+  const items = useMemo(() => {
+    const map = new Map<string, Notification>();
+    const others: Notification[] = [];
+    for (const n of rawItems as Notification[]) {
+      if (n.type === "conversation_message") {
+        const cid = (n.payload as Record<string, unknown> | undefined)?.conversation_id as string | undefined;
+        if (!cid) {
+          others.push(n);
+          continue;
+        }
+        const existing = map.get(cid);
+        if (!existing || (n.created_at ?? "") > (existing.created_at ?? "")) {
+          map.set(cid, n);
+        }
+      } else {
+        others.push(n);
+      }
+    }
+    const grouped = Array.from(map.values());
+    const merged = [...others, ...grouped].sort((a, b) =>
+      (b.created_at ?? "").localeCompare(a.created_at ?? "")
+    );
+    return merged;
+  }, [rawItems]);
 
   const { result: notifUnreadResult, query: notifUnreadQuery } = useCustom<{ count: number }>({
     url: "notifications/unread-count",
@@ -44,9 +70,11 @@ export function NotificationCenter() {
   });
 
   const notifCount = (notifUnreadResult?.data as { count?: number } | undefined)?.count ?? (result?.total ?? items.length);
-  const convUnreadConversations = (convUnreadResult?.data as { unread_conversations?: number } | undefined)?.unread_conversations ?? 0;
-  // Combined badge: notifications + distinct unread conversations
-  const unread = notifCount + convUnreadConversations;
+  // Badge counts total unread conversation MESSAGES (not just conversations)
+  // so every incoming message ticks the bell instantly.
+  const convUnreadMessages = (convUnreadResult?.data as { count?: number } | undefined)?.count ?? 0;
+  // Combined badge: notifications + unread conversation messages
+  const unread = notifCount + convUnreadMessages;
 
   useEffect(() => {
     if (open) {
@@ -55,6 +83,22 @@ export function NotificationCenter() {
       convUnreadQuery.refetch();
     }
   }, [open, query, notifUnreadQuery, convUnreadQuery]);
+
+  // Realtime: cache patches in liveCache keep the badge and list fresh with
+  // zero requests. This subscription keeps the socket alive and only
+  // reconciles the open sheet as a fallback (covers missed frames).
+  const openRef = useRef(open);
+  openRef.current = open;
+  useEffect(() => {
+    const refetchWhenOpen = () => {
+      if (openRef.current) query.refetch();
+    };
+    const unsubscribers = [
+      subscribeLive(liveChannels.notifications, refetchWhenOpen),
+      subscribeLive(liveChannels.conversations, refetchWhenOpen),
+    ];
+    return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
+  }, [query]);
 
   const acknowledge = (id: string) => {
     mutate(
@@ -78,8 +122,18 @@ export function NotificationCenter() {
     if (!convId) return;
     setOpen(false);
     navigate(`/inbox?tab=messages&conversationId=${convId}`);
-    // Also acknowledge the pointer?
-    acknowledge(n.id);
+    // Acknowledge all unread pointers for this conversation (grouped view)
+    const toAck = (rawItems as Notification[]).filter(
+      (x) =>
+        x.type === "conversation_message" &&
+        (x.payload as Record<string, unknown> | undefined)?.conversation_id === convId &&
+        !x.acknowledged
+    );
+    if (toAck.length > 0) {
+      for (const item of toAck) acknowledge(item.id);
+    } else {
+      acknowledge(n.id);
+    }
   };
 
   const renderItem = (n: Notification) => {
@@ -98,7 +152,7 @@ export function NotificationCenter() {
           <p className="text-muted-foreground text-xs">From {senderName}</p>
         )}
         {n.body && (
-          <p className="text-muted-foreground text-sm">{truncate(n.body, 100)}</p>
+          <p className="text-muted-foreground text-sm">{truncateEscaped(n.body, 100)}</p>
         )}
         <div className="flex flex-wrap items-center gap-2">
           {isMessage ? (
@@ -137,6 +191,13 @@ export function NotificationCenter() {
                 if (convId) {
                   setOpen(false);
                   navigate(`/inbox?tab=messages&conversationId=${convId}`);
+                  const toAck = (rawItems as Notification[]).filter(
+                    (x) =>
+                      x.type === "conversation_message" &&
+                      (x.payload as Record<string, unknown> | undefined)?.conversation_id === convId &&
+                      !x.acknowledged
+                  );
+                  for (const item of toAck) acknowledge(item.id);
                 } else {
                   setOpen(false);
                   navigate("/inbox?tab=messages");
@@ -185,11 +246,11 @@ export function NotificationCenter() {
               className="w-full"
               onClick={() => {
                 setOpen(false);
-                navigate("/inbox");
+                navigate("/inbox?tab=notifications");
               }}
             >
               <Inbox className="mr-2 h-4 w-4" />
-              Go to Inbox
+              See all Notifications
             </Button>
           </div>
         </div>

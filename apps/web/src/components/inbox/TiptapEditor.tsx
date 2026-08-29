@@ -5,7 +5,7 @@ import Link from "@tiptap/extension-link";
 import TurndownService from "turndown";
 import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Bold, Italic, Code2, List, ListOrdered, Link2, Quote } from "lucide-react";
+import { Bold, Italic, Code2, SquareCode, List, ListOrdered, Link2, Quote } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const turndownService = new TurndownService({
@@ -26,10 +26,15 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
     extensions: [
       StarterKit.configure({
         heading: false,
-        // keep defaults
+        // StarterKit includes codeBlock/bulletList/orderedList/blockquote/code etc.
       }),
       Placeholder.configure({ placeholder }),
-      Link.configure({ openOnClick: false, autolink: true, linkOnPaste: true }),
+      Link.configure({
+        openOnClick: false,
+        autolink: true,
+        linkOnPaste: true,
+        HTMLAttributes: { rel: "noopener noreferrer", target: null },
+      }),
     ],
     content: value ? `<p>${escapeHtml(value)}</p>` : "",
     onUpdate: ({ editor }) => {
@@ -105,6 +110,8 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           variant={editor.isActive("code") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
+          title="Inline code"
+          aria-label="Inline code"
           onMouseDown={(e) => {
             e.preventDefault();
             editor.chain().focus().toggleCode().run();
@@ -114,9 +121,25 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
         </Button>
         <Button
           type="button"
+          variant={editor.isActive("codeBlock") ? "secondary" : "ghost"}
+          size="icon"
+          className="h-7 w-7"
+          title="Code block"
+          aria-label="Code block"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            editor.chain().focus().toggleCodeBlock().run();
+          }}
+        >
+          <SquareCode className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          type="button"
           variant={editor.isActive("bulletList") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
+          title="Bullet list"
+          aria-label="Bullet list"
           onMouseDown={(e) => {
             e.preventDefault();
             editor.chain().focus().toggleBulletList().run();
@@ -173,7 +196,20 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
         className={cn(
           "prose prose-sm dark:prose-invert max-w-none p-3 focus-within:outline-none",
           "[&_.tiptap]:outline-none [&_.tiptap]:min-h-[80px]",
-          "[&_.tiptap_p.is-editor-empty:first-child::before]:text-muted-foreground [&_.tiptap_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.tiptap_p.is-editor-empty:first-child::before]:float-left [&_.tiptap_p.is-editor-empty:first-child::before]:h-0 [&_.tiptap_p.is-editor-empty:first-child::before]:pointer-events-none"
+          "[&_.tiptap_p.is-editor-empty:first-child::before]:text-muted-foreground [&_.tiptap_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.tiptap_p.is-editor-empty:first-child::before]:float-left [&_.tiptap_p.is-editor-empty:first-child::before]:h-0 [&_.tiptap_p.is-editor-empty:first-child::before]:pointer-events-none",
+          // Link visibly blue + underline
+          "[&_.tiptap_a]:text-primary [&_.tiptap_a]:underline [&_.tiptap_a]:underline-offset-4 [&_.tiptap_a]:decoration-primary/50 hover:[&_.tiptap_a]:text-primary/80",
+          // Blockquote visible left border
+          "[&_.tiptap_blockquote]:border-l-4 [&_.tiptap_blockquote]:border-muted-foreground/30 [&_.tiptap_blockquote]:pl-4 [&_.tiptap_blockquote]:italic [&_.tiptap_blockquote]:my-2 [&_.tiptap_blockquote]:py-1",
+          // Lists with visible markers (tailwind resets need re-added)
+          "[&_.tiptap_ul]:list-disc [&_.tiptap_ul]:ml-6 [&_.tiptap_ul]:my-2 [&_.tiptap_ul]:space-y-1",
+          "[&_.tiptap_ol]:list-decimal [&_.tiptap_ol]:ml-6 [&_.tiptap_ol]:my-2 [&_.tiptap_ol]:space-y-1",
+          "[&_.tiptap_li_p]:m-0",
+          // Inline code visibly distinct
+          "[&_.tiptap_code]:bg-muted [&_.tiptap_code]:rounded [&_.tiptap_code]:px-1.5 [&_.tiptap_code]:py-0.5 [&_.tiptap_code]:font-mono [&_.tiptap_code]:text-[0.9em] [&_.tiptap_code]:border",
+          // Code block distinct from inline (pre wraps code)
+          "[&_.tiptap_pre]:bg-muted [&_.tiptap_pre]:rounded-md [&_.tiptap_pre]:p-3 [&_.tiptap_pre]:my-2 [&_.tiptap_pre]:overflow-x-auto [&_.tiptap_pre]:font-mono [&_.tiptap_pre]:text-sm [&_.tiptap_pre]:border",
+          "[&_.tiptap_pre_code]:bg-transparent [&_.tiptap_pre_code]:p-0 [&_.tiptap_pre_code]:border-0 [&_.tiptap_pre_code]:rounded-none"
         )}
         style={{ minHeight } as React.CSSProperties}
       />

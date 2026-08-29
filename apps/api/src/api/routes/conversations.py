@@ -229,6 +229,32 @@ async def mark_read(
     return data
 
 
+@router.patch("/{conversation_id}/unread")
+async def mark_unread(
+    conversation_id: str,
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
+    _=Depends(require_key_permission(MESSAGE_READ)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    service = ConversationService(db, container.bus)
+    try:
+        data = await service.mark_unread(
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            user_id=user.id,
+        )
+    except ConversationForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    except ConversationNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    except ConversationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+    return data
+
+
 @router.patch("/{conversation_id}/archive")
 async def archive_conversation(
     conversation_id: str,

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
+from collections.abc import Iterable
 
 from fastapi import WebSocket
 
@@ -22,7 +23,8 @@ class ConnectionManager:
         self._lock = asyncio.Lock()
 
     async def connect(self, user_id: str, ws: WebSocket) -> None:
-        await ws.accept()
+        # The caller performs the protocol handshake (accept + auth); this
+        # only registers the session for realtime fan-out.
         async with self._lock:
             self._sessions[user_id].add(ws)
         logger.debug("ws connected: user=%s", user_id)
@@ -58,3 +60,19 @@ class ConnectionManager:
             except Exception:
                 logger.warning("ws send failed, dropping session", exc_info=True)
                 await self.disconnect(user_id, ws)
+
+    async def push_many(
+        self,
+        user_ids: Iterable[str],
+        payload: dict,
+        *,
+        event: str | None = None,
+    ) -> None:
+        """Fan an event out to every live session of each user, concurrently.
+
+        `push` never raises (per-session failures are handled internally), so
+        a single slow or dead client cannot delay delivery to the others.
+        """
+        await asyncio.gather(
+            *(self.push(user_id=user_id, payload=payload, event=event) for user_id in user_ids)
+        )

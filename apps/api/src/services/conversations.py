@@ -13,6 +13,7 @@ from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
 from src.models.conversation import Conversation, ConversationParticipant, Message
 from src.models.workspace import User, Workspace, WorkspaceMember
+from src.services.notifications import NotificationService
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,40 @@ def _plain_preview(body: str) -> str:
     # Keep simple: strip and collapse newlines.
     text = " ".join(body.strip().split())
     return _truncate(text, 200) or ""
+
+
+def _message_event_payload(
+    *,
+    workspace_id: str,
+    workspace_name: str | None,
+    conversation: Conversation,
+    message: Message,
+    sender: User,
+    participant_ids: list[str],
+    preview: str,
+) -> dict:
+    """Shared shape for `conversations.message.*` events.
+
+    Carries everything the realtime thread push (`conversations.message.live`)
+    needs to render the message without a refetch — id, body, sender display
+    fields, timestamp — plus what the durable notification workflow
+    (`conversations.message.created`) needs — participants, preview, title.
+    """
+    return {
+        "workspace_id": workspace_id,
+        "workspace_name": workspace_name or "workspace",
+        "conversation_id": conversation.id,
+        "message_id": message.id,
+        "sender_id": sender.id,
+        "sender_type": "user",
+        "sender_name": sender.display_name,
+        "sender_avatar_url": sender.avatar_url,
+        "body": message.body,
+        "body_preview": preview,
+        "title": conversation.title,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+        "participant_user_ids": participant_ids,
+    }
 
 
 class ConversationService:
@@ -81,39 +116,97 @@ class ConversationService:
     async def _participants_with_users(
         self, conversation_id: str
     ) -> list[tuple[ConversationParticipant, User | None]]:
-        # Fetch participants plus user details (for type=user)
         result = await self._session.execute(
             select(ConversationParticipant).where(
                 ConversationParticipant.conversation_id == conversation_id
             )
         )
+        return await self._attach_users(list(result.scalars().all()))
+
+    async def _participants_for_conversations(
+        self, conversation_ids: list[str]
+    ) -> dict[str, list[tuple[ConversationParticipant, User | None]]]:
+        """Participants (with user details) for many conversations, in two
+        queries total instead of two per conversation."""
+        grouped: dict[str, list[tuple[ConversationParticipant, User | None]]] = {}
+        if not conversation_ids:
+            return grouped
+        result = await self._session.execute(
+            select(ConversationParticipant).where(
+                ConversationParticipant.conversation_id.in_(conversation_ids)
+            )
+        )
         participants = list(result.scalars().all())
-        user_ids = [p.participant_id for p in participants if p.participant_type == "user"]
+        user_ids = {p.participant_id for p in participants if p.participant_type == "user"}
         users: dict[str, User] = {}
         if user_ids:
             urows = await self._session.execute(select(User).where(User.id.in_(user_ids)))
-            for u in urows.scalars().all():
-                users[u.id] = u
-        return [(p, users.get(p.participant_id) if p.participant_type == "user" else None) for p in participants]
+            users = {u.id: u for u in urows.scalars().all()}
+        for p in participants:
+            attached = users.get(p.participant_id) if p.participant_type == "user" else None
+            grouped.setdefault(p.conversation_id, []).append((p, attached))
+        return grouped
 
-    async def _unread_count(self, conversation_id: str, participant: ConversationParticipant) -> int:
-        if participant.last_read_at is None:
-            # Never read: count all messages in conversation
-            result = await self._session.execute(
-                select(func.count()).select_from(Message).where(Message.conversation_id == conversation_id)
-            )
-            return int(result.scalar_one())
-        # Count messages with created_at > last_read_at
-        # Need to ensure UTC comparison; SQLite stores naive but we compare as stored.
+    async def _attach_users(
+        self, participants: list[ConversationParticipant]
+    ) -> list[tuple[ConversationParticipant, User | None]]:
+        """Join display-name/avatar data onto participant rows (one query)."""
+        user_ids = {p.participant_id for p in participants if p.participant_type == "user"}
+        users: dict[str, User] = {}
+        if user_ids:
+            urows = await self._session.execute(select(User).where(User.id.in_(user_ids)))
+            users = {u.id: u for u in urows.scalars().all()}
+        return [
+            (p, users.get(p.participant_id) if p.participant_type == "user" else None)
+            for p in participants
+        ]
+
+    def _unread_join_condition(self, user_id: str, *, active_only: bool):
+        """Join condition matching the messages a user has not read yet.
+
+        Messages with `created_at > participant.last_read_at`; a participant
+        who never read the conversation has unread *all* its messages. Used
+        by the grouped unread-count queries below.
+        """
+        conditions = [
+            ConversationParticipant.conversation_id == Message.conversation_id,
+            ConversationParticipant.participant_type == "user",
+            ConversationParticipant.participant_id == user_id,
+            or_(
+                ConversationParticipant.last_read_at.is_(None),
+                Message.created_at > ConversationParticipant.last_read_at,
+            ),
+        ]
+        if active_only:
+            conditions.append(ConversationParticipant.archived_at.is_(None))
+        return and_(*conditions)
+
+    async def _unread_counts(self, user_id: str, conversation_ids: list[str]) -> dict[str, int]:
+        """Unread message count per conversation for one user (single query)."""
+        if not conversation_ids:
+            return {}
         result = await self._session.execute(
-            select(func.count())
+            select(Message.conversation_id, func.count())
             .select_from(Message)
-            .where(
-                Message.conversation_id == conversation_id,
-                Message.created_at > participant.last_read_at,
+            .join(
+                ConversationParticipant,
+                self._unread_join_condition(user_id, active_only=False),
             )
+            .where(Message.conversation_id.in_(conversation_ids))
+            .group_by(Message.conversation_id)
         )
-        return int(result.scalar_one())
+        return {conversation_id: int(count) for conversation_id, count in result.all()}
+
+    async def _message_counts(self, conversation_ids: list[str]) -> dict[str, int]:
+        """Total message count per conversation (single query)."""
+        if not conversation_ids:
+            return {}
+        result = await self._session.execute(
+            select(Message.conversation_id, func.count())
+            .where(Message.conversation_id.in_(conversation_ids))
+            .group_by(Message.conversation_id)
+        )
+        return {conversation_id: int(count) for conversation_id, count in result.all()}
 
     async def _workspace_name(self, workspace_id: str) -> str | None:
         ws = await self._session.get(Workspace, workspace_id)
@@ -320,23 +413,20 @@ class ConversationService:
 
         workspace_name = await self._workspace_name(workspace_id)
 
-        # Publish durable event for notification pointers & realtime
-        participant_ids = all_ids
+        # Durable event for notification pointers + transient fan-out for the
+        # realtime thread push (every replica forwards to its local sessions).
+        message_payload = _message_event_payload(
+            workspace_id=workspace_id,
+            workspace_name=workspace_name,
+            conversation=conv,
+            message=msg,
+            sender=creator,
+            participant_ids=all_ids,
+            preview=preview,
+        )
+        await publish_event(self._bus, Subjects.CONVERSATION_MESSAGE_CREATED, message_payload)
         await publish_event(
-            self._bus,
-            Subjects.CONVERSATION_MESSAGE_CREATED,
-            {
-                "workspace_id": workspace_id,
-                "workspace_name": workspace_name or "workspace",
-                "conversation_id": conv.id,
-                "message_id": msg.id,
-                "sender_id": creator.id,
-                "sender_type": "user",
-                "sender_name": creator.display_name,
-                "body_preview": preview,
-                "title": clean_title,
-                "participant_user_ids": participant_ids,
-            },
+            self._bus, Subjects.CONVERSATION_MESSAGE_LIVE, message_payload, transient=True
         )
         await publish_audit(
             self._bus,
@@ -447,18 +537,26 @@ class ConversationService:
         base_stmt = base_stmt.offset(offset).limit(limit)
         rows = await self._session.execute(base_stmt)
         conv_parts = list(rows.all())
+        conv_ids = [conv.id for conv, _ in conv_parts]
+
+        # Aggregate participants, unread and message counts for the whole
+        # page in constant queries instead of per-conversation round-trips.
+        participants_by_conv = await self._participants_for_conversations(conv_ids)
+        unread_by_conv = await self._unread_counts(user_id, conv_ids)
+        counts_by_conv = await self._message_counts(conv_ids)
 
         results: list[dict] = []
         for conv, part in conv_parts:
-            participants = await self._participants_with_users(conv.id)
-            unread = await self._unread_count(conv.id, part)
-            # Message count
-            cnt = await self._session.execute(
-                select(func.count()).select_from(Message).where(Message.conversation_id == conv.id)
-            )
-            mcount = int(cnt.scalar_one())
             is_arch = part.archived_at is not None
-            results.append(self._conversation_to_dict(conv, participants, unread, is_arch, mcount))
+            results.append(
+                self._conversation_to_dict(
+                    conv,
+                    participants_by_conv.get(conv.id, []),
+                    unread_by_conv.get(conv.id, 0),
+                    is_arch,
+                    counts_by_conv.get(conv.id, 0),
+                )
+            )
         return results, total
 
     async def get_conversation(self, *, workspace_id: str, conversation_id: str, user_id: str) -> dict:
@@ -470,11 +568,8 @@ class ConversationService:
         if part is None:
             raise ConversationForbidden("you are not a participant of this conversation")
         participants = await self._participants_with_users(conversation_id)
-        unread = await self._unread_count(conversation_id, part)
-        cnt = await self._session.execute(
-            select(func.count()).select_from(Message).where(Message.conversation_id == conversation_id)
-        )
-        mcount = int(cnt.scalar_one())
+        unread = (await self._unread_counts(user_id, [conversation_id])).get(conversation_id, 0)
+        mcount = (await self._message_counts([conversation_id])).get(conversation_id, 0)
         is_arch = part.archived_at is not None
         return self._conversation_to_dict(conv, participants, unread, is_arch, mcount)
 
@@ -551,24 +646,14 @@ class ConversationService:
         if actor_type == "user" and actor_user_id:
             part = await self._get_participant(conversation_id, actor_user_id)
             participants = await self._participants_with_users(conversation_id)
-            unread = await self._unread_count(conversation_id, part) if part else 0
+            unread = (await self._unread_counts(actor_user_id, [conversation_id])).get(conversation_id, 0)
             is_arch = bool(part.archived_at) if part else False
-            cnt = await self._session.execute(
-                select(func.count()).select_from(Message).where(Message.conversation_id == conversation_id)
-            )
-            mcount = int(cnt.scalar_one())
+            mcount = (await self._message_counts([conversation_id])).get(conversation_id, 0)
             return self._conversation_to_dict(conv, participants, unread, is_arch, mcount)
         # For agent, return minimal
         participants = await self._participants_with_users(conversation_id)
-        # Use first participant to compute unread (not critical)
-        first_part = participants[0][0] if participants else None
-        unread = 0
-        is_arch = False
-        cnt = await self._session.execute(
-            select(func.count()).select_from(Message).where(Message.conversation_id == conversation_id)
-        )
-        mcount = int(cnt.scalar_one())
-        return self._conversation_to_dict(conv, participants, unread, is_arch, mcount)
+        mcount = (await self._message_counts([conversation_id])).get(conversation_id, 0)
+        return self._conversation_to_dict(conv, participants, 0, False, mcount)
 
     # ---------------------------------------------------------------- read / archive
 
@@ -607,7 +692,52 @@ class ConversationService:
             if latest:
                 part.last_read_message_id = latest
         await self._session.commit()
+        # Also clear conversation_message notification pointers for this conversation
+        try:
+            await NotificationService(self._session, self._bus).acknowledge_for_conversation(
+                user_id=user_id, workspace_id=workspace_id, conversation_id=conversation_id
+            )
+        except Exception:
+            logger.warning("failed to acknowledge notifications for conversation %s", conversation_id, exc_info=True)
         return {"success": True, "last_read_at": part.last_read_at.isoformat(), "last_read_message_id": part.last_read_message_id}
+
+    async def mark_unread(
+        self,
+        *,
+        workspace_id: str,
+        conversation_id: str,
+        user_id: str,
+    ) -> dict:
+        await self._ensure_membership(workspace_id, user_id)
+        conv = await self._get_conversation(conversation_id)
+        if conv is None or conv.workspace_id != workspace_id:
+            raise ConversationNotFound("conversation not found")
+        part = await self._get_participant(conversation_id, user_id)
+        if part is None:
+            raise ConversationForbidden("you are not a participant of this conversation")
+        # Find the latest message and the one before it
+        result = await self._session.execute(
+            select(Message)
+            .where(Message.conversation_id == conversation_id)
+            .order_by(Message.created_at.desc())
+            .limit(2)
+        )
+        msgs = list(result.scalars().all())
+        if not msgs:
+            # No messages: just clear read markers so next message will be unread
+            part.last_read_at = None
+            part.last_read_message_id = None
+        elif len(msgs) == 1:
+            # Only one message: mark it unread by clearing read pointer
+            part.last_read_at = None
+            part.last_read_message_id = None
+        else:
+            # Two messages: set read pointer to the previous message so latest is unread
+            prev = msgs[1]
+            part.last_read_at = prev.created_at
+            part.last_read_message_id = prev.id
+        await self._session.commit()
+        return {"success": True, "last_read_at": part.last_read_at.isoformat() if part.last_read_at else None, "last_read_message_id": part.last_read_message_id}
 
     async def set_archived(
         self,
@@ -732,22 +862,20 @@ class ConversationService:
 
         msg_dict = self._message_to_dict(msg, sender_name=sender.display_name, sender_avatar=sender.avatar_url)
 
+        # Durable event for notification pointers + transient fan-out for the
+        # realtime thread push (every replica forwards to its local sessions).
+        message_payload = _message_event_payload(
+            workspace_id=workspace_id,
+            workspace_name=workspace_name,
+            conversation=conv,
+            message=msg,
+            sender=sender,
+            participant_ids=participant_ids,
+            preview=preview,
+        )
+        await publish_event(self._bus, Subjects.CONVERSATION_MESSAGE_CREATED, message_payload)
         await publish_event(
-            self._bus,
-            Subjects.CONVERSATION_MESSAGE_CREATED,
-            {
-                "workspace_id": workspace_id,
-                "workspace_name": workspace_name or "workspace",
-                "conversation_id": conversation_id,
-                "message_id": msg.id,
-                "sender_id": sender.id,
-                "sender_type": "user",
-                "sender_name": sender.display_name,
-                "body_preview": preview,
-                "title": conv.title,
-                "participant_user_ids": participant_ids,
-                "body": clean,
-            },
+            self._bus, Subjects.CONVERSATION_MESSAGE_LIVE, message_payload, transient=True
         )
         await publish_audit(
             self._bus,
@@ -764,32 +892,25 @@ class ConversationService:
     # ---------------------------------------------------------------- unread count
 
     async def get_unread_counts(self, *, workspace_id: str, user_id: str) -> dict:
+        """Total unread messages across the user's active conversations in
+        this workspace, plus the number of conversations with unread > 0."""
         await self._ensure_membership(workspace_id, user_id)
-        # Active conversations only for count? Plan says count = sum unread across active conversations; unread_conversations = distinct with unread>0
-        # But should exclude archived? Yes count only active.
-        stmt = (
-            select(Conversation, ConversationParticipant)
+        result = await self._session.execute(
+            select(Message.conversation_id, func.count())
+            .select_from(Message)
             .join(
                 ConversationParticipant,
-                and_(
-                    ConversationParticipant.conversation_id == Conversation.id,
-                    ConversationParticipant.participant_type == "user",
-                    ConversationParticipant.participant_id == user_id,
-                    ConversationParticipant.archived_at.is_(None),
-                ),
+                self._unread_join_condition(user_id, active_only=True),
             )
+            .join(Conversation, Conversation.id == Message.conversation_id)
             .where(Conversation.workspace_id == workspace_id)
+            .group_by(Message.conversation_id)
         )
-        rows = await self._session.execute(stmt)
-        total_count = 0
-        unread_conversations = 0
-        for conv, part in rows.all():
-            unread = await self._unread_count(conv.id, part)
-            if unread > 0:
-                unread_conversations += 1
-                total_count += unread
-        # Also include archived? For badge sum we want only active? We'll keep active only for this method.
-        return {"count": total_count, "unread_conversations": unread_conversations}
+        unread_rows = result.all()
+        return {
+            "count": sum(int(count) for _, count in unread_rows),
+            "unread_conversations": len(unread_rows),
+        }
 
     async def get_unread_counts_all(self, *, workspace_id: str, user_id: str) -> dict:
         # Helper for tests: same as above but clearer name
