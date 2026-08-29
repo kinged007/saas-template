@@ -160,6 +160,9 @@ async def test_workflow_registry_wiring(app_client):
         "apikeys.revoked",
         "jobs.execute",
         "notifications.created",
+        "conversations.message.created",
+        "conversations.message.live",
+        "conversations.renamed",
     }
     await registry.wire()
     await registry.start()

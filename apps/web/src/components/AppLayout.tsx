@@ -111,7 +111,11 @@ function WorkspaceSwitcher() {
         if (id === CREATE_WORKSPACE_VALUE) {
           navigate("/workspaces/create");
         } else {
-          setWorkspace(workspaces.find((w) => w.id === id)!);
+          const target = workspaces.find((w) => w.id === id);
+          if (target && target.id !== workspace?.id) {
+            setWorkspace(target);
+            navigate("/");
+          }
         }
       }}
     >

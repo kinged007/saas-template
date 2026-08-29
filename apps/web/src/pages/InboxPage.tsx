@@ -1,21 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useList, useUpdate, useCustomMutation, useCustom, useInvalidate, useGetIdentity } from "@refinedev/core";
 import Markdown from "react-markdown";
-import { ArrowLeft, Inbox, Mail, MailOpen, ExternalLink, SendHorizontal, Pencil, Archive, ArchiveRestore, Search, MessageSquare } from "lucide-react";
+import { ArrowLeft, Inbox, Mail, MailOpen, ExternalLink, SendHorizontal, Pencil, Archive, ArchiveRestore, Search, MessageSquare, PanelLeftClose, PanelLeftOpen, X, Check } from "lucide-react";
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
+import { markdownComponents, markdownComponentsInverted, stripMarkdown, truncate as truncatePreview } from "@/lib/markdown";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDate } from "../components/ui";
-import { PageHeader } from "../components/refine-ui/layout/page-header";
+import { TabbedPageHeader } from "../components/refine-ui/layout/tabbed-page-header";
 import { cn } from "@/lib/utils";
 import type { Notification, Conversation, Message, Identity } from "../types";
 import { ComposeDialog } from "../components/inbox/ComposeDialog";
 import { TiptapEditor } from "../components/inbox/TiptapEditor";
+import {
+  applyConversationRead,
+  applyMessageCreated,
+  removeThreadMessage,
+  upsertThreadMessage,
+} from "../providers/liveCache";
 
 type Tab = "messages" | "notifications";
 type StatusFilter = "unread" | "read" | "all";
@@ -27,9 +35,8 @@ const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
   { value: "all", label: "All" },
 ];
 
-function truncate(text: string | undefined, max: number): string {
-  if (!text) return "";
-  return text.length > max ? text.slice(0, max) + "…" : text;
+function truncateEscaped(text: string | undefined | null, max: number): string {
+  return truncatePreview(stripMarkdown(text ?? undefined), max);
 }
 
 export function InboxPage() {
@@ -48,6 +55,11 @@ export function InboxPage() {
   const [editTitleValue, setEditTitleValue] = useState("");
   const [draft, setDraft] = useState("");
   const [, setDraftHtml] = useState("");
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [searchExpanded, setSearchExpanded] = useState(false);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
   const selectedRef = useRef<Notification | null>(null);
   const openedAtRef = useRef(0);
   const pendingTimerRef = useRef<number | null>(null);
@@ -59,6 +71,27 @@ export function InboxPage() {
     const t = window.setTimeout(() => setDebouncedQ(searchInput.trim()), 300);
     return () => window.clearTimeout(t);
   }, [searchInput]);
+
+  // Search expand: Esc or click outside collapses (keeps text), focus when expanded
+  useEffect(() => {
+    if (!searchExpanded) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (searchContainerRef.current && !searchContainerRef.current.contains(target)) {
+        setSearchExpanded(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSearchExpanded(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey as unknown as EventListener);
+    window.setTimeout(() => searchInputRef.current?.focus(), 0);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey as unknown as EventListener);
+    };
+  }, [searchExpanded]);
 
   // Sync tab to URL
   useEffect(() => {
@@ -77,20 +110,35 @@ export function InboxPage() {
     if (pConv && pConv !== selectedConvId) setSelectedConvId(pConv);
   }, [searchParams]);
 
-  // Notifications data (workspace-scoped)
+  // When left panel collapses, close expanded search (keeps text)
+  useEffect(() => {
+    if (leftCollapsed) setSearchExpanded(false);
+  }, [leftCollapsed]);
+
+  // Clear archive confirmation when switching tabs/filters
+  useEffect(() => {
+    setConfirmArchiveId(null);
+  }, [archivedFilter, tab]);
+
+  // Notifications data (workspace-scoped) – hide conversation_message pointers; they are surfaced via Messages tab + right sidebar grouped
   const { result: notifResult } = useList<Notification>({
     resource: "notifications",
     pagination: { pageSize: 200 },
     sorters: [{ field: "created_at", order: "desc" }],
-    filters:
-      statusFilter === "all"
+    filters: [
+      ...(statusFilter === "all"
         ? []
-        : [{ field: "acknowledged", operator: "eq", value: statusFilter === "unread" ? "false" : "true" }],
+        : [{ field: "acknowledged", operator: "eq", value: statusFilter === "unread" ? "false" : "true" } as const]),
+      { field: "type", operator: "ne", value: "conversation_message" } as const,
+    ] as never,
     queryOptions: { enabled: tab === "notifications" },
   });
   const { mutate: updateNotif } = useUpdate();
 
-  const allNotifications = notifResult?.data ?? [];
+  const allNotifications = useMemo(() => {
+    const data = (notifResult?.data ?? []) as Notification[];
+    return data.filter((n) => n.type !== "conversation_message");
+  }, [notifResult?.data]);
 
   // Conversations data
   const convFilters = useMemo(() => {
@@ -123,20 +171,19 @@ export function InboxPage() {
     url: selectedConvId ? `conversations/${selectedConvId}/messages` : "",
     method: "get",
     config: {
-      query: { limit: 100, sort: "created_at", order: "asc" },
+      query: { limit: 100 },
     },
     queryOptions: {
       enabled: !!selectedConvId && tab === "messages",
+      retry: false,
     },
   });
   const messages: Message[] = useMemo(() => {
     const raw = messagesResult?.data as unknown;
-    if (!raw) return [];
-    if (Array.isArray(raw)) return raw as Message[];
+    if (raw && Array.isArray(raw)) return raw as Message[];
     return [];
   }, [messagesResult]);
   const messagesLoading = (messagesQuery as unknown as { isLoading?: boolean })?.isLoading ?? false;
-  const refetchMessages = () => messagesQuery.refetch();
 
   // Auto scroll to bottom when messages change
   useEffect(() => {
@@ -145,24 +192,23 @@ export function InboxPage() {
     }
   }, [messages]);
 
-  // Mark read when conversation opened
+  // Mark read when conversation opened – also clears the grouped notification pointer for that conversation
   useEffect(() => {
     if (!selectedConvId || tab !== "messages") return;
-    // Don't mark if already read? But we mark anyway; backend is idempotent
+    const conversationId = selectedConvId;
     customMutate(
       {
-        url: `conversations/${selectedConvId}/read`,
+        url: `conversations/${conversationId}/read`,
         method: "patch",
         values: {},
       },
       {
         onSuccess: () => {
-          // Invalidate conversation list to update unread dot
-          invalidate({ resource: "conversations", invalidates: ["list"] });
+          applyConversationRead(conversationId);
         },
       }
     );
-  }, [selectedConvId]);
+  }, [selectedConvId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Notification helpers (old inbox behavior)
   const [selectedNotif, setSelectedNotif] = useState<Notification | null>(null);
@@ -238,37 +284,87 @@ export function InboxPage() {
 
   // Conversation actions
   const handleSelectConv = (id: string) => {
+    // Switching (or re-clicking) a conversation loads the thread via the
+    // messages query key and marks it read — this also clears any unread
+    // that accumulated from messages arriving while the thread was open.
     setSelectedConvId(id);
-    // Trigger refetch
-    setTimeout(() => refetchMessages(), 0);
+    customMutate(
+      {
+        url: `conversations/${id}/read`,
+        method: "patch",
+        values: {},
+        successNotification: false,
+        errorNotification: false,
+      },
+      {
+        onSuccess: () => {
+          applyConversationRead(id);
+        },
+      }
+    );
   };
 
   const handleSend = async () => {
     if (!selectedConvId || !draft.trim()) return;
+    const body = draft.trim();
+    const conversationId = selectedConvId;
+    // Optimistic: append directly to the thread cache so the message shows
+    // before the server round-trip.
+    const tempId = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const optimistic: Message = {
+      id: tempId,
+      conversation_id: conversationId,
+      sender_type: "user",
+      sender_id: identity?.id ?? "me",
+      sender_name: identity?.display_name ?? "You",
+      sender_avatar_url: identity?.avatar_url ?? null,
+      body,
+      body_html: null,
+      created_at: new Date().toISOString(),
+    };
+    upsertThreadMessage(conversationId, optimistic);
+    setDraft("");
+    setDraftHtml("");
     try {
-      await customMutateAsync({
-        url: `conversations/${selectedConvId}/messages`,
+      const res = await customMutateAsync({
+        url: `conversations/${conversationId}/messages`,
         method: "post",
-        values: { body: draft },
+        values: { body },
         successNotification: false,
         errorNotification: false,
       });
-      setDraft("");
-      setDraftHtml("");
-      // Refetch messages and conv list
-      refetchMessages();
-      convQuery.refetch();
+      const serverMsg = (res as unknown as { data?: Message })?.data as Message | undefined;
+      removeThreadMessage(conversationId, tempId);
+      if (serverMsg?.id) {
+        // Reuse the realtime patch: appends the persisted message, bumps the
+        // conversation preview, skips unread (own message).
+        applyMessageCreated({
+          conversation_id: serverMsg.conversation_id,
+          message_id: serverMsg.id,
+          sender_id: serverMsg.sender_id,
+          sender_type: serverMsg.sender_type,
+          sender_name: serverMsg.sender_name,
+          sender_avatar_url: serverMsg.sender_avatar_url,
+          body: serverMsg.body,
+          body_preview: truncatePreview(stripMarkdown(serverMsg.body), 200),
+          created_at: serverMsg.created_at,
+        });
+      }
+      // Sending marks the conversation read server-side — reflect it locally.
+      applyConversationRead(conversationId);
     } catch (err: unknown) {
+      removeThreadMessage(conversationId, tempId);
       const msg = (err as { message?: string })?.message || String(err);
       toast.error(msg);
+      // Restore draft on failure for retry
+      setDraft(body);
     }
   };
 
-  const handleArchive = (archived: boolean) => {
-    if (!selectedConvId) return;
+  const handleArchiveConversation = (conversationId: string, archived: boolean) => {
     customMutate(
       {
-        url: `conversations/${selectedConvId}/archive`,
+        url: `conversations/${conversationId}/archive`,
         method: "patch",
         values: { archived },
         successNotification: false,
@@ -276,7 +372,42 @@ export function InboxPage() {
       },
       {
         onSuccess: () => {
+          setConfirmArchiveId(null);
           convQuery.refetch();
+          invalidate({ resource: "conversations", invalidates: ["list"] });
+          if (selectedConvId === conversationId && archived) {
+            // If we archived the open thread, keep it selected but it will disappear from active list; allow user to see archived tab
+          }
+        },
+        onError: (e) => {
+          toast.error(String((e as { message?: string })?.message ?? e));
+        },
+      }
+    );
+  };
+
+  const handleToggleRead = (conv: Conversation) => {
+    const isUnread = conv.unread_count > 0;
+    const url = isUnread ? `conversations/${conv.id}/read` : `conversations/${conv.id}/unread`;
+    customMutate(
+      {
+        url,
+        method: "patch",
+        values: {},
+        successNotification: false,
+        errorNotification: false,
+      },
+      {
+        onSuccess: () => {
+          if (isUnread) {
+            applyConversationRead(conv.id);
+          }
+          convQuery.refetch();
+          invalidate({ resource: "conversations", invalidates: ["list"] });
+          invalidate({ resource: "notifications", invalidates: ["list"] });
+        },
+        onError: (e) => {
+          toast.error(String((e as { message?: string })?.message ?? e));
         },
       }
     );
@@ -313,30 +444,32 @@ export function InboxPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-      <PageHeader
+      <TabbedPageHeader
         title="Inbox"
+        tabs={
+          <div className="flex w-full rounded-lg border p-1 sm:w-auto">
+            <Button
+              variant={tab === "messages" ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 flex-1 justify-center sm:flex-none"
+              onClick={() => setTab("messages")}
+            >
+              <MessageSquare className="mr-1 h-3.5 w-3.5" />
+              Messages
+            </Button>
+            <Button
+              variant={tab === "notifications" ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 flex-1 justify-center sm:flex-none"
+              onClick={() => setTab("notifications")}
+            >
+              <Mail className="mr-1 h-3.5 w-3.5" />
+              Notifications
+            </Button>
+          </div>
+        }
         actions={
-          <div className="flex items-center gap-2">
-            <div className="flex rounded-lg border p-1">
-              <Button
-                variant={tab === "messages" ? "secondary" : "ghost"}
-                size="sm"
-                className="h-7"
-                onClick={() => setTab("messages")}
-              >
-                <MessageSquare className="mr-1 h-3.5 w-3.5" />
-                Messages
-              </Button>
-              <Button
-                variant={tab === "notifications" ? "secondary" : "ghost"}
-                size="sm"
-                className="h-7"
-                onClick={() => setTab("notifications")}
-              >
-                <Mail className="mr-1 h-3.5 w-3.5" />
-                Notifications
-              </Button>
-            </div>
+          <>
             {tab === "messages" && (
               <Button size="sm" onClick={() => setComposeOpen(true)}>
                 Compose
@@ -356,77 +489,195 @@ export function InboxPage() {
                 </SelectContent>
               </Select>
             )}
-          </div>
+          </>
         }
       />
 
       {tab === "messages" ? (
         <div className="flex min-h-0 flex-1 overflow-hidden rounded-lg border">
           {/* Left pane */}
-          <div className={cn("flex w-full flex-col border-r md:w-80", selectedConvId ? "hidden md:flex" : "flex")}>
-            <div className="flex items-center gap-2 border-b p-3">
-              <div className="relative flex-1">
-                <Search className="text-muted-foreground absolute left-2 top-2.5 h-4 w-4" />
-                <Input
-                  placeholder="Search title or preview…"
-                  value={searchInput}
-                  onChange={(e) => setSearchInput(e.target.value)}
-                  className="pl-8"
-                />
-              </div>
-              <Select value={archivedFilter} onValueChange={(v) => setArchivedFilter(v as ArchivedFilter)}>
-                <SelectTrigger className="w-28">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="active">Active</SelectItem>
-                  <SelectItem value="archived">Archived</SelectItem>
-                </SelectContent>
-              </Select>
+          <div
+            className={cn(
+              "flex w-full flex-col border-r transition-all duration-200",
+              selectedConvId ? "hidden md:flex" : "flex",
+              leftCollapsed ? "md:hidden" : "md:w-80 md:flex"
+            )}
+          >
+            <div ref={searchContainerRef} className="flex items-center gap-2 border-b p-3">
+              {searchExpanded ? (
+                <div className="relative flex flex-1 items-center">
+                  <Search className="text-muted-foreground pointer-events-none absolute left-2 top-2.5 h-4 w-4" />
+                  <Input
+                    ref={searchInputRef}
+                    placeholder="Search title or preview…"
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") setSearchExpanded(false);
+                    }}
+                    className={cn("pl-8 pr-8", searchInput.trim() && "border-ring ring-1 ring-ring")}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="absolute right-1 top-1 h-7 w-7 shrink-0"
+                    onClick={() => {
+                      setSearchInput("");
+                      // keep search bar expanded so user can type a new query; Esc / outside click still collapses
+                      searchInputRef.current?.focus();
+                    }}
+                    aria-label="Clear search"
+                    title="Clear search"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <Button
+                    variant={searchInput.trim() ? "secondary" : "ghost"}
+                    size="icon"
+                    onClick={() => setSearchExpanded(true)}
+                    aria-label="Search"
+                    className={cn("h-9 w-9 shrink-0", searchInput.trim() && "ring-1 ring-ring border-ring")}
+                  >
+                    <Search className="h-4 w-4" />
+                  </Button>
+                  <Select value={archivedFilter} onValueChange={(v) => setArchivedFilter(v as ArchivedFilter)}>
+                    <SelectTrigger className="w-28">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="active">Active</SelectItem>
+                      <SelectItem value="archived">Archived</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setLeftCollapsed((v) => !v)}
+                    aria-label={leftCollapsed ? "Expand panel" : "Collapse panel"}
+                    title={leftCollapsed ? "Expand" : "Collapse"}
+                    className="ml-auto hidden h-9 w-9 shrink-0 md:inline-flex"
+                  >
+                    <PanelLeftClose className="h-4 w-4" />
+                  </Button>
+                </>
+              )}
             </div>
             <div className="flex-1 overflow-y-auto">
               {conversations.map((c) => {
                 const isActive = c.id === selectedConvId;
+                const isConfirm = confirmArchiveId === c.id;
+                const isArchived = c.is_archived;
+                const isUnread = c.unread_count > 0;
                 return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => handleSelectConv(c.id)}
-                    className={cn(
-                      "flex w-full flex-col gap-1 border-b px-4 py-3 text-left transition-colors",
-                      isActive ? "bg-accent" : "hover:bg-accent/50"
-                    )}
-                  >
-                    <div className="flex items-center gap-2">
-                      {c.unread_count > 0 && <span className="bg-primary mt-1 h-2 w-2 shrink-0 rounded-full" />}
-                      <p className={cn("min-w-0 flex-1 truncate text-sm", c.unread_count > 0 ? "font-semibold" : "font-medium")}>
-                        {c.title || "Untitled"}
-                      </p>
-                      {c.unread_count > 0 && (
-                        <Badge variant="default" className="h-5 px-1.5 text-xs">
-                          {c.unread_count}
-                        </Badge>
+                  <div key={c.id} className="group relative flex border-b">
+                    <button
+                      type="button"
+                      onClick={() => handleSelectConv(c.id)}
+                      className={cn(
+                        "flex min-w-0 flex-1 flex-col gap-1 px-4 py-3 text-left transition-colors",
+                        isActive ? "bg-accent" : "hover:bg-accent/50"
                       )}
-                    </div>
-                    <p className="text-muted-foreground line-clamp-1 pl-4 text-xs">{truncate(c.last_message_preview ?? "", 80)}</p>
-                    <div className="flex items-center gap-2 pl-4">
-                      <div className="flex -space-x-1">
-                        {c.participants.slice(0, 3).map((p) => (
-                          <Avatar key={p.id} className="h-5 w-5 border-2 border-background">
-                            <AvatarImage src={p.avatar_url ?? undefined} />
-                            <AvatarFallback className="text-[9px]">{p.display_name.slice(0, 2).toUpperCase()}</AvatarFallback>
-                          </Avatar>
-                        ))}
-                        {c.participants.length > 3 && (
-                          <span className="text-muted-foreground bg-muted flex h-5 w-5 items-center justify-center rounded-full border-2 border-background text-[10px]">
-                            +{c.participants.length - 3}
-                          </span>
+                    >
+                      <div className="flex items-center gap-2 pr-16">
+                        {c.unread_count > 0 && <span className="bg-primary mt-1 h-2 w-2 shrink-0 rounded-full" />}
+                        <p className={cn("min-w-0 flex-1 truncate text-sm", c.unread_count > 0 ? "font-semibold" : "font-medium")}>
+                          {c.title || "Untitled"}
+                        </p>
+                        {c.unread_count > 0 && (
+                          <Badge variant="default" className="h-5 px-1.5 text-xs">
+                            {c.unread_count}
+                          </Badge>
                         )}
                       </div>
-                      <span className="text-muted-foreground truncate text-[11px]">{c.participants.map((p) => p.display_name).join(", ")}</span>
+                      <p className="text-muted-foreground line-clamp-1 pl-4 pr-16 text-xs">{truncateEscaped(c.last_message_preview ?? "", 80)}</p>
+                      <div className="flex items-center gap-2 pl-4 pr-16">
+                        <div className="flex -space-x-1">
+                          {c.participants.slice(0, 3).map((p) => (
+                            <Avatar key={p.id} className="h-5 w-5 border-2 border-background">
+                              <AvatarImage src={p.avatar_url ?? undefined} />
+                              <AvatarFallback className="text-[9px]">{p.display_name.slice(0, 2).toUpperCase()}</AvatarFallback>
+                            </Avatar>
+                          ))}
+                          {c.participants.length > 3 && (
+                            <span className="text-muted-foreground bg-muted flex h-5 w-5 items-center justify-center rounded-full border-2 border-background text-[10px]">
+                              +{c.participants.length - 3}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-muted-foreground truncate text-[11px]">{c.participants.map((p) => p.display_name).join(", ")}</span>
+                      </div>
+                      <p className="text-muted-foreground pl-4 pr-16 text-[11px]">{formatDate(c.last_message_at)}</p>
+                    </button>
+                    <div
+                      className={cn(
+                        "absolute right-1 top-1.5 flex items-center gap-1 rounded-md border bg-background/95 p-1 shadow-sm backdrop-blur transition-opacity",
+                        isConfirm ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
+                      )}
+                    >
+                      {isConfirm ? (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setConfirmArchiveId(null);
+                            }}
+                            aria-label="Cancel"
+                            title="Cancel"
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleArchiveConversation(c.id, !isArchived);
+                            }}
+                            aria-label={isArchived ? "Confirm unarchive" : "Confirm archive"}
+                            title={isArchived ? "Confirm unarchive" : "Confirm archive"}
+                          >
+                            <Check className="h-4 w-4" />
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleRead(c);
+                            }}
+                            aria-label={isUnread ? "Mark as read" : "Mark as unread"}
+                            title={isUnread ? "Mark as read" : "Mark as unread"}
+                          >
+                            {isUnread ? <MailOpen className="h-4 w-4" /> : <Mail className="h-4 w-4" />}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setConfirmArchiveId(c.id);
+                            }}
+                            aria-label={isArchived ? "Unarchive" : "Archive"}
+                            title={isArchived ? "Unarchive" : "Archive"}
+                          >
+                            {isArchived ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
+                          </Button>
+                        </>
+                      )}
                     </div>
-                    <p className="text-muted-foreground pl-4 text-[11px]">{formatDate(c.last_message_at)}</p>
-                  </button>
+                  </div>
                 );
               })}
               {conversations.length === 0 && (
@@ -441,32 +692,69 @@ export function InboxPage() {
 
           {/* Right pane */}
           <div className={cn("flex min-w-0 flex-1 flex-col overflow-hidden", selectedConvId ? "flex" : "hidden md:flex")}>
+            {leftCollapsed && (
+              <div className="hidden items-center gap-2 border-b bg-muted/30 px-3 py-2 md:flex">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0"
+                  onClick={() => setLeftCollapsed(false)}
+                  aria-label="Show conversations"
+                  title="Show conversations"
+                >
+                  <PanelLeftOpen className="h-4 w-4" />
+                </Button>
+                <span className="text-muted-foreground text-sm">Conversations hidden</span>
+              </div>
+            )}
             {selectedConversation ? (
               <div className="flex min-h-0 flex-1 flex-col">
                 {/* Thread header */}
                 <div className="flex flex-col gap-3 border-b p-4">
-                  <div className="flex items-center gap-2 md:hidden">
-                    <Button size="sm" variant="ghost" onClick={() => setSelectedConvId(null)}>
-                      <ArrowLeft className="mr-1 h-4 w-4" />
-                      Back
+                  <div className="flex items-start gap-2">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 shrink-0 mt-0.5"
+                      onClick={() => setSelectedConvId(null)}
+                      aria-label="Back"
+                      title="Back"
+                    >
+                      <ArrowLeft className="h-4 w-4" />
                     </Button>
-                  </div>
-                  <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
                       {editingTitle ? (
                         <div className="flex items-center gap-2">
                           <Input
                             value={editTitleValue}
                             onChange={(e) => setEditTitleValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleTitleSave();
+                              if (e.key === "Escape") setEditingTitle(false);
+                            }}
                             className="h-8"
                             placeholder="Conversation title"
                             autoFocus
                           />
-                          <Button size="sm" onClick={handleTitleSave}>
-                            Save
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 shrink-0"
+                            onClick={handleTitleSave}
+                            aria-label="Save title"
+                            title="Save"
+                          >
+                            <Check className="h-4 w-4" />
                           </Button>
-                          <Button size="sm" variant="ghost" onClick={() => setEditingTitle(false)}>
-                            Cancel
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 shrink-0"
+                            onClick={() => setEditingTitle(false)}
+                            aria-label="Cancel"
+                            title="Cancel"
+                          >
+                            <X className="h-4 w-4" />
                           </Button>
                         </div>
                       ) : (
@@ -478,7 +766,7 @@ export function InboxPage() {
                         </div>
                       )}
                       <div className="mt-1 flex flex-wrap items-center gap-1">
-                        {selectedConversation.participants.map((p) => (
+                        {selectedConversation.participants.slice(0, 2).map((p) => (
                           <Badge key={p.id} variant="secondary" className="gap-1">
                             <Avatar className="h-4 w-4">
                               <AvatarImage src={p.avatar_url ?? undefined} />
@@ -487,26 +775,33 @@ export function InboxPage() {
                             {p.display_name}
                           </Badge>
                         ))}
+                        {selectedConversation.participants.length > 2 && (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge
+                                  variant="secondary"
+                                  className="cursor-pointer px-2"
+                                  aria-label={`+${selectedConversation.participants.length - 2} more recipients`}
+                                  title={`+${selectedConversation.participants.length - 2} more`}
+                                >
+                                  …
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom" align="start" className="max-w-[260px]">
+                                <div className="flex flex-col gap-1 text-xs">
+                                  {selectedConversation.participants.map((p) => (
+                                    <span key={p.id} className="truncate">
+                                      {p.display_name}
+                                    </span>
+                                  ))}
+                                </div>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )}
                       </div>
                     </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleArchive(!selectedConversation.is_archived)}
-                      title={selectedConversation.is_archived ? "Unarchive (only for you)" : "Archive (only for you)"}
-                    >
-                      {selectedConversation.is_archived ? (
-                        <>
-                          <ArchiveRestore className="mr-1 h-3.5 w-3.5" />
-                          Unarchive
-                        </>
-                      ) : (
-                        <>
-                          <Archive className="mr-1 h-3.5 w-3.5" />
-                          Archive
-                        </>
-                      )}
-                    </Button>
                   </div>
                 </div>
 
@@ -531,7 +826,7 @@ export function InboxPage() {
                             <div className={cn("max-w-[75%] rounded-lg px-3 py-2", isSelf ? "bg-primary text-primary-foreground" : "bg-muted")}>
                               {!isSelf && <p className="mb-1 text-xs font-medium opacity-70">{m.sender_name}</p>}
                               <div className={cn("prose prose-sm dark:prose-invert max-w-none break-words", isSelf ? "prose-invert" : "")}>
-                                <Markdown>{m.body}</Markdown>
+                                <Markdown components={isSelf ? markdownComponentsInverted : markdownComponents}>{m.body}</Markdown>
                               </div>
                               <p className={cn("mt-1 text-[11px]", isSelf ? "text-primary-foreground/70" : "text-muted-foreground")}>
                                 {formatDate(m.created_at)}
@@ -589,8 +884,28 @@ export function InboxPage() {
       ) : (
         /* Notifications tab - simplified workspace-scoped list */
         <div className="flex min-h-0 flex-1 overflow-hidden rounded-lg border">
-          <div className={cn("flex w-full flex-col overflow-y-auto border-r md:w-80", selectedNotif ? "hidden md:flex" : "flex")}>
-            {allNotifications.map((n) => {
+          <div
+            className={cn(
+              "flex w-full flex-col overflow-hidden border-r transition-all duration-200",
+              selectedNotif ? "hidden md:flex" : "flex",
+              leftCollapsed ? "md:hidden" : "md:w-80 md:flex"
+            )}
+          >
+            <div className="flex items-center justify-between border-b p-3">
+              <span className="text-sm font-medium">Notifications</span>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setLeftCollapsed((v) => !v)}
+                aria-label={leftCollapsed ? "Expand panel" : "Collapse panel"}
+                title={leftCollapsed ? "Expand" : "Collapse"}
+                className="hidden h-9 w-9 shrink-0 md:inline-flex"
+              >
+                <PanelLeftClose className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {allNotifications.map((n) => {
               const isActive = n.id === selectedNotif?.id;
               const isConvMsg = n.type === "conversation_message";
               return (
@@ -610,7 +925,7 @@ export function InboxPage() {
                     </p>
                     {isConvMsg && <Badge variant="outline" className="shrink-0 text-[10px]">message</Badge>}
                   </div>
-                  <p className="text-muted-foreground line-clamp-1 pl-4 text-xs">{truncate(n.body, 100)}</p>
+                  <p className="text-muted-foreground line-clamp-1 pl-4 text-xs">{truncateEscaped(n.body, 100)}</p>
                   <p className="text-muted-foreground pl-4 text-[11px]">{formatDate(n.created_at)}</p>
                 </button>
               );
@@ -620,32 +935,54 @@ export function InboxPage() {
                 <p className="text-muted-foreground text-sm">No notifications.</p>
               </div>
             )}
+            </div>
           </div>
 
           <div className={cn("flex min-w-0 flex-1 flex-col overflow-y-auto", selectedNotif ? "flex" : "hidden md:flex")}>
+            {leftCollapsed && (
+              <div className="hidden items-center gap-2 border-b bg-muted/30 px-3 py-2 md:flex">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0"
+                  onClick={() => setLeftCollapsed(false)}
+                  aria-label="Show notifications"
+                  title="Show notifications"
+                >
+                  <PanelLeftOpen className="h-4 w-4" />
+                </Button>
+                <span className="text-muted-foreground text-sm">Notifications hidden</span>
+              </div>
+            )}
             {selectedNotif ? (
               <div className="flex flex-1 flex-col p-6">
-                <div className="mb-4 flex items-center gap-3 md:hidden">
-                  <Button size="sm" variant="ghost" onClick={handleCloseNotif}>
-                    <ArrowLeft className="mr-1 h-4 w-4" />
-                    Back
+                <div className="mb-6 flex items-start gap-2">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0"
+                    onClick={handleCloseNotif}
+                    aria-label="Back"
+                    title="Back"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
                   </Button>
-                </div>
-                <div className="mb-6 flex flex-col gap-2">
-                  <h3 className="text-xl font-semibold">{selectedNotif.title}</h3>
-                  <div className="text-muted-foreground flex flex-wrap items-center gap-3 text-sm">
-                    <span>{formatDate(selectedNotif.created_at)}</span>
-                    {selectedNotif.workspace_name && (
-                      <>
-                        <span>·</span>
-                        <Badge variant="secondary">{selectedNotif.workspace_name}</Badge>
-                      </>
-                    )}
-                    {selectedNotif.type === "conversation_message" && <Badge variant="outline">message</Badge>}
+                  <div className="min-w-0 flex-1 flex flex-col gap-2">
+                    <h3 className="text-xl font-semibold">{selectedNotif.title}</h3>
+                    <div className="text-muted-foreground flex flex-wrap items-center gap-3 text-sm">
+                      <span>{formatDate(selectedNotif.created_at)}</span>
+                      {selectedNotif.workspace_name && (
+                        <>
+                          <span>·</span>
+                          <Badge variant="secondary">{selectedNotif.workspace_name}</Badge>
+                        </>
+                      )}
+                      {selectedNotif.type === "conversation_message" && <Badge variant="outline">message</Badge>}
+                    </div>
                   </div>
                 </div>
                 <div className="prose prose-sm dark:prose-invert max-w-none flex-1">
-                  <Markdown>{selectedNotif.body || ""}</Markdown>
+                  <Markdown components={markdownComponents}>{selectedNotif.body || ""}</Markdown>
                 </div>
                 <div className="border-border mt-6 flex items-center gap-2 border-t pt-4">
                   {linkUrl(selectedNotif) && (

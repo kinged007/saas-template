@@ -32,12 +32,15 @@ export function MembersPage() {
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
   const { result: membersResult } = useList<Member>({ resource: "members" });
   const { result: rolesResult } = useList<Role>({ resource: "roles" });
-  const { result: invitationsResult } = useList<Invitation>({ resource: "invitations" });
-  const { mutate: changeRole } = useUpdate();
-  const { mutate: invite, mutation } = useCreate();
   const { data: canManage } = useCan({ resource: "members", action: "edit" });
   const { data: canDelete } = useCan({ resource: "members", action: "delete" });
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
+  const { result: invitationsResult } = useList<Invitation>({
+    resource: "invitations",
+    queryOptions: { enabled: !!canInvite?.can },
+  });
+  const { mutate: changeRole } = useUpdate();
+  const { mutate: invite, mutation } = useCreate();
   const [email, setEmail] = useState("");
   const [inviteRoleId, setInviteRoleId] = useState("");
 
@@ -136,14 +139,14 @@ export function MembersPage() {
         </Table>
       </div>
 
-      <section className="flex flex-col gap-4">
-        <div className="flex flex-col gap-1">
-          <h3 className="text-lg font-semibold">Invited members</h3>
-          <p className="text-muted-foreground text-sm">
-            Invitations sent to join this workspace.
-          </p>
-        </div>
-        {canInvite?.can && (
+      {canInvite?.can && (
+        <section className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1">
+            <h3 className="text-lg font-semibold">Invited members</h3>
+            <p className="text-muted-foreground text-sm">
+              Invitations sent to join this workspace.
+            </p>
+          </div>
           <form
             onSubmit={submit}
             className="border-border flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-end"
@@ -176,46 +179,46 @@ export function MembersPage() {
               {mutation.isPending ? "Sending…" : "Invite"}
             </Button>
           </form>
-        )}
-        <div className="border-border overflow-x-auto rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Email</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Expires</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {invitations.map((i) => (
-                <TableRow key={i.id}>
-                  <TableCell>{i.email}</TableCell>
-                  <TableCell>{roleName(i.role_id) ?? "—"}</TableCell>
-                  <TableCell>
-                    <StatusBadge status={i.status} />
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{formatDate(i.expires_at)}</TableCell>
-                  <TableCell className="text-muted-foreground">{formatDate(i.created_at)}</TableCell>
-                  <TableCell className="text-right">
-                    {canInvite?.can && i.status === "pending" && (
-                      <DeleteButton
-                        resource="invitations"
-                        recordItemId={i.id}
-                        variant="ghost"
-                        size="sm"
-                      />
-                    )}
-                  </TableCell>
+          <div className="border-border overflow-x-auto rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Expires</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
-              ))}
-              {invitations.length === 0 && <EmptyRow colSpan={6}>No invitations yet.</EmptyRow>}
-            </TableBody>
-          </Table>
-        </div>
-      </section>
+              </TableHeader>
+              <TableBody>
+                {invitations.map((i) => (
+                  <TableRow key={i.id}>
+                    <TableCell>{i.email}</TableCell>
+                    <TableCell>{roleName(i.role_id) ?? "—"}</TableCell>
+                    <TableCell>
+                      <StatusBadge status={i.status} />
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{formatDate(i.expires_at)}</TableCell>
+                    <TableCell className="text-muted-foreground">{formatDate(i.created_at)}</TableCell>
+                    <TableCell className="text-right">
+                      {i.status === "pending" && (
+                        <DeleteButton
+                          resource="invitations"
+                          recordItemId={i.id}
+                          variant="ghost"
+                          size="sm"
+                        />
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {invitations.length === 0 && <EmptyRow colSpan={6}>No invitations yet.</EmptyRow>}
+              </TableBody>
+            </Table>
+          </div>
+        </section>
+      )}
     </ListView>
   );
 }

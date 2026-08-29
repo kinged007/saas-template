@@ -94,12 +94,8 @@ async def unread_count(
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = await NotificationService(db).list_for_user(
-        user.id,
-        acknowledged=False,
-        workspace_id=workspace_id,
-    )
-    return {"count": len(rows)}
+    count = await NotificationService(db).unread_count(user.id, workspace_id=workspace_id)
+    return {"count": count}
 
 
 @router.patch("/{notification_id}")

@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, Request, WebSocket, WebSocketException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -187,22 +187,22 @@ def require_permission(permission: str):
     return checker
 
 
-async def websocket_auth(websocket: WebSocket, db: Annotated[AsyncSession, Depends(get_db)]):
-    token = websocket.query_params.get("token")
+async def authenticate_websocket_token(db: AsyncSession, token: str | None) -> User | None:
+    """Validate a WebSocket access token.
+
+    Returns the authenticated user, or None when the token is missing/invalid
+    or the account is inactive. The caller owns the DB session and must close
+    it before the socket loop starts — WebSockets stay open for minutes to
+    hours, and holding a pool connection for their lifetime would exhaust the
+    pool after ~15 open sockets.
+    """
     if not token:
-        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="missing token")
+        return None
     try:
         payload = decode_access_token(token)
-    except Exception as exc:
-        raise WebSocketException(
-            code=status.WS_1008_POLICY_VIOLATION, reason="invalid token"
-        ) from exc
+    except Exception:
+        return None
     user = await AuthService(db).get_user(payload.get("sub", ""))
     if user is None or not user.is_active:
-        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="invalid user")
-    # Release the DB session before the socket loop starts. WebSockets stay
-    # open for a long time (minutes to hours); holding a get_db session (and
-    # its pool connection) for the socket's lifetime would exhaust the
-    # connection pool after ~15 open sockets and 500 every API request.
-    await db.close()
+        return None
     return user
