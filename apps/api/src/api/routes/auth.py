@@ -14,7 +14,8 @@ from src.schemas.api import (
     TokenResponse,
 )
 from src.services.auth import AuthError, AuthService
-from src.services.serializers import user_to_dict, workspace_to_dict
+from src.services.profiles import ProfileService
+from src.services.serializers import profile_to_dict, user_to_dict, workspace_to_dict
 from src.services.workspaces import WorkspaceService
 
 logger = logging.getLogger(__name__)
@@ -93,7 +94,11 @@ async def logout(
 
 
 @router.get("/me")
-async def me(user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def me(
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
     service = WorkspaceService(db)
     data = user_to_dict(user)
     memberships = await service.list_workspaces(user.id)
@@ -102,4 +107,27 @@ async def me(user=Depends(get_current_user), db: AsyncSession = Depends(get_db))
         for w, role, _ in memberships
     ]
     data["permissions"] = sorted({p for _, role, _ in memberships for p in role.permissions})
+    # Embed profile (lazy create)
+    try:
+        profile = await ProfileService(db, container.bus).get_or_create(user.id)
+        data["profile"] = profile_to_dict(profile)
+    except Exception:
+        logger.exception("failed to embed profile for user %s", user.id)
+        # Fallback: minimal empty profile
+        data["profile"] = {
+            "id": user.id,
+            "user_id": user.id,
+            "first_name": None,
+            "last_name": None,
+            "bio": None,
+            "phone_number": None,
+            "timezone": None,
+            "locale": None,
+            "date_of_birth": None,
+            "website_url": None,
+            "location": None,
+            "custom_data": {},
+            "created_at": None,
+            "updated_at": None,
+        }
     return data

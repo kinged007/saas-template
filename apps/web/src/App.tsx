@@ -25,6 +25,7 @@ import { InboxPage } from "./pages/InboxPage";
 import { JobsPage } from "./pages/JobsPage";
 import { JobDetailPage } from "./pages/JobDetailPage";
 import { JobRunPage } from "./pages/JobRunPage";
+import { ProfileSettingsPage } from "./pages/settings/ProfileSettingsPage";
 
 export function App() {
   return (
@@ -84,6 +85,7 @@ export function App() {
               <Route path="jobs" element={<JobsPage />} />
               <Route path="jobs/:id" element={<JobDetailPage />} />
               <Route path="jobs/:id/runs/:runId" element={<JobRunPage />} />
+              <Route path="settings/profile" element={<ProfileSettingsPage />} />
             </Route>
             <Route
               path="/login"

@@ -33,7 +33,8 @@ User ──< WorkspaceMember >── Workspace (slug, name)
   │                                  ├──< JobDefinition > (cron, params, enabled)
   │                                  │     └──< JobRun > (status, params snapshot, logs)
   │                                  └──< AuditLogEntry > (immutable, workspace-wide)
-  └──< RefreshToken >──< Notification > (user_id, type, payload, acknowledged_at)
+  ├──< RefreshToken >──< Notification > (user_id, type, payload, acknowledged_at)
+  └──< UserProfile > (1:1 users, custom_data JSON, phone/timezone/locale etc.)
 ```
 
 - **Workspace** — the tenancy boundary. Every workspace-scoped request carries
@@ -48,6 +49,7 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 - **ApiKey** — per-user machine credentials with assignable permissions
   (capped by the minting principal's own permissions). Only the raw key is
   returned once at creation.
+- **UserProfile** — 1:1 with `User` (`user_id` PK FK CASCADE), 9 common columns (`first_name`, `last_name`, `bio`, `phone_number`, `timezone`, `locale`, `date_of_birth`, `website_url`, `location`) + schemaless `custom_data JSON DEFAULT {}` (Merge Patch, 50 keys / 16 KiB). Lazily auto-created on `GET /me/profile` or `GET /auth/me` (ON CONFLICT), cascade-deleted with `User`. Cross-user read is workspace-bounded (404 if not co-member nor superuser) with redacted projection (`phone_number`, `date_of_birth`, `_private*` stripped). See `docs/providers/profile.md` for extension seam.
 - **JobDefinition / JobRun** — DB-backed scheduled jobs (see §7).
 - **Notification** — persisted per user/workspace, acknowledged via
   `PATCH /notifications/{id}`; pushed in realtime over WebSockets.
@@ -78,7 +80,7 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 |---|---|
 | Password | `POST /auth/login` → access + refresh; `POST /auth/refresh` (rotating, hashed opaque token in DB); `POST /auth/logout` revokes |
 | API keys | `Authorization: Bearer <key>`; permissions resolved per workspace |
-| Identity | `GET /auth/me` → current user + workspaces + permissions |
+| Identity | `GET /auth/me` → current user + workspaces + permissions + embedded `profile` (auto-created, same shape as `GET /me/profile`) |
 
 ## 6. Events & pub/sub
 

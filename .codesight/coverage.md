@@ -1,7 +1,7 @@
 # Test Coverage
 
 > **28%** of routes and models are covered by tests
-> 18 test files found
+> 22 test files found
 
 ## Covered Routes
 
@@ -13,12 +13,17 @@
 
 - ApiKey
 - AuditLogEntry
+- Conversation
+- Message
 - Invitation
 - Notification
 - JobDefinition
 - JobRun
 - JobLogEntry
 - StoredSecret
+- UserProfile
 - User
+- RefreshToken
 - Workspace
 - Role
+- WorkspaceMember
