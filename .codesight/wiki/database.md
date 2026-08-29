@@ -2,7 +2,7 @@
 
 > **Navigation aid.** Schema shapes and field types extracted via AST. Read the actual schema source files before writing migrations or query logic.
 
-**sqlalchemy** — 13 models
+**sqlalchemy** — 17 models
 
 ### ApiKey
 
@@ -30,6 +30,45 @@ pk: `id` (str)
 - `action`: String
 - `details`: JSON _(default)_
 - `ip_address`: String _(nullable)_
+
+### Conversation
+
+pk: `id` (str)
+
+- `id`: str _(pk, default)_
+- `workspace_id`: str _(index)_
+- `created_by_user_id`: str _(index)_
+- `title`: String _(nullable)_
+- `last_message_at`: DateTime _(nullable, index)_
+- `last_message_preview`: String _(nullable)_
+
+### ConversationParticipant
+
+pk: `id` (str)
+
+- `id`: str _(pk, default)_
+- `conversation_id`: str _(index)_
+- `participant_type`: String _(default, index)_
+- `participant_id`: str _(index)_
+- `user_id`: unknown _(nullable, index)_
+- `agent_id`: unknown _(nullable, index)_
+- `joined_at`: DateTime
+- `last_read_at`: DateTime _(nullable)_
+- `last_read_message_id`: unknown _(nullable)_
+- `archived_at`: DateTime _(nullable)_
+
+### Message
+
+pk: `id` (str)
+
+- `id`: str _(pk, default)_
+- `conversation_id`: str _(index)_
+- `sender_type`: String _(default)_
+- `sender_id`: str _(index)_
+- `sender_user_id`: unknown _(nullable, index)_
+- `sender_agent_id`: unknown _(nullable)_
+- `body`: Text
+- `body_html`: Text _(nullable)_
 
 ### Invitation
 
@@ -119,6 +158,22 @@ pk: `id` (str)
 - `meta`: JSON _(default)_
 - `expires_at`: DateTime _(nullable)_
 
+### UserProfile
+
+pk: `user_id` (str) · fk: user_id
+
+- `user_id`: str _(fk, pk)_
+- `first_name`: String _(nullable)_
+- `last_name`: String _(nullable)_
+- `bio`: String _(nullable)_
+- `phone_number`: String _(nullable)_
+- `timezone`: String _(nullable)_
+- `locale`: String _(nullable)_
+- `date_of_birth`: Date _(nullable)_
+- `website_url`: String _(nullable)_
+- `location`: String _(nullable)_
+- `custom_data`: JSON _(default)_
+
 ### User
 
 pk: `id` (str)
@@ -177,13 +232,12 @@ pk: `id` (str)
 
 Read and edit these files when adding columns, creating migrations, or changing relations:
 
-- `apps/api/src/db/session.py` — imported by **28** files
-- `apps/api/src/models/workspace.py` — imported by **15** files
-- `apps/api/src/models/core.py` — imported by **11** files
-- `apps/api/src/db/base.py` — imported by **8** files
-- `apps/api/src/schemas/api.py` — imported by **8** files
-- `apps/api/src/models/api_key.py` — imported by **7** files
-- `apps/api/src/models/jobs.py` — imported by **7** files
+- `apps/api/src/db/session.py` — imported by **32** files
+- `apps/api/src/models/workspace.py` — imported by **19** files
+- `apps/api/src/models/core.py` — imported by **13** files
+- `apps/api/src/db/base.py` — imported by **10** files
+- `apps/api/src/schemas/api.py` — imported by **10** files
+- `apps/api/src/models/api_key.py` — imported by **9** files
 
 ---
 _Back to [overview.md](./overview.md)_

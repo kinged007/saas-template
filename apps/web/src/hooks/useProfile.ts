@@ -1,0 +1,184 @@
+import { useCustom, useCustomMutation, useGetIdentity, useInvalidate } from "@refinedev/core";
+import { useQueryClient } from "@tanstack/react-query";
+import { useCallback } from "react";
+
+import type { Identity, UserProfile } from "../types";
+import { getProfileField } from "../types";
+export { getProfileField };
+
+import { API_URL, httpClient } from "../providers/dataProvider";
+import { identityStore, tokenStore } from "../utils/storage";
+import { clearAllCaches } from "../providers/queryClient";
+
+export function useProfile() {
+  const { data: identity } = useGetIdentity<Identity>();
+  const enabled = !identity?.profile;
+  const custom = useCustom<UserProfile>({
+    url: "me/profile",
+    method: "get",
+    queryOptions: { enabled },
+  });
+  const data = (identity?.profile as UserProfile | undefined) ?? (custom.result?.data as UserProfile | undefined);
+  const isLoading = enabled ? (custom.query.isPending as boolean) : false;
+  const isError = enabled ? (custom.query.isError as boolean) : false;
+  return {
+    data,
+    isLoading,
+    isError,
+    query: custom.query,
+    result: custom.result,
+    refetch: custom.query.refetch,
+  };
+}
+
+export function useUpdateProfile() {
+  const queryClient = useQueryClient();
+  const invalidate = useInvalidate();
+  const { mutate, mutateAsync, mutation } = useCustomMutation<UserProfile>();
+
+  const update = useCallback(
+    (
+      values: Record<string, unknown>,
+      opts?: { isPut?: boolean; onSuccess?: () => void; onError?: (e: unknown) => void }
+    ) => {
+      const isPut = opts?.isPut ?? false;
+      mutate(
+        {
+          url: "me/profile",
+          method: isPut ? "put" : "patch",
+          values,
+          successNotification: {
+            message: "Profile updated",
+            type: "success",
+          },
+          errorNotification: false,
+        } as never,
+        {
+          onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ["auth"] });
+            queryClient.invalidateQueries({ queryKey: ["data"] });
+            invalidate({ resource: "profile", invalidates: ["all"] });
+            queryClient.invalidateQueries({ queryKey: ["getIdentity"] });
+            opts?.onSuccess?.();
+          },
+          onError: (e) => {
+            opts?.onError?.(e);
+          },
+        }
+      );
+    },
+    [mutate, queryClient, invalidate]
+  );
+
+  const updateAsync = useCallback(
+    async (values: Record<string, unknown>, isPut = false) => {
+      const res = await mutateAsync({
+        url: "me/profile",
+        method: isPut ? "put" : "patch",
+        values,
+        successNotification: {
+          message: "Profile updated",
+          type: "success",
+        },
+        errorNotification: false,
+      } as never);
+      queryClient.invalidateQueries({ queryKey: ["auth"] });
+      queryClient.invalidateQueries({ queryKey: ["data"] });
+      queryClient.invalidateQueries({ queryKey: ["getIdentity"] });
+      return res;
+    },
+    [mutateAsync, queryClient]
+  );
+
+  return { mutate: update, mutateAsync: updateAsync, mutation };
+}
+
+export function useExportProfile() {
+  const exportMyData = useCallback(async () => {
+    const resp = await httpClient.get(`${API_URL}/me/export`, {
+      responseType: "blob",
+    });
+    const disposition = (resp.headers["content-disposition"] as string) || (resp.headers["Content-Disposition"] as string) || "";
+    let filename = `export.json`;
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    if (match) filename = match[1];
+    const blob = new Blob([resp.data as BlobPart], { type: "application/json" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  }, []);
+
+  const exportUserData = useCallback(async (userId: string) => {
+    const resp = await httpClient.get(`${API_URL}/users/${userId}/export`, {
+      responseType: "blob",
+    });
+    const disposition = (resp.headers["content-disposition"] as string) || (resp.headers["Content-Disposition"] as string) || "";
+    let filename = `export-${userId}.json`;
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    if (match) filename = match[1];
+    const blob = new Blob([resp.data as BlobPart], { type: "application/json" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  }, []);
+
+  return { exportMyData, exportUserData };
+}
+
+export function useDeleteAccount() {
+  const queryClient = useQueryClient();
+  const { mutate, mutateAsync, mutation } = useCustomMutation();
+
+  const deleteMyAccount = useCallback(
+    (values: { confirm: string; password?: string }, opts?: { onSuccess?: () => void; onError?: (e: unknown) => void }) => {
+      mutate(
+        {
+          url: "me",
+          method: "delete",
+          values,
+          successNotification: false,
+          errorNotification: false,
+        } as never,
+        {
+          onSuccess: () => {
+            tokenStore.clear();
+            identityStore.set(null);
+            clearAllCaches(queryClient);
+            opts?.onSuccess?.();
+          },
+          onError: (e) => opts?.onError?.(e),
+        }
+      );
+    },
+    [mutate, queryClient]
+  );
+
+  const deleteMyAccountAsync = useCallback(
+    async (values: { confirm: string; password?: string }) => {
+      const res = await mutateAsync({
+        url: "me",
+        method: "delete",
+        values,
+        successNotification: false,
+        errorNotification: false,
+      } as never);
+      tokenStore.clear();
+      identityStore.set(null);
+      clearAllCaches(queryClient);
+      return res;
+    },
+    [mutateAsync, queryClient]
+  );
+
+  return { mutate: deleteMyAccount, mutateAsync: deleteMyAccountAsync, mutation };
+}

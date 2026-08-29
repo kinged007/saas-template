@@ -74,6 +74,13 @@ class AuthService:
             details={"email": user.email, "display_name": user.display_name},
             ip_address=ip_address,
         )
+        # Auto-provision profile (best-effort, idempotent)
+        try:
+            from src.services.profiles import ProfileService
+
+            await ProfileService(self._session, self._bus).get_or_create(user.id)
+        except Exception:
+            logger.exception("failed to provision profile for user %s", user.id)
         return user
 
     async def upsert_oauth_user(
@@ -100,6 +107,12 @@ class AuthService:
                 actor_user_id=user.id,
                 details={"email": user.email, "provider": provider, "subject": subject},
             )
+            try:
+                from src.services.profiles import ProfileService
+
+                await ProfileService(self._session, self._bus).get_or_create(user.id)
+            except Exception:
+                logger.exception("failed to provision profile for oauth user %s", user.id)
         return user
 
     def _is_superadmin_email(self, email: str) -> bool:

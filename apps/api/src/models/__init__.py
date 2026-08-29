@@ -15,6 +15,7 @@ from src.models.jobs import (
     JobRun,
 )
 from src.models.secret import StoredSecret
+from src.models.user_profile import UserProfile
 from src.models.workspace import (
     RefreshToken,
     Role,
@@ -38,6 +39,7 @@ __all__ = [
     "Role",
     "StoredSecret",
     "User",
+    "UserProfile",
     "Workspace",
     "WorkspaceMember",
 ]

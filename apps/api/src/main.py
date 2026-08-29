@@ -15,6 +15,7 @@ from src.api.routes import (
     members,
     meta,
     notifications,
+    profiles,
     roles,
     workspaces,
     ws,
@@ -100,4 +101,5 @@ app.include_router(api_keys.router, prefix=API)
 app.include_router(jobs.router, prefix=API)
 app.include_router(notifications.router, prefix=API)
 app.include_router(conversations.router, prefix=API)
+app.include_router(profiles.router, prefix=API)
 app.include_router(ws.router, prefix=API)

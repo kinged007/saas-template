@@ -10,6 +10,38 @@ export type Workspace = {
   created_at?: string;
 };
 
+export type UserProfile = {
+  id: string;
+  user_id: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  bio?: string | null;
+  phone_number?: string | null;
+  timezone?: string | null;
+  locale?: string | null;
+  date_of_birth?: string | null;
+  website_url?: string | null;
+  location?: string | null;
+  custom_data: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+} & Record<string, unknown>;
+
+export function getProfileField(
+  profile: UserProfile | null | undefined,
+  key: string,
+  fallback: unknown = null
+): unknown {
+  if (!profile) return fallback ?? null;
+  if (key === "__proto__" || key === "constructor" || key === "prototype") return fallback ?? null;
+  const top = (profile as Record<string, unknown>)[key];
+  if (top !== undefined) return top;
+  if (profile.custom_data && (profile.custom_data as Record<string, unknown>)[key] !== undefined) {
+    return (profile.custom_data as Record<string, unknown>)[key];
+  }
+  return fallback ?? null;
+}
+
 export type Identity = {
   id: string;
   email: string;
@@ -19,6 +51,7 @@ export type Identity = {
   permissions: string[];
   /** Bootstrap superuser (SUPERADMIN_EMAIL): manages global scheduled jobs. */
   is_superuser?: boolean;
+  profile?: UserProfile;
 };
 
 export type Role = {

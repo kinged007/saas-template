@@ -44,6 +44,7 @@ import {
   LogOut,
   Mail,
   Plus,
+  Settings,
   ShieldCheck,
   Users,
 } from "lucide-react";
@@ -185,6 +186,10 @@ function UserMenu() {
           <CircleUser className="h-4 w-4" />
           {identity?.display_name ?? ""}
         </DropdownMenuLabel>
+        <DropdownMenuItem onClick={() => navigate("/settings/profile")}>
+          <Settings />
+          Profile Settings
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => navigate("/invitations")}>
           <Mail />
