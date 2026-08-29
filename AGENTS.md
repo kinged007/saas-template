@@ -56,3 +56,17 @@ If any source file shows ⚠ in a wiki article, re-run `npx codesight --wiki` be
 **Not yet canonical (migrate to the patterns above when touched):** RolesPage, MembersPage, WorkspaceCreatePage, ReceivedInvitationsPage (use `PageHeader`/`useCreate`/dialogs instead of views + `useForm`).
 
 **Dev notes:** Vite's proxy rule is `"/api/"` (trailing slash) — a bare `"/api"` prefix would also swallow SPA routes like `/api-keys` and `/api-keys/create`, forwarding them to the backend as 404s on hard refresh. Frontend validation: `npm run build` (runs `tsc --noEmit` first). No web lint script.
+
+## Quick start (development — all terminal, no docker)
+
+The dev stack is self-contained: the API embeds PostgreSQL (via `pgserver`,
+real Postgres 16 binaries, data in `~/.local/share/saas-template/pgdata`) and
+consumes events asynchronously in-process. Switching to NATS JetStream is a
+single env var swap (`EVENT_BUS_DRIVER=nats`).
+
+```bash
+make setup  # one-time: installs uv + Node.js if missing (tries fnm, then apt, then nvm)
+make dev    # install deps, migrate, seed, then run api (:8000) + web (:5173)
+```
+
+For more commands, read README.md
