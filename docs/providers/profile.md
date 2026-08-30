@@ -24,9 +24,9 @@ Serializers `profile_to_dict` / `public_projection` in `apps/api/src/services/se
 
 ## Frontend
 
-- `UserProfile` type + `getProfileField(profile,key,fallback?)` in `apps/web/src/types.ts:1` — column wins over `custom_data`, fallback `?? null`.
+- `UserProfile` type + `getProfileField(profile,key,fallback?)` in `apps/web/src/types.ts:1` — column wins over `custom_data`, fallback `?? null`. `custom_data` keys are **developer-defined**, not user-editable; forks add dedicated inputs that map to `custom_data` via `getProfileField`.
 - `useProfile` / `useUpdateProfile` / `useExportProfile` / `useDeleteAccount` in `apps/web/src/hooks/useProfile.ts:1` — `useCustom` relative to `/api/v1`, invalidates `auth` + `data` caches.
-- Settings page `apps/web/src/pages/settings/ProfileSettingsPage.tsx:1` — shadcn `Form` + `zodResolver`, 9 fields + `avatar_url` URL input + key-value `custom_data` editor (null deletes), `successNotification`, `errorNotification:false` rendering `detail` once.
+- Settings page `apps/web/src/pages/settings/ProfileSettingsPage.tsx:1` — shadcn `Form` + `zodResolver`, 9 fields + `avatar_url` URL input, `timezone` dropdown (full IANA list via `Intl.supportedValuesOf`, preselected with `Intl.DateTimeFormat().resolvedOptions().timeZone`) and `locale` dropdown (English `en` only for now). No generic `custom_data` key-value editor — custom fields are rendered as dedicated inputs in forks. `successNotification`, `errorNotification:false` rendering `detail` once.
 
 ## 3-Step Extension Recipe
 
