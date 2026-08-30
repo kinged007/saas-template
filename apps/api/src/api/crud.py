@@ -128,6 +128,14 @@ def parse_query(request: Request, *, max_limit: int = 100) -> QuerySpec:
 
 def _coerce(column: ColumnElement, value: str) -> Any:
     """Best-effort type coercion so comparisons work on typed columns."""
+    from sqlalchemy import Boolean
+
+    if isinstance(column.type, Boolean):
+        if value.strip().lower() in ("true", "1"):
+            return True
+        if value.strip().lower() in ("false", "0"):
+            return False
+        raise InvalidQuery(f"invalid boolean value: {value}")
     for candidate in (int, float):
         try:
             return candidate(value)

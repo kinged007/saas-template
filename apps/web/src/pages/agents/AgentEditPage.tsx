@@ -102,9 +102,13 @@ export function AgentEditPage() {
   } = form;
   const record = query?.data?.data as Agent | undefined;
 
+  // Seed the form once. `form` is a new object every render, so depending on it
+  // here would re-run this effect → reset → re-render → loop ("Maximum update depth").
+  const seededRef = React.useRef(false);
   React.useEffect(() => {
-    if (record) {
-      form.reset({
+    if (!record || seededRef.current) return;
+    seededRef.current = true;
+    form.reset({
         name: record.name ?? "",
         slug: record.slug ?? "",
         description: record.description ?? "",
@@ -127,8 +131,7 @@ export function AgentEditPage() {
         is_active: record.is_active ?? true,
         skills: record.skills ?? [],
       });
-    }
-  }, [record, form]);
+  }, [record]);
 
   const mcpServers = useWatch({ control: form.control, name: "mcp_servers" }) ?? [];
   const nameVal = useWatch({ control: form.control, name: "name" });

@@ -169,3 +169,29 @@ async def test_missing_workspace_header_400(app_client):
     await create_workspace(client, owner)
     r = await client.get("/api/v1/agents", headers=auth_headers(owner))
     assert r.status_code == 400
+
+
+async def test_list_agents_bool_filter(app_client):
+    """`is_active=true` (simple-rest flat filter) must not 500 — bool columns coerce."""
+    client = app_client
+    owner = await register_user(client, "bool-owner@example.com")
+    ws = await create_workspace(client, owner)
+    hdr = ws_headers(owner, ws["id"])
+
+    r = await client.post("/api/v1/agents", json={"name": "Active One"}, headers=hdr)
+    assert r.status_code == 201, r.text
+    r = await client.post("/api/v1/agents", json={"name": "Sleepy", "is_active": False}, headers=hdr)
+    assert r.status_code == 201, r.text
+
+    r = await client.get("/api/v1/agents?is_active=true", headers=hdr)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body) == 1 and body[0]["name"] == "Active One"
+
+    r = await client.get("/api/v1/agents?is_active=false", headers=hdr)
+    assert r.status_code == 200, r.text
+    assert len(r.json()) == 1 and r.json()[0]["name"] == "Sleepy"
+
+    # invalid bool value → 422, not 500
+    r = await client.get("/api/v1/agents?is_active=banana", headers=hdr)
+    assert r.status_code == 422
