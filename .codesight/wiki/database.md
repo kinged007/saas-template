@@ -63,6 +63,7 @@ pk: `id` (str)
 - `workspace_id`: str _(index)_
 - `created_by_user_id`: str _(index)_
 - `title`: String _(nullable)_
+- `entity_type`: String _(default, index)_
 - `last_message_at`: DateTime _(nullable, index)_
 - `last_message_preview`: String _(nullable)_
 
@@ -80,6 +81,7 @@ pk: `id` (str)
 - `last_read_at`: DateTime _(nullable)_
 - `last_read_message_id`: unknown _(nullable)_
 - `archived_at`: DateTime _(nullable)_
+- `agent_session_ref`: String _(nullable)_
 
 ### Message
 
@@ -266,12 +268,13 @@ pk: `id` (str)
 
 Read and edit these files when adding columns, creating migrations, or changing relations:
 
-- `apps/api/src/db/session.py` — imported by **36** files
+- `apps/api/src/db/session.py` — imported by **37** files
 - `apps/api/src/models/workspace.py` — imported by **22** files
 - `apps/api/src/models/core.py` — imported by **13** files
 - `apps/api/src/db/base.py` — imported by **12** files
 - `apps/api/src/schemas/api.py` — imported by **11** files
 - `apps/api/src/models/api_key.py` — imported by **10** files
+- `apps/api/src/models/conversation.py` — imported by **8** files
 - `apps/api/src/models/jobs.py` — imported by **8** files
 
 ---

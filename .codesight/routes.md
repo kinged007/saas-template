@@ -19,6 +19,7 @@
 - `PATCH` `/{conversation_id}/unread` params(conversation_id)
 - `PATCH` `/{conversation_id}/archive` params(conversation_id)
 - `GET` `/{conversation_id}/messages` params(conversation_id) → in: st
+- `GET` `/{conversation_id}/session-history` params(conversation_id) → in: st [auth, db]
 - `POST` `/{conversation_id}/messages` params(conversation_id) → in: ConversationCreate
 - `POST` `/accept` params() → in: InvitationCreate [auth, db]
 - `GET` `/mine` params()

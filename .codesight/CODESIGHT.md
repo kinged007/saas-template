@@ -3,9 +3,9 @@
 > **Stack:** fastapi | sqlalchemy | react | typescript
 > **Monorepo:** api, saas-template-web
 
-> 61 routes | 19 models | 68 components | 118 lib files | 33 env vars | 5 middleware | 26% test coverage
-> **Token savings:** this file is ~12,500 tokens. Without it, AI exploration would cost ~106,600 tokens. **Saves ~94,100 tokens per conversation.**
-> **Last scanned:** 2026-08-30 22:05 — re-run after significant changes
+> 62 routes | 19 models | 68 components | 122 lib files | 33 env vars | 5 middleware | 26% test coverage
+> **Token savings:** this file is ~12,600 tokens. Without it, AI exploration would cost ~108,200 tokens. **Saves ~95,600 tokens per conversation.**
+> **Last scanned:** 2026-08-30 23:12 — re-run after significant changes
 
 ---
 
@@ -30,6 +30,7 @@
 - `PATCH` `/{conversation_id}/unread` params(conversation_id)
 - `PATCH` `/{conversation_id}/archive` params(conversation_id)
 - `GET` `/{conversation_id}/messages` params(conversation_id) → in: st
+- `GET` `/{conversation_id}/session-history` params(conversation_id) → in: st [auth, db]
 - `POST` `/{conversation_id}/messages` params(conversation_id) → in: ConversationCreate
 - `POST` `/accept` params() → in: InvitationCreate [auth, db]
 - `GET` `/mine` params()
@@ -104,6 +105,7 @@
 - workspace_id: str (index)
 - created_by_user_id: str (index)
 - title: String (nullable)
+- entity_type: String (default, index)
 - last_message_at: DateTime (nullable, index)
 - last_message_preview: String (nullable)
 
@@ -118,6 +120,7 @@
 - last_read_at: DateTime (nullable)
 - last_read_message_id: unknown (nullable)
 - archived_at: DateTime (nullable)
+- agent_session_ref: String (nullable)
 
 ### Message
 - id: str (pk, default)
@@ -564,18 +567,22 @@
 - `apps/api/alembic/versions/0006_user_profiles.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0007_agents.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0008_workspace_settings.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0009_chat_entity_and_session_ref.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/src/agents/handlers/base.py`
   - class AgentRequest
   - class AgentContext
   - class AgentEvent
   - class AgentHandler
+- `apps/api/src/agents/handlers/chat.py` — class ChatHandler
 - `apps/api/src/agents/registry.py` — function register_handler: (handler) -> None, function get_handler: (entity_type) -> AgentHandler | None
 - `apps/api/src/agents/runners/base.py`
   - class RunSpec
   - class RunHandle
   - class AgentEvent
   - class RunnerService
+- `apps/api/src/agents/runners/factory.py` — function build_runner: () -> RunnerService
 - `apps/api/src/agents/runners/local.py` — class LocalTmpRunner
+- `apps/api/src/agents/runners/vercel.py` — class VercelSandboxRunner
 - `apps/api/src/agents/sessions/store.py` — class SessionStore
 - `apps/api/src/api/crud.py`
   - function parse_query: (request, *, max_limit) -> QuerySpec
@@ -849,38 +856,38 @@
 
 ## Most Imported Files (change these carefully)
 
-- `apps/api/src/db/session.py` — imported by **36** files
+- `apps/api/src/db/session.py` — imported by **37** files
 - `apps/web/src/types.ts` — imported by **23** files
 - `apps/api/src/models/workspace.py` — imported by **22** files
-- `apps/api/src/settings.py` — imported by **18** files
+- `apps/api/src/settings.py` — imported by **20** files
 - `apps/api/src/events/bus.py` — imported by **18** files
+- `apps/api/src/events/subjects.py` — imported by **15** files
 - `apps/api/src/api/deps.py` — imported by **15** files
 - `apps/api/src/core/permissions.py` — imported by **15** files
-- `apps/api/src/events/subjects.py` — imported by **14** files
-- `apps/api/tests/conftest.py` — imported by **14** files
+- `apps/api/tests/conftest.py` — imported by **15** files
 - `apps/api/src/models/core.py` — imported by **13** files
 - `apps/api/src/db/base.py` — imported by **12** files
+- `apps/api/src/events/publisher.py` — imported by **12** files
 - `apps/api/src/services/workspaces.py` — imported by **12** files
 - `apps/api/src/core/dates.py` — imported by **12** files
 - `apps/api/src/schemas/api.py` — imported by **11** files
-- `apps/api/src/events/publisher.py` — imported by **11** files
 - `apps/api/src/models/api_key.py` — imported by **10** files
 - `apps/api/src/api/crud.py` — imported by **10** files
+- `apps/api/src/models/conversation.py` — imported by **8** files
 - `apps/api/src/services/serializers.py` — imported by **8** files
 - `apps/api/src/models/jobs.py` — imported by **8** files
-- `apps/api/src/core/security/crypto.py` — imported by **8** files
 
 ## Import Map (who imports what)
 
-- `apps/api/src/db/session.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/agents.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/auth.py` +31 more
+- `apps/api/src/db/session.py` ← `apps/api/src/agents/handlers/chat.py`, `apps/api/src/api/deps.py`, `apps/api/src/api/routes/agents.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/audit.py` +32 more
 - `apps/web/src/types.ts` ← `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/NotificationCenter.tsx`, `apps/web/src/contexts/WorkspaceContext.tsx`, `apps/web/src/hooks/useProfile.ts` +18 more
 - `apps/api/src/models/workspace.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py`, `apps/api/src/api/routes/notifications.py` +17 more
-- `apps/api/src/settings.py` ← `apps/api/alembic/env.py`, `apps/api/src/agents/runners/local.py`, `apps/api/src/agents/sessions/store.py`, `apps/api/src/container.py`, `apps/api/src/core/security/tokens.py` +13 more
+- `apps/api/src/settings.py` ← `apps/api/alembic/env.py`, `apps/api/src/agents/handlers/chat.py`, `apps/api/src/agents/runners/factory.py`, `apps/api/src/agents/runners/local.py`, `apps/api/src/agents/sessions/store.py` +15 more
 - `apps/api/src/events/bus.py` ← `apps/api/src/container.py`, `apps/api/src/events/factory.py`, `apps/api/src/events/inprocess.py`, `apps/api/src/events/nats.py`, `apps/api/src/events/publisher.py` +13 more
+- `apps/api/src/events/subjects.py` ← `apps/api/src/agents/handlers/chat.py`, `apps/api/src/events/nats.py`, `apps/api/src/events/publisher.py`, `apps/api/src/services/agents.py`, `apps/api/src/services/api_keys.py` +10 more
 - `apps/api/src/api/deps.py` ← `apps/api/src/api/routes/agents.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/conversations.py` +10 more
 - `apps/api/src/core/permissions.py` ← `apps/api/src/api/routes/agents.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/conversations.py`, `apps/api/src/api/routes/invitations.py` +10 more
-- `apps/api/src/events/subjects.py` ← `apps/api/src/events/nats.py`, `apps/api/src/events/publisher.py`, `apps/api/src/services/agents.py`, `apps/api/src/services/api_keys.py`, `apps/api/src/services/conversations.py` +9 more
-- `apps/api/tests/conftest.py` ← `apps/api/tests/test_agents.py`, `apps/api/tests/test_api_key_security.py`, `apps/api/tests/test_api_keys.py`, `apps/api/tests/test_audit_workflow.py`, `apps/api/tests/test_auth.py` +9 more
+- `apps/api/tests/conftest.py` ← `apps/api/tests/test_agents.py`, `apps/api/tests/test_api_key_security.py`, `apps/api/tests/test_api_keys.py`, `apps/api/tests/test_audit_workflow.py`, `apps/api/tests/test_auth.py` +10 more
 - `apps/api/src/models/core.py` ← `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/notifications.py`, `apps/api/src/jobs/builtin.py`, `apps/api/src/models/__init__.py`, `apps/api/src/seed.py` +8 more
 
 ---
@@ -888,7 +895,7 @@
 # Test Coverage
 
 > **26%** of routes and models are covered by tests
-> 25 test files found
+> 26 test files found
 
 ## Covered Routes
 

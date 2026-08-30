@@ -1,0 +1,361 @@
+from __future__ import annotations
+
+import logging
+import uuid
+from typing import AsyncIterator
+
+from sqlalchemy import select
+
+from src.agents.handlers.base import AgentContext, AgentEvent, AgentRequest
+from src.agents.runners.base import RunSpec
+from src.db.session import SessionFactory
+from src.events.publisher import publish_audit, publish_event
+from src.events.subjects import Subjects
+from src.settings import settings
+
+logger = logging.getLogger(__name__)
+
+
+class ChatHandler:
+    """Phase 5 handler: deterministic echo loop + SessionStore enrichment + final reply persistence.
+
+    No real LLM yet — proves the on_request → collect_context → execute → post_process
+    pipeline end-to-end (message → agents.requests.chat → agent message visible in thread).
+    Tool/permission pause, memory injection, platform MCP all remain TODO (Phases 7-8).
+    """
+
+    entity_type = "chat"
+    queue_subject = Subjects.AGENTS_REQUEST_CHAT
+    inject_platform_mcp = False
+
+    def __init__(self, bus=None, secret_store=None) -> None:
+        self._bus = bus
+        self._secret_store = secret_store
+
+    # ---------------------------------------------------------------- entry
+
+    async def on_request(self, req: AgentRequest) -> None:
+        try:
+            ctx = await self.collect_context(req)
+            result: dict | None = None
+            events: list[AgentEvent] = []
+            async for ev in self.execute(ctx):
+                events.append(ev)
+                # stream each token/tool event transient so realtime fanout can push it
+                try:
+                    await publish_event(
+                        self._bus,
+                        Subjects.AGENTS_RUN_EVENT,
+                        {
+                            "workspace_id": req.workspace_id,
+                            "conversation_id": req.conversation_id,
+                            "agent_id": req.agent_id,
+                            "message_id": req.message_id,
+                            "event": {"type": ev.type, "data": ev.data},
+                        },
+                        transient=True,
+                    )
+                except Exception:
+                    logger.exception("failed to publish agents.run.event for %s", req.message_id)
+            result = {"events": [e.data for e in events]}
+            await self.post_process(req, ctx, events, result)
+        except Exception:
+            logger.exception("ChatHandler on_request failed for %s", req.message_id)
+            # publish error so frontend can show failure
+            try:
+                await publish_event(
+                    self._bus,
+                    Subjects.AGENTS_RUN_EVENT,
+                    {
+                        "workspace_id": req.workspace_id,
+                        "conversation_id": req.conversation_id,
+                        "agent_id": req.agent_id,
+                        "message_id": req.message_id,
+                        "event": {"type": "error", "data": {"message": "agent execution failed"}},
+                    },
+                    transient=True,
+                )
+            except Exception:
+                pass
+
+    # ---------------------------------------------------------------- phases
+
+    async def collect_context(self, req: AgentRequest) -> AgentContext:
+        """Load profile, recent history, resolve model, load session_ref + env secrets."""
+        async with SessionFactory() as session:
+            from src.models.agent import Agent
+            from src.models.conversation import Conversation, ConversationParticipant, Message
+            from src.models.workspace_setting import WorkspaceSetting
+
+            agent = await session.get(Agent, req.agent_id)
+            profile = None
+            session_ref: str | None = None
+            if agent is not None:
+                # sanity: workspace match (handler never trusts bus payload alone)
+                if agent.workspace_id != req.workspace_id:
+                    profile = None
+                else:
+                    profile = {
+                        "id": agent.id,
+                        "name": agent.name,
+                        "system_prompt": agent.system_prompt,
+                        "model": agent.model,
+                        "temperature": agent.temperature,
+                        "max_tokens": agent.max_tokens,
+                    }
+                    # load per-participant session_ref (unique per agent in this conversation)
+                    res = await session.execute(
+                        select(ConversationParticipant.agent_session_ref).where(
+                            ConversationParticipant.conversation_id == req.conversation_id,
+                            ConversationParticipant.participant_type == "agent",
+                            ConversationParticipant.participant_id == req.agent_id,
+                        )
+                    )
+                    row = res.scalar_one_or_none()
+                    # scalar may be string or wrapped
+                    if row is not None:
+                        session_ref = row if isinstance(row, str) else str(row)
+
+            # last 20 messages as context (cheap, good enough for Phase 5)
+            hist: list[dict] = []
+            if req.conversation_id:
+                res = await session.execute(
+                    select(Message)
+                    .where(Message.conversation_id == req.conversation_id)
+                    .order_by(Message.created_at.desc())
+                    .limit(20)
+                )
+                msgs = list(reversed(list(res.scalars().all())))
+                for m in msgs:
+                    hist.append({"sender_type": m.sender_type, "sender_id": m.sender_id, "body": m.body})
+
+            # model fallback: agent.model → workspace agents.default_model → settings.agent_default_model
+            model = profile.get("model") if profile else None
+            if not model:
+                res = await session.execute(
+                    select(WorkspaceSetting).where(
+                        WorkspaceSetting.workspace_id == req.workspace_id,
+                        WorkspaceSetting.key == "agents.default_model",
+                    )
+                )
+                row = res.scalar_one_or_none()
+                if row is not None and isinstance(row.value, str) and row.value.strip():
+                    model = row.value.strip()
+                elif row is not None and isinstance(row.value, dict) and isinstance(row.value.get("value"), str):
+                    v = row.value["value"]
+                    if isinstance(v, str) and v.strip():
+                        model = v
+            if not model and settings.agent_default_model:
+                model = settings.agent_default_model
+
+            # env secrets for this agent (host-side only, never logged)
+            env: dict[str, str] = {}
+            if self._secret_store is not None:
+                try:
+                    prefix = f"agent:{req.agent_id}:"
+                    records = await self._secret_store.list_for_workspace(req.workspace_id, prefix=prefix)
+                    for r in records:
+                        k = r.key[len(prefix):] if r.key.startswith(prefix) else r.key
+                        # need decrypt: get each secret value via get()
+                        rec = await self._secret_store.get(workspace_id=req.workspace_id, key=r.key)
+                        if rec is not None and rec.value:
+                            env[k] = rec.value
+                except Exception:
+                    logger.warning("failed to load agent env for %s", req.agent_id, exc_info=True)
+
+        return AgentContext(request=req, profile=profile, session_ref=session_ref, history=hist, model=model, env=env)  # type: ignore
+
+    async def execute(self, ctx: AgentContext) -> AsyncIterator[AgentEvent]:
+        """Deterministic echo via LocalTmpRunner (real LLM deferred).
+
+        The runner contract is provision → execute(payload) → close. Phase 5 just
+        yields a synthetic token stream + done so SessionStore + post_process are tested.
+        """
+        # Resolve the user message that triggered this run
+        trigger_body = ""
+        if getattr(ctx, "history", None):
+            # last user message is the trigger; history includes it
+            for h in reversed(ctx.history):  # type: ignore
+                if h.get("sender_type") == "user":
+                    trigger_body = h.get("body", "")
+                    break
+
+        name = (ctx.profile or {}).get("name") or "Agent"
+        reply = f"[{name}] echo: {trigger_body[:500]}" if trigger_body else f"[{name}] hello — no message history yet."
+
+        # Use runner for provision/close lifecycle even on echo (proves isolation boundary)
+        try:
+            from src.agents.runners.local import LocalTmpRunner
+
+            runner = LocalTmpRunner()
+            spec = RunSpec(
+                workspace_id=ctx.request.workspace_id,
+                agent_id=ctx.request.agent_id,
+                conversation_id=ctx.request.conversation_id,
+                session_id=ctx.session_ref,
+                model=getattr(ctx, "model", None),
+                env=getattr(ctx, "env", {}) or {},
+            )
+            handle = await runner.provision(spec)
+            try:
+                # Stream token-by-token so frontend can show incremental UI
+                for ch in reply:
+                    yield AgentEvent(type="token", data={"text": ch})
+                yield AgentEvent(type="done", data={"run_id": handle.run_id})
+            finally:
+                await runner.close(handle)
+        except Exception:
+            logger.exception("ChatHandler execute failed")
+            yield AgentEvent(type="error", data={"message": "execution failed"})
+            yield AgentEvent(type="done", data={})
+
+        # history is carried via context for session persist
+
+    async def retrieve_session_history(self, req: AgentRequest) -> list[dict]:
+        if not req.workspace_id or not req.conversation_id or not req.agent_id:
+            return []
+        # session_id is the participant's agent_session_ref; if none, no history yet
+        async with SessionFactory() as session:
+            from src.models.conversation import ConversationParticipant
+
+            res = await session.execute(
+                select(ConversationParticipant.agent_session_ref).where(
+                    ConversationParticipant.conversation_id == req.conversation_id,
+                    ConversationParticipant.participant_type == "agent",
+                    ConversationParticipant.participant_id == req.agent_id,
+                )
+            )
+            ref = res.scalar_one_or_none()
+            if isinstance(ref, tuple):
+                ref = ref[0]
+            session_id = ref if isinstance(ref, str) and ref else None
+        if not session_id:
+            return []
+        from src.agents.sessions.store import SessionStore
+
+        store = SessionStore()
+        data = await store.read(req.workspace_id, req.agent_id, req.conversation_id, session_id)
+        return data or []
+
+    async def post_process(self, req: AgentRequest, ctx: AgentContext, events: list[AgentEvent], result: dict | None) -> None:
+        """Persist final assistant reply, update session_ref + SessionStore, audit, push."""
+        # Compose final text from token events
+        tokens = [e.data.get("text", "") for e in events if e.type == "token"]
+        body = "".join(tokens).strip()
+        if not body:
+            # fallback: last done's data may carry body
+            body = "…"
+
+        async with SessionFactory() as session:
+            from src.models.agent import Agent
+            from src.models.conversation import Conversation, ConversationParticipant, Message
+
+            agent = await session.get(Agent, req.agent_id)
+            if agent is None or agent.workspace_id != req.workspace_id:
+                logger.warning("post_process: agent %s not found in workspace %s", req.agent_id, req.workspace_id)
+                return
+            conv = await session.get(Conversation, req.conversation_id)
+            if conv is None or conv.workspace_id != req.workspace_id:
+                logger.warning("post_process: conversation %s not found", req.conversation_id)
+                return
+
+            # Persist agent message — the one thing that lands in messages (tools/thinking live in SessionStore)
+            msg = Message(
+                conversation_id=req.conversation_id,
+                sender_type="agent",
+                sender_id=req.agent_id,
+                sender_user_id=None,
+                sender_agent_id=req.agent_id,
+                body=body,
+            )
+            session.add(msg)
+            await session.flush()
+
+            # Session management: create/rotate agent_session_ref if missing
+            res = await session.execute(
+                select(ConversationParticipant).where(
+                    ConversationParticipant.conversation_id == req.conversation_id,
+                    ConversationParticipant.participant_type == "agent",
+                    ConversationParticipant.participant_id == req.agent_id,
+                )
+            )
+            participant = res.scalar_one_or_none()
+            session_id = None
+            if participant is not None:
+                session_id = participant.agent_session_ref
+                if not session_id:
+                    session_id = str(uuid.uuid4())
+                    participant.agent_session_ref = session_id
+            else:
+                # agent not participant — shouldn't happen (router filters) but be defensive
+                session_id = str(uuid.uuid4())
+
+            # Build collapsed enrichment steps (tool_call/thinking) for Phase 5: just token batch
+            steps: list[dict] = []
+            if tokens:
+                steps.append({"message_id": msg.id, "kind": "token_batch", "title": "Response", "content": body, "status": "done"})
+            # Append to history: keep prior steps + this turn
+            from src.agents.sessions.store import SessionStore as _Store
+
+            store = _Store()
+            prior = await store.read(req.workspace_id, req.agent_id, req.conversation_id, session_id) if session_id else None
+            history = list(prior) if prior else []
+            history.extend(steps)
+            if session_id:
+                await store.write(req.workspace_id, req.agent_id, req.conversation_id, session_id, history)
+
+            # bump conversation preview
+            from src.services.conversations import _plain_preview
+            from datetime import datetime, timezone
+
+            conv.last_message_at = datetime.now(timezone.utc)
+            conv.last_message_preview = _plain_preview(body)
+
+            await session.commit()
+            await session.refresh(msg)
+
+            sender_name = agent.name
+            sender_avatar = agent.avatar
+
+            # publish agent message live fanout so thread updates without reload
+            try:
+                await publish_event(
+                    self._bus,
+                    Subjects.CONVERSATION_MESSAGE_LIVE,
+                    {
+                        "workspace_id": req.workspace_id,
+                        "conversation_id": req.conversation_id,
+                        "message_id": msg.id,
+                        "sender_id": req.agent_id,
+                        "sender_type": "agent",
+                        "sender_name": sender_name,
+                        "sender_avatar_url": sender_avatar,
+                        "body": msg.body,
+                        "body_preview": body[:200],
+                        "created_at": msg.created_at.isoformat() if msg.created_at else None,
+                    },
+                    transient=True,
+                )
+            except Exception:
+                logger.exception("failed to publish agent message live")
+
+            # also durable notification pointer for mention semantics deferred — skip for now (agent reply is implicit)
+            try:
+                await publish_audit(
+                    self._bus,
+                    workspace_id=req.workspace_id,
+                    resource_type="message",
+                    resource_id=msg.id,
+                    action="message.created",
+                    actor_user_id=None,
+                    details={"conversation_id": req.conversation_id, "agent_id": req.agent_id},
+                )
+            except Exception:
+                pass
+
+    # stubs for permission flow (Phases 5 plan but deferred UI — no-op to satisfy Protocol)
+    async def pause_for_permission(self, req: AgentRequest, ctx: AgentContext, tool: str, args: dict) -> None:  # pragma: no cover
+        return
+
+    async def resume(self, req: AgentRequest, decision: dict) -> None:  # pragma: no cover
+        return

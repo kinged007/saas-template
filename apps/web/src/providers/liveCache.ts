@@ -151,7 +151,7 @@ export function applyMessageCreated(frame: unknown): void {
   const message = messageFromFrame(data);
   if (!message) return;
   const conversationId = message.conversation_id;
-  const isOwnMessage = data.sender_id !== undefined && data.sender_id === currentUserId();
+  const isOwnMessage = data.sender_type === "agent" ? false : (data.sender_id !== undefined && data.sender_id === currentUserId());
   const countsAsUnread = !isOwnMessage;
 
   // Read the cached unread state BEFORE patching the list entry.

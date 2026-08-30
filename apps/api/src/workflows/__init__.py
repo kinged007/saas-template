@@ -17,15 +17,13 @@ Registered subscriptions (subject → handler, fanout flag):
     apikeys.revoked                 → security/monitoring hook (TODO)
     jobs.execute                    → execute one scheduled-job run
     conversations.message.created   → persist notification pointers (bulk)
+    agents.requests.chat            → ChatHandler on_request (wakes agent)
 
   Fanout (every replica receives the event, realtime push):
     notifications.created           → push to the user's WebSocket sessions
     conversations.message.live      → push thread update to participants
     conversations.renamed           → push title change to participants
-
-The durable subscriptions run once per deployment (JetStream queue group);
-the fanout subscription runs in *every* replica so the WS push reaches the
-user regardless of which replica holds their socket.
+    agents.run.event                → push token/tool events to watchers
 """
 
 from __future__ import annotations
@@ -337,8 +335,6 @@ def build_workflows(
         """Fan-out conversation rename to participants."""
 
         participant_ids: list[str] | None = payload.get("participant_user_ids")
-        # If payload does not contain participant list (legacy service path with just workspace_id), fall back to no fan-out
-        # New service publishes without participant list for rename; we need to resolve participants from DB.
         if participant_ids is None:
             conversation_id = payload.get("conversation_id")
             workspace_id = payload.get("workspace_id")
@@ -393,9 +389,11 @@ def build_workflows(
     async def _route_to_agents(payload: dict, metadata) -> None:
         """Durable side-effect of `conversations.message.created`: fan out to `agents.requests.chat`.
 
-        Invoked inside `on_conversation_message` after notifications are persisted, so a
-        single durable consumer still owns the subject (no duplicate subscription).
+        Loop prevention: agent messages (sender_type == "agent") never route — otherwise
+        an agent reply would re-wake every agent including itself.
         """
+        if payload.get("sender_type") == "agent":
+            return
         conversation_id = payload.get("conversation_id")
         workspace_id = payload.get("workspace_id")
         message_id = payload.get("message_id")
@@ -416,7 +414,6 @@ def build_workflows(
             if not agent_participants:
                 return
             agent_ids = [p.participant_id for p in agent_participants]
-            # Filter to active agents only
             active_result = await session.execute(
                 select(Agent.id).where(Agent.id.in_(agent_ids), Agent.is_active.is_(True))
             )
@@ -424,7 +421,6 @@ def build_workflows(
             for p in agent_participants:
                 if p.participant_id not in active_ids:
                     continue
-                # Idempotency key is (conversation_id, message_id, agent_id) — caller de-duplicates
                 from src.events.publisher import publish_event as _publish
 
                 await _publish(
@@ -441,7 +437,6 @@ def build_workflows(
                 )
             logger.debug("routed message %s to %d agent(s) in %s", message_id, len(active_ids), conversation_id)
 
-    # Wrap the original on_conversation_message to also route to agents
     _orig_on_conversation_message = on_conversation_message
 
     async def on_conversation_message_with_routing(payload: dict, metadata) -> None:
@@ -452,26 +447,35 @@ def build_workflows(
             logger.exception("agent routing failed for message %s", payload.get("message_id"))
 
     async def on_agents_request_chat(payload: dict, metadata) -> None:
-        """Stub durable consumer for `agents.requests.chat` (Phase 4).
+        """Durable consumer: dispatch to ChatHandler.
 
-        Phase 5+ will replace this with the real handler dispatch (ChatHandler).
-        For now we log and fan out a transient run event so the streaming
-        plumbing can be exercised in tests.
+        Decoupled from the routing durable consumer so backpressure on one
+        agent run never blocks notification persistence.
         """
-        logger.info("agents.requests.chat stub received: %s", payload)
-        # Emit a transient run event for fanout plumbing (no-op in prod until handler exists)
         try:
-            from src.events.publisher import publish_event as _publish
+            from src.agents.handlers.base import AgentRequest
+            from src.agents.handlers.chat import ChatHandler
+            from src.secrets.factory import build_secret_store
 
-            await _publish(bus, Subjects.AGENTS_RUN_EVENT, payload, transient=True)
+            req = AgentRequest(
+                entity_type=payload.get("entity_type", "chat"),
+                conversation_id=payload["conversation_id"],
+                message_id=payload["message_id"],
+                agent_id=payload["agent_id"],
+                workspace_id=payload["workspace_id"],
+                triggering_user_id=payload.get("triggering_user_id") or payload.get("sender_id") or "",
+            )
+            handler = ChatHandler(bus=bus, secret_store=build_secret_store())
+            await handler.on_request(req)
+        except KeyError as exc:
+            logger.warning("agents.requests.chat missing key %s: %s", exc, payload)
         except Exception:
-            logger.exception("failed to publish agents.run.event stub")
+            logger.exception("agents.requests.chat handler failed for %s", payload)
 
     async def on_agents_run_event(payload: dict, metadata) -> None:
         """Fanout: push agent run events to watching users (every replica)."""
         workspace_id = payload.get("workspace_id")
         conversation_id = payload.get("conversation_id")
-        # Prefer explicit participant list if present, else resolve from DB
         participant_ids: list[str] | None = payload.get("participant_user_ids") or payload.get("user_ids")
         if participant_ids is None and conversation_id:
             async with SessionFactory() as session:
@@ -485,7 +489,6 @@ def build_workflows(
                 )
                 participant_ids = [r[0] for r in result.all()]
         if not participant_ids:
-            # Fallback: push to workspace members
             if not workspace_id:
                 return
             async with SessionFactory() as session:

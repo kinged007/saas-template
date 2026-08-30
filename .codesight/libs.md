@@ -229,18 +229,22 @@
 - `apps/api/alembic/versions/0006_user_profiles.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0007_agents.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0008_workspace_settings.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0009_chat_entity_and_session_ref.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/src/agents/handlers/base.py`
   - class AgentRequest
   - class AgentContext
   - class AgentEvent
   - class AgentHandler
+- `apps/api/src/agents/handlers/chat.py` — class ChatHandler
 - `apps/api/src/agents/registry.py` — function register_handler: (handler) -> None, function get_handler: (entity_type) -> AgentHandler | None
 - `apps/api/src/agents/runners/base.py`
   - class RunSpec
   - class RunHandle
   - class AgentEvent
   - class RunnerService
+- `apps/api/src/agents/runners/factory.py` — function build_runner: () -> RunnerService
 - `apps/api/src/agents/runners/local.py` — class LocalTmpRunner
+- `apps/api/src/agents/runners/vercel.py` — class VercelSandboxRunner
 - `apps/api/src/agents/sessions/store.py` — class SessionStore
 - `apps/api/src/api/crud.py`
   - function parse_query: (request, *, max_limit) -> QuerySpec

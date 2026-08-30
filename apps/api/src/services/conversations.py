@@ -11,6 +11,7 @@ from src.core.dates import now_utc
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
+from src.models.agent import Agent
 from src.models.conversation import Conversation, ConversationParticipant, Message
 from src.models.user_profile import UserProfile
 from src.models.workspace import User, Workspace, WorkspaceMember
@@ -118,7 +119,7 @@ class ConversationService:
 
     async def _participants_with_users(
         self, conversation_id: str
-    ) -> list[tuple[ConversationParticipant, User | None, UserProfile | None]]:
+    ) -> list[tuple[ConversationParticipant, User | None, UserProfile | None, Agent | None]]:
         result = await self._session.execute(
             select(ConversationParticipant).where(
                 ConversationParticipant.conversation_id == conversation_id
@@ -128,10 +129,10 @@ class ConversationService:
 
     async def _participants_for_conversations(
         self, conversation_ids: list[str]
-    ) -> dict[str, list[tuple[ConversationParticipant, User | None, UserProfile | None]]]:
+    ) -> dict[str, list[tuple[ConversationParticipant, User | None, UserProfile | None, Agent | None]]]:
         """Participants (with user details) for many conversations, in three
         queries total instead of two per conversation."""
-        grouped: dict[str, list[tuple[ConversationParticipant, User | None, UserProfile | None]]] = {}
+        grouped: dict[str, list[tuple[ConversationParticipant, User | None, UserProfile | None, Agent | None]]] = {}
         if not conversation_ids:
             return grouped
         result = await self._session.execute(
@@ -141,42 +142,58 @@ class ConversationService:
         )
         participants = list(result.scalars().all())
         user_ids = {p.participant_id for p in participants if p.participant_type == "user"}
+        agent_ids = {p.participant_id for p in participants if p.participant_type == "agent"}
         users: dict[str, User] = {}
         profiles: dict[str, UserProfile] = {}
+        agents: dict[str, Agent] = {}
         if user_ids:
             urows = await self._session.execute(select(User).where(User.id.in_(user_ids)))
             users = {u.id: u for u in urows.scalars().all()}
             prows = await self._session.execute(select(UserProfile).where(UserProfile.user_id.in_(user_ids)))
             profiles = {p.user_id: p for p in prows.scalars().all()}
+        if agent_ids:
+            arows = await self._session.execute(select(Agent).where(Agent.id.in_(agent_ids)))
+            agents = {a.id: a for a in arows.scalars().all()}
         for p in participants:
             if p.participant_type == "user":
                 u = users.get(p.participant_id)
                 prof = profiles.get(p.participant_id)
-                grouped.setdefault(p.conversation_id, []).append((p, u, prof))
+                grouped.setdefault(p.conversation_id, []).append((p, u, prof, None))
+            elif p.participant_type == "agent":
+                a = agents.get(p.participant_id)
+                grouped.setdefault(p.conversation_id, []).append((p, None, None, a))
             else:
-                grouped.setdefault(p.conversation_id, []).append((p, None, None))
+                grouped.setdefault(p.conversation_id, []).append((p, None, None, None))
         return grouped
 
     async def _attach_users(
         self, participants: list[ConversationParticipant]
-    ) -> list[tuple[ConversationParticipant, User | None, UserProfile | None]]:
-        """Join display-name/avatar data onto participant rows (users + profiles)."""
+    ) -> list[tuple[ConversationParticipant, User | None, UserProfile | None, Agent | None]]:
+        """Join display-name/avatar data onto participant rows (users + profiles + agents)."""
         user_ids = {p.participant_id for p in participants if p.participant_type == "user"}
+        agent_ids = {p.participant_id for p in participants if p.participant_type == "agent"}
         users: dict[str, User] = {}
         profiles: dict[str, UserProfile] = {}
+        agents: dict[str, Agent] = {}
         if user_ids:
             urows = await self._session.execute(select(User).where(User.id.in_(user_ids)))
             users = {u.id: u for u in urows.scalars().all()}
             prows = await self._session.execute(select(UserProfile).where(UserProfile.user_id.in_(user_ids)))
             profiles = {p.user_id: p for p in prows.scalars().all()}
-        result: list[tuple[ConversationParticipant, User | None, UserProfile | None]] = []
+        if agent_ids:
+            arows = await self._session.execute(select(Agent).where(Agent.id.in_(agent_ids)))
+            agents = {a.id: a for a in arows.scalars().all()}
+        result: list[tuple[ConversationParticipant, User | None, UserProfile | None, Agent | None]] = []
         for p in participants:
             if p.participant_type == "user":
                 u = users.get(p.participant_id)
                 prof = profiles.get(p.participant_id)
-                result.append((p, u, prof))
+                result.append((p, u, prof, None))
+            elif p.participant_type == "agent":
+                a = agents.get(p.participant_id)
+                result.append((p, None, None, a))
             else:
-                result.append((p, None, None))
+                result.append((p, None, None, None))
         return result
 
     def _unread_join_condition(self, user_id: str, *, active_only: bool):
@@ -233,19 +250,24 @@ class ConversationService:
     def _conversation_to_dict(
         self,
         conv: Conversation,
-        participants: list[tuple[ConversationParticipant, User | None, UserProfile | None]] | list[tuple[ConversationParticipant, User | None]],
+        participants: list[tuple[ConversationParticipant, User | None, UserProfile | None, Agent | None]] | list[tuple[ConversationParticipant, User | None]],
         unread_count: int,
         is_archived: bool,
         message_count: int | None = None,
     ) -> dict:
         part_list = []
         for item in participants:
-            # Support both 2-tuple (legacy) and 3-tuple (with profile)
-            if len(item) == 3:  # type: ignore
-                p, u, prof = item  # type: ignore
+            # Support both 2/3/4-tuple (legacy vs with profile vs with agent)
+            p: ConversationParticipant
+            u: User | None = None
+            prof: UserProfile | None = None
+            ag: Agent | None = None
+            if len(item) == 4:  # type: ignore
+                p, u, prof, ag = item  # type: ignore
+            elif len(item) == 3:  # type: ignore
+                p, u, prof = item  # type: ignore  # type: ignore
             else:
                 p, u = item  # type: ignore
-                prof = None
             if p.participant_type == "user" and u:
                 # Derive display as First L. from profile if available, else stored display_name
                 display = u.display_name
@@ -268,15 +290,32 @@ class ConversationService:
                         "email": u.email,
                     }
                 )
-            else:
+            elif p.participant_type == "agent" and ag is not None:
                 part_list.append(
                     {
                         "type": p.participant_type,
                         "id": p.participant_id,
-                        "display_name": p.participant_id,
+                        "display_name": ag.name,
                         "first_name": None,
                         "last_name": None,
-                        "avatar_url": None,
+                        "avatar_url": ag.avatar,
+                        "email": None,
+                    }
+                )
+            else:
+                # fallback: participant row exists but agent/user not found (deleted) — keep row
+                label = ag.name if ag else p.participant_id
+                if p.participant_type == "agent" and ag is None:
+                    # agent row may not have been loaded (e.g. deleted); still show id
+                    label = p.participant_id
+                part_list.append(
+                    {
+                        "type": p.participant_type,
+                        "id": p.participant_id,
+                        "display_name": label,
+                        "first_name": None,
+                        "last_name": None,
+                        "avatar_url": ag.avatar if ag else None,
                         "email": None,
                     }
                 )
@@ -284,6 +323,7 @@ class ConversationService:
             "id": conv.id,
             "workspace_id": conv.workspace_id,
             "title": conv.title,
+            "entity_type": getattr(conv, "entity_type", "chat"),
             "created_by_user_id": conv.created_by_user_id,
             "last_message_at": conv.last_message_at.isoformat() if conv.last_message_at else None,
             "last_message_preview": conv.last_message_preview,
@@ -327,6 +367,8 @@ class ConversationService:
         creator: User,
         title: str | None,
         participant_user_ids: list[str],
+        participant_agent_ids: list[str] | None = None,
+        entity_type: str | None = None,
         initial_message: str,
         ip_address: str | None = None,
     ) -> tuple[dict, dict]:
@@ -338,6 +380,7 @@ class ConversationService:
             raise ConversationError("initial message must be at most 5000 characters")
         if title is not None and len(title.strip()) > 300:
             raise ConversationError("title must be at most 300 characters")
+        agent_ids = [a.strip() for a in (participant_agent_ids or []) if a and a.strip()]
         # Deduplicate participant_user_ids, remove creator if present (will re-add)
         others = []
         seen = set()
@@ -350,10 +393,11 @@ class ConversationService:
             seen.add(uid)
             others.append(uid)
 
-        # Need at least 1 other (so total >=2)
-        if len(others) < 1:
+        # Need at least 1 other (user or agent) (so total >=2)
+        total_others = len(others) + len(agent_ids)
+        if total_others < 1:
             raise ConversationError("at least one other participant is required")
-        total = len(others) + 1
+        total = total_others + 1
         if total > 20:
             raise ConversationError("too many participants (max 20)")
         # Workspace membership check for creator
@@ -371,6 +415,18 @@ class ConversationService:
             missing = set(others) - found
             if missing:
                 raise ConversationError("one or more participants are not members of this workspace")
+        # Validate agent participants: same workspace, is_active
+        if agent_ids:
+            result = await self._session.execute(
+                select(Agent).where(Agent.id.in_(agent_ids))
+            )
+            found_agents = {a.id: a for a in result.scalars().all()}
+            for aid in agent_ids:
+                ag = found_agents.get(aid)
+                if ag is None or ag.workspace_id != workspace_id:
+                    raise ConversationError("one or more agents not found in this workspace")
+                if not ag.is_active:
+                    raise ConversationError("one or more agents are inactive")
 
         # Resolve title
         clean_title = title.strip() if title and title.strip() else None
@@ -382,6 +438,10 @@ class ConversationService:
                 id_to_name = {u.id: u.display_name for u in urows.scalars().all()}
                 for uid in others:
                     names.append(id_to_name.get(uid, "Unknown"))
+            if agent_ids:
+                arows = await self._session.execute(select(Agent).where(Agent.id.in_(agent_ids)))
+                for a in arows.scalars().all():
+                    names.append(a.name)
             if names:
                 # Limit to 3 names
                 if len(names) > 3:
@@ -398,6 +458,7 @@ class ConversationService:
             workspace_id=workspace_id,
             created_by_user_id=creator.id,
             title=clean_title,
+            entity_type=(entity_type or "chat")[:30] if entity_type else "chat",
             last_message_at=now,
             last_message_preview=preview,
         )
@@ -417,6 +478,19 @@ class ConversationService:
                 joined_at=now,
                 last_read_at=now if is_creator else None,
                 last_read_message_id=None,  # set after message
+                archived_at=None,
+            )
+            self._session.add(p)
+        for aid in agent_ids:
+            p = ConversationParticipant(
+                conversation_id=conv.id,
+                participant_type="agent",
+                participant_id=aid,
+                agent_id=aid,
+                user_id=None,
+                joined_at=now,
+                last_read_at=None,
+                last_read_message_id=None,
                 archived_at=None,
             )
             self._session.add(p)
@@ -453,8 +527,8 @@ class ConversationService:
         await self._session.refresh(msg)
 
         unread_for_creator = 0
-        part_for_creator = next((p for p, *_ in participants if p.participant_id == creator.id), None)  # type: ignore
-        is_arch = bool(part_for_creator.archived_at) if part_for_creator else False
+        part_for_creator = next((p for p, *_ in participants if p.participant_type == "user" and p.participant_id == creator.id), None)  # type: ignore
+        is_arch = bool(part_for_creator.archived_at) if part_for_creator else False  # type: ignore
         conv_dict = self._conversation_to_dict(conv, participants, unread_for_creator, is_arch, message_count=1)
         msg_dict = self._message_to_dict(
             msg, sender_name=creator.display_name, sender_avatar=creator.avatar_url, sender_email=creator.email
@@ -484,7 +558,7 @@ class ConversationService:
             resource_id=conv.id,
             action="conversation.created",
             actor_user_id=creator.id,
-            details={"title": clean_title, "participant_count": len(all_ids)},
+            details={"title": clean_title, "participant_count": len(all_ids) + len(agent_ids)},
             ip_address=ip_address,
         )
         # Also publish message created audit
@@ -844,23 +918,40 @@ class ConversationService:
         rows = await self._session.execute(stmt)
         msgs = list(rows.scalars().all())
         # Fetch sender names
-        sender_ids = {m.sender_id for m in msgs if m.sender_type == "user"}
+        sender_user_ids = {m.sender_id for m in msgs if m.sender_type == "user"}
+        sender_agent_ids = {m.sender_id for m in msgs if m.sender_type == "agent"}
         user_map: dict[str, User] = {}
-        if sender_ids:
-            urows = await self._session.execute(select(User).where(User.id.in_(sender_ids)))
+        agent_map: dict[str, Agent] = {}
+        if sender_user_ids:
+            urows = await self._session.execute(select(User).where(User.id.in_(sender_user_ids)))
             for u in urows.scalars().all():
                 user_map[u.id] = u
+        if sender_agent_ids:
+            arows = await self._session.execute(select(Agent).where(Agent.id.in_(sender_agent_ids)))
+            for a in arows.scalars().all():
+                agent_map[a.id] = a
         result = []
         for m in msgs:
-            u = user_map.get(m.sender_id) if m.sender_type == "user" else None
-            result.append(
-                self._message_to_dict(
-                    m,
-                    sender_name=u.display_name if u else m.sender_id,
-                    sender_avatar=u.avatar_url if u else None,
-                    sender_email=u.email if u else None,
+            if m.sender_type == "user":
+                u = user_map.get(m.sender_id)
+                result.append(
+                    self._message_to_dict(
+                        m,
+                        sender_name=u.display_name if u else m.sender_id,
+                        sender_avatar=u.avatar_url if u else None,
+                        sender_email=u.email if u else None,
+                    )
                 )
-            )
+            else:
+                a = agent_map.get(m.sender_id)
+                result.append(
+                    self._message_to_dict(
+                        m,
+                        sender_name=a.name if a else m.sender_id,
+                        sender_avatar=a.avatar if a else None,
+                        sender_email=None,
+                    )
+                )
         return result, total
 
     async def send_message(

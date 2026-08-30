@@ -14,9 +14,6 @@
   summary: Consider POST alternative for DELETE /me confirm to handle proxy stripping
   evidence: Edge case notes DELETE bodies may be stripped by proxies; current spec uses DELETE with JSON body
 - source_spec: none
-  summary: Agent invocation pipeline — chat handler + Inbox integration (agent-platform-plan Phases 5–6)
-  evidence: Split from agent-platform intent — framework core (Phase 4) shipped; chat handler + Inbox integration still deferred
-- source_spec: none
   summary: Agent memory (workspace+agent+user scoped) (agent-platform-plan Phase 7)
   evidence: Split from agent-platform intent — depends on the invocation pipeline, deferred independently
 - source_spec: none

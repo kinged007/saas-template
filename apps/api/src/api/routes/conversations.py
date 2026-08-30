@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, parse_query
@@ -134,6 +135,8 @@ async def create_conversation(
             creator=user,
             title=body.title,
             participant_user_ids=body.participant_user_ids,
+            participant_agent_ids=body.participant_agent_ids,
+            entity_type=body.entity_type,
             initial_message=body.initial_message,
             ip_address=request.client.host if request.client else None,
         )
@@ -323,6 +326,71 @@ async def list_messages(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
     response.headers["X-Total-Count"] = str(total)
     return items
+
+
+@router.get("/{conversation_id}/session-history")
+async def get_session_history(
+    conversation_id: str,
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
+    _=Depends(require_key_permission(MESSAGE_READ)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    """Lazy enrichment: tool calls / thinking steps for agent messages, collapsed by default.
+
+    Handler-routed — conversation.entity_type picks the handler (chat today).
+    Verifies caller is conversation participant before revealing session artifacts.
+    """
+    from sqlalchemy import select as _select
+
+    from src.agents.handlers.chat import ChatHandler
+    from src.models.conversation import Conversation, ConversationParticipant
+
+    conv = await db.get(Conversation, conversation_id)
+    if conv is None or conv.workspace_id != workspace_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "conversation not found")
+    # caller must be participant
+    res = await db.execute(
+        _select(ConversationParticipant).where(
+            ConversationParticipant.conversation_id == conversation_id,
+            ConversationParticipant.participant_type == "user",
+            ConversationParticipant.participant_id == user.id,
+        )
+    )
+    if res.scalar_one_or_none() is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a participant of this conversation")
+    # find agent participants for history aggregation (return all per-agent steps)
+    res2 = await db.execute(
+        _select(ConversationParticipant.participant_id).where(
+            ConversationParticipant.conversation_id == conversation_id,
+            ConversationParticipant.participant_type == "agent",
+        )
+    )
+    agent_ids = [r[0] for r in res2.all()]
+    if not agent_ids:
+        return []
+    # aggregate across agents (chat: one per conversation but keep generic)
+    handler = ChatHandler(bus=container.bus, secret_store=container.secret_store)
+    all_steps: list[dict] = []
+    for aid in agent_ids:
+        from src.agents.handlers.base import AgentRequest as _Req
+
+        req = _Req(
+            entity_type=getattr(conv, "entity_type", "chat") or "chat",
+            conversation_id=conversation_id,
+            message_id="",
+            agent_id=aid,
+            workspace_id=workspace_id,
+            triggering_user_id=user.id,
+        )
+        try:
+            steps = await handler.retrieve_session_history(req)
+            all_steps.extend(steps)
+        except Exception:
+            logger.warning("session history fetch failed for agent %s", aid, exc_info=True)
+    return all_steps
 
 
 @router.post("/{conversation_id}/messages", status_code=201)

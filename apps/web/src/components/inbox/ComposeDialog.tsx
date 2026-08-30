@@ -3,8 +3,8 @@ import { useCreate, useGetIdentity, useList } from "@refinedev/core";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
+import { Bot, Check, ChevronsUpDown, X } from "lucide-react";
 import { toast } from "sonner";
-import { Check, ChevronsUpDown, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,16 +29,21 @@ import {
 } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { TiptapEditor } from "./TiptapEditor";
-import type { Identity, Member, Conversation } from "@/types";
+import type { Identity, Member, Conversation, Agent } from "@/types";
 import { getMemberDisplayName } from "@/types";
 import { UserAvatar } from "@/components/ui/user-avatar";
+import { AgentAvatar } from "@/components/ui/agent-avatar";
 import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "@/contexts/WorkspaceContext";
 import { cn } from "@/lib/utils";
 
 const schema = z.object({
   title: z.string().max(300, "Title must be at most 300 characters").optional(),
-  participantIds: z.array(z.string()).min(1, "Select at least one participant").max(19, "Max 19 other participants"),
+  participantIds: z.array(z.string()).max(19, "Max 19 other participants").default([]),
+  agentIds: z.array(z.string()).max(10).default([]),
   initialMessage: z.string().min(1, "Message is required").max(5000, "Message must be at most 5000 characters"),
+}).refine((d) => (d.participantIds?.length ?? 0) + (d.agentIds?.length ?? 0) >= 1, {
+  message: "Select at least one participant",
+  path: ["participantIds"],
 });
 
 type FormData = z.infer<typeof schema>;
@@ -54,35 +59,47 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
   const currentUserId = identity?.id ?? null;
 
-  const { result } = useList<Member>({
+  const { result: membersResult } = useList<Member>({
     resource: "members",
     pagination: { pageSize: 100 },
     queryOptions: { enabled: open && !!workspace?.id },
   });
-  const members = result?.data ?? [];
+  const members = membersResult?.data ?? [];
+
+  const { result: agentsResult } = useList<Agent>({
+    resource: "agents",
+    pagination: { pageSize: 100 },
+    filters: [{ field: "is_active", operator: "eq", value: true } as never],
+    queryOptions: { enabled: open && !!workspace?.id },
+  });
+  const agents = (agentsResult?.data ?? []) as Agent[];
 
   const selectableMembers = useMemo(() => {
     if (!currentUserId) return members;
     return members.filter((m) => m.id !== currentUserId);
   }, [members, currentUserId]);
 
+  const selectableAgents = useMemo(() => agents.filter((a) => a.is_active), [agents]);
+
   const { mutateAsync, mutation } = useCreate<Conversation>();
   const isPending = (mutation as unknown as { isPending?: boolean })?.isPending ?? false;
 
   const form = useForm<FormData>({
-    resolver: zodResolver(schema),
-    defaultValues: { title: "", participantIds: [], initialMessage: "" },
+    resolver: zodResolver(schema) as unknown as never,
+    defaultValues: { title: "", participantIds: [], agentIds: [], initialMessage: "" },
   });
 
   const [editorKey, setEditorKey] = useState(0);
   const [comboOpen, setComboOpen] = useState(false);
+  const [agentComboOpen, setAgentComboOpen] = useState(false);
 
   const onSubmit = async (data: FormData) => {
-    const payload = {
+    const payload: Record<string, unknown> = {
       title: data.title?.trim() || null,
-      participant_user_ids: data.participantIds,
+      participant_user_ids: data.participantIds ?? [],
       initial_message: data.initialMessage,
     };
+    if ((data.agentIds?.length ?? 0) > 0) payload.participant_agent_ids = data.agentIds;
     try {
       const res = await mutateAsync({
         resource: "conversations",
@@ -92,9 +109,10 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
       });
       const conv = res?.data as unknown as Conversation;
       toast.success("Conversation created");
-      form.reset({ title: "", participantIds: [], initialMessage: "" });
+      form.reset({ title: "", participantIds: [], agentIds: [], initialMessage: "" });
       setEditorKey((k) => k + 1);
       setComboOpen(false);
+      setAgentComboOpen(false);
       onOpenChange(false);
       if (conv && onCreated) onCreated(conv);
     } catch (err: unknown) {
@@ -106,16 +124,17 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
   return (
     <Dialog open={open} onOpenChange={(v) => {
       if (!v) {
-        form.reset({ title: "", participantIds: [], initialMessage: "" });
+        form.reset({ title: "", participantIds: [], agentIds: [], initialMessage: "" });
         setEditorKey(k=>k+1);
         setComboOpen(false);
+        setAgentComboOpen(false);
       }
       onOpenChange(v);
     }}>
       <DialogContent className="sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle>New conversation</DialogTitle>
-          <DialogDescription>Start a conversation with workspace members. Markdown supported.</DialogDescription>
+          <DialogDescription>Start a conversation with workspace members. Add agents to get AI replies. Markdown supported.</DialogDescription>
         </DialogHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col gap-4">
@@ -134,13 +153,12 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
               )}
             />
 
-            {/* Flex container for participant selector + future select box */}
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-2">
               <FormField
                 control={form.control}
                 name="participantIds"
                 render={({ field }) => {
-                  const selectedIds = field.value as string[];
+                  const selectedIds = (field.value as string[]) ?? [];
                   const toggle = (id: string) => {
                     const next = selectedIds.includes(id)
                       ? selectedIds.filter((x) => x !== id)
@@ -151,8 +169,8 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
 
                   return (
                     <FormItem className="flex-1 min-w-0">
-                      <FormLabel>Participants</FormLabel>
-                      <FormDescription>Select 1 to 19 other members (max 20 including you).</FormDescription>
+                      <FormLabel>People</FormLabel>
+                      <FormDescription className="text-xs">Members (max 20 including you + agents).</FormDescription>
                       <Popover open={comboOpen} onOpenChange={setComboOpen}>
                         <PopoverTrigger asChild>
                           <FormControl>
@@ -167,7 +185,7 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
                             >
                               <span className="flex flex-wrap gap-1 flex-1 text-left items-center min-w-0">
                                 {selectedIds.length === 0 ? (
-                                  "Select participants..."
+                                  "Select members..."
                                 ) : selectedMembers.length === 0 ? (
                                   `${selectedIds.length} selected`
                                 ) : (
@@ -203,11 +221,6 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
                                       <Badge variant="secondary" className="px-1.5 py-0.5 text-xs">
                                         +{selectedMembers.length - 3}
                                       </Badge>
-                                    )}
-                                    {selectedIds.length !== selectedMembers.length && selectedMembers.length <= 3 && (
-                                      <span className="text-xs text-muted-foreground">
-                                        +{selectedIds.length - selectedMembers.length} more
-                                      </span>
                                     )}
                                   </>
                                 )}
@@ -251,7 +264,6 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
                                           <span className="truncate text-sm font-medium leading-none">{name}</span>
                                           <span className="truncate text-xs text-muted-foreground leading-none">{m.email}</span>
                                         </span>
-                                        <span className="text-muted-foreground text-xs hidden sm:inline shrink-0">{m.role}</span>
                                         <Check
                                           className={cn(
                                             "ml-auto h-4 w-4 shrink-0",
@@ -262,6 +274,98 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
                                     );
                                   })
                                 )}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                      <FormMessage />
+                    </FormItem>
+                  );
+                }}
+              />
+              <FormField
+                control={form.control}
+                name="agentIds"
+                render={({ field }) => {
+                  const selectedIds = (field.value as string[]) ?? [];
+                  const toggle = (id: string) => {
+                    const next = selectedIds.includes(id)
+                      ? selectedIds.filter((x) => x !== id)
+                      : [...selectedIds, id];
+                    field.onChange(next);
+                  };
+                  const selectedAgents = selectableAgents.filter((a) => selectedIds.includes(a.id));
+                  return (
+                    <FormItem className="flex-1 min-w-0">
+                      <FormLabel>Agents <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                      <FormDescription className="text-xs">AI participants — will auto-reply.</FormDescription>
+                      <Popover open={agentComboOpen} onOpenChange={setAgentComboOpen}>
+                        <PopoverTrigger asChild>
+                          <FormControl>
+                            <Button
+                              variant="outline"
+                              role="combobox"
+                              aria-expanded={agentComboOpen}
+                              className={cn(
+                                "w-full justify-between h-auto min-h-9 px-3 py-2 font-normal",
+                                selectedIds.length === 0 && "text-muted-foreground"
+                              )}
+                            >
+                              <span className="flex flex-wrap gap-1 flex-1 text-left items-center min-w-0">
+                                {selectedIds.length === 0 ? (
+                                  "Add agents..."
+                                ) : (
+                                  <>
+                                    {selectedAgents.slice(0, 2).map((a) => (
+                                      <span
+                                        key={a.id}
+                                        className="inline-flex items-center gap-1 rounded-md border bg-secondary px-1.5 py-0.5 text-xs font-medium"
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          toggle(a.id);
+                                        }}
+                                      >
+                                        <AgentAvatar value={a.avatar} name={a.name} sizeClassName="h-4 w-4" />
+                                        <span className="max-w-[80px] truncate">{a.name}</span>
+                                        <X className="h-3 w-3 opacity-60 hover:opacity-100 shrink-0" />
+                                      </span>
+                                    ))}
+                                    {selectedAgents.length > 2 && (
+                                      <Badge variant="secondary" className="px-1.5 py-0.5 text-xs">+{selectedAgents.length - 2}</Badge>
+                                    )}
+                                  </>
+                                )}
+                              </span>
+                              <Bot className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                            </Button>
+                          </FormControl>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                          <Command>
+                            <CommandInput placeholder="Search agents..." className="h-9" />
+                            <CommandList className="max-h-[200px] overflow-y-auto">
+                              <CommandEmpty>No agents found. Create one in Agents.</CommandEmpty>
+                              <CommandGroup>
+                                {selectableAgents.map((a) => {
+                                  const isSelected = selectedIds.includes(a.id);
+                                  return (
+                                    <CommandItem
+                                      key={a.id}
+                                      value={`${a.name} ${a.slug} ${a.id}`}
+                                      onSelect={() => toggle(a.id)}
+                                      className="flex items-center gap-2 px-2 py-1.5"
+                                    >
+                                      <AgentAvatar value={a.avatar} name={a.name} sizeClassName="h-6 w-6" />
+                                      <span className="flex flex-1 min-w-0 flex-col text-left">
+                                        <span className="truncate text-sm font-medium leading-none">{a.name}</span>
+                                        <span className="truncate text-xs text-muted-foreground leading-none">{a.slug}</span>
+                                      </span>
+                                      <Check className={cn("ml-auto h-4 w-4 shrink-0", isSelected ? "opacity-100" : "opacity-0")} />
+                                    </CommandItem>
+                                  );
+                                })}
                               </CommandGroup>
                             </CommandList>
                           </Command>

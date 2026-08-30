@@ -2,7 +2,7 @@
 
 > **Navigation aid.** Route list and file locations extracted via AST. Read the source files listed below before implementing or modifying this subsystem.
 
-The Conversations subsystem handles **8 routes**.
+The Conversations subsystem handles **9 routes** and touches: auth, db.
 
 ## Routes
 
@@ -19,6 +19,8 @@ The Conversations subsystem handles **8 routes**.
 - `PATCH` `/{conversation_id}/archive` params(conversation_id)
   `apps/api/src/api/routes/conversations.py`
 - `GET` `/{conversation_id}/messages` params(conversation_id) → in: st
+  `apps/api/src/api/routes/conversations.py`
+- `GET` `/{conversation_id}/session-history` params(conversation_id) → in: st [auth, db]
   `apps/api/src/api/routes/conversations.py`
 - `POST` `/{conversation_id}/messages` params(conversation_id) → in: ConversationCreate
   `apps/api/src/api/routes/conversations.py`

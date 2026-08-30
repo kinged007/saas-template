@@ -2,9 +2,9 @@
 
 > **Navigation aid.** Library inventory extracted via AST. Read the source files listed here before modifying exported functions.
 
-**118 library files** across 5 modules
+**122 library files** across 5 modules
 
-## Api (68 files)
+## Api (72 files)
 
 - `apps/api/src/schemas/api.py` — LoginRequest, RegisterRequest, TokenResponse, RefreshRequest, WorkspaceCreate, WorkspaceUpdate, …
 - `apps/api/src/jobs/registry.py` — validate_cron_schedule, next_cron_occurrence, validate_params, default_params, register_builtin_jobs, ValidationError, …
@@ -31,7 +31,7 @@
 - `apps/api/src/jobs/builtin.py` — system_heartbeat, expire_stale_invitations, demo_global_daily_report
 - `apps/api/src/models/conversation.py` — Conversation, ConversationParticipant, Message
 - `apps/api/src/services/auth.py` — AuthError, TokenPair, AuthService
-- _…and 43 more files_
+- _…and 47 more files_
 
 ## Agent (36 files)
 

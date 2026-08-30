@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import AsyncIterator, Protocol
 
 
@@ -19,6 +19,9 @@ class AgentContext:
     request: AgentRequest
     profile: dict | None = None
     session_ref: str | None = None
+    history: list[dict] = field(default_factory=list)
+    model: str | None = None
+    env: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

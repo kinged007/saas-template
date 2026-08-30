@@ -110,6 +110,11 @@ function dispatch(event: string, data: unknown): void {
   if (event === "notification.created") {
     applyNotificationCreated(data);
     emit(liveChannels.notifications, "created", data);
+  } else if (event === "agents.run.event") {
+    // transient agent token/stream events — fanout, no cache patch needed (thread live will arrive as message.created)
+    emit("resources/agents/run", "event", data);
+    const cid = (data as { conversation_id?: string } | undefined)?.conversation_id;
+    if (cid) emit(`resources/conversations/${cid}/run`, "event", data);
   } else if (event === "message.created") {
     applyMessageCreated(data);
     const conversationId = (data as { conversation_id?: string } | undefined)?.conversation_id;

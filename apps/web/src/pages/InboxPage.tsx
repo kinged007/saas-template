@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useList, useUpdate, useCustomMutation, useCustom, useInvalidate, useGetIdentity } from "@refinedev/core";
 import Markdown from "react-markdown";
-import { ArrowLeft, Inbox, Mail, MailOpen, ExternalLink, SendHorizontal, Pencil, Archive, ArchiveRestore, Search, MessageSquare, PanelLeftClose, PanelLeftOpen, X, Check } from "lucide-react";
+import { ArrowLeft, Inbox, Mail, MailOpen, ExternalLink, SendHorizontal, Pencil, Archive, ArchiveRestore, Search, MessageSquare, PanelLeftClose, PanelLeftOpen, X, Check, ChevronDown } from "lucide-react";
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { markdownComponents, markdownComponentsInverted, stripMarkdown, truncate as truncatePreview } from "@/lib/markdown";
@@ -12,6 +12,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/ui/user-avatar";
+import { AgentAvatar } from "@/components/ui/agent-avatar";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { formatDate } from "../components/ui";
 import { TabbedPageHeader } from "../components/refine-ui/layout/tabbed-page-header";
 import { cn } from "@/lib/utils";
@@ -185,6 +187,22 @@ export function InboxPage() {
     return [];
   }, [messagesResult]);
   const messagesLoading = (messagesQuery as unknown as { isLoading?: boolean })?.isLoading ?? false;
+
+  // Lazy enrichment: collapsed session steps (tool calls / thinking) — fetched after messages load
+  const hasAgent = useMemo(() => selectedConversation?.participants.some((p) => p.type === "agent") ?? false, [selectedConversation]);
+  const { result: sessionHistoryResult } = useCustom<unknown[]>({
+    url: selectedConvId ? `conversations/${selectedConvId}/session-history` : "",
+    method: "get",
+    queryOptions: {
+      enabled: !!selectedConvId && tab === "messages" && hasAgent,
+      retry: false,
+    },
+  });
+  const sessionSteps = useMemo(() => {
+    const raw = sessionHistoryResult?.data as unknown;
+    if (Array.isArray(raw)) return raw as Array<{ message_id?: string; kind?: string; title?: string; content?: string; status?: string }>;
+    return [];
+  }, [sessionHistoryResult]);
 
   // Auto scroll to bottom when messages change
   useEffect(() => {
@@ -602,7 +620,10 @@ export function InboxPage() {
                             const name = getParticipantDisplayName(
                               p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null },
                             );
-                            return (
+                            const isAgent = (p as unknown as { type?: string }).type === "agent";
+                            return isAgent ? (
+                              <AgentAvatar key={p.id} value={p.avatar_url} name={name} sizeClassName="h-5 w-5 border-2 border-background" />
+                            ) : (
                               <UserAvatar
                                 key={p.id}
                                 name={name}
@@ -781,17 +802,22 @@ export function InboxPage() {
                           const name = getParticipantDisplayName(
                             p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null },
                           );
+                          const isAgent = (p as unknown as { type?: string }).type === "agent";
                           return (
                             <Badge key={p.id} variant="secondary" className="gap-1">
-                              <UserAvatar
-                                name={name}
-                                email={(p as unknown as { email?: string | null }).email ?? null}
-                                avatarUrl={p.avatar_url}
-                                sizeClassName="h-4 w-4"
-                                fallbackClassName="text-[8px]"
-                                firstName={(p as unknown as { first_name?: string | null }).first_name ?? null}
-                                lastName={(p as unknown as { last_name?: string | null }).last_name ?? null}
-                              />
+                              {isAgent ? (
+                                <AgentAvatar value={p.avatar_url} name={name} sizeClassName="h-4 w-4" />
+                              ) : (
+                                <UserAvatar
+                                  name={name}
+                                  email={(p as unknown as { email?: string | null }).email ?? null}
+                                  avatarUrl={p.avatar_url}
+                                  sizeClassName="h-4 w-4"
+                                  fallbackClassName="text-[8px]"
+                                  firstName={(p as unknown as { first_name?: string | null }).first_name ?? null}
+                                  lastName={(p as unknown as { last_name?: string | null }).last_name ?? null}
+                                />
+                              )}
                               {name}
                             </Badge>
                           );
@@ -838,20 +864,25 @@ export function InboxPage() {
                       <p className="text-muted-foreground text-sm">No messages yet.</p>
                     ) : (
                       messages.map((m) => {
-                        const isSelf = identity?.id === m.sender_id;
+                        const isSelf = m.sender_type === "user" && identity?.id === m.sender_id;
+                        const isAgentMsg = m.sender_type === "agent";
                         return (
                           <div key={m.id} className={cn("flex gap-3", isSelf ? "justify-end" : "justify-start")}>
                             {!isSelf && (
-                              <UserAvatar
-                                name={m.sender_name}
-                                email={m.sender_email ?? null}
-                                avatarUrl={m.sender_avatar_url ?? null}
-                                sizeClassName="h-7 w-7 shrink-0"
-                                fallbackClassName="text-xs"
-                              />
+                              isAgentMsg ? (
+                                <AgentAvatar value={m.sender_avatar_url} name={m.sender_name} sizeClassName="h-7 w-7 shrink-0" />
+                              ) : (
+                                <UserAvatar
+                                  name={m.sender_name}
+                                  email={m.sender_email ?? null}
+                                  avatarUrl={m.sender_avatar_url ?? null}
+                                  sizeClassName="h-7 w-7 shrink-0"
+                                  fallbackClassName="text-xs"
+                                />
+                              )
                             )}
-                            <div className={cn("max-w-[75%] rounded-lg px-3 py-2", isSelf ? "bg-primary text-primary-foreground" : "bg-muted")}>
-                              {!isSelf && <p className="mb-1 text-xs font-medium opacity-70">{m.sender_name}</p>}
+                            <div className={cn("max-w-[75%] rounded-lg px-3 py-2", isSelf ? "bg-primary text-primary-foreground" : isAgentMsg ? "bg-violet-50 border border-violet-200 dark:bg-violet-950/30 dark:border-violet-800" : "bg-muted")}>
+                              {!isSelf && <p className="mb-1 text-xs font-medium opacity-70">{m.sender_name} {isAgentMsg && <span className="ml-1 inline-flex items-center rounded bg-violet-100 px-1 py-0 text-[10px] font-medium text-violet-700 dark:bg-violet-900 dark:text-violet-200">agent</span>}</p>}
                               <div className={cn("prose prose-sm dark:prose-invert max-w-none break-words", isSelf ? "prose-invert" : "")}>
                                 <Markdown components={isSelf ? markdownComponentsInverted : markdownComponents}>{m.body}</Markdown>
                               </div>
@@ -871,6 +902,25 @@ export function InboxPage() {
                           </div>
                         );
                       })
+                    )}
+                    {sessionSteps.length > 0 && (
+                      <Collapsible className="mt-4 rounded-md border bg-muted/30">
+                        <CollapsibleTrigger className="flex w-full items-center justify-between px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
+                          <span>Session details ({sessionSteps.length} {sessionSteps.length === 1 ? "step" : "steps"}) — collapsed by default</span>
+                          <ChevronDown className="h-4 w-4 transition-transform data-[state=open]:rotate-180" />
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="px-3 pb-3">
+                          <div className="mt-2 flex flex-col gap-2">
+                            {sessionSteps.map((s, idx) => (
+                              <div key={idx} className="rounded border bg-background p-2">
+                                <p className="text-xs font-medium">{s.title || s.kind || "Step"}</p>
+                                {s.content && <p className="mt-1 whitespace-pre-wrap break-words text-xs text-muted-foreground">{String(s.content).slice(0, 500)}</p>}
+                                <p className="mt-1 text-[11px] text-muted-foreground">{s.status || ""}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
                     )}
                     <div ref={messagesEndRef} />
                   </div>

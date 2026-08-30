@@ -69,6 +69,8 @@ class NotificationAck(BaseModel):
 class ConversationCreate(BaseModel):
     title: str | None = Field(default=None, max_length=300)
     participant_user_ids: list[str] = Field(min_length=1, max_length=19)
+    participant_agent_ids: list[str] | None = Field(default=None, max_length=19)
+    entity_type: str | None = Field(default=None, max_length=30)
     initial_message: str = Field(min_length=1, max_length=5000)
 
 

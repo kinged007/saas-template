@@ -47,6 +47,7 @@
 - workspace_id: str (index)
 - created_by_user_id: str (index)
 - title: String (nullable)
+- entity_type: String (default, index)
 - last_message_at: DateTime (nullable, index)
 - last_message_preview: String (nullable)
 
@@ -61,6 +62,7 @@
 - last_read_at: DateTime (nullable)
 - last_read_message_id: unknown (nullable)
 - archived_at: DateTime (nullable)
+- agent_session_ref: String (nullable)
 
 ### Message
 - id: str (pk, default)

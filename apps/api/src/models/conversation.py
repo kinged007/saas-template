@@ -17,6 +17,7 @@ class Conversation(Base, TimestampMixin):
     workspace_id: Mapped[str] = mapped_column(StringUUID(), index=True, nullable=False)
     created_by_user_id: Mapped[str] = mapped_column(StringUUID(), index=True, nullable=False)
     title: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    entity_type: Mapped[str] = mapped_column(String(30), nullable=False, default="chat", index=True)
     last_message_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     last_message_preview: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
@@ -44,6 +45,7 @@ class ConversationParticipant(Base, TimestampMixin):
     last_read_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_read_message_id: Mapped[str | None] = mapped_column(StringUUID(), nullable=True)
     archived_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    agent_session_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 
 class Message(Base, TimestampMixin):
