@@ -12,8 +12,10 @@ from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
 from src.models.conversation import Conversation, ConversationParticipant, Message
+from src.models.user_profile import UserProfile
 from src.models.workspace import User, Workspace, WorkspaceMember
 from src.services.notifications import NotificationService
+from src.services.profile_helpers import format_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +117,7 @@ class ConversationService:
 
     async def _participants_with_users(
         self, conversation_id: str
-    ) -> list[tuple[ConversationParticipant, User | None]]:
+    ) -> list[tuple[ConversationParticipant, User | None, UserProfile | None]]:
         result = await self._session.execute(
             select(ConversationParticipant).where(
                 ConversationParticipant.conversation_id == conversation_id
@@ -125,10 +127,10 @@ class ConversationService:
 
     async def _participants_for_conversations(
         self, conversation_ids: list[str]
-    ) -> dict[str, list[tuple[ConversationParticipant, User | None]]]:
-        """Participants (with user details) for many conversations, in two
+    ) -> dict[str, list[tuple[ConversationParticipant, User | None, UserProfile | None]]]:
+        """Participants (with user details) for many conversations, in three
         queries total instead of two per conversation."""
-        grouped: dict[str, list[tuple[ConversationParticipant, User | None]]] = {}
+        grouped: dict[str, list[tuple[ConversationParticipant, User | None, UserProfile | None]]] = {}
         if not conversation_ids:
             return grouped
         result = await self._session.execute(
@@ -139,27 +141,42 @@ class ConversationService:
         participants = list(result.scalars().all())
         user_ids = {p.participant_id for p in participants if p.participant_type == "user"}
         users: dict[str, User] = {}
+        profiles: dict[str, UserProfile] = {}
         if user_ids:
             urows = await self._session.execute(select(User).where(User.id.in_(user_ids)))
             users = {u.id: u for u in urows.scalars().all()}
+            prows = await self._session.execute(select(UserProfile).where(UserProfile.user_id.in_(user_ids)))
+            profiles = {p.user_id: p for p in prows.scalars().all()}
         for p in participants:
-            attached = users.get(p.participant_id) if p.participant_type == "user" else None
-            grouped.setdefault(p.conversation_id, []).append((p, attached))
+            if p.participant_type == "user":
+                u = users.get(p.participant_id)
+                prof = profiles.get(p.participant_id)
+                grouped.setdefault(p.conversation_id, []).append((p, u, prof))
+            else:
+                grouped.setdefault(p.conversation_id, []).append((p, None, None))
         return grouped
 
     async def _attach_users(
         self, participants: list[ConversationParticipant]
-    ) -> list[tuple[ConversationParticipant, User | None]]:
-        """Join display-name/avatar data onto participant rows (one query)."""
+    ) -> list[tuple[ConversationParticipant, User | None, UserProfile | None]]:
+        """Join display-name/avatar data onto participant rows (users + profiles)."""
         user_ids = {p.participant_id for p in participants if p.participant_type == "user"}
         users: dict[str, User] = {}
+        profiles: dict[str, UserProfile] = {}
         if user_ids:
             urows = await self._session.execute(select(User).where(User.id.in_(user_ids)))
             users = {u.id: u for u in urows.scalars().all()}
-        return [
-            (p, users.get(p.participant_id) if p.participant_type == "user" else None)
-            for p in participants
-        ]
+            prows = await self._session.execute(select(UserProfile).where(UserProfile.user_id.in_(user_ids)))
+            profiles = {p.user_id: p for p in prows.scalars().all()}
+        result: list[tuple[ConversationParticipant, User | None, UserProfile | None]] = []
+        for p in participants:
+            if p.participant_type == "user":
+                u = users.get(p.participant_id)
+                prof = profiles.get(p.participant_id)
+                result.append((p, u, prof))
+            else:
+                result.append((p, None, None))
+        return result
 
     def _unread_join_condition(self, user_id: str, *, active_only: bool):
         """Join condition matching the messages a user has not read yet.
@@ -215,19 +232,37 @@ class ConversationService:
     def _conversation_to_dict(
         self,
         conv: Conversation,
-        participants: list[tuple[ConversationParticipant, User | None]],
+        participants: list[tuple[ConversationParticipant, User | None, UserProfile | None]] | list[tuple[ConversationParticipant, User | None]],
         unread_count: int,
         is_archived: bool,
         message_count: int | None = None,
     ) -> dict:
         part_list = []
-        for p, u in participants:
+        for item in participants:
+            # Support both 2-tuple (legacy) and 3-tuple (with profile)
+            if len(item) == 3:  # type: ignore
+                p, u, prof = item  # type: ignore
+            else:
+                p, u = item  # type: ignore
+                prof = None
             if p.participant_type == "user" and u:
+                # Derive display as First L. from profile if available, else stored display_name
+                display = u.display_name
+                first_name = None
+                last_name = None
+                if prof is not None:
+                    first_name = prof.first_name
+                    last_name = prof.last_name
+                    derived = format_display_name(first_name, last_name, u.display_name)
+                    if derived:
+                        display = derived
                 part_list.append(
                     {
                         "type": p.participant_type,
                         "id": p.participant_id,
-                        "display_name": u.display_name,
+                        "display_name": display,
+                        "first_name": first_name,
+                        "last_name": last_name,
                         "avatar_url": u.avatar_url,
                     }
                 )
@@ -237,6 +272,8 @@ class ConversationService:
                         "type": p.participant_type,
                         "id": p.participant_id,
                         "display_name": p.participant_id,
+                        "first_name": None,
+                        "last_name": None,
                         "avatar_url": None,
                     }
                 )
@@ -406,7 +443,7 @@ class ConversationService:
         await self._session.refresh(msg)
 
         unread_for_creator = 0
-        part_for_creator = next((p for p, _ in participants if p.participant_id == creator.id), None)
+        part_for_creator = next((p for p, *_ in participants if p.participant_id == creator.id), None)  # type: ignore
         is_arch = bool(part_for_creator.archived_at) if part_for_creator else False
         conv_dict = self._conversation_to_dict(conv, participants, unread_for_creator, is_arch, message_count=1)
         msg_dict = self._message_to_dict(msg, sender_name=creator.display_name, sender_avatar=creator.avatar_url)

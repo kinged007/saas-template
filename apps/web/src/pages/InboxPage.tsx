@@ -16,7 +16,7 @@ import { formatDate } from "../components/ui";
 import { TabbedPageHeader } from "../components/refine-ui/layout/tabbed-page-header";
 import { cn } from "@/lib/utils";
 import type { Notification, Conversation, Message, Identity } from "../types";
-import { getDisplayName, formatDisplayName } from "../types";
+import { getDisplayName, getParticipantDisplayName } from "../types";
 import { ComposeDialog } from "../components/inbox/ComposeDialog";
 import { TiptapEditor } from "../components/inbox/TiptapEditor";
 import {
@@ -597,11 +597,14 @@ export function InboxPage() {
                       <div className="flex items-center gap-2 pl-4 pr-16">
                         <div className="flex -space-x-1">
                           {c.participants.slice(0, 3).map((p) => {
-                            const name = formatDisplayName((p as unknown as { first_name?: string }).first_name, (p as unknown as { last_name?: string }).last_name, p.display_name);
+                            const name = getParticipantDisplayName(p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null });
                             const initials = (() => {
                               const fn = (p as unknown as { first_name?: string }).first_name?.trim();
                               const ln = (p as unknown as { last_name?: string }).last_name?.trim();
                               if (fn && ln) return `${fn[0]}${ln[0]}`.toUpperCase();
+                              // Fallback: use derived name's initials
+                              const derived = name.trim().split(/\s+/);
+                              if (derived.length >= 2) return `${derived[0][0]}${derived[1][0]}`.toUpperCase();
                               return name.slice(0, 2).toUpperCase();
                             })();
                             return (
@@ -617,7 +620,7 @@ export function InboxPage() {
                             </span>
                           )}
                         </div>
-                        <span className="text-muted-foreground truncate text-[11px]">{c.participants.map((p) => formatDisplayName((p as unknown as { first_name?: string }).first_name, (p as unknown as { last_name?: string }).last_name, p.display_name)).join(", ")}</span>
+                        <span className="text-muted-foreground truncate text-[11px]">{c.participants.map((p) => getParticipantDisplayName(p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null })).join(", ")}</span>
                       </div>
                       <p className="text-muted-foreground pl-4 pr-16 text-[11px]">{formatDate(c.last_message_at)}</p>
                     </button>
@@ -777,11 +780,13 @@ export function InboxPage() {
                       )}
                       <div className="mt-1 flex flex-wrap items-center gap-1">
                         {selectedConversation.participants.slice(0, 2).map((p) => {
-                          const name = formatDisplayName((p as unknown as { first_name?: string }).first_name, (p as unknown as { last_name?: string }).last_name, p.display_name);
+                          const name = getParticipantDisplayName(p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null });
                           const initials = (() => {
                             const fn = (p as unknown as { first_name?: string }).first_name?.trim();
                             const ln = (p as unknown as { last_name?: string }).last_name?.trim();
                             if (fn && ln) return `${fn[0]}${ln[0]}`.toUpperCase();
+                            const derived = name.trim().split(/\s+/);
+                            if (derived.length >= 2) return `${derived[0][0]}${derived[1][0]}`.toUpperCase();
                             return name.slice(0, 2).toUpperCase();
                           })();
                           return (
@@ -810,7 +815,7 @@ export function InboxPage() {
                               <TooltipContent side="bottom" align="start" className="max-w-[260px]">
                                 <div className="flex flex-col gap-1 text-xs">
                                   {selectedConversation.participants.map((p) => {
-                                    const name = formatDisplayName((p as unknown as { first_name?: string }).first_name, (p as unknown as { last_name?: string }).last_name, p.display_name);
+                                    const name = getParticipantDisplayName(p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null });
                                     return (
                                       <span key={p.id} className="truncate">
                                         {name}

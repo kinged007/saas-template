@@ -5,7 +5,7 @@
 
 > 52 routes | 17 models | 55 components | 106 lib files | 33 env vars | 5 middleware | 28% test coverage
 > **Token savings:** this file is ~11,400 tokens. Without it, AI exploration would cost ~93,800 tokens. **Saves ~82,400 tokens per conversation.**
-> **Last scanned:** 2026-08-30 02:14 — re-run after significant changes
+> **Last scanned:** 2026-08-30 10:55 — re-run after significant changes
 
 ---
 
@@ -692,8 +692,8 @@
   - function getDisplayNameFromProfile: (profile?, fallback?) => string
   - function getDisplayName: (identity?) => string
   - function getMemberDisplayName: (member) => string
-  - type Workspace
-  - _...16 more_
+  - function getParticipantDisplayName: (participant) => string
+  - _...17 more_
 - `apps/web/src/utils/permissions.ts` — function activeWorkspacePermissions: (identity?) => string[]
 - `scripts/dev.py`
   - function main: () -> int

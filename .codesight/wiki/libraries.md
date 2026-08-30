@@ -64,7 +64,7 @@
 
 ## Web (7 files)
 
-- `apps/web/src/types.ts` — getProfileField, formatDisplayName, getDisplayNameFromProfile, getDisplayName, getMemberDisplayName, Workspace, …
+- `apps/web/src/types.ts` — getProfileField, formatDisplayName, getDisplayNameFromProfile, getDisplayName, getMemberDisplayName, getParticipantDisplayName, …
 - `apps/web/src/providers/liveCache.ts` — upsertThreadMessage, removeThreadMessage, applyMessageCreated, applyNotificationCreated, applyConversationRead
 - `apps/web/src/hooks/useProfile.ts` — useProfile, useUpdateProfile, useExportProfile, useDeleteAccount
 - `apps/web/src/providers/liveProvider.ts` — subscribeLive, LiveEventHandler, liveChannels, liveProvider
