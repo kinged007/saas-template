@@ -138,3 +138,54 @@ class ProfileExport(BaseModel):
     profile: dict[str, Any]
     workspaces: list[dict[str, Any]]
     counts: dict[str, Any]
+
+
+class MCPServerSpec(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    url: AnyHttpUrl
+    transport: Literal["http", "sse"]
+    auth_secret_ref: str | None = Field(default=None, max_length=200)
+    enabled: bool = True
+    timeout_ms: int | None = Field(default=None, gt=0, le=60000)
+
+
+class AgentCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=150)
+    slug: str | None = Field(default=None, max_length=100, pattern=r"^[a-z0-9-]+$")
+    description: str | None = Field(default=None, max_length=5000)
+    avatar: str | None = Field(default=None, max_length=300)
+    system_prompt: str | None = None
+    model: str | None = Field(default=None, max_length=100)
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    max_tokens: int | None = Field(default=None, gt=0)
+    tool_allowlist: list[str] | None = None
+    mcp_servers: list[MCPServerSpec] | None = Field(default=None)
+    execution_target: str | None = Field(default=None, max_length=30)
+    role_id: str | None = None
+    skills: list[str] | None = Field(default=None)
+    is_active: bool | None = None
+    custom_data: dict[str, Any] | None = None
+
+
+class AgentUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=150)
+    slug: str | None = Field(default=None, max_length=100, pattern=r"^[a-z0-9-]+$")
+    description: str | None = Field(default=None, max_length=5000)
+    avatar: str | None = Field(default=None, max_length=300)
+    system_prompt: str | None = None
+    model: str | None = Field(default=None, max_length=100)
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    max_tokens: int | None = Field(default=None, gt=0)
+    tool_allowlist: list[str] | None = None
+    mcp_servers: list[MCPServerSpec] | None = None
+    execution_target: str | None = Field(default=None, max_length=30)
+    role_id: str | None = None
+    skills: list[str] | None = None
+    is_active: bool | None = None
+    custom_data: dict[str, Any] | None = None
+
+
+class AgentSecretPut(BaseModel):
+    value: str = Field(min_length=1, max_length=10000)

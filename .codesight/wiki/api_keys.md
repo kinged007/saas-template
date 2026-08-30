@@ -2,15 +2,11 @@
 
 > **Navigation aid.** Route list and file locations extracted via AST. Read the source files listed below before implementing or modifying this subsystem.
 
-The Api_keys subsystem handles **4 routes** and touches: db.
+The Api_keys subsystem handles **2 routes** and touches: db.
 
 ## Routes
 
-- `GET` `` [db]
-  `apps/api/src/api/routes/api_keys.py`
 - `GET` `/effective-permissions`
-  `apps/api/src/api/routes/api_keys.py`
-- `POST` `` → in: ApiKeyCreate
   `apps/api/src/api/routes/api_keys.py`
 - `DELETE` `/{api_key_id}` params(api_key_id) [db]
   `apps/api/src/api/routes/api_keys.py`

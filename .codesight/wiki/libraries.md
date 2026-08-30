@@ -2,9 +2,9 @@
 
 > **Navigation aid.** Library inventory extracted via AST. Read the source files listed here before modifying exported functions.
 
-**107 library files** across 5 modules
+**118 library files** across 5 modules
 
-## Api (57 files)
+## Api (68 files)
 
 - `apps/api/src/schemas/api.py` — LoginRequest, RegisterRequest, TokenResponse, RefreshRequest, WorkspaceCreate, WorkspaceUpdate, …
 - `apps/api/src/jobs/registry.py` — validate_cron_schedule, next_cron_occurrence, validate_params, default_params, register_builtin_jobs, ValidationError, …
@@ -14,11 +14,15 @@
 - `apps/api/src/api/deps.py` — get_container, require_key_permission, require_permission, authenticate_websocket_token, AuthPrincipal
 - `apps/api/src/events/bus.py` — EventMetadata, EventEnvelope, EventBus, PublishError, SubscriptionError
 - `apps/api/src/models/workspace.py` — User, RefreshToken, Workspace, Role, WorkspaceMember
+- `apps/api/src/services/agents.py` — AgentError, AgentNotFound, AgentConflict, AgentValidation, AgentService
 - `apps/api/src/services/jobs.py` — job_to_dict, job_run_to_dict, job_log_to_dict, JobError, JobService
 - `apps/api/src/services/serializers.py` — notification_to_dict, user_to_dict, workspace_to_dict, profile_to_dict, public_projection
+- `apps/api/src/agents/handlers/base.py` — AgentRequest, AgentContext, AgentEvent, AgentHandler
+- `apps/api/src/agents/runners/base.py` — RunSpec, RunHandle, AgentEvent, RunnerService
 - `apps/api/src/db/base.py` — StringUUID, Base, TimestampMixin, StrEnum
 - `apps/api/src/services/api_keys.py` — ApiKeyError, ApiKeyForbidden, ApiKeyNotFound, ApiKeyService
 - `apps/api/src/services/conversations.py` — ConversationError, ConversationForbidden, ConversationNotFound, ConversationService
+- `apps/api/src/services/workspace_settings.py` — WorkspaceSettingsError, WorkspaceSettingsNotFound, WorkspaceSettingsValidation, WorkspaceSettingsService
 - `apps/api/src/services/workspaces.py` — WorkspaceError, WorkspaceForbidden, WorkspaceConflict, WorkspaceService
 - `apps/api/alembic/env.py` — run_migrations_offline, do_run_migrations, run_migrations_online
 - `apps/api/src/core/security/tokens.py` — create_access_token, decode_access_token, OpaqueToken
@@ -27,11 +31,7 @@
 - `apps/api/src/jobs/builtin.py` — system_heartbeat, expire_stale_invitations, demo_global_daily_report
 - `apps/api/src/models/conversation.py` — Conversation, ConversationParticipant, Message
 - `apps/api/src/services/auth.py` — AuthError, TokenPair, AuthService
-- `apps/api/src/services/profile_helpers.py` — format_display_name, validate_custom_data, merge_custom_data
-- `apps/api/alembic/versions/0001_initial.py` — upgrade, downgrade
-- `apps/api/alembic/versions/0002_api_keys.py` — upgrade, downgrade
-- `apps/api/alembic/versions/0003_audit_nullable_workspace.py` — upgrade, downgrade
-- _…and 32 more files_
+- _…and 43 more files_
 
 ## Agent (36 files)
 
@@ -65,7 +65,7 @@
 ## Web (8 files)
 
 - `apps/web/src/types.ts` — getProfileField, formatDisplayName, getDisplayNameFromProfile, getDisplayName, getMemberDisplayName, getParticipantDisplayName, …
-- `apps/web/src/lib/avatar.ts` — getInitials, getInitialsFromNames, getAvatarSrc, getAvatarData, UserProfileAvatar
+- `apps/web/src/lib/avatar.ts` — getInitials, getInitialsFromNames, getAvatarSrc, getAvatarData, parseAvatarValue, ParsedAvatar, …
 - `apps/web/src/providers/liveCache.ts` — upsertThreadMessage, removeThreadMessage, applyMessageCreated, applyNotificationCreated, applyConversationRead
 - `apps/web/src/hooks/useProfile.ts` — useProfile, useUpdateProfile, useExportProfile, useDeleteAccount
 - `apps/web/src/providers/liveProvider.ts` — subscribeLive, LiveEventHandler, liveChannels, liveProvider

@@ -1,5 +1,26 @@
 # Schema
 
+### Agent
+- id: str (pk, default)
+- workspace_id: str (index)
+- slug: String
+- name: String
+- description: Text (nullable)
+- avatar: String (nullable)
+- system_prompt: Text (nullable)
+- model: String (nullable)
+- temperature: Float (nullable)
+- max_tokens: Integer (nullable)
+- tool_allowlist: JSON (nullable)
+- mcp_servers: JSON (default)
+- execution_target: String (nullable)
+- role_id: unknown (index, nullable)
+- skills: JSON (default)
+- is_active: Boolean (default)
+- custom_data: JSON (default)
+- created_by_user_id: unknown (index, nullable)
+- updated_by_user_id: unknown (index, nullable)
+
 ### ApiKey
 - id: str (pk, default)
 - workspace_id: str (index)
@@ -172,3 +193,10 @@
 - user_id: str (index)
 - role_id: str (index)
 - status: String (default)
+
+### WorkspaceSetting
+- id: str (pk, default)
+- workspace_id: str (index)
+- key: String
+- value: JSON (default)
+- updated_by_user_id: unknown (index, nullable)

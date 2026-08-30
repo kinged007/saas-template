@@ -374,6 +374,132 @@ def build_workflows(
             return
         await execute_run(run_id)
 
+    async def on_agent_profile_changed(payload: dict, metadata) -> None:
+        workspace_id = payload.get("workspace_id")
+        if not workspace_id:
+            return
+        async with SessionFactory() as session:
+            result = await session.execute(
+                select(WorkspaceMember.user_id).where(
+                    WorkspaceMember.workspace_id == workspace_id,
+                    WorkspaceMember.status == "active",
+                )
+            )
+            user_ids = [r[0] for r in result.all()]
+        if not user_ids:
+            return
+        await connection_manager.push_many(user_ids, payload, event="agents.profile.changed")
+
+    async def _route_to_agents(payload: dict, metadata) -> None:
+        """Durable side-effect of `conversations.message.created`: fan out to `agents.requests.chat`.
+
+        Invoked inside `on_conversation_message` after notifications are persisted, so a
+        single durable consumer still owns the subject (no duplicate subscription).
+        """
+        conversation_id = payload.get("conversation_id")
+        workspace_id = payload.get("workspace_id")
+        message_id = payload.get("message_id")
+        sender_id = payload.get("sender_id")
+        if not conversation_id or not workspace_id or not message_id:
+            return
+        async with SessionFactory() as session:
+            from src.models.agent import Agent  # local import to avoid cycle
+            from src.models.conversation import ConversationParticipant
+
+            result = await session.execute(
+                select(ConversationParticipant).where(
+                    ConversationParticipant.conversation_id == conversation_id,
+                    ConversationParticipant.participant_type == "agent",
+                )
+            )
+            agent_participants = list(result.scalars().all())
+            if not agent_participants:
+                return
+            agent_ids = [p.participant_id for p in agent_participants]
+            # Filter to active agents only
+            active_result = await session.execute(
+                select(Agent.id).where(Agent.id.in_(agent_ids), Agent.is_active.is_(True))
+            )
+            active_ids = {r[0] for r in active_result.all()}
+            for p in agent_participants:
+                if p.participant_id not in active_ids:
+                    continue
+                # Idempotency key is (conversation_id, message_id, agent_id) — caller de-duplicates
+                from src.events.publisher import publish_event as _publish
+
+                await _publish(
+                    bus,
+                    Subjects.AGENTS_REQUEST_CHAT,
+                    {
+                        "entity_type": "chat",
+                        "conversation_id": conversation_id,
+                        "message_id": message_id,
+                        "agent_id": p.participant_id,
+                        "workspace_id": workspace_id,
+                        "triggering_user_id": sender_id,
+                    },
+                )
+            logger.debug("routed message %s to %d agent(s) in %s", message_id, len(active_ids), conversation_id)
+
+    # Wrap the original on_conversation_message to also route to agents
+    _orig_on_conversation_message = on_conversation_message
+
+    async def on_conversation_message_with_routing(payload: dict, metadata) -> None:
+        await _orig_on_conversation_message(payload, metadata)
+        try:
+            await _route_to_agents(payload, metadata)
+        except Exception:
+            logger.exception("agent routing failed for message %s", payload.get("message_id"))
+
+    async def on_agents_request_chat(payload: dict, metadata) -> None:
+        """Stub durable consumer for `agents.requests.chat` (Phase 4).
+
+        Phase 5+ will replace this with the real handler dispatch (ChatHandler).
+        For now we log and fan out a transient run event so the streaming
+        plumbing can be exercised in tests.
+        """
+        logger.info("agents.requests.chat stub received: %s", payload)
+        # Emit a transient run event for fanout plumbing (no-op in prod until handler exists)
+        try:
+            from src.events.publisher import publish_event as _publish
+
+            await _publish(bus, Subjects.AGENTS_RUN_EVENT, payload, transient=True)
+        except Exception:
+            logger.exception("failed to publish agents.run.event stub")
+
+    async def on_agents_run_event(payload: dict, metadata) -> None:
+        """Fanout: push agent run events to watching users (every replica)."""
+        workspace_id = payload.get("workspace_id")
+        conversation_id = payload.get("conversation_id")
+        # Prefer explicit participant list if present, else resolve from DB
+        participant_ids: list[str] | None = payload.get("participant_user_ids") or payload.get("user_ids")
+        if participant_ids is None and conversation_id:
+            async with SessionFactory() as session:
+                from src.models.conversation import ConversationParticipant
+
+                result = await session.execute(
+                    select(ConversationParticipant.participant_id).where(
+                        ConversationParticipant.conversation_id == conversation_id,
+                        ConversationParticipant.participant_type == "user",
+                    )
+                )
+                participant_ids = [r[0] for r in result.all()]
+        if not participant_ids:
+            # Fallback: push to workspace members
+            if not workspace_id:
+                return
+            async with SessionFactory() as session:
+                result = await session.execute(
+                    select(WorkspaceMember.user_id).where(
+                        WorkspaceMember.workspace_id == workspace_id,
+                        WorkspaceMember.status == "active",
+                    )
+                )
+                participant_ids = [r[0] for r in result.all()]
+        if not participant_ids:
+            return
+        await connection_manager.push_many(participant_ids, payload, event="agents.run.event")
+
     registry.register(Subjects.WORKSPACE_MEMBER_INVITED, on_member_invited)
     registry.register(Subjects.WORKSPACE_MEMBER_JOINED, on_member_joined)
     registry.register(Subjects.WORKSPACE_MEMBER_ROLE_CHANGED, on_member_role_changed)
@@ -385,6 +511,9 @@ def build_workflows(
     registry.register(Subjects.APIKEY_REVOKED, on_apikey_revoked)
     registry.register(Subjects.JOBS_EXECUTE, on_job_execute)
     registry.register(Subjects.NOTIFICATIONS_CREATED, on_notification_created, fanout=True)
-    registry.register(Subjects.CONVERSATION_MESSAGE_CREATED, on_conversation_message)
+    registry.register(Subjects.CONVERSATION_MESSAGE_CREATED, on_conversation_message_with_routing)
     registry.register(Subjects.CONVERSATION_MESSAGE_LIVE, on_conversation_message_live, fanout=True)
     registry.register(Subjects.CONVERSATION_RENAMED, on_conversation_renamed, fanout=True)
+    registry.register(Subjects.AGENT_PROFILE_CHANGED, on_agent_profile_changed, fanout=True)
+    registry.register(Subjects.AGENTS_REQUEST_CHAT, on_agents_request_chat)
+    registry.register(Subjects.AGENTS_RUN_EVENT, on_agents_run_event, fanout=True)

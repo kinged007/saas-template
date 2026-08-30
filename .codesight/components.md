@@ -54,10 +54,15 @@
 - **RegisterPage** — `apps/web/src/pages/RegisterPage.tsx`
 - **RolesPage** — `apps/web/src/pages/RolesPage.tsx`
 - **WorkspaceCreatePage** — `apps/web/src/pages/WorkspaceCreatePage.tsx`
+- **AgentCreatePage** — `apps/web/src/pages/agents/AgentCreatePage.tsx`
+- **AgentEditPage** — `apps/web/src/pages/agents/AgentEditPage.tsx`
+- **AgentsPage** — `apps/web/src/pages/agents/AgentsPage.tsx`
 - **ProfileSettingsPage** — `apps/web/src/pages/settings/ProfileSettingsPage.tsx`
 - **GenericSettingsLayout** — props: registry, basePath, title, subtitle, can, guard — `apps/web/src/pages/settings/components/GenericSettingsLayout.tsx`
 - **SettingsNav** — props: sections, basePath — `apps/web/src/pages/settings/components/SettingsNav.tsx`
 - **WorkspaceSettingsLayout** — `apps/web/src/pages/settings/workspace/WorkspaceSettingsLayout.tsx`
+- **AgentsGeneralSection** — `apps/web/src/pages/settings/workspace/sections/AgentsGeneralSection.tsx`
+- **AgentsSandboxSection** — `apps/web/src/pages/settings/workspace/sections/AgentsSandboxSection.tsx`
 - **AuditLogSection** — `apps/web/src/pages/settings/workspace/sections/AuditLogSection.tsx`
 - **GeneralSection** — `apps/web/src/pages/settings/workspace/sections/GeneralSection.tsx`
 - **JobsSection** — `apps/web/src/pages/settings/workspace/sections/JobsSection.tsx`

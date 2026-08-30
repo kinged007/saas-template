@@ -14,7 +14,9 @@ from src.models.jobs import (
     JobLogEntry,
     JobRun,
 )
+from src.models.agent import Agent
 from src.models.secret import StoredSecret
+from src.models.workspace_setting import WorkspaceSetting
 from src.models.user_profile import UserProfile
 from src.models.workspace import (
     RefreshToken,
@@ -25,6 +27,7 @@ from src.models.workspace import (
 )
 
 __all__ = [
+    "Agent",
     "ApiKey",
     "AuditLogEntry",
     "Conversation",
@@ -42,4 +45,5 @@ __all__ = [
     "UserProfile",
     "Workspace",
     "WorkspaceMember",
+    "WorkspaceSetting",
 ]

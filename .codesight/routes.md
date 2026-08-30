@@ -2,7 +2,8 @@
 
 ## CRUD Resources
 
-- **``** GET | POST | GET/:id | PATCH/:id | DELETE/:id
+- **``** GET | POST | GET/:id | PUT/:id | DELETE/:id
+- **`/{agent_id}/secrets`** GET | GET/:id | PUT/:id | DELETE/:id → Secret
 - **`/global`** GET | GET/:id | PATCH/:id → Global
 
 ## Other Routes

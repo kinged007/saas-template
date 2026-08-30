@@ -8,12 +8,13 @@
 
 ## Scale
 
-52 API routes · 17 database models · 63 UI components · 107 library files · 5 middleware layers · 33 environment variables
+61 API routes · 19 database models · 68 UI components · 118 library files · 5 middleware layers · 33 environment variables
 
 ## Subsystems
 
 - **[Auth](./auth.md)** — 5 routes — touches: auth
-- **[Api_keys](./api_keys.md)** — 4 routes — touches: db
+- **[Agents](./agents.md)** — 8 routes — touches: db
+- **[Api_keys](./api_keys.md)** — 2 routes — touches: db
 - **[Conversations](./conversations.md)** — 8 routes
 - **[Invitations](./invitations.md)** — 4 routes — touches: db, auth
 - **[Jobs](./jobs.md)** — 11 routes — touches: auth
@@ -21,25 +22,26 @@
 - **[Notifications](./notifications.md)** — 2 routes — touches: db
 - **[Profiles](./profiles.md)** — 8 routes — touches: db
 - **[Roles](./roles.md)** — 2 routes
+- **[Workspace_settings](./workspace_settings.md)** — 3 routes — touches: db
 - **[Workspaces](./workspaces.md)** — 3 routes — touches: db
 - **[Infra](./infra.md)** — 3 routes
 
-**Database:** sqlalchemy, 17 models — see [database.md](./database.md)
+**Database:** sqlalchemy, 19 models — see [database.md](./database.md)
 
-**UI:** 63 components (react) — see [ui.md](./ui.md)
+**UI:** 68 components (react) — see [ui.md](./ui.md)
 
-**Libraries:** 107 files — see [libraries.md](./libraries.md)
+**Libraries:** 118 files — see [libraries.md](./libraries.md)
 
 ## High-Impact Files
 
 Changes to these files have the widest blast radius across the codebase:
 
-- `apps/api/src/db/session.py` — imported by **33** files
+- `apps/api/src/db/session.py` — imported by **36** files
 - `apps/web/src/types.ts` — imported by **23** files
-- `apps/api/src/models/workspace.py` — imported by **20** files
-- `apps/api/src/events/bus.py` — imported by **16** files
-- `apps/api/src/settings.py` — imported by **14** files
-- `apps/api/src/api/deps.py` — imported by **13** files
+- `apps/api/src/models/workspace.py` — imported by **22** files
+- `apps/api/src/settings.py` — imported by **18** files
+- `apps/api/src/events/bus.py` — imported by **18** files
+- `apps/api/src/api/deps.py` — imported by **15** files
 
 ## Required Environment Variables
 

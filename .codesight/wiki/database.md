@@ -2,7 +2,31 @@
 
 > **Navigation aid.** Schema shapes and field types extracted via AST. Read the actual schema source files before writing migrations or query logic.
 
-**sqlalchemy** — 17 models
+**sqlalchemy** — 19 models
+
+### Agent
+
+pk: `id` (str)
+
+- `id`: str _(pk, default)_
+- `workspace_id`: str _(index)_
+- `slug`: String
+- `name`: String
+- `description`: Text _(nullable)_
+- `avatar`: String _(nullable)_
+- `system_prompt`: Text _(nullable)_
+- `model`: String _(nullable)_
+- `temperature`: Float _(nullable)_
+- `max_tokens`: Integer _(nullable)_
+- `tool_allowlist`: JSON _(nullable)_
+- `mcp_servers`: JSON _(default)_
+- `execution_target`: String _(nullable)_
+- `role_id`: unknown _(index, nullable)_
+- `skills`: JSON _(default)_
+- `is_active`: Boolean _(default)_
+- `custom_data`: JSON _(default)_
+- `created_by_user_id`: unknown _(index, nullable)_
+- `updated_by_user_id`: unknown _(index, nullable)_
 
 ### ApiKey
 
@@ -228,16 +252,26 @@ pk: `id` (str)
 - `role_id`: str _(index)_
 - `status`: String _(default)_
 
+### WorkspaceSetting
+
+pk: `id` (str)
+
+- `id`: str _(pk, default)_
+- `workspace_id`: str _(index)_
+- `key`: String
+- `value`: JSON _(default)_
+- `updated_by_user_id`: unknown _(index, nullable)_
+
 ## Schema Source Files
 
 Read and edit these files when adding columns, creating migrations, or changing relations:
 
-- `apps/api/src/db/session.py` — imported by **33** files
-- `apps/api/src/models/workspace.py` — imported by **20** files
+- `apps/api/src/db/session.py` — imported by **36** files
+- `apps/api/src/models/workspace.py` — imported by **22** files
 - `apps/api/src/models/core.py` — imported by **13** files
-- `apps/api/src/db/base.py` — imported by **10** files
+- `apps/api/src/db/base.py` — imported by **12** files
+- `apps/api/src/schemas/api.py` — imported by **11** files
 - `apps/api/src/models/api_key.py` — imported by **10** files
-- `apps/api/src/schemas/api.py` — imported by **10** files
 - `apps/api/src/models/jobs.py` — imported by **8** files
 
 ---

@@ -1,7 +1,7 @@
 # Test Coverage
 
-> **28%** of routes and models are covered by tests
-> 22 test files found
+> **26%** of routes and models are covered by tests
+> 25 test files found
 
 ## Covered Routes
 
@@ -11,9 +11,11 @@
 
 ## Covered Models
 
+- Agent
 - ApiKey
 - AuditLogEntry
 - Conversation
+- ConversationParticipant
 - Message
 - Invitation
 - Notification

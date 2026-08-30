@@ -220,6 +220,42 @@ export type ApiKeyCreated = ApiKey & {
   key: string;
 };
 
+export type Agent = {
+  id: string;
+  workspace_id: string;
+  slug: string;
+  name: string;
+  description?: string | null;
+  avatar?: string | null;
+  system_prompt?: string | null;
+  model?: string | null;
+  temperature?: number | null;
+  max_tokens?: number | null;
+  tool_allowlist?: string[] | null;
+  mcp_servers: Array<{
+    id: string;
+    url: string;
+    transport: "http" | "sse";
+    auth_secret_ref?: string | null;
+    enabled: boolean;
+    timeout_ms?: number | null;
+  }>;
+  execution_target?: string | null;
+  role_id?: string | null;
+  skills: string[];
+  is_active: boolean;
+  custom_data: Record<string, unknown>;
+  created_by_user_id?: string | null;
+  updated_by_user_id?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type AgentSecretInfo = {
+  key: string;
+  created_at?: string | null;
+};
+
 export type AuditLogEntry = {
   id: string;
   workspace_id: string;

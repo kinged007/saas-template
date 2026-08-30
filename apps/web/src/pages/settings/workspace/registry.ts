@@ -1,4 +1,4 @@
-import { Building2, Users, ShieldCheck, Clock, ScrollText } from "lucide-react";
+import { Building2, Users, ShieldCheck, Clock, ScrollText, Bot, Container } from "lucide-react";
 
 import { createSettingsRegistry } from "../types";
 import { GeneralSection } from "./sections/GeneralSection";
@@ -6,6 +6,8 @@ import { RolesSection } from "./sections/RolesSection";
 import { JobsSection } from "./sections/JobsSection";
 import { UsersSection } from "./sections/UsersSection";
 import { AuditLogSection } from "./sections/AuditLogSection";
+import { AgentsGeneralSection } from "./sections/AgentsGeneralSection";
+import { AgentsSandboxSection } from "./sections/AgentsSandboxSection";
 
 /**
  * Workspace settings registry — the single extension seam for workspace admin pages.
@@ -76,6 +78,22 @@ export const workspaceSettings = createSettingsRegistry([
     component: AuditLogSection,
     permission: "audit:read",
     order: 50,
+  },
+  {
+    key: "agents-general",
+    label: "Agents",
+    icon: Bot,
+    component: AgentsGeneralSection,
+    permission: "workspace:read",
+    order: 60,
+  },
+  {
+    key: "agents-sandbox",
+    label: "Sandbox",
+    icon: Container,
+    component: AgentsSandboxSection,
+    permission: "workspace:read",
+    order: 61,
   },
 ]);
 

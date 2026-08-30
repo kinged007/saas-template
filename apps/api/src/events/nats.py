@@ -30,6 +30,7 @@ STREAM_SUBJECTS = [
     f"{Subjects.AUDIT}.>",
     f"{Subjects.JOBS}.>",
     f"{Subjects.CONVERSATIONS}.>",
+    f"{Subjects.AGENTS}.>",
 ]
 MAX_DELIVER = 10
 ACK_WAIT_SECONDS = 30.0

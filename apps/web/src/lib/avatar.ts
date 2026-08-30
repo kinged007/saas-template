@@ -77,6 +77,17 @@ export function getAvatarData(
   return { src: getAvatarSrc(avatarUrl), initials, name: name || "U" };
 }
 
+export type ParsedAvatar = { kind: "url" | "emoji"; value: string };
+
+export function parseAvatarValue(value?: string | null): ParsedAvatar | null {
+  const raw = (value ?? "").trim();
+  if (!raw) return null;
+  if (raw.startsWith("url:")) return { kind: "url", value: raw.slice(4).trim() };
+  if (raw.startsWith("emoji:")) return { kind: "emoji", value: raw.slice(6).trim() };
+  if (/^https?:\/\//i.test(raw) || raw.startsWith("data:")) return { kind: "url", value: raw };
+  return { kind: "emoji", value: raw };
+}
+
 // Backwards-compatible helper for the "user profile class" wording in tasks.
 // Allows callers to treat this as UserProfileAvatar.getInitials etc.
 export const UserProfileAvatar = {
@@ -84,4 +95,5 @@ export const UserProfileAvatar = {
   getInitialsFromNames,
   getAvatarSrc,
   getAvatarData,
+  parseAvatarValue,
 };

@@ -47,6 +47,13 @@ class Subjects:
     JOBS = "jobs"
     JOBS_EXECUTE = "jobs.execute"
 
+    AGENTS = "agents"
+    AGENT_PROFILE_CHANGED = "agents.profile.changed"
+    AGENTS_REQUEST_PREFIX = "agents.requests."
+    AGENTS_REQUEST_CHAT = "agents.requests.chat"
+    AGENTS_RUN_EVENT = "agents.run.event"
+    AGENTS_PERMISSION_EVENT = "agents.permission.event"
+
 
 # Subjects published over core NATS (realtime fan-out / publish-only).
 # TODO(events): when a durable consumer is added for one of these, move the
@@ -55,6 +62,9 @@ TRANSIENT_SUBJECTS: set[str] = {
     Subjects.NOTIFICATIONS_CREATED,
     Subjects.CONVERSATION_MESSAGE_LIVE,
     Subjects.CONVERSATION_RENAMED,
+    Subjects.AGENT_PROFILE_CHANGED,
+    Subjects.AGENTS_RUN_EVENT,
+    Subjects.AGENTS_PERMISSION_EVENT,
 }
 
 
@@ -74,4 +84,8 @@ ALL = [
     Subjects.APIKEY_REVOKED,
     Subjects.AUDIT_ENTRY_CREATED,
     Subjects.JOBS_EXECUTE,
+    Subjects.AGENT_PROFILE_CHANGED,
+    Subjects.AGENTS_REQUEST_CHAT,
+    Subjects.AGENTS_RUN_EVENT,
+    Subjects.AGENTS_PERMISSION_EVENT,
 ]

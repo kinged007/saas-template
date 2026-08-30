@@ -28,6 +28,11 @@ JOB_EDIT = "jobs:edit"
 
 AUDIT_READ = "audit:read"
 
+AGENT_READ = "agent:read"
+AGENT_MANAGE = "agent:manage"
+AGENT_INVOKE = "agent:invoke"
+AGENT_USAGE_READ = "agent:usage:read"
+
 ALL_PERMISSIONS = [
     WORKSPACE_READ,
     WORKSPACE_UPDATE,
@@ -46,6 +51,10 @@ ALL_PERMISSIONS = [
     JOB_VIEW,
     JOB_EDIT,
     AUDIT_READ,
+    AGENT_READ,
+    AGENT_MANAGE,
+    AGENT_INVOKE,
+    AGENT_USAGE_READ,
 ]
 
 
@@ -69,6 +78,8 @@ def permissions_for_role(role_name: str) -> list[str]:
                 NOTIFICATION_ACK,
                 MESSAGE_READ,
                 MESSAGE_SEND,
+                AGENT_READ,
+                AGENT_INVOKE,
             ]
         case "viewer":
             return [
@@ -81,6 +92,8 @@ def permissions_for_role(role_name: str) -> list[str]:
                 NOTIFICATION_ACK,
                 MESSAGE_READ,
                 MESSAGE_SEND,
+                AGENT_READ,
+                AGENT_INVOKE,
             ]
         case _:
             raise ValueError(f"unknown role {role_name}")

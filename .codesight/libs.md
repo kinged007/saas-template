@@ -227,6 +227,21 @@
 - `apps/api/alembic/versions/0004_jobs.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0005_conversations.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0006_user_profiles.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0007_agents.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0008_workspace_settings.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/src/agents/handlers/base.py`
+  - class AgentRequest
+  - class AgentContext
+  - class AgentEvent
+  - class AgentHandler
+- `apps/api/src/agents/registry.py` — function register_handler: (handler) -> None, function get_handler: (entity_type) -> AgentHandler | None
+- `apps/api/src/agents/runners/base.py`
+  - class RunSpec
+  - class RunHandle
+  - class AgentEvent
+  - class RunnerService
+- `apps/api/src/agents/runners/local.py` — class LocalTmpRunner
+- `apps/api/src/agents/sessions/store.py` — class SessionStore
 - `apps/api/src/api/crud.py`
   - function parse_query: (request, *, max_limit) -> QuerySpec
   - function apply_query: (stmt, model, spec, *, sortable, filterable) -> Select
@@ -296,6 +311,7 @@
   - _...4 more_
 - `apps/api/src/jobs/scheduler.py` — class JobScheduler
 - `apps/api/src/main.py` — function lifespan: (app), function root: () -> dict
+- `apps/api/src/models/agent.py` — class Agent
 - `apps/api/src/models/api_key.py` — class ApiKey
 - `apps/api/src/models/audit.py` — class AuditLogEntry
 - `apps/api/src/models/conversation.py`
@@ -319,6 +335,7 @@
   - class Workspace
   - class Role
   - class WorkspaceMember
+- `apps/api/src/models/workspace_setting.py` — class WorkspaceSetting
 - `apps/api/src/realtime/manager.py` — class ConnectionManager
 - `apps/api/src/schemas/api.py`
   - class LoginRequest
@@ -327,11 +344,17 @@
   - class RefreshRequest
   - class WorkspaceCreate
   - class WorkspaceUpdate
-  - _...17 more_
+  - _...21 more_
 - `apps/api/src/secrets/base.py` — class SecretRecord, class SecretStore
 - `apps/api/src/secrets/db_store.py` — class DbSecretStore
 - `apps/api/src/secrets/factory.py` — function build_secret_store: () -> SecretStore
 - `apps/api/src/seed.py` — function main: () -> None
+- `apps/api/src/services/agents.py`
+  - class AgentError
+  - class AgentNotFound
+  - class AgentConflict
+  - class AgentValidation
+  - class AgentService
 - `apps/api/src/services/api_keys.py`
   - class ApiKeyError
   - class ApiKeyForbidden
@@ -365,6 +388,11 @@
   - function workspace_to_dict: (w, *, role, permissions) -> dict
   - function profile_to_dict: (p) -> dict
   - function public_projection: (p) -> dict
+- `apps/api/src/services/workspace_settings.py`
+  - class WorkspaceSettingsError
+  - class WorkspaceSettingsNotFound
+  - class WorkspaceSettingsValidation
+  - class WorkspaceSettingsService
 - `apps/api/src/services/workspaces.py`
   - class WorkspaceError
   - class WorkspaceForbidden
@@ -382,7 +410,9 @@
   - function getInitialsFromNames: (firstName?, lastName?, fallbackName?) => string
   - function getAvatarSrc: (avatarUrl?) => string | undefined
   - function getAvatarData: (entity, fallbackEmailAsName) => void
-  - const UserProfileAvatar
+  - function parseAvatarValue: (value?) => ParsedAvatar | null
+  - type ParsedAvatar
+  - _...1 more_
 - `apps/web/src/lib/utils.ts` — function cn: (...inputs) => void, function oktaAdminConsoleFix: (value?) => string | null
 - `apps/web/src/providers/liveCache.ts`
   - function upsertThreadMessage: (conversationId, message) => void
@@ -406,7 +436,7 @@
   - function getDisplayName: (identity?) => string
   - function getMemberDisplayName: (member) => string
   - function getParticipantDisplayName: (participant) => string
-  - _...17 more_
+  - _...19 more_
 - `apps/web/src/utils/permissions.ts` — function activeWorkspacePermissions: (identity?) => string[]
 - `scripts/dev.py`
   - function main: () -> int

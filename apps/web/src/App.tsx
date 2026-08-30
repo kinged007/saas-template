@@ -30,6 +30,11 @@ import { RolesSection } from "./pages/settings/workspace/sections/RolesSection";
 import { JobsSection } from "./pages/settings/workspace/sections/JobsSection";
 import { UsersSection } from "./pages/settings/workspace/sections/UsersSection";
 import { AuditLogSection } from "./pages/settings/workspace/sections/AuditLogSection";
+import { AgentsGeneralSection } from "./pages/settings/workspace/sections/AgentsGeneralSection";
+import { AgentsSandboxSection } from "./pages/settings/workspace/sections/AgentsSandboxSection";
+import { AgentsPage } from "./pages/agents/AgentsPage";
+import { AgentCreatePage } from "./pages/agents/AgentCreatePage";
+import { AgentEditPage } from "./pages/agents/AgentEditPage";
 
 export function App() {
   return (
@@ -65,6 +70,7 @@ export function App() {
             meta: { label: "Scheduled Jobs" },
           },
           { name: "audit", list: "/audit", meta: { hide: true } },
+          { name: "agents", list: "/agents", create: "/agents/create", edit: "/agents/edit/:id" },
         ]}
       >
         <WorkspaceProvider>
@@ -83,6 +89,9 @@ export function App() {
               <Route path="workspaces/create" element={<WorkspaceCreatePage />} />
               <Route path="members" element={<MembersPage />} />
               <Route path="invitations" element={<ReceivedInvitationsPage />} />
+              <Route path="agents/create" element={<AgentCreatePage />} />
+              <Route path="agents/edit/:id" element={<AgentEditPage />} />
+              <Route path="agents" element={<AgentsPage />} />
               <Route path="api-keys/create" element={<ApiKeyCreatePage />} />
               <Route path="api-keys" element={<ApiKeysPage />} />
               <Route path="inbox" element={<InboxPage />} />
@@ -97,6 +106,8 @@ export function App() {
                 <Route path="jobs" element={<JobsSection />} />
                 <Route path="users" element={<UsersSection />} />
                 <Route path="audit" element={<AuditLogSection />} />
+                <Route path="agents-general" element={<AgentsGeneralSection />} />
+                <Route path="agents-sandbox" element={<AgentsSandboxSection />} />
               </Route>
               {/* Legacy redirects — keep old URLs working */}
               <Route path="roles" element={<Navigate to="/settings/workspace/roles" replace />} />

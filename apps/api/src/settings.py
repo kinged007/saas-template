@@ -46,6 +46,16 @@ class Settings(BaseSettings):
     # superuser (global jobs, etc.). Empty disables the bootstrap.
     superadmin_email: str = ""
 
+    # Agents
+    agent_llm_providers: str = ""
+    agent_default_model: str = ""
+    agent_runner_driver: str = "local"
+    agent_runner_root: str = "/tmp/agent-runs"
+    agent_mcp_enabled: bool = False
+    vector_enabled: bool = False
+    agent_cost_table: str = ""
+    agent_permission_ttl: int = 3600
+
     # Scheduled jobs
     jobs_scheduler_tick_seconds: float = 10.0
     jobs_default_timeout_seconds: int = 600

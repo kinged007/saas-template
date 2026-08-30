@@ -13,3 +13,21 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-extendable-user-profiles.md`
   summary: Consider POST alternative for DELETE /me confirm to handle proxy stripping
   evidence: Edge case notes DELETE bodies may be stripped by proxies; current spec uses DELETE with JSON body
+- source_spec: none
+  summary: Agent invocation pipeline — chat handler + Inbox integration (agent-platform-plan Phases 5–6)
+  evidence: Split from agent-platform intent — framework core (Phase 4) shipped; chat handler + Inbox integration still deferred
+- source_spec: none
+  summary: Agent memory (workspace+agent+user scoped) (agent-platform-plan Phase 7)
+  evidence: Split from agent-platform intent — depends on the invocation pipeline, deferred independently
+- source_spec: none
+  summary: Platform MCP as extensible tool registry, role-gated (agent-platform-plan Phase 8)
+  evidence: Split from agent-platform intent — depends on the invocation pipeline and agent roles, deferred independently
+- source_spec: none
+  summary: Cost & usage monitoring dashboard (agent-platform-plan Phase 9)
+  evidence: Split from agent-platform intent — usage rows land during invocation, dashboard deferred independently
+- source_spec: none
+  summary: Scheduled invocation of agents (agent-platform-plan Phase 10)
+  evidence: Split from agent-platform intent — builds on the invocation pipeline, deferred independently
+- source_spec: none
+  summary: Extension guide ("add a tasks entity") + hardening notes (agent-platform-plan Phase 11)
+  evidence: Split from agent-platform intent — documentation phase, deferred until the pipeline exists

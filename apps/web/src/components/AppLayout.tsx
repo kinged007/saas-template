@@ -34,6 +34,7 @@ import { useCustom, useGetIdentity, useLogout } from "@refinedev/core";
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import {
+  Bot,
   Building2,
   ChevronsUpDown,
   CircleUser,
@@ -58,6 +59,7 @@ import { getDisplayName } from "../types";
 const MENU_ITEMS = [
   { key: "/", label: "Dashboard", icon: LayoutDashboard, permission: "workspace:read" },
   { key: "/inbox", label: "Inbox", icon: Inbox, permission: "notification:read" },
+  { key: "/agents", label: "Agents", icon: Bot, permission: "agent:read" },
   { key: "/members", label: "Members", icon: Users, permission: "member:read" },
 ];
 
@@ -94,7 +96,7 @@ function SidebarNav() {
               <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
                 <Link to={item.key}>
                   <span className="relative">
-                    <Icon />
+                    <Icon className="h-4 w-4 shrink-0" />
                     {badgeCount > 0 && (
                       <span className="absolute -right-1.5 -top-1.5 hidden h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-0.5 text-[10px] font-medium leading-none text-destructive-foreground group-data-[collapsible=icon]:flex">
                         {badgeCount > 99 ? "99+" : badgeCount}
@@ -103,7 +105,7 @@ function SidebarNav() {
                   </span>
                   <span>{item.label}</span>
                   {badgeCount > 0 && (
-                    <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-xs font-medium text-destructive-foreground group-data-[collapsible=icon]:hidden">
+                    <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-medium leading-none text-destructive-foreground group-data-[collapsible=icon]:hidden">
                       {badgeCount > 99 ? "99+" : badgeCount}
                     </span>
                   )}

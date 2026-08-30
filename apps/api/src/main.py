@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routes import (
+    agents,
     api_keys,
     audit,
     auth,
@@ -18,6 +19,7 @@ from src.api.routes import (
     notifications,
     profiles,
     roles,
+    workspace_settings,
     workspaces,
     ws,
 )
@@ -112,4 +114,6 @@ app.include_router(notifications.router, prefix=API)
 app.include_router(conversations.router, prefix=API)
 app.include_router(profiles.router, prefix=API)
 app.include_router(audit.router, prefix=API)
+app.include_router(agents.router, prefix=API)
+app.include_router(workspace_settings.router, prefix=API)
 app.include_router(ws.router, prefix=API)

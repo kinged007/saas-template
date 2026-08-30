@@ -17,4 +17,8 @@ export const ALL_PERMISSIONS = [
   "jobs:view",
   "jobs:edit",
   "audit:read",
+  "agent:read",
+  "agent:manage",
+  "agent:invoke",
+  "agent:usage:read",
 ];
