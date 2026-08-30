@@ -179,6 +179,7 @@ export type Conversation = {
     first_name?: string | null;
     last_name?: string | null;
     avatar_url?: string | null;
+    email?: string | null;
   }>;
   message_count?: number;
   created_at: string;
@@ -194,6 +195,7 @@ export type Message = {
   sender_id: string;
   sender_name: string;
   sender_avatar_url?: string | null;
+  sender_email?: string | null;
   body: string;
   body_html?: string | null;
   created_at: string;

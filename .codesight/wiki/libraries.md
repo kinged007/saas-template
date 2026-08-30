@@ -2,7 +2,7 @@
 
 > **Navigation aid.** Library inventory extracted via AST. Read the source files listed here before modifying exported functions.
 
-**106 library files** across 5 modules
+**107 library files** across 5 modules
 
 ## Api (57 files)
 
@@ -62,9 +62,10 @@
 - `agent/skills/book-converter/scripts/analyze_structure.py` — extract_headers, detect_issues, generate_structure_report, main
 - _…and 11 more files_
 
-## Web (7 files)
+## Web (8 files)
 
 - `apps/web/src/types.ts` — getProfileField, formatDisplayName, getDisplayNameFromProfile, getDisplayName, getMemberDisplayName, getParticipantDisplayName, …
+- `apps/web/src/lib/avatar.ts` — getInitials, getInitialsFromNames, getAvatarSrc, getAvatarData, UserProfileAvatar
 - `apps/web/src/providers/liveCache.ts` — upsertThreadMessage, removeThreadMessage, applyMessageCreated, applyNotificationCreated, applyConversationRead
 - `apps/web/src/hooks/useProfile.ts` — useProfile, useUpdateProfile, useExportProfile, useDeleteAccount
 - `apps/web/src/providers/liveProvider.ts` — subscribeLive, LiveEventHandler, liveChannels, liveProvider

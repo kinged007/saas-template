@@ -232,12 +232,13 @@ pk: `id` (str)
 
 Read and edit these files when adding columns, creating migrations, or changing relations:
 
-- `apps/api/src/db/session.py` — imported by **32** files
-- `apps/api/src/models/workspace.py` — imported by **19** files
+- `apps/api/src/db/session.py` — imported by **33** files
+- `apps/api/src/models/workspace.py` — imported by **20** files
 - `apps/api/src/models/core.py` — imported by **13** files
 - `apps/api/src/db/base.py` — imported by **10** files
+- `apps/api/src/models/api_key.py` — imported by **10** files
 - `apps/api/src/schemas/api.py` — imported by **10** files
-- `apps/api/src/models/api_key.py` — imported by **9** files
+- `apps/api/src/models/jobs.py` — imported by **8** files
 
 ---
 _Back to [overview.md](./overview.md)_

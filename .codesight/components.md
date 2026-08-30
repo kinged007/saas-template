@@ -55,3 +55,11 @@
 - **RolesPage** — `apps/web/src/pages/RolesPage.tsx`
 - **WorkspaceCreatePage** — `apps/web/src/pages/WorkspaceCreatePage.tsx`
 - **ProfileSettingsPage** — `apps/web/src/pages/settings/ProfileSettingsPage.tsx`
+- **GenericSettingsLayout** — props: registry, basePath, title, subtitle, can, guard — `apps/web/src/pages/settings/components/GenericSettingsLayout.tsx`
+- **SettingsNav** — props: sections, basePath — `apps/web/src/pages/settings/components/SettingsNav.tsx`
+- **WorkspaceSettingsLayout** — `apps/web/src/pages/settings/workspace/WorkspaceSettingsLayout.tsx`
+- **AuditLogSection** — `apps/web/src/pages/settings/workspace/sections/AuditLogSection.tsx`
+- **GeneralSection** — `apps/web/src/pages/settings/workspace/sections/GeneralSection.tsx`
+- **JobsSection** — `apps/web/src/pages/settings/workspace/sections/JobsSection.tsx`
+- **RolesSection** — `apps/web/src/pages/settings/workspace/sections/RolesSection.tsx`
+- **UsersSection** — `apps/web/src/pages/settings/workspace/sections/UsersSection.tsx`

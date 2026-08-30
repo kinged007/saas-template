@@ -144,7 +144,18 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       }
       return;
     }
-    // Stable: keep store in sync and record.
+    // Stable: keep store in sync and record. Also sync name/description/permission
+    // changes (e.g. after PATCH /workspaces/:id) without triggering a cache wipe.
+    if (
+      selected.name !== next.name ||
+      selected.description !== next.description ||
+      selected.slug !== next.slug ||
+      // permissions/role may have changed after a role update
+      JSON.stringify(selected.permissions) !== JSON.stringify(next.permissions) ||
+      selected.role !== next.role
+    ) {
+      setSelected(next);
+    }
     workspaceStore.set(next.id);
     prevWorkspaceIdRef.current = next.id;
   }, [workspaces, selected, identityId, switching]);

@@ -10,8 +10,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { UserAvatar } from "@/components/ui/user-avatar";
 import { formatDate } from "../components/ui";
 import { TabbedPageHeader } from "../components/refine-ui/layout/tabbed-page-header";
 import { cn } from "@/lib/utils";
@@ -319,6 +319,7 @@ export function InboxPage() {
       sender_id: identity?.id ?? "me",
       sender_name: getDisplayName(identity as Identity | null) || "You",
       sender_avatar_url: identity?.avatar_url ?? null,
+      sender_email: identity?.email ?? null,
       body,
       body_html: null,
       created_at: new Date().toISOString(),
@@ -346,6 +347,7 @@ export function InboxPage() {
           sender_type: serverMsg.sender_type,
           sender_name: serverMsg.sender_name,
           sender_avatar_url: serverMsg.sender_avatar_url,
+          sender_email: serverMsg.sender_email,
           body: serverMsg.body,
           body_preview: truncatePreview(stripMarkdown(serverMsg.body), 200),
           created_at: serverMsg.created_at,
@@ -597,21 +599,18 @@ export function InboxPage() {
                       <div className="flex items-center gap-2 pl-4 pr-16">
                         <div className="flex -space-x-1">
                           {c.participants.slice(0, 3).map((p) => {
-                            const name = getParticipantDisplayName(p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null });
-                            const initials = (() => {
-                              const fn = (p as unknown as { first_name?: string }).first_name?.trim();
-                              const ln = (p as unknown as { last_name?: string }).last_name?.trim();
-                              if (fn && ln) return `${fn[0]}${ln[0]}`.toUpperCase();
-                              // Fallback: use derived name's initials
-                              const derived = name.trim().split(/\s+/);
-                              if (derived.length >= 2) return `${derived[0][0]}${derived[1][0]}`.toUpperCase();
-                              return name.slice(0, 2).toUpperCase();
-                            })();
+                            const name = getParticipantDisplayName(
+                              p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null },
+                            );
                             return (
-                              <Avatar key={p.id} className="h-5 w-5 border-2 border-background">
-                                <AvatarImage src={p.avatar_url ?? undefined} />
-                                <AvatarFallback className="text-[9px]">{initials}</AvatarFallback>
-                              </Avatar>
+                              <UserAvatar
+                                key={p.id}
+                                name={name}
+                                email={(p as unknown as { email?: string | null }).email ?? null}
+                                avatarUrl={p.avatar_url}
+                                sizeClassName="h-5 w-5 border-2 border-background"
+                                fallbackClassName="text-[9px]"
+                              />
                             );
                           })}
                           {c.participants.length > 3 && (
@@ -620,7 +619,6 @@ export function InboxPage() {
                             </span>
                           )}
                         </div>
-                        <span className="text-muted-foreground truncate text-[11px]">{c.participants.map((p) => getParticipantDisplayName(p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null })).join(", ")}</span>
                       </div>
                       <p className="text-muted-foreground pl-4 pr-16 text-[11px]">{formatDate(c.last_message_at)}</p>
                     </button>
@@ -780,21 +778,20 @@ export function InboxPage() {
                       )}
                       <div className="mt-1 flex flex-wrap items-center gap-1">
                         {selectedConversation.participants.slice(0, 2).map((p) => {
-                          const name = getParticipantDisplayName(p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null });
-                          const initials = (() => {
-                            const fn = (p as unknown as { first_name?: string }).first_name?.trim();
-                            const ln = (p as unknown as { last_name?: string }).last_name?.trim();
-                            if (fn && ln) return `${fn[0]}${ln[0]}`.toUpperCase();
-                            const derived = name.trim().split(/\s+/);
-                            if (derived.length >= 2) return `${derived[0][0]}${derived[1][0]}`.toUpperCase();
-                            return name.slice(0, 2).toUpperCase();
-                          })();
+                          const name = getParticipantDisplayName(
+                            p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null },
+                          );
                           return (
                             <Badge key={p.id} variant="secondary" className="gap-1">
-                              <Avatar className="h-4 w-4">
-                                <AvatarImage src={p.avatar_url ?? undefined} />
-                                <AvatarFallback className="text-[8px]">{initials}</AvatarFallback>
-                              </Avatar>
+                              <UserAvatar
+                                name={name}
+                                email={(p as unknown as { email?: string | null }).email ?? null}
+                                avatarUrl={p.avatar_url}
+                                sizeClassName="h-4 w-4"
+                                fallbackClassName="text-[8px]"
+                                firstName={(p as unknown as { first_name?: string | null }).first_name ?? null}
+                                lastName={(p as unknown as { last_name?: string | null }).last_name ?? null}
+                              />
                               {name}
                             </Badge>
                           );
@@ -845,10 +842,13 @@ export function InboxPage() {
                         return (
                           <div key={m.id} className={cn("flex gap-3", isSelf ? "justify-end" : "justify-start")}>
                             {!isSelf && (
-                              <Avatar className="h-7 w-7 shrink-0">
-                                <AvatarImage src={m.sender_avatar_url ?? undefined} />
-                                <AvatarFallback className="text-xs">{m.sender_name.slice(0, 2).toUpperCase()}</AvatarFallback>
-                              </Avatar>
+                              <UserAvatar
+                                name={m.sender_name}
+                                email={m.sender_email ?? null}
+                                avatarUrl={m.sender_avatar_url ?? null}
+                                sizeClassName="h-7 w-7 shrink-0"
+                                fallbackClassName="text-xs"
+                              />
                             )}
                             <div className={cn("max-w-[75%] rounded-lg px-3 py-2", isSelf ? "bg-primary text-primary-foreground" : "bg-muted")}>
                               {!isSelf && <p className="mb-1 text-xs font-medium opacity-70">{m.sender_name}</p>}
@@ -860,10 +860,13 @@ export function InboxPage() {
                               </p>
                             </div>
                             {isSelf && (
-                              <Avatar className="h-7 w-7 shrink-0">
-                                <AvatarImage src={m.sender_avatar_url ?? undefined} />
-                                <AvatarFallback className="text-xs">{m.sender_name.slice(0, 2).toUpperCase()}</AvatarFallback>
-                              </Avatar>
+                              <UserAvatar
+                                name={m.sender_name}
+                                email={m.sender_email ?? identity?.email ?? null}
+                                avatarUrl={m.sender_avatar_url ?? null}
+                                sizeClassName="h-7 w-7 shrink-0"
+                                fallbackClassName="text-xs"
+                              />
                             )}
                           </div>
                         );
@@ -882,7 +885,7 @@ export function InboxPage() {
                         setDraft(md);
                         setDraftHtml(html);
                       }}
-                      placeholder="Write a message… (markdown supported)"
+                      placeholder="Write a message..."
                       minHeight="60px"
                     />
                     <div className="flex justify-end">
@@ -892,7 +895,6 @@ export function InboxPage() {
                       </Button>
                     </div>
                   </div>
-                  <p className="text-muted-foreground mt-2 text-xs">Press the toolbar to format. Stored as markdown, rendered with react-markdown.</p>
                 </div>
               </div>
             ) : (

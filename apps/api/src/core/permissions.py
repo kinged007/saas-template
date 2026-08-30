@@ -26,6 +26,8 @@ MESSAGE_SEND = "message:send"
 JOB_VIEW = "jobs:view"
 JOB_EDIT = "jobs:edit"
 
+AUDIT_READ = "audit:read"
+
 ALL_PERMISSIONS = [
     WORKSPACE_READ,
     WORKSPACE_UPDATE,
@@ -43,6 +45,7 @@ ALL_PERMISSIONS = [
     MESSAGE_SEND,
     JOB_VIEW,
     JOB_EDIT,
+    AUDIT_READ,
 ]
 
 

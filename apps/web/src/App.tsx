@@ -18,14 +18,18 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { WorkspaceCreatePage } from "./pages/WorkspaceCreatePage";
 import { MembersPage } from "./pages/MembersPage";
 import { ReceivedInvitationsPage } from "./pages/ReceivedInvitationsPage";
-import { RolesPage } from "./pages/RolesPage";
 import { ApiKeyCreatePage } from "./pages/ApiKeyCreatePage";
 import { ApiKeysPage } from "./pages/ApiKeysPage";
 import { InboxPage } from "./pages/InboxPage";
-import { JobsPage } from "./pages/JobsPage";
 import { JobDetailPage } from "./pages/JobDetailPage";
 import { JobRunPage } from "./pages/JobRunPage";
 import { ProfileSettingsPage } from "./pages/settings/ProfileSettingsPage";
+import { WorkspaceSettingsLayout } from "./pages/settings/workspace/WorkspaceSettingsLayout";
+import { GeneralSection } from "./pages/settings/workspace/sections/GeneralSection";
+import { RolesSection } from "./pages/settings/workspace/sections/RolesSection";
+import { JobsSection } from "./pages/settings/workspace/sections/JobsSection";
+import { UsersSection } from "./pages/settings/workspace/sections/UsersSection";
+import { AuditLogSection } from "./pages/settings/workspace/sections/AuditLogSection";
 
 export function App() {
   return (
@@ -48,7 +52,7 @@ export function App() {
         resources={[
           { name: "workspaces", list: "/", create: "/workspaces/create" },
           { name: "members", list: "/members" },
-          { name: "roles", list: "/roles" },
+          { name: "roles", list: "/settings/workspace/roles" },
           { name: "api-keys", list: "/api-keys", create: "/api-keys/create" },
           { name: "invitations", list: "/invitations" },
           { name: "notifications", list: "/inbox", meta: { label: "Inbox" } },
@@ -56,10 +60,11 @@ export function App() {
           { name: "messages", list: "/inbox", meta: { hide: true } },
           {
             name: "jobs",
-            list: "/jobs",
+            list: "/settings/workspace/jobs",
             show: "/jobs/:id",
             meta: { label: "Scheduled Jobs" },
           },
+          { name: "audit", list: "/audit", meta: { hide: true } },
         ]}
       >
         <WorkspaceProvider>
@@ -78,14 +83,24 @@ export function App() {
               <Route path="workspaces/create" element={<WorkspaceCreatePage />} />
               <Route path="members" element={<MembersPage />} />
               <Route path="invitations" element={<ReceivedInvitationsPage />} />
-              <Route path="roles" element={<RolesPage />} />
               <Route path="api-keys/create" element={<ApiKeyCreatePage />} />
               <Route path="api-keys" element={<ApiKeysPage />} />
               <Route path="inbox" element={<InboxPage />} />
-              <Route path="jobs" element={<JobsPage />} />
+              {/* Jobs detail stays top-level; list moved into workspace settings */}
               <Route path="jobs/:id" element={<JobDetailPage />} />
               <Route path="jobs/:id/runs/:runId" element={<JobRunPage />} />
               <Route path="settings/profile" element={<ProfileSettingsPage />} />
+              <Route path="settings/workspace" element={<WorkspaceSettingsLayout />}>
+                <Route index element={<Navigate to="general" replace />} />
+                <Route path="general" element={<GeneralSection />} />
+                <Route path="roles" element={<RolesSection />} />
+                <Route path="jobs" element={<JobsSection />} />
+                <Route path="users" element={<UsersSection />} />
+                <Route path="audit" element={<AuditLogSection />} />
+              </Route>
+              {/* Legacy redirects — keep old URLs working */}
+              <Route path="roles" element={<Navigate to="/settings/workspace/roles" replace />} />
+              <Route path="jobs" element={<Navigate to="/settings/workspace/jobs" replace />} />
             </Route>
             <Route
               path="/login"

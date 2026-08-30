@@ -377,6 +377,12 @@
   - function useUpdateProfile: () => void
   - function useExportProfile: () => void
   - function useDeleteAccount: () => void
+- `apps/web/src/lib/avatar.ts`
+  - function getInitials: (name) => string
+  - function getInitialsFromNames: (firstName?, lastName?, fallbackName?) => string
+  - function getAvatarSrc: (avatarUrl?) => string | undefined
+  - function getAvatarData: (entity, fallbackEmailAsName) => void
+  - const UserProfileAvatar
 - `apps/web/src/lib/utils.ts` — function cn: (...inputs) => void, function oktaAdminConsoleFix: (value?) => string | null
 - `apps/web/src/providers/liveCache.ts`
   - function upsertThreadMessage: (conversationId, message) => void
