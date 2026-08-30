@@ -23,9 +23,13 @@ async def bus():
 
 
 async def _register(bus, email, display_name, *, ip_address=None):
+    # display_name arg is legacy — split into first/last for new API
+    parts = display_name.strip().split()
+    fn = parts[0] if parts else "Test"
+    ln = " ".join(parts[1:]) if len(parts) > 1 else None
     async with SessionFactory() as session:
         return await AuthService(session, bus).register(
-            email=email, password="Password123!", display_name=display_name, ip_address=ip_address
+            email=email, password="Password123!", first_name=fn, last_name=ln, ip_address=ip_address
         )
 
 
@@ -360,7 +364,7 @@ async def test_services_without_bus_are_noops():
     """publish_audit/publish_event must no-op when no bus is wired."""
     async with SessionFactory() as session:
         user = await AuthService(session).register(
-            email="nobus@example.com", password="Password123!", display_name="No Bus"
+            email="nobus@example.com", password="Password123!", first_name="No", last_name="Bus"
         )
         service = WorkspaceService(session)
         workspace = await service.create_workspace(

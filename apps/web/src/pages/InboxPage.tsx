@@ -16,6 +16,7 @@ import { formatDate } from "../components/ui";
 import { TabbedPageHeader } from "../components/refine-ui/layout/tabbed-page-header";
 import { cn } from "@/lib/utils";
 import type { Notification, Conversation, Message, Identity } from "../types";
+import { getDisplayName, formatDisplayName } from "../types";
 import { ComposeDialog } from "../components/inbox/ComposeDialog";
 import { TiptapEditor } from "../components/inbox/TiptapEditor";
 import {
@@ -316,7 +317,7 @@ export function InboxPage() {
       conversation_id: conversationId,
       sender_type: "user",
       sender_id: identity?.id ?? "me",
-      sender_name: identity?.display_name ?? "You",
+      sender_name: getDisplayName(identity as Identity | null) || "You",
       sender_avatar_url: identity?.avatar_url ?? null,
       body,
       body_html: null,
@@ -595,19 +596,28 @@ export function InboxPage() {
                       <p className="text-muted-foreground line-clamp-1 pl-4 pr-16 text-xs">{truncateEscaped(c.last_message_preview ?? "", 80)}</p>
                       <div className="flex items-center gap-2 pl-4 pr-16">
                         <div className="flex -space-x-1">
-                          {c.participants.slice(0, 3).map((p) => (
-                            <Avatar key={p.id} className="h-5 w-5 border-2 border-background">
-                              <AvatarImage src={p.avatar_url ?? undefined} />
-                              <AvatarFallback className="text-[9px]">{p.display_name.slice(0, 2).toUpperCase()}</AvatarFallback>
-                            </Avatar>
-                          ))}
+                          {c.participants.slice(0, 3).map((p) => {
+                            const name = formatDisplayName((p as unknown as { first_name?: string }).first_name, (p as unknown as { last_name?: string }).last_name, p.display_name);
+                            const initials = (() => {
+                              const fn = (p as unknown as { first_name?: string }).first_name?.trim();
+                              const ln = (p as unknown as { last_name?: string }).last_name?.trim();
+                              if (fn && ln) return `${fn[0]}${ln[0]}`.toUpperCase();
+                              return name.slice(0, 2).toUpperCase();
+                            })();
+                            return (
+                              <Avatar key={p.id} className="h-5 w-5 border-2 border-background">
+                                <AvatarImage src={p.avatar_url ?? undefined} />
+                                <AvatarFallback className="text-[9px]">{initials}</AvatarFallback>
+                              </Avatar>
+                            );
+                          })}
                           {c.participants.length > 3 && (
                             <span className="text-muted-foreground bg-muted flex h-5 w-5 items-center justify-center rounded-full border-2 border-background text-[10px]">
                               +{c.participants.length - 3}
                             </span>
                           )}
                         </div>
-                        <span className="text-muted-foreground truncate text-[11px]">{c.participants.map((p) => p.display_name).join(", ")}</span>
+                        <span className="text-muted-foreground truncate text-[11px]">{c.participants.map((p) => formatDisplayName((p as unknown as { first_name?: string }).first_name, (p as unknown as { last_name?: string }).last_name, p.display_name)).join(", ")}</span>
                       </div>
                       <p className="text-muted-foreground pl-4 pr-16 text-[11px]">{formatDate(c.last_message_at)}</p>
                     </button>
@@ -766,15 +776,24 @@ export function InboxPage() {
                         </div>
                       )}
                       <div className="mt-1 flex flex-wrap items-center gap-1">
-                        {selectedConversation.participants.slice(0, 2).map((p) => (
-                          <Badge key={p.id} variant="secondary" className="gap-1">
-                            <Avatar className="h-4 w-4">
-                              <AvatarImage src={p.avatar_url ?? undefined} />
-                              <AvatarFallback className="text-[8px]">{p.display_name.slice(0, 2).toUpperCase()}</AvatarFallback>
-                            </Avatar>
-                            {p.display_name}
-                          </Badge>
-                        ))}
+                        {selectedConversation.participants.slice(0, 2).map((p) => {
+                          const name = formatDisplayName((p as unknown as { first_name?: string }).first_name, (p as unknown as { last_name?: string }).last_name, p.display_name);
+                          const initials = (() => {
+                            const fn = (p as unknown as { first_name?: string }).first_name?.trim();
+                            const ln = (p as unknown as { last_name?: string }).last_name?.trim();
+                            if (fn && ln) return `${fn[0]}${ln[0]}`.toUpperCase();
+                            return name.slice(0, 2).toUpperCase();
+                          })();
+                          return (
+                            <Badge key={p.id} variant="secondary" className="gap-1">
+                              <Avatar className="h-4 w-4">
+                                <AvatarImage src={p.avatar_url ?? undefined} />
+                                <AvatarFallback className="text-[8px]">{initials}</AvatarFallback>
+                              </Avatar>
+                              {name}
+                            </Badge>
+                          );
+                        })}
                         {selectedConversation.participants.length > 2 && (
                           <TooltipProvider>
                             <Tooltip>
@@ -790,11 +809,14 @@ export function InboxPage() {
                               </TooltipTrigger>
                               <TooltipContent side="bottom" align="start" className="max-w-[260px]">
                                 <div className="flex flex-col gap-1 text-xs">
-                                  {selectedConversation.participants.map((p) => (
-                                    <span key={p.id} className="truncate">
-                                      {p.display_name}
-                                    </span>
-                                  ))}
+                                  {selectedConversation.participants.map((p) => {
+                                    const name = formatDisplayName((p as unknown as { first_name?: string }).first_name, (p as unknown as { last_name?: string }).last_name, p.display_name);
+                                    return (
+                                      <span key={p.id} className="truncate">
+                                        {name}
+                                      </span>
+                                    );
+                                  })}
                                 </div>
                               </TooltipContent>
                             </Tooltip>

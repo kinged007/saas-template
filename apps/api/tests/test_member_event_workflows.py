@@ -216,7 +216,7 @@ async def test_member_removed_notifies_the_removed_member(app_client):
             .order_by(Notification.created_at.desc())
         )
         row = result.scalars().first()
-    assert row.payload["removed_by"] == "Test User"
+    assert row.payload["removed_by"] == "Test U."
 
 
 async def test_unregistered_invite_emits_no_in_app_notification(app_client):

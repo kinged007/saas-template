@@ -15,8 +15,10 @@ from src.api.deps import (
 )
 from src.core.permissions import MEMBER_MANAGE, MEMBER_READ
 from src.db.session import get_db
+from src.models.user_profile import UserProfile
 from src.models.workspace import Role, User, WorkspaceMember
 from src.schemas.api import MemberRoleUpdate
+from src.services.profile_helpers import format_display_name
 from src.services.serializers import user_to_dict
 from src.services.workspaces import (
     WorkspaceConflict,
@@ -33,8 +35,18 @@ _MEMBER_FILTERABLE = {"status", "role_id"}
 _MEMBER_SORTABLE = {"created_at", "status"}
 
 
-def _member_dict(member: WorkspaceMember, user: User, role: Role) -> dict:
+def _member_dict(member: WorkspaceMember, user: User, role: Role, profile: UserProfile | None = None) -> dict:
     data = user_to_dict(user)
+    # Prefer profile-derived display name (First L.) if profile available
+    if profile is not None and (profile.first_name or profile.last_name):
+        derived = format_display_name(profile.first_name, profile.last_name, user.display_name)
+        if derived:
+            data["display_name"] = derived
+        data["first_name"] = profile.first_name
+        data["last_name"] = profile.last_name
+    else:
+        data["first_name"] = profile.first_name if profile else None
+        data["last_name"] = profile.last_name if profile else None
     data.update(
         {
             "membership_id": member.id,
@@ -56,9 +68,10 @@ async def list_members(
     db: AsyncSession = Depends(get_db),
 ):
     stmt = (
-        select(WorkspaceMember, User, Role)
+        select(WorkspaceMember, User, Role, UserProfile)
         .join(User, User.id == WorkspaceMember.user_id)
         .join(Role, Role.id == WorkspaceMember.role_id)
+        .outerjoin(UserProfile, UserProfile.user_id == User.id)
         .where(WorkspaceMember.workspace_id == workspace_id)
     )
     try:
@@ -73,7 +86,7 @@ async def list_members(
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
-    return [_member_dict(m, u, r) for m, u, r in rows.all()]
+    return [_member_dict(m, u, r, p) for m, u, r, p in rows.all()]
 
 
 @router.patch("/{membership_id}")

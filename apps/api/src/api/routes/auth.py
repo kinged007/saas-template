@@ -35,15 +35,25 @@ async def register(
     container=Depends(get_container),
 ) -> TokenResponse:
     service = AuthService(db, container.bus)
+    # Validate naming: prefer first/last, fallback to deprecated display_name
+    if not body.first_name and not body.last_name and not body.display_name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "first_name and last_name are required (or display_name deprecated)")
+    # If only one of first/last provided without the other, still allow but derive
     try:
         user = await service.register(
             email=body.email,
             password=body.password,
+            first_name=body.first_name,
+            last_name=body.last_name,
             display_name=body.display_name,
             ip_address=_client_ip(request),
         )
     except AuthError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+        msg = str(exc)
+        # Map missing names to 422, else 409
+        if "first_name and last_name" in msg:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, msg) from None
+        raise HTTPException(status.HTTP_409_CONFLICT, msg) from None
     pair = await service.issue_tokens(user)
     return TokenResponse(**pair.__dict__)
 

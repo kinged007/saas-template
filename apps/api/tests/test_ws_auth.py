@@ -15,7 +15,7 @@ async def _make_user() -> str:
 
     async with SessionFactory() as session:
         user = await AuthService(session).register(
-            email="ws@example.com", password="Password123!", display_name="WS Tester"
+            email="ws@example.com", password="Password123!", first_name="WS", last_name="Tester"
         )
         return user.id
 

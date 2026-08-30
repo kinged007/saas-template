@@ -35,7 +35,7 @@
 Changes to these files have the widest blast radius across the codebase:
 
 - `apps/api/src/db/session.py` — imported by **32** files
-- `apps/web/src/types.ts` — imported by **20** files
+- `apps/web/src/types.ts` — imported by **23** files
 - `apps/api/src/models/workspace.py` — imported by **19** files
 - `apps/api/src/events/bus.py` — imported by **15** files
 - `apps/api/src/settings.py` — imported by **14** files

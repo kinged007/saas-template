@@ -55,6 +55,7 @@ import { ThemeToggle } from "./refine-ui/theme/theme-toggle";
 import { NotificationCenter } from "./NotificationCenter";
 import { cn } from "@/lib/utils";
 import type { Identity } from "../types";
+import { getDisplayName } from "../types";
 
 const MENU_ITEMS = [
   { key: "/", label: "Dashboard", icon: LayoutDashboard, permission: "workspace:read" },
@@ -154,7 +155,14 @@ function UserMenu() {
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
   const { mutate: logout } = useLogout();
   const navigate = useNavigate();
-  const initial = (identity?.display_name ?? "U").slice(0, 2).toUpperCase();
+  const displayName = getDisplayName(identity);
+  const initial = (() => {
+    const fn = identity?.profile?.first_name?.trim();
+    const ln = identity?.profile?.last_name?.trim();
+    if (fn && ln) return `${fn[0]}${ln[0]}`.toUpperCase();
+    if (fn) return fn.slice(0, 2).toUpperCase();
+    return displayName.slice(0, 2).toUpperCase() || "U";
+  })();
   const permissions = activeWorkspacePermissions(identity);
   const canManageRoles = permissions.includes("*") || permissions.includes("role:manage");
   const canViewApiKeys = permissions.includes("*") || permissions.includes("apikey:read");
@@ -173,7 +181,7 @@ function UserMenu() {
             <AvatarFallback className="rounded-lg text-xs">{initial}</AvatarFallback>
           </Avatar>
           <div className="flex flex-1 flex-col items-start text-left group-data-[collapsible=icon]:hidden">
-            <span className="text-sm font-medium leading-none">{identity?.display_name ?? "…"}</span>
+            <span className="text-sm font-medium leading-none">{displayName}</span>
             <span className="text-muted-foreground text-xs leading-tight truncate w-36">
               {identity?.email ?? ""}
             </span>
@@ -184,7 +192,7 @@ function UserMenu() {
       <DropdownMenuContent align="end" side="top" className="w-56">
         <DropdownMenuLabel className="flex items-center gap-2">
           <CircleUser className="h-4 w-4" />
-          {identity?.display_name ?? ""}
+          {displayName}
         </DropdownMenuLabel>
         <DropdownMenuItem onClick={() => navigate("/settings/profile")}>
           <Settings />

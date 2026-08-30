@@ -13,8 +13,11 @@ class LoginRequest(BaseModel):
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    display_name: str = Field(min_length=1, max_length=150)
+    first_name: str | None = Field(default=None, min_length=1, max_length=100)
+    last_name: str | None = Field(default=None, min_length=1, max_length=100)
     password: str = Field(min_length=8)
+    # Deprecated — kept for backward compat, ignored if first_name/last_name provided.
+    display_name: str | None = Field(default=None, min_length=1, max_length=150, deprecated=True)
 
 
 class TokenResponse(BaseModel):

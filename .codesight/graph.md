@@ -3,7 +3,7 @@
 ## Most Imported Files (change these carefully)
 
 - `apps/api/src/db/session.py` — imported by **32** files
-- `apps/web/src/types.ts` — imported by **20** files
+- `apps/web/src/types.ts` — imported by **23** files
 - `apps/api/src/models/workspace.py` — imported by **19** files
 - `apps/api/src/events/bus.py` — imported by **15** files
 - `apps/api/src/settings.py` — imported by **14** files
@@ -26,7 +26,7 @@
 ## Import Map (who imports what)
 
 - `apps/api/src/db/session.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/conversations.py`, `apps/api/src/api/routes/invitations.py` +27 more
-- `apps/web/src/types.ts` ← `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/NotificationCenter.tsx`, `apps/web/src/contexts/WorkspaceContext.tsx`, `apps/web/src/hooks/useProfile.ts`, `apps/web/src/hooks/useProfile.ts` +15 more
+- `apps/web/src/types.ts` ← `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/NotificationCenter.tsx`, `apps/web/src/contexts/WorkspaceContext.tsx`, `apps/web/src/hooks/useProfile.ts` +18 more
 - `apps/api/src/models/workspace.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py`, `apps/api/src/api/routes/notifications.py`, `apps/api/src/api/routes/profiles.py` +14 more
 - `apps/api/src/events/bus.py` ← `apps/api/src/container.py`, `apps/api/src/events/factory.py`, `apps/api/src/events/inprocess.py`, `apps/api/src/events/nats.py`, `apps/api/src/events/publisher.py` +10 more
 - `apps/api/src/settings.py` ← `apps/api/alembic/env.py`, `apps/api/src/container.py`, `apps/api/src/core/security/tokens.py`, `apps/api/src/db/session.py`, `apps/api/src/events/factory.py` +9 more
