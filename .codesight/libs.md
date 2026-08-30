@@ -399,8 +399,8 @@
   - function getDisplayNameFromProfile: (profile?, fallback?) => string
   - function getDisplayName: (identity?) => string
   - function getMemberDisplayName: (member) => string
-  - type Workspace
-  - _...16 more_
+  - function getParticipantDisplayName: (participant) => string
+  - _...17 more_
 - `apps/web/src/utils/permissions.ts` — function activeWorkspacePermissions: (identity?) => string[]
 - `scripts/dev.py`
   - function main: () -> int
