@@ -57,4 +57,4 @@ Changes to these files have the widest blast radius across the codebase:
 - `VITE_EDIT` — `agent/skills/slide-maker/deck-template/src/App.jsx`
 
 ---
-_Back to [index.md](./index.md) · Generated 2026-08-29_
+_Back to [index.md](./index.md) · Generated 2026-08-30_
