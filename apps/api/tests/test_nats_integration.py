@@ -249,7 +249,7 @@ async def test_workflow_end_to_end_over_nats(nats_url: str, clean_stream: None):
 
     async with SessionFactory() as session:
         user = await AuthService(session).register(
-            email="nats-e2e@example.com", password="Password123!", display_name="NATS E2E"
+            email="nats-e2e@example.com", password="Password123!", first_name="NATS", last_name="E2E"
         )
 
     bus_instance = NatsEventBus(nats_url)

@@ -17,7 +17,7 @@ from src.models.core import Invitation, Notification
 from src.models.api_key import ApiKey
 from src.models.user_profile import UserProfile
 from src.models.workspace import RefreshToken, User, Workspace, WorkspaceMember, Role
-from src.services.profile_helpers import merge_custom_data, validate_custom_data
+from src.services.profile_helpers import format_display_name, merge_custom_data, validate_custom_data
 from src.services.serializers import profile_to_dict
 
 logger = logging.getLogger(__name__)
@@ -117,6 +117,13 @@ class ProfileService:
                 # Keep simple.
                 changed_fields.append(field)
                 setattr(profile, field, new_val)
+
+        # Sync display_name from profile first/last (derived as "First L.")
+        if user is not None and ("first_name" in changed_fields or "last_name" in changed_fields or not user.display_name):
+            new_display = format_display_name(profile.first_name, profile.last_name, user.display_name)
+            if new_display and new_display != user.display_name:
+                changed_fields.append("display_name")
+                user.display_name = new_display
 
         # Handle custom_data
         if has_custom:

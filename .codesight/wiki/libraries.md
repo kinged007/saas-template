@@ -27,10 +27,10 @@
 - `apps/api/src/jobs/builtin.py` — system_heartbeat, expire_stale_invitations, demo_global_daily_report
 - `apps/api/src/models/conversation.py` — Conversation, ConversationParticipant, Message
 - `apps/api/src/services/auth.py` — AuthError, TokenPair, AuthService
+- `apps/api/src/services/profile_helpers.py` — format_display_name, validate_custom_data, merge_custom_data
 - `apps/api/alembic/versions/0001_initial.py` — upgrade, downgrade
 - `apps/api/alembic/versions/0002_api_keys.py` — upgrade, downgrade
 - `apps/api/alembic/versions/0003_audit_nullable_workspace.py` — upgrade, downgrade
-- `apps/api/alembic/versions/0004_jobs.py` — upgrade, downgrade
 - _…and 32 more files_
 
 ## Agent (36 files)
@@ -64,7 +64,7 @@
 
 ## Web (7 files)
 
-- `apps/web/src/types.ts` — getProfileField, Workspace, UserProfile, Identity, Role, Member, …
+- `apps/web/src/types.ts` — getProfileField, formatDisplayName, getDisplayNameFromProfile, getDisplayName, getMemberDisplayName, Workspace, …
 - `apps/web/src/providers/liveCache.ts` — upsertThreadMessage, removeThreadMessage, applyMessageCreated, applyNotificationCreated, applyConversationRead
 - `apps/web/src/hooks/useProfile.ts` — useProfile, useUpdateProfile, useExportProfile, useDeleteAccount
 - `apps/web/src/providers/liveProvider.ts` — subscribeLive, LiveEventHandler, liveChannels, liveProvider

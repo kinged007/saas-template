@@ -34,10 +34,25 @@ export const authProvider: AuthProvider = {
     }
   },
 
-  register: async ({ email, password, display_name }) => {
+  register: async ({ email, password, display_name, first_name, last_name }) => {
     try {
       if (tokenStore.getAccess()) clearAllCaches(queryClient);
-      const tokens = await post("/auth/register", { email, password, display_name });
+      // Prefer first/last; fall back to deprecated display_name for compat
+      const body: Record<string, unknown> = { email, password };
+      if (first_name || last_name) {
+        body.first_name = first_name;
+        body.last_name = last_name;
+      } else if (display_name) {
+        body.display_name = display_name;
+      } else {
+        // Keep for type compat — backend will 422
+        body.display_name = display_name;
+      }
+      // Always forward first/last if present alongside display_name for transition
+      if (first_name) body.first_name = first_name;
+      if (last_name) body.last_name = last_name;
+      if (display_name && !body.display_name) body.display_name = display_name;
+      const tokens = await post("/auth/register", body);
       tokenStore.setTokens(tokens.access_token, tokens.refresh_token);
       return { success: true, redirectTo: "/" };
     } catch (error) {

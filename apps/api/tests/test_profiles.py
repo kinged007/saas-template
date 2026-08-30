@@ -37,11 +37,12 @@ async def _wait_for_audit(client_headers, action: str, deadline_seconds: float =
 async def test_get_me_profile_auto_creates(app_client):
     client = app_client
     tokens = await register_user(client, "profile1@example.com")
-    # Fresh user should have profile with empty custom_data and null fields
+    # Fresh user should have profile with names from registration
     profile = await _get_profile(client, tokens)
     assert profile["user_id"]
     assert profile["custom_data"] == {}
-    assert profile["first_name"] is None
+    assert profile["first_name"] == "Test"
+    assert profile["last_name"] == "User"
     # GET /auth/me should embed identical profile shape
     resp = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
     assert resp.status_code == 200
@@ -49,7 +50,8 @@ async def test_get_me_profile_auto_creates(app_client):
     assert "profile" in body
     assert body["profile"]["user_id"] == profile["user_id"]
     assert body["profile"]["custom_data"] == {}
-    assert body["profile"]["first_name"] is None
+    assert body["profile"]["first_name"] == "Test"
+    assert body["profile"]["last_name"] == "User"
 
 
 async def test_get_or_create_concurrent(app_client):
@@ -184,14 +186,14 @@ async def test_bio_too_long_422(app_client):
 async def test_profile_update_publishes_audit(app_client):
     client = app_client
     tokens = await register_user(client, "audit1@example.com")
-    # Patch with first_name
-    await client.patch("/api/v1/me/profile", json={"first_name": "Test"}, headers=auth_headers(tokens))
+    # Patch with first_name to a new value (initial is "Test" from registration)
+    await client.patch("/api/v1/me/profile", json={"first_name": "NewFirst"}, headers=auth_headers(tokens))
     # Wait for audit workflow
     rows = await _wait_for_audit(auth_headers(tokens), "profile.updated")
     assert len(rows) >= 1
     # Find one with changed_fields containing first_name and not containing value
     entry = next(r for r in rows if "first_name" in (r.details.get("changed_fields") or []))
-    assert "Test" not in json.dumps(entry.details)  # no PII values
+    assert "NewFirst" not in json.dumps(entry.details)  # no PII values
     assert "first_name" in entry.details["changed_fields"]
 
     # Patch custom_data - wait for second audit

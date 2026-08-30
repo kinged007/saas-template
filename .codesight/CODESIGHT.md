@@ -4,8 +4,8 @@
 > **Monorepo:** api, saas-template-web
 
 > 52 routes | 17 models | 55 components | 106 lib files | 33 env vars | 5 middleware | 28% test coverage
-> **Token savings:** this file is ~11,300 tokens. Without it, AI exploration would cost ~93,800 tokens. **Saves ~82,500 tokens per conversation.**
-> **Last scanned:** 2026-08-30 01:40 — re-run after significant changes
+> **Token savings:** this file is ~11,400 tokens. Without it, AI exploration would cost ~93,800 tokens. **Saves ~82,400 tokens per conversation.**
+> **Last scanned:** 2026-08-30 02:14 — re-run after significant changes
 
 ---
 
@@ -647,7 +647,10 @@
   - class JobError
   - class JobService
 - `apps/api/src/services/notifications.py` — class NotificationSpec, class NotificationService
-- `apps/api/src/services/profile_helpers.py` — function validate_custom_data: (data) -> None, function merge_custom_data: (existing, patch, is_put) -> dict
+- `apps/api/src/services/profile_helpers.py`
+  - function format_display_name: (first_name, last_name, fallback) -> str
+  - function validate_custom_data: (data) -> None
+  - function merge_custom_data: (existing, patch, is_put) -> dict
 - `apps/api/src/services/profiles.py` — class ProfileService
 - `apps/api/src/services/serializers.py`
   - function notification_to_dict: (n, *, workspace_name) -> dict
@@ -685,12 +688,12 @@
   - const queryClient
 - `apps/web/src/types.ts`
   - function getProfileField: (profile, key, fallback) => unknown
+  - function formatDisplayName: (firstName?, lastName?, fallback?) => string
+  - function getDisplayNameFromProfile: (profile?, fallback?) => string
+  - function getDisplayName: (identity?) => string
+  - function getMemberDisplayName: (member) => string
   - type Workspace
-  - type UserProfile
-  - type Identity
-  - type Role
-  - type Member
-  - _...12 more_
+  - _...16 more_
 - `apps/web/src/utils/permissions.ts` — function activeWorkspacePermissions: (identity?) => string[]
 - `scripts/dev.py`
   - function main: () -> int
@@ -769,7 +772,7 @@
 ## Most Imported Files (change these carefully)
 
 - `apps/api/src/db/session.py` — imported by **32** files
-- `apps/web/src/types.ts` — imported by **20** files
+- `apps/web/src/types.ts` — imported by **23** files
 - `apps/api/src/models/workspace.py` — imported by **19** files
 - `apps/api/src/events/bus.py` — imported by **15** files
 - `apps/api/src/settings.py` — imported by **14** files
@@ -792,7 +795,7 @@
 ## Import Map (who imports what)
 
 - `apps/api/src/db/session.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/conversations.py`, `apps/api/src/api/routes/invitations.py` +27 more
-- `apps/web/src/types.ts` ← `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/NotificationCenter.tsx`, `apps/web/src/contexts/WorkspaceContext.tsx`, `apps/web/src/hooks/useProfile.ts`, `apps/web/src/hooks/useProfile.ts` +15 more
+- `apps/web/src/types.ts` ← `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/NotificationCenter.tsx`, `apps/web/src/contexts/WorkspaceContext.tsx`, `apps/web/src/hooks/useProfile.ts` +18 more
 - `apps/api/src/models/workspace.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py`, `apps/api/src/api/routes/notifications.py`, `apps/api/src/api/routes/profiles.py` +14 more
 - `apps/api/src/events/bus.py` ← `apps/api/src/container.py`, `apps/api/src/events/factory.py`, `apps/api/src/events/inprocess.py`, `apps/api/src/events/nats.py`, `apps/api/src/events/publisher.py` +10 more
 - `apps/api/src/settings.py` ← `apps/api/alembic/env.py`, `apps/api/src/container.py`, `apps/api/src/core/security/tokens.py`, `apps/api/src/db/session.py`, `apps/api/src/events/factory.py` +9 more

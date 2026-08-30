@@ -354,7 +354,10 @@
   - class JobError
   - class JobService
 - `apps/api/src/services/notifications.py` — class NotificationSpec, class NotificationService
-- `apps/api/src/services/profile_helpers.py` — function validate_custom_data: (data) -> None, function merge_custom_data: (existing, patch, is_put) -> dict
+- `apps/api/src/services/profile_helpers.py`
+  - function format_display_name: (first_name, last_name, fallback) -> str
+  - function validate_custom_data: (data) -> None
+  - function merge_custom_data: (existing, patch, is_put) -> dict
 - `apps/api/src/services/profiles.py` — class ProfileService
 - `apps/api/src/services/serializers.py`
   - function notification_to_dict: (n, *, workspace_name) -> dict
@@ -392,12 +395,12 @@
   - const queryClient
 - `apps/web/src/types.ts`
   - function getProfileField: (profile, key, fallback) => unknown
+  - function formatDisplayName: (firstName?, lastName?, fallback?) => string
+  - function getDisplayNameFromProfile: (profile?, fallback?) => string
+  - function getDisplayName: (identity?) => string
+  - function getMemberDisplayName: (member) => string
   - type Workspace
-  - type UserProfile
-  - type Identity
-  - type Role
-  - type Member
-  - _...12 more_
+  - _...16 more_
 - `apps/web/src/utils/permissions.ts` — function activeWorkspacePermissions: (identity?) => string[]
 - `scripts/dev.py`
   - function main: () -> int

@@ -24,6 +24,7 @@ import { ListView, ListViewHeader } from "../components/refine-ui/views/list-vie
 import { EmptyRow, StatusBadge, formatDate } from "../components/ui";
 import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceContext";
 import type { Identity, Invitation, Member, Role } from "../types";
+import { getMemberDisplayName } from "../types";
 
 const MANAGER_ROLES = ["owner", "admin"];
 
@@ -89,7 +90,7 @@ export function MembersPage() {
             {rows.map((m) => (
               <TableRow key={m.membership_id}>
                 <TableCell>
-                  <p className="font-medium">{m.display_name}</p>
+                  <p className="font-medium">{getMemberDisplayName(m)}</p>
                   <p className="text-muted-foreground text-xs">{m.email}</p>
                 </TableCell>
                 <TableCell>{m.role}</TableCell>

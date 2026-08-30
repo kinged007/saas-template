@@ -11,6 +11,21 @@ MAX_CUSTOM_DATA_KEYS = 50
 MAX_CUSTOM_DATA_BYTES = 16 * 1024  # 16 KiB
 
 
+def format_display_name(first_name: str | None, last_name: str | None, fallback: str | None = None) -> str:
+    """Format as 'First L.' — first name + initial of last name. Deprecated display_name fallback."""
+    fn = (first_name or "").strip()
+    ln = (last_name or "").strip()
+    if fn and ln:
+        return f"{fn} {ln[0].upper()}."
+    if fn:
+        return fn
+    if ln:
+        return ln
+    if fallback:
+        return fallback.strip()
+    return ""
+
+
 def validate_custom_data(data: dict) -> None:
     if not isinstance(data, dict):
         raise HTTPException(status_code=422, detail="custom_data must be an object")

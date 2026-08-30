@@ -20,6 +20,7 @@ import {
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { TiptapEditor } from "./TiptapEditor";
 import type { Member, Conversation } from "@/types";
+import { getMemberDisplayName } from "@/types";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 const schema = z.object({
@@ -137,7 +138,7 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
                                 field.onChange(next);
                               }}
                             />
-                            <span className="flex-1 truncate">{m.display_name} <span className="text-muted-foreground">({m.email})</span></span>
+                            <span className="flex-1 truncate">{getMemberDisplayName(m)} <span className="text-muted-foreground">({m.email})</span></span>
                             <span className="text-muted-foreground text-xs">{m.role}</span>
                           </label>
                         ))

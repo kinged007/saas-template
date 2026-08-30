@@ -50,7 +50,7 @@ async def _actions_contain(action: str) -> bool:
 async def test_register_persists_audit_row(app_client):
     await app_client.post(
         "/api/v1/auth/register",
-        json={"email": "audit@example.com", "password": "Password123!", "display_name": "Audit"},
+        json={"email": "audit@example.com", "password": "Password123!", "first_name": "Audit", "last_name": "User"},
     )
     assert await _wait_for(lambda: _actions_equal(["user.register"]))
     rows = await _audit_rows()
@@ -65,7 +65,7 @@ async def test_register_persists_audit_row(app_client):
 async def test_login_refresh_logout_persist_audit_rows(app_client):
     await app_client.post(
         "/api/v1/auth/register",
-        json={"email": "audit2@example.com", "password": "Password123!", "display_name": "Audit"},
+        json={"email": "audit2@example.com", "password": "Password123!", "first_name": "Audit", "last_name": "User"},
     )
     assert await _wait_for(lambda: _actions_contain("user.register"))
 
@@ -143,7 +143,7 @@ async def test_api_key_create_persists_audit(app_client):
 async def test_audit_rows_carry_ip_address(app_client):
     await app_client.post(
         "/api/v1/auth/register",
-        json={"email": "audit5@example.com", "password": "Password123!", "display_name": "Audit"},
+        json={"email": "audit5@example.com", "password": "Password123!", "first_name": "Audit", "last_name": "User"},
     )
     assert await _wait_for(lambda: _actions_equal(["user.register"]))
     rows = await _audit_rows()

@@ -42,9 +42,44 @@ export function getProfileField(
   return fallback ?? null;
 }
 
+export function formatDisplayName(firstName?: string | null, lastName?: string | null, fallback?: string | null): string {
+  const fn = (firstName ?? "").trim();
+  const ln = (lastName ?? "").trim();
+  if (fn && ln) return `${fn} ${ln[0].toUpperCase()}.`;
+  if (fn) return fn;
+  if (ln) return ln;
+  return (fallback ?? "").trim();
+}
+
+export function getDisplayNameFromProfile(profile?: UserProfile | null, fallback?: string | null): string {
+  if (!profile) return (fallback ?? "").trim();
+  return formatDisplayName(profile.first_name, profile.last_name, fallback ?? undefined);
+}
+
+export function getDisplayName(identity?: Identity | null): string {
+  if (!identity) return "U";
+  const fromProfile = getDisplayNameFromProfile(identity.profile, undefined);
+  if (fromProfile) return fromProfile;
+  // Fallback to deprecated display_name or email prefix
+  if (identity.display_name) {
+    // If display_name looks like "First Last", convert to "First L." for consistency
+    const parts = identity.display_name.trim().split(/\s+/);
+    if (parts.length >= 2) return formatDisplayName(parts[0], parts.slice(1).join(" "), identity.display_name);
+    return identity.display_name;
+  }
+  return identity.email?.split("@")[0] ?? "U";
+}
+
+export function getMemberDisplayName(member: { display_name: string; first_name?: string | null; last_name?: string | null; email?: string }): string {
+  const anyM = member as { first_name?: string | null; last_name?: string | null };
+  if (anyM.first_name || anyM.last_name) return formatDisplayName(anyM.first_name, anyM.last_name, member.display_name);
+  return member.display_name;
+}
+
 export type Identity = {
   id: string;
   email: string;
+  /** @deprecated — use profile.first_name/last_name via getDisplayName() */
   display_name: string;
   avatar_url?: string;
   workspaces: Workspace[];
@@ -67,7 +102,10 @@ export type Role = {
 export type Member = {
   id: string;
   email: string;
+  /** @deprecated — use first_name/last_name via getMemberDisplayName() */
   display_name: string;
+  first_name?: string | null;
+  last_name?: string | null;
   avatar_url?: string;
   membership_id: string;
   role_id: string;
@@ -120,7 +158,10 @@ export type Conversation = {
   participants: Array<{
     type: "user" | "agent";
     id: string;
+    /** @deprecated — use first_name/last_name via formatDisplayName */
     display_name: string;
+    first_name?: string | null;
+    last_name?: string | null;
     avatar_url?: string | null;
   }>;
   message_count?: number;

@@ -164,7 +164,7 @@ async def test_my_invitations_lists_received_with_workspace_and_inviter(app_clie
     assert len(items) == 1
     item = items[0]
     assert item["workspace_name"] == "Acme Corp"
-    assert item["invited_by_name"] == "Test User"
+    assert item["invited_by_name"] == "Test U."
     assert item["status"] == "pending"
     assert item["expired"] is False
 
