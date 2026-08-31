@@ -20,7 +20,7 @@ from src.db.session import engine  # noqa: E402
 from src.settings import settings  # noqa: E402
 
 
-async def _drop_all_with_retry(tries: int = 24, delay: float = 0.25) -> None:
+async def _drop_all_with_retry(tries: int = 60, delay: float = 0.5) -> None:
     """Drop all tables, retrying transient sqlite locks.
 
     Background bus workers may still be draining their last transactions when a
@@ -32,9 +32,10 @@ async def _drop_all_with_retry(tries: int = 24, delay: float = 0.25) -> None:
     waiting 30s (the app engine's timeout) per attempt only turns a transient
     contention into a multi-minute stall.
 
-    The budget is ~6s: workspace provisioning (workspaces.created workflow)
-    and scheduled-job workers add a little more post-test drain time than the
-    notification workflows alone.
+    The budget is ~30s: workspace provisioning (workspaces.created workflow),
+    scheduled-job workers, and the agent workflows (agents.requests.chat,
+    agents.run.event) add more post-test drain time than the notification
+    workflows alone. 24×0.25s was too tight once agent workflows landed.
     """
     drop_engine = create_async_engine(settings.resolved_database_url, connect_args={"timeout": 2})
     try:

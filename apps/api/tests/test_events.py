@@ -162,8 +162,11 @@ async def test_workflow_registry_wiring(app_client):
         "notifications.created",
         "conversations.message.created",
         "conversations.message.live",
-        "conversations.renamed",
-    }
+"conversations.renamed",
+            "agents.profile.changed",
+            "agents.requests.chat",
+            "agents.run.event",
+        }
     await registry.wire()
     await registry.start()
     await registry.stop()
