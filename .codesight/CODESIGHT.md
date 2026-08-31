@@ -3,9 +3,9 @@
 > **Stack:** fastapi | sqlalchemy | react | typescript
 > **Monorepo:** api, saas-template-web
 
-> 52 routes | 17 models | 55 components | 106 lib files | 33 env vars | 5 middleware | 28% test coverage
-> **Token savings:** this file is ~11,400 tokens. Without it, AI exploration would cost ~93,800 tokens. **Saves ~82,400 tokens per conversation.**
-> **Last scanned:** 2026-08-30 10:55 — re-run after significant changes
+> 62 routes | 19 models | 68 components | 123 lib files | 34 env vars | 5 middleware | 26% test coverage
+> **Token savings:** this file is ~12,700 tokens. Without it, AI exploration would cost ~108,600 tokens. **Saves ~95,900 tokens per conversation.**
+> **Last scanned:** 2026-08-31 00:17 — re-run after significant changes
 
 ---
 
@@ -13,7 +13,8 @@
 
 ## CRUD Resources
 
-- **``** GET | POST | GET/:id | PATCH/:id | DELETE/:id
+- **``** GET | POST | GET/:id | PUT/:id | DELETE/:id
+- **`/{agent_id}/secrets`** GET | GET/:id | PUT/:id | DELETE/:id → Secret
 - **`/global`** GET | GET/:id | PATCH/:id → Global
 
 ## Other Routes
@@ -29,6 +30,7 @@
 - `PATCH` `/{conversation_id}/unread` params(conversation_id)
 - `PATCH` `/{conversation_id}/archive` params(conversation_id)
 - `GET` `/{conversation_id}/messages` params(conversation_id) → in: st
+- `GET` `/{conversation_id}/session-history` params(conversation_id) → in: st [auth, db]
 - `POST` `/{conversation_id}/messages` params(conversation_id) → in: ConversationCreate
 - `POST` `/accept` params() → in: InvitationCreate [auth, db]
 - `GET` `/mine` params()
@@ -56,6 +58,27 @@
 
 # Schema
 
+### Agent
+- id: str (pk, default)
+- workspace_id: str (index)
+- slug: String
+- name: String
+- description: Text (nullable)
+- avatar: String (nullable)
+- system_prompt: Text (nullable)
+- model: String (nullable)
+- temperature: Float (nullable)
+- max_tokens: Integer (nullable)
+- tool_allowlist: JSON (nullable)
+- mcp_servers: JSON (default)
+- execution_target: String (nullable)
+- role_id: unknown (index, nullable)
+- skills: JSON (default)
+- is_active: Boolean (default)
+- custom_data: JSON (default)
+- created_by_user_id: unknown (index, nullable)
+- updated_by_user_id: unknown (index, nullable)
+
 ### ApiKey
 - id: str (pk, default)
 - workspace_id: str (index)
@@ -82,6 +105,7 @@
 - workspace_id: str (index)
 - created_by_user_id: str (index)
 - title: String (nullable)
+- entity_type: String (default, index)
 - last_message_at: DateTime (nullable, index)
 - last_message_preview: String (nullable)
 
@@ -96,6 +120,7 @@
 - last_read_at: DateTime (nullable)
 - last_read_message_id: unknown (nullable)
 - archived_at: DateTime (nullable)
+- agent_session_ref: String (nullable)
 
 ### Message
 - id: str (pk, default)
@@ -229,6 +254,13 @@
 - role_id: str (index)
 - status: String (default)
 
+### WorkspaceSetting
+- id: str (pk, default)
+- workspace_id: str (index)
+- key: String
+- value: JSON (default)
+- updated_by_user_id: unknown (index, nullable)
+
 ---
 
 # Components
@@ -287,7 +319,20 @@
 - **RegisterPage** — `apps/web/src/pages/RegisterPage.tsx`
 - **RolesPage** — `apps/web/src/pages/RolesPage.tsx`
 - **WorkspaceCreatePage** — `apps/web/src/pages/WorkspaceCreatePage.tsx`
+- **AgentCreatePage** — `apps/web/src/pages/agents/AgentCreatePage.tsx`
+- **AgentEditPage** — `apps/web/src/pages/agents/AgentEditPage.tsx`
+- **AgentsPage** — `apps/web/src/pages/agents/AgentsPage.tsx`
 - **ProfileSettingsPage** — `apps/web/src/pages/settings/ProfileSettingsPage.tsx`
+- **GenericSettingsLayout** — props: registry, basePath, title, subtitle, can, guard — `apps/web/src/pages/settings/components/GenericSettingsLayout.tsx`
+- **SettingsNav** — props: sections, basePath — `apps/web/src/pages/settings/components/SettingsNav.tsx`
+- **WorkspaceSettingsLayout** — `apps/web/src/pages/settings/workspace/WorkspaceSettingsLayout.tsx`
+- **AgentsGeneralSection** — `apps/web/src/pages/settings/workspace/sections/AgentsGeneralSection.tsx`
+- **AgentsSandboxSection** — `apps/web/src/pages/settings/workspace/sections/AgentsSandboxSection.tsx`
+- **AuditLogSection** — `apps/web/src/pages/settings/workspace/sections/AuditLogSection.tsx`
+- **GeneralSection** — `apps/web/src/pages/settings/workspace/sections/GeneralSection.tsx`
+- **JobsSection** — `apps/web/src/pages/settings/workspace/sections/JobsSection.tsx`
+- **RolesSection** — `apps/web/src/pages/settings/workspace/sections/RolesSection.tsx`
+- **UsersSection** — `apps/web/src/pages/settings/workspace/sections/UsersSection.tsx`
 
 ---
 
@@ -520,6 +565,26 @@
 - `apps/api/alembic/versions/0004_jobs.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0005_conversations.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0006_user_profiles.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0007_agents.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0008_workspace_settings.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0009_chat_entity_and_session_ref.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/src/agents/handlers/base.py`
+  - class AgentRequest
+  - class AgentContext
+  - class AgentEvent
+  - class AgentHandler
+- `apps/api/src/agents/handlers/chat.py` — class ChatHandler
+- `apps/api/src/agents/llm.py` — function stream_chat: (*, model, env, str], system_prompt, history, temperature, max_tokens, http, # injectable for tests) -> AsyncIterator[dict]
+- `apps/api/src/agents/registry.py` — function register_handler: (handler) -> None, function get_handler: (entity_type) -> AgentHandler | None
+- `apps/api/src/agents/runners/base.py`
+  - class RunSpec
+  - class RunHandle
+  - class AgentEvent
+  - class RunnerService
+- `apps/api/src/agents/runners/factory.py` — function build_runner: () -> RunnerService
+- `apps/api/src/agents/runners/local.py` — class LocalTmpRunner
+- `apps/api/src/agents/runners/vercel.py` — class VercelSandboxRunner
+- `apps/api/src/agents/sessions/store.py` — class SessionStore
 - `apps/api/src/api/crud.py`
   - function parse_query: (request, *, max_limit) -> QuerySpec
   - function apply_query: (stmt, model, spec, *, sortable, filterable) -> Select
@@ -589,6 +654,7 @@
   - _...4 more_
 - `apps/api/src/jobs/scheduler.py` — class JobScheduler
 - `apps/api/src/main.py` — function lifespan: (app), function root: () -> dict
+- `apps/api/src/models/agent.py` — class Agent
 - `apps/api/src/models/api_key.py` — class ApiKey
 - `apps/api/src/models/audit.py` — class AuditLogEntry
 - `apps/api/src/models/conversation.py`
@@ -612,6 +678,7 @@
   - class Workspace
   - class Role
   - class WorkspaceMember
+- `apps/api/src/models/workspace_setting.py` — class WorkspaceSetting
 - `apps/api/src/realtime/manager.py` — class ConnectionManager
 - `apps/api/src/schemas/api.py`
   - class LoginRequest
@@ -620,11 +687,17 @@
   - class RefreshRequest
   - class WorkspaceCreate
   - class WorkspaceUpdate
-  - _...17 more_
+  - _...21 more_
 - `apps/api/src/secrets/base.py` — class SecretRecord, class SecretStore
 - `apps/api/src/secrets/db_store.py` — class DbSecretStore
 - `apps/api/src/secrets/factory.py` — function build_secret_store: () -> SecretStore
 - `apps/api/src/seed.py` — function main: () -> None
+- `apps/api/src/services/agents.py`
+  - class AgentError
+  - class AgentNotFound
+  - class AgentConflict
+  - class AgentValidation
+  - class AgentService
 - `apps/api/src/services/api_keys.py`
   - class ApiKeyError
   - class ApiKeyForbidden
@@ -658,6 +731,11 @@
   - function workspace_to_dict: (w, *, role, permissions) -> dict
   - function profile_to_dict: (p) -> dict
   - function public_projection: (p) -> dict
+- `apps/api/src/services/workspace_settings.py`
+  - class WorkspaceSettingsError
+  - class WorkspaceSettingsNotFound
+  - class WorkspaceSettingsValidation
+  - class WorkspaceSettingsService
 - `apps/api/src/services/workspaces.py`
   - class WorkspaceError
   - class WorkspaceForbidden
@@ -670,6 +748,14 @@
   - function useUpdateProfile: () => void
   - function useExportProfile: () => void
   - function useDeleteAccount: () => void
+- `apps/web/src/lib/avatar.ts`
+  - function getInitials: (name) => string
+  - function getInitialsFromNames: (firstName?, lastName?, fallbackName?) => string
+  - function getAvatarSrc: (avatarUrl?) => string | undefined
+  - function getAvatarData: (entity, fallbackEmailAsName) => void
+  - function parseAvatarValue: (value?) => ParsedAvatar | null
+  - type ParsedAvatar
+  - _...1 more_
 - `apps/web/src/lib/utils.ts` — function cn: (...inputs) => void, function oktaAdminConsoleFix: (value?) => string | null
 - `apps/web/src/providers/liveCache.ts`
   - function upsertThreadMessage: (conversationId, message) => void
@@ -693,7 +779,7 @@
   - function getDisplayName: (identity?) => string
   - function getMemberDisplayName: (member) => string
   - function getParticipantDisplayName: (participant) => string
-  - _...17 more_
+  - _...19 more_
 - `apps/web/src/utils/permissions.ts` — function activeWorkspacePermissions: (identity?) => string[]
 - `scripts/dev.py`
   - function main: () -> int
@@ -730,6 +816,7 @@
 - `JOBS_SCHEDULER_TICK_SECONDS` (has default) — apps/api/.env.example
 - `MULTIMODAL_MODEL` **required** — agent/skills/ai-multimodal/scripts/gemini_batch_process.py
 - `NATS_URL` (has default) — apps/api/.env.example
+- `OPENAI_BASE_URL` **required** — apps/api/src/agents/llm.py
 - `REFRESH_TOKEN_EXPIRE_DAYS` (has default) — apps/api/.env.example
 - `SECRET_ENCRYPT_VERSION` (has default) — apps/api/.env.example
 - `SECRET_KEY` (has default) — apps/api/.env.example
@@ -771,46 +858,46 @@
 
 ## Most Imported Files (change these carefully)
 
-- `apps/api/src/db/session.py` — imported by **32** files
+- `apps/api/src/db/session.py` — imported by **37** files
 - `apps/web/src/types.ts` — imported by **23** files
-- `apps/api/src/models/workspace.py` — imported by **19** files
-- `apps/api/src/events/bus.py` — imported by **15** files
-- `apps/api/src/settings.py` — imported by **14** files
+- `apps/api/src/models/workspace.py` — imported by **22** files
+- `apps/api/src/settings.py` — imported by **20** files
+- `apps/api/src/events/bus.py` — imported by **18** files
+- `apps/api/src/events/subjects.py` — imported by **15** files
+- `apps/api/src/api/deps.py` — imported by **15** files
+- `apps/api/src/core/permissions.py` — imported by **15** files
+- `apps/api/tests/conftest.py` — imported by **15** files
 - `apps/api/src/models/core.py` — imported by **13** files
-- `apps/api/src/api/deps.py` — imported by **12** files
-- `apps/api/src/core/permissions.py` — imported by **12** files
+- `apps/api/src/db/base.py` — imported by **12** files
+- `apps/api/src/events/publisher.py` — imported by **12** files
+- `apps/api/src/services/workspaces.py` — imported by **12** files
 - `apps/api/src/core/dates.py` — imported by **12** files
-- `apps/api/src/events/subjects.py` — imported by **12** files
-- `apps/api/src/services/workspaces.py` — imported by **11** files
-- `apps/api/tests/conftest.py` — imported by **11** files
-- `apps/api/src/db/base.py` — imported by **10** files
-- `apps/api/src/schemas/api.py` — imported by **10** files
-- `apps/api/src/models/api_key.py` — imported by **9** files
-- `apps/api/src/api/crud.py` — imported by **8** files
+- `apps/api/src/schemas/api.py` — imported by **11** files
+- `apps/api/src/models/api_key.py` — imported by **10** files
+- `apps/api/src/api/crud.py` — imported by **10** files
+- `apps/api/src/models/conversation.py` — imported by **8** files
 - `apps/api/src/services/serializers.py` — imported by **8** files
-- `apps/api/src/events/publisher.py` — imported by **8** files
-- `apps/api/src/core/security/crypto.py` — imported by **8** files
-- `apps/web/src/utils/storage.ts` — imported by **8** files
+- `apps/api/src/models/jobs.py` — imported by **8** files
 
 ## Import Map (who imports what)
 
-- `apps/api/src/db/session.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/conversations.py`, `apps/api/src/api/routes/invitations.py` +27 more
+- `apps/api/src/db/session.py` ← `apps/api/src/agents/handlers/chat.py`, `apps/api/src/api/deps.py`, `apps/api/src/api/routes/agents.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/audit.py` +32 more
 - `apps/web/src/types.ts` ← `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/NotificationCenter.tsx`, `apps/web/src/contexts/WorkspaceContext.tsx`, `apps/web/src/hooks/useProfile.ts` +18 more
-- `apps/api/src/models/workspace.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py`, `apps/api/src/api/routes/notifications.py`, `apps/api/src/api/routes/profiles.py` +14 more
-- `apps/api/src/events/bus.py` ← `apps/api/src/container.py`, `apps/api/src/events/factory.py`, `apps/api/src/events/inprocess.py`, `apps/api/src/events/nats.py`, `apps/api/src/events/publisher.py` +10 more
-- `apps/api/src/settings.py` ← `apps/api/alembic/env.py`, `apps/api/src/container.py`, `apps/api/src/core/security/tokens.py`, `apps/api/src/db/session.py`, `apps/api/src/events/factory.py` +9 more
+- `apps/api/src/models/workspace.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py`, `apps/api/src/api/routes/notifications.py` +17 more
+- `apps/api/src/settings.py` ← `apps/api/alembic/env.py`, `apps/api/src/agents/handlers/chat.py`, `apps/api/src/agents/runners/factory.py`, `apps/api/src/agents/runners/local.py`, `apps/api/src/agents/sessions/store.py` +15 more
+- `apps/api/src/events/bus.py` ← `apps/api/src/container.py`, `apps/api/src/events/factory.py`, `apps/api/src/events/inprocess.py`, `apps/api/src/events/nats.py`, `apps/api/src/events/publisher.py` +13 more
+- `apps/api/src/events/subjects.py` ← `apps/api/src/agents/handlers/chat.py`, `apps/api/src/events/nats.py`, `apps/api/src/events/publisher.py`, `apps/api/src/services/agents.py`, `apps/api/src/services/api_keys.py` +10 more
+- `apps/api/src/api/deps.py` ← `apps/api/src/api/routes/agents.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/conversations.py` +10 more
+- `apps/api/src/core/permissions.py` ← `apps/api/src/api/routes/agents.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/conversations.py`, `apps/api/src/api/routes/invitations.py` +10 more
+- `apps/api/tests/conftest.py` ← `apps/api/tests/test_agents.py`, `apps/api/tests/test_api_key_security.py`, `apps/api/tests/test_api_keys.py`, `apps/api/tests/test_audit_workflow.py`, `apps/api/tests/test_auth.py` +10 more
 - `apps/api/src/models/core.py` ← `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/notifications.py`, `apps/api/src/jobs/builtin.py`, `apps/api/src/models/__init__.py`, `apps/api/src/seed.py` +8 more
-- `apps/api/src/api/deps.py` ← `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/conversations.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/jobs.py` +7 more
-- `apps/api/src/core/permissions.py` ← `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/conversations.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/jobs.py`, `apps/api/src/api/routes/members.py` +7 more
-- `apps/api/src/core/dates.py` ← `apps/api/src/api/routes/invitations.py`, `apps/api/src/jobs/builtin.py`, `apps/api/src/jobs/executor.py`, `apps/api/src/seed.py`, `apps/api/src/services/api_keys.py` +7 more
-- `apps/api/src/events/subjects.py` ← `apps/api/src/events/nats.py`, `apps/api/src/events/publisher.py`, `apps/api/src/services/api_keys.py`, `apps/api/src/services/conversations.py`, `apps/api/src/services/jobs.py` +7 more
 
 ---
 
 # Test Coverage
 
-> **28%** of routes and models are covered by tests
-> 22 test files found
+> **26%** of routes and models are covered by tests
+> 27 test files found
 
 ## Covered Routes
 
@@ -820,9 +907,11 @@
 
 ## Covered Models
 
+- Agent
 - ApiKey
 - AuditLogEntry
 - Conversation
+- ConversationParticipant
 - Message
 - Invitation
 - Notification
