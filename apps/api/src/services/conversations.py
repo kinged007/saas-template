@@ -393,11 +393,10 @@ class ConversationService:
             seen.add(uid)
             others.append(uid)
 
-        # Need at least 1 other (user or agent) (so total >=2)
-        total_others = len(others) + len(agent_ids)
-        if total_others < 1:
+        # Need at least 1 other (human or agent) (so total >=2)
+        total = len(others) + len(agent_ids) + 1
+        if total < 2:
             raise ConversationError("at least one other participant is required")
-        total = total_others + 1
         if total > 20:
             raise ConversationError("too many participants (max 20)")
         # Workspace membership check for creator

@@ -8,7 +8,7 @@
 
 ## Scale
 
-62 API routes · 19 database models · 68 UI components · 122 library files · 5 middleware layers · 33 environment variables
+62 API routes · 19 database models · 68 UI components · 123 library files · 5 middleware layers · 34 environment variables
 
 ## Subsystems
 
@@ -30,7 +30,7 @@
 
 **UI:** 68 components (react) — see [ui.md](./ui.md)
 
-**Libraries:** 122 files — see [libraries.md](./libraries.md)
+**Libraries:** 123 files — see [libraries.md](./libraries.md)
 
 ## High-Impact Files
 
@@ -55,8 +55,9 @@ Changes to these files have the widest blast radius across the codebase:
 - `GEMINI_MODEL` — `agent/skills/ai-multimodal/scripts/gemini_batch_process.py`
 - `IMAGE_GEN_MODEL` — `agent/skills/ai-multimodal/scripts/gemini_batch_process.py`
 - `MULTIMODAL_MODEL` — `agent/skills/ai-multimodal/scripts/gemini_batch_process.py`
+- `OPENAI_BASE_URL` — `apps/api/src/agents/llm.py`
 - `VIDEO_GEN_MODEL` — `agent/skills/ai-multimodal/scripts/gemini_batch_process.py`
-- `VITE_EDIT` — `agent/skills/slide-maker/deck-template/src/App.jsx`
+- _...1 more_
 
 ---
-_Back to [index.md](./index.md) · Generated 2026-08-30_
+_Back to [index.md](./index.md) · Generated 2026-08-31_

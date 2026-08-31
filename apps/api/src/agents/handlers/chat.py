@@ -7,7 +7,6 @@ from typing import AsyncIterator
 from sqlalchemy import select
 
 from src.agents.handlers.base import AgentContext, AgentEvent, AgentRequest
-from src.agents.runners.base import RunSpec
 from src.db.session import SessionFactory
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
@@ -17,11 +16,12 @@ logger = logging.getLogger(__name__)
 
 
 class ChatHandler:
-    """Phase 5 handler: deterministic echo loop + SessionStore enrichment + final reply persistence.
+    """Phase 5 handler: real LLM invocation + SessionStore enrichment + final reply persistence.
 
-    No real LLM yet — proves the on_request → collect_context → execute → post_process
-    pipeline end-to-end (message → agents.requests.chat → agent message visible in thread).
-    Tool/permission pause, memory injection, platform MCP all remain TODO (Phases 7-8).
+    Pipeline: on_request → collect_context (profile/history/model/env) → execute
+    (OpenAI-compatible streaming chat via httpx) → post_process (persist final
+    reply as agent message + agent_session_ref + SessionStore + live fanout).
+    Tool/MCP loop, memory injection remain TODO (Phases 7-8).
     """
 
     entity_type = "chat"
@@ -166,50 +166,23 @@ class ChatHandler:
         return AgentContext(request=req, profile=profile, session_ref=session_ref, history=hist, model=model, env=env)  # type: ignore
 
     async def execute(self, ctx: AgentContext) -> AsyncIterator[AgentEvent]:
-        """Deterministic echo via LocalTmpRunner (real LLM deferred).
-
-        The runner contract is provision → execute(payload) → close. Phase 5 just
-        yields a synthetic token stream + done so SessionStore + post_process are tested.
-        """
-        # Resolve the user message that triggered this run
-        trigger_body = ""
-        if getattr(ctx, "history", None):
-            # last user message is the trigger; history includes it
-            for h in reversed(ctx.history):  # type: ignore
-                if h.get("sender_type") == "user":
-                    trigger_body = h.get("body", "")
-                    break
-
-        name = (ctx.profile or {}).get("name") or "Agent"
-        reply = f"[{name}] echo: {trigger_body[:500]}" if trigger_body else f"[{name}] hello — no message history yet."
-
-        # Use runner for provision/close lifecycle even on echo (proves isolation boundary)
+        """Stream a real LLM response (OpenAI-compatible endpoint)."""
+        profile = ctx.profile or {}
         try:
-            from src.agents.runners.local import LocalTmpRunner
+            from src.agents.llm import stream_chat
 
-            runner = LocalTmpRunner()
-            spec = RunSpec(
-                workspace_id=ctx.request.workspace_id,
-                agent_id=ctx.request.agent_id,
-                conversation_id=ctx.request.conversation_id,
-                session_id=ctx.session_ref,
-                model=getattr(ctx, "model", None),
-                env=getattr(ctx, "env", {}) or {},
-            )
-            handle = await runner.provision(spec)
-            try:
-                # Stream token-by-token so frontend can show incremental UI
-                for ch in reply:
-                    yield AgentEvent(type="token", data={"text": ch})
-                yield AgentEvent(type="done", data={"run_id": handle.run_id})
-            finally:
-                await runner.close(handle)
+            async for ev in stream_chat(
+                model=ctx.model,
+                env=ctx.env or {},
+                system_prompt=profile.get("system_prompt"),
+                history=ctx.history or [],
+                temperature=profile.get("temperature"),
+                max_tokens=profile.get("max_tokens"),
+            ):
+                yield AgentEvent(type=ev["type"], data=ev["data"])
         except Exception:
             logger.exception("ChatHandler execute failed")
-            yield AgentEvent(type="error", data={"message": "execution failed"})
-            yield AgentEvent(type="done", data={})
-
-        # history is carried via context for session persist
+            yield AgentEvent(type="error", data={"message": "agent execution failed"})
 
     async def retrieve_session_history(self, req: AgentRequest) -> list[dict]:
         if not req.workspace_id or not req.conversation_id or not req.agent_id:
@@ -239,11 +212,15 @@ class ChatHandler:
 
     async def post_process(self, req: AgentRequest, ctx: AgentContext, events: list[AgentEvent], result: dict | None) -> None:
         """Persist final assistant reply, update session_ref + SessionStore, audit, push."""
-        # Compose final text from token events
+        # Compose final text from token events; LLM errors land as a visible
+        # agent message so misconfiguration is actionable in the thread.
         tokens = [e.data.get("text", "") for e in events if e.type == "token"]
-        body = "".join(tokens).strip()
-        if not body:
-            # fallback: last done's data may carry body
+        errors = [e for e in events if e.type == "error"]
+        if tokens:
+            body = "".join(tokens).strip()
+        elif errors:
+            body = errors[-1].data.get("message") or "Agent execution failed."
+        else:
             body = "…"
 
         async with SessionFactory() as session:
@@ -290,10 +267,12 @@ class ChatHandler:
                 # agent not participant — shouldn't happen (router filters) but be defensive
                 session_id = str(uuid.uuid4())
 
-            # Build collapsed enrichment steps (tool_call/thinking) for Phase 5: just token batch
+            # Build collapsed enrichment steps (tool_call/thinking) for Phase 5
             steps: list[dict] = []
             if tokens:
                 steps.append({"message_id": msg.id, "kind": "token_batch", "title": "Response", "content": body, "status": "done"})
+            elif errors:
+                steps.append({"message_id": msg.id, "kind": "error", "title": "Error", "content": body, "status": "failed"})
             # Append to history: keep prior steps + this turn
             from src.agents.sessions.store import SessionStore as _Store
 

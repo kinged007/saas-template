@@ -3,9 +3,9 @@
 > **Stack:** fastapi | sqlalchemy | react | typescript
 > **Monorepo:** api, saas-template-web
 
-> 62 routes | 19 models | 68 components | 122 lib files | 33 env vars | 5 middleware | 26% test coverage
-> **Token savings:** this file is ~12,600 tokens. Without it, AI exploration would cost ~108,200 tokens. **Saves ~95,600 tokens per conversation.**
-> **Last scanned:** 2026-08-30 23:32 — re-run after significant changes
+> 62 routes | 19 models | 68 components | 123 lib files | 34 env vars | 5 middleware | 26% test coverage
+> **Token savings:** this file is ~12,700 tokens. Without it, AI exploration would cost ~108,600 tokens. **Saves ~95,900 tokens per conversation.**
+> **Last scanned:** 2026-08-31 00:09 — re-run after significant changes
 
 ---
 
@@ -574,6 +574,7 @@
   - class AgentEvent
   - class AgentHandler
 - `apps/api/src/agents/handlers/chat.py` — class ChatHandler
+- `apps/api/src/agents/llm.py` — function stream_chat: (*, model, env, str], system_prompt, history, temperature, max_tokens, http, # injectable for tests) -> AsyncIterator[dict]
 - `apps/api/src/agents/registry.py` — function register_handler: (handler) -> None, function get_handler: (entity_type) -> AgentHandler | None
 - `apps/api/src/agents/runners/base.py`
   - class RunSpec
@@ -815,6 +816,7 @@
 - `JOBS_SCHEDULER_TICK_SECONDS` (has default) — apps/api/.env.example
 - `MULTIMODAL_MODEL` **required** — agent/skills/ai-multimodal/scripts/gemini_batch_process.py
 - `NATS_URL` (has default) — apps/api/.env.example
+- `OPENAI_BASE_URL` **required** — apps/api/src/agents/llm.py
 - `REFRESH_TOKEN_EXPIRE_DAYS` (has default) — apps/api/.env.example
 - `SECRET_ENCRYPT_VERSION` (has default) — apps/api/.env.example
 - `SECRET_KEY` (has default) — apps/api/.env.example
@@ -895,7 +897,7 @@
 # Test Coverage
 
 > **26%** of routes and models are covered by tests
-> 26 test files found
+> 27 test files found
 
 ## Covered Routes
 

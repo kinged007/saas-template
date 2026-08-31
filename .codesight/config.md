@@ -26,6 +26,7 @@
 - `JOBS_SCHEDULER_TICK_SECONDS` (has default) — apps/api/.env.example
 - `MULTIMODAL_MODEL` **required** — agent/skills/ai-multimodal/scripts/gemini_batch_process.py
 - `NATS_URL` (has default) — apps/api/.env.example
+- `OPENAI_BASE_URL` **required** — apps/api/src/agents/llm.py
 - `REFRESH_TOKEN_EXPIRE_DAYS` (has default) — apps/api/.env.example
 - `SECRET_ENCRYPT_VERSION` (has default) — apps/api/.env.example
 - `SECRET_KEY` (has default) — apps/api/.env.example

@@ -164,3 +164,43 @@ async def test_chat_cross_workspace_agent_rejected(app_client):
         headers=h1,
     )
     assert r.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_agent_only_conversation(app_client):
+    """A conversation with no humans — just one or more agents — is valid."""
+    client = app_client
+    owner = await register_user(client, "agent-only-owner@example.com")
+    ws = await create_workspace(client, owner)
+    hdr = ws_headers(owner, ws["id"])
+    r = await client.post("/api/v1/agents", json={"name": "Solo", "slug": "solo"}, headers=hdr)
+    assert r.status_code == 201, r.text
+    agent_id = r.json()["id"]
+
+    r = await client.post(
+        "/api/v1/conversations",
+        json={"participant_user_ids": [], "participant_agent_ids": [agent_id], "initial_message": "hello"},
+        headers=hdr,
+    )
+    assert r.status_code == 201, r.text
+    conv = r.json()
+    assert any(p["type"] == "agent" and p["id"] == agent_id for p in conv["participants"])
+    # creator is still a participant
+    assert any(p["type"] == "user" for p in conv["participants"])
+
+    # no participants at all → 422 (schema-level validator)
+    r = await client.post(
+        "/api/v1/conversations",
+        json={"participant_user_ids": [], "initial_message": "hi"},
+        headers=hdr,
+    )
+    assert r.status_code == 422
+
+    # agent-only conversation flows through the pipeline: wait for agent reply
+    conv_id = conv["id"]
+    for _ in range(20):
+        await asyncio.sleep(0.25)
+        msgs = (await client.get(f"/api/v1/conversations/{conv_id}/messages", headers=hdr)).json()
+        if any(m["sender_type"] == "agent" for m in msgs):
+            break
+    assert any(m["sender_type"] == "agent" for m in msgs), f"no agent reply in {msgs}"

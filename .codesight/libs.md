@@ -236,6 +236,7 @@
   - class AgentEvent
   - class AgentHandler
 - `apps/api/src/agents/handlers/chat.py` — class ChatHandler
+- `apps/api/src/agents/llm.py` — function stream_chat: (*, model, env, str], system_prompt, history, temperature, max_tokens, http, # injectable for tests) -> AsyncIterator[dict]
 - `apps/api/src/agents/registry.py` — function register_handler: (handler) -> None, function get_handler: (entity_type) -> AgentHandler | None
 - `apps/api/src/agents/runners/base.py`
   - class RunSpec

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 class LoginRequest(BaseModel):
@@ -68,10 +68,17 @@ class NotificationAck(BaseModel):
 
 class ConversationCreate(BaseModel):
     title: str | None = Field(default=None, max_length=300)
-    participant_user_ids: list[str] = Field(min_length=1, max_length=19)
+    participant_user_ids: list[str] = Field(max_length=19)
     participant_agent_ids: list[str] | None = Field(default=None, max_length=19)
     entity_type: str | None = Field(default=None, max_length=30)
     initial_message: str = Field(min_length=1, max_length=5000)
+
+    @model_validator(mode="after")
+    def _require_participant(self):
+        # At least one participant (human or agent) besides the creator.
+        if not self.participant_user_ids and not self.participant_agent_ids:
+            raise ValueError("at least one participant (user or agent) is required")
+        return self
 
 
 class ConversationUpdate(BaseModel):
