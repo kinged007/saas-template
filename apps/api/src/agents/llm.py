@@ -1,10 +1,12 @@
 """Minimal OpenAI-compatible streaming chat client (no vendor SDK).
 
 Speaks the `/chat/completions` SSE protocol with httpx, so it works against
-OpenAI, OpenRouter, Ollama, vLLM, LiteLLM — any OpenAI-compatible endpoint
-(`OPENAI_BASE_URL` override). API keys come from per-agent secrets
+OpenAI, OpenRouter, Ollama, vLLM, LiteLLM — any OpenAI-compatible endpoint.
+OpenRouter is the default provider: unrecognized model ids and the fallback
+`DEFAULT_MODEL` all route to OpenRouter. API keys come from per-agent secrets
 (`agent:{agent_id}:*`, resolved in `ChatHandler.collect_context`) or the
-server process env; values are never logged.
+server process env; values are never logged. Endpoints are overridable per
+family via `OPENROUTER_BASE_URL` / `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`.
 
 Pydantic AI (the plan's Phase-8 harness) is not needed yet — chat-only
 invocation has no tools/MCP loop, and the handler interface lets us swap the
@@ -23,34 +25,45 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"  # default provider
+DEFAULT_MODEL = "openrouter/free"  # OpenRouter's free-model router id
 _TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 
 # Key to try per model family; agent secrets win over process env.
 _KEY_ORDER: dict[str, list[str]] = {
-    "openrouter": ["OPENROUTER_API_KEY"],
+    "openrouter": ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "LLM_API_KEY"],
     "anthropic": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
     "openai": ["OPENAI_API_KEY"],
     "local": ["OPENAI_API_KEY", "LLM_API_KEY", "ANTHROPIC_API_KEY"],
 }
 
-# Base URL per model family (env OPENAI_BASE_URL still overrides).
+# Family-specific endpoint; each family is overridable only via its own
+# *_BASE_URL var (OPENAI_BASE_URL must not redirect the OpenRouter family).
+_BASE_URL_ENV: dict[str, str] = {
+    "openrouter": "OPENROUTER_BASE_URL",
+    "anthropic": "ANTHROPIC_BASE_URL",
+    "openai": "OPENAI_BASE_URL",
+    "local": "OPENAI_BASE_URL",
+}
 _DEFAULT_BASE_URLS: dict[str, str] = {
-    "openrouter": "https://openrouter.ai/api/v1",
+    "openrouter": DEFAULT_BASE_URL,
+    "anthropic": "https://api.anthropic.com/v1",
+    "openai": "https://api.openai.com/v1",
 }
 
 
-def _family(model: str) -> str:
+def _family(model: str, env: dict[str, str]) -> str:
     m = (model or "").lower()
-    for name in _KEY_ORDER:
+    for name in ("openrouter", "anthropic", "openai"):
         if name in m:
             return name
-    return "local"
+    # No recognizable provider: an explicit self-hosted endpoint (OPENAI_BASE_URL)
+    # means local; otherwise the default provider (OpenRouter) handles it.
+    return "local" if env.get("OPENAI_BASE_URL") or os.environ.get("OPENAI_BASE_URL") else "openrouter"
 
 
 def _select_key(model: str, env: dict[str, str]) -> str | None:
-    family = _family(model)
+    family = _family(model, env)
     for key in _KEY_ORDER[family]:
         value = env.get(key) or os.environ.get(key)
         if value:
@@ -83,7 +96,7 @@ async def stream_chat(
 ) -> AsyncIterator[dict]:
     """Yield event dicts: {"type":"token"|"error"|"done", "data": {...}}."""
     model = (model or "").strip() or DEFAULT_MODEL
-    family = _family(model)
+    family = _family(model, env)
     api_key = _select_key(model, env)
     if not api_key:
         yield {
@@ -98,9 +111,10 @@ async def stream_chat(
             },
         }
         return
+    base_env = _BASE_URL_ENV.get(family, "OPENAI_BASE_URL")
     base_url = (
-        env.get("OPENAI_BASE_URL")
-        or os.environ.get("OPENAI_BASE_URL")
+        env.get(base_env)
+        or os.environ.get(base_env)
         or _DEFAULT_BASE_URLS.get(family, DEFAULT_BASE_URL)
     ).rstrip("/")
     payload: dict[str, Any] = {

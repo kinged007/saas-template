@@ -141,3 +141,40 @@ async def test_stream_chat_openrouter_uses_own_key_and_base_url():
     assert url == "https://openrouter.ai/api/v1/chat/completions"
     assert headers["Authorization"] == "Bearer sk-or"
     assert payload["model"] == "openrouter/free"
+
+
+@pytest.mark.anyio
+async def test_openai_base_url_never_redirects_openrouter_family():
+    """OPENAI_BASE_URL (even pointing at openai.com) must not apply to the
+    OpenRouter family — an OpenRouter key must never hit api.openai.com."""
+    fake = FakeClient(status=401, body=b'{"error":"unauthorized"}')
+    events = [
+        e
+        async for e in llm.stream_chat(
+            model="openrouter/free",
+            env={"OPENROUTER_API_KEY": "sk-or", "OPENAI_BASE_URL": "https://api.openai.com/v1"},
+            system_prompt=None,
+            history=[],
+            http=fake,
+        )
+    ]
+    assert fake.calls[0][1] == "https://openrouter.ai/api/v1/chat/completions"
+
+
+@pytest.mark.anyio
+async def test_unrecognized_model_defaults_to_openrouter():
+    fake = FakeClient(lines=["data: [DONE]"])
+    events = [
+        e
+        async for e in llm.stream_chat(
+            model="some/vendor-model",
+            env={"OPENROUTER_API_KEY": "sk-or"},
+            system_prompt=None,
+            history=[],
+            http=fake,
+        )
+    ]
+    assert events[-1]["type"] == "done"
+    method, url, payload, headers = fake.calls[0]
+    assert url == "https://openrouter.ai/api/v1/chat/completions"
+    assert headers["Authorization"] == "Bearer sk-or"
