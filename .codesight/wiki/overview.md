@@ -8,7 +8,7 @@
 
 ## Scale
 
-62 API routes · 19 database models · 68 UI components · 123 library files · 5 middleware layers · 34 environment variables
+62 API routes · 19 database models · 69 UI components · 123 library files · 5 middleware layers · 34 environment variables
 
 ## Subsystems
 
@@ -28,7 +28,7 @@
 
 **Database:** sqlalchemy, 19 models — see [database.md](./database.md)
 
-**UI:** 68 components (react) — see [ui.md](./ui.md)
+**UI:** 69 components (react) — see [ui.md](./ui.md)
 
 **Libraries:** 123 files — see [libraries.md](./libraries.md)
 

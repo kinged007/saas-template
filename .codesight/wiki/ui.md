@@ -2,7 +2,7 @@
 
 > **Navigation aid.** Component inventory and prop signatures extracted via AST. Read the source files before adding props or modifying component logic.
 
-**68 components** (react)
+**69 components** (react)
 
 ## Client Components
 
@@ -43,6 +43,7 @@
 - **AppLayout** — `apps/web/src/components/AppLayout.tsx`
 - **NotificationCenter** — `apps/web/src/components/NotificationCenter.tsx`
 - **ComposeDialog** — props: open, onOpenChange, onCreated — `apps/web/src/components/inbox/ComposeDialog.tsx`
+- **SessionStepCard** — props: step — `apps/web/src/components/inbox/SessionStepCard.tsx`
 - **TiptapEditor** — props: value, onChange, placeholder, className, minHeight — `apps/web/src/components/inbox/TiptapEditor.tsx`
 - **UndoableNotification** — props: message, description, undoableTimeout, cancelMutation, onClose — `apps/web/src/components/refine-ui/notification/undoable-notification.tsx`
 - **StatusBadge** — props: status — `apps/web/src/components/ui.tsx`

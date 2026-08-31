@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useList, useUpdate, useCustomMutation, useCustom, useInvalidate, useGetIdentity } from "@refinedev/core";
 import Markdown from "react-markdown";
-import { ArrowLeft, Inbox, Mail, MailOpen, ExternalLink, SendHorizontal, Pencil, Archive, ArchiveRestore, Search, MessageSquare, PanelLeftClose, PanelLeftOpen, X, Check, ChevronDown } from "lucide-react";
+import { ArrowLeft, Inbox, Mail, MailOpen, ExternalLink, SendHorizontal, Pencil, Archive, ArchiveRestore, Search, MessageSquare, PanelLeftClose, PanelLeftOpen, X, Check } from "lucide-react";
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { markdownComponents, markdownComponentsInverted, stripMarkdown, truncate as truncatePreview } from "@/lib/markdown";
@@ -13,7 +13,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { AgentAvatar } from "@/components/ui/agent-avatar";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { formatDate } from "../components/ui";
 import { TabbedPageHeader } from "../components/refine-ui/layout/tabbed-page-header";
 import { cn } from "@/lib/utils";
@@ -21,6 +20,8 @@ import type { Notification, Conversation, Message, Identity } from "../types";
 import { getDisplayName, getParticipantDisplayName } from "../types";
 import { ComposeDialog } from "../components/inbox/ComposeDialog";
 import { TiptapEditor } from "../components/inbox/TiptapEditor";
+import { SessionStepCard, type SessionStep } from "../components/inbox/SessionStepCard";
+import { subscribeLive } from "../providers/liveProvider";
 import {
   applyConversationRead,
   applyMessageCreated,
@@ -188,9 +189,11 @@ export function InboxPage() {
   }, [messagesResult]);
   const messagesLoading = (messagesQuery as unknown as { isLoading?: boolean })?.isLoading ?? false;
 
-  // Lazy enrichment: collapsed session steps (tool calls / thinking) — fetched after messages load
+  // Lazy enrichment: agent run parts (thinking / tool calls) — fetched after
+  // messages load, refetched when a run ends. The agent's reply itself is a
+  // chat message; parts are the "in-between" artifacts of a run.
   const hasAgent = useMemo(() => selectedConversation?.participants.some((p) => p.type === "agent") ?? false, [selectedConversation]);
-  const { result: sessionHistoryResult } = useCustom<unknown[]>({
+  const { result: sessionHistoryResult, query: sessionHistoryQuery } = useCustom<unknown[]>({
     url: selectedConvId ? `conversations/${selectedConvId}/session-history` : "",
     method: "get",
     queryOptions: {
@@ -200,9 +203,53 @@ export function InboxPage() {
   });
   const sessionSteps = useMemo(() => {
     const raw = sessionHistoryResult?.data as unknown;
-    if (Array.isArray(raw)) return raw as Array<{ message_id?: string; kind?: string; title?: string; content?: string; status?: string }>;
+    if (Array.isArray(raw)) return raw as SessionStep[];
     return [];
   }, [sessionHistoryResult]);
+
+  // Run state: while the agent is producing a reply, show a typing indicator;
+  // when the run ends, pull the persisted parts + the reply message.
+  const [runActive, setRunActive] = useState(false);
+  useEffect(() => {
+    if (!selectedConvId || tab !== "messages") return;
+    setRunActive(false); // fresh conversation/tab: drop stale typing state
+    const convId = selectedConvId;
+    return subscribeLive(`resources/conversations/${convId}/run`, (ev) => {
+      const frame = (ev as { payload?: { data?: unknown } } | undefined)?.payload?.data as
+        | { event?: { type?: string } }
+        | undefined;
+      const evType = frame?.event?.type;
+      if (evType === "done" || evType === "error") {
+        setRunActive(false);
+        sessionHistoryQuery?.refetch?.();
+        messagesQuery.refetch();
+      } else if (evType) {
+        setRunActive(true);
+      }
+    });
+  }, [selectedConvId, tab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // One chronological thread: chat messages + agent run parts merged by
+  // timestamp. Parts sit between the user message and the agent's reply.
+  const timeline = useMemo(() => {
+    type Item =
+      | { key: string; at: string; kind: "message"; message: Message }
+      | { key: string; at: string; kind: "step"; step: SessionStep };
+    const items: Item[] = [
+      ...messages.map((m) => ({ key: `m:${m.id}`, at: m.created_at ?? "", kind: "message" as const, message: m })),
+      ...sessionSteps
+        // legacy stores duplicated the reply as a token_batch/response step — skip those
+        .filter((s) => s.kind !== "token_batch" && s.kind !== "response")
+        .map((s, i) => ({ key: `s:${i}`, at: s.created_at ?? "", kind: "step" as const, step: s })),
+    ];
+    return items.sort((a, b) => {
+      const t = (a.at || "").localeCompare(b.at || "");
+      if (t !== 0) return t;
+      // equal timestamps: the part came before the reply it belongs to
+      if (a.kind !== b.kind) return a.kind === "step" ? -1 : 1;
+      return 0;
+    });
+  }, [messages, sessionSteps]);
 
   // Auto scroll to bottom when messages change
   useEffect(() => {
@@ -860,14 +907,18 @@ export function InboxPage() {
                   <div className="flex flex-col gap-4">
                     {messagesLoading ? (
                       <p className="text-muted-foreground text-sm">Loading…</p>
-                    ) : messages.length === 0 ? (
+                    ) : timeline.length === 0 ? (
                       <p className="text-muted-foreground text-sm">No messages yet.</p>
                     ) : (
-                      messages.map((m) => {
+                      timeline.map((item) => {
+                        if (item.kind === "step") {
+                          return <SessionStepCard key={item.key} step={item.step} />;
+                        }
+                        const m = item.message;
                         const isSelf = m.sender_type === "user" && identity?.id === m.sender_id;
                         const isAgentMsg = m.sender_type === "agent";
                         return (
-                          <div key={m.id} className={cn("flex gap-3", isSelf ? "justify-end" : "justify-start")}>
+                          <div key={item.key} className={cn("flex gap-3", isSelf ? "justify-end" : "justify-start")}>
                             {!isSelf && (
                               isAgentMsg ? (
                                 <AgentAvatar value={m.sender_avatar_url} name={m.sender_name} sizeClassName="h-7 w-7 shrink-0" />
@@ -903,24 +954,19 @@ export function InboxPage() {
                         );
                       })
                     )}
-                    {sessionSteps.length > 0 && (
-                      <Collapsible className="mt-4 rounded-md border bg-muted/30">
-                        <CollapsibleTrigger className="flex w-full items-center justify-between px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
-                          <span>Session details ({sessionSteps.length} {sessionSteps.length === 1 ? "step" : "steps"}) — collapsed by default</span>
-                          <ChevronDown className="h-4 w-4 transition-transform data-[state=open]:rotate-180" />
-                        </CollapsibleTrigger>
-                        <CollapsibleContent className="px-3 pb-3">
-                          <div className="mt-2 flex flex-col gap-2">
-                            {sessionSteps.map((s, idx) => (
-                              <div key={idx} className="rounded border bg-background p-2">
-                                <p className="text-xs font-medium">{s.title || s.kind || "Step"}</p>
-                                {s.content && <p className="mt-1 whitespace-pre-wrap break-words text-xs text-muted-foreground">{String(s.content).slice(0, 500)}</p>}
-                                <p className="mt-1 text-[11px] text-muted-foreground">{s.status || ""}</p>
-                              </div>
-                            ))}
-                          </div>
-                        </CollapsibleContent>
-                      </Collapsible>
+                    {runActive && hasAgent && (
+                      <div className="flex gap-3">
+                        <AgentAvatar value={selectedConversation?.participants.find((p) => p.type === "agent")?.avatar_url} name="Agent" sizeClassName="h-7 w-7 shrink-0" />
+                        <div className="flex items-center gap-1.5 rounded-lg border bg-muted/40 px-4 py-3" aria-label="Agent is typing">
+                          {[0, 150, 300].map((delay) => (
+                            <span
+                              key={delay}
+                              className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/70"
+                              style={{ animationDelay: `${delay}ms` }}
+                            />
+                          ))}
+                        </div>
+                      </div>
                     )}
                     <div ref={messagesEndRef} />
                   </div>

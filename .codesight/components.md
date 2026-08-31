@@ -23,6 +23,7 @@
 - **AppLayout** — `apps/web/src/components/AppLayout.tsx`
 - **NotificationCenter** — `apps/web/src/components/NotificationCenter.tsx`
 - **ComposeDialog** — props: open, onOpenChange, onCreated — `apps/web/src/components/inbox/ComposeDialog.tsx`
+- **SessionStepCard** — props: step — `apps/web/src/components/inbox/SessionStepCard.tsx`
 - **TiptapEditor** — props: value, onChange, placeholder, className, minHeight — `apps/web/src/components/inbox/TiptapEditor.tsx`
 - **CreateButton** [client] — props: resource — `apps/web/src/components/refine-ui/buttons/create.tsx`
 - **DeleteButton** [client] — props: resource, recordItemId — `apps/web/src/components/refine-ui/buttons/delete.tsx`

@@ -68,12 +68,18 @@ async def test_chat_with_agent_replies_and_session_history(app_client):
     else:
         pytest.fail(f"agent reply did not appear: {msgs}")
 
-    # session history should have at least one step (collapsed enrichment)
+    # the reply is a real chat message, never a session step
+    agent_msgs = [m for m in msgs if m["sender_type"] == "agent"]
+    assert agent_msgs, f"no agent reply in {msgs}"
+    assert agent_msgs[-1]["body"].strip()
+
+    # session history holds ONLY parts (thinking/tool calls); the response
+    # must not be duplicated there as a step
     r = await client.get(f"/api/v1/conversations/{conv_id}/session-history", headers=hdr)
     assert r.status_code == 200, r.text
     steps = r.json()
-    assert isinstance(steps, list) and len(steps) >= 1
-    assert any("content" in s for s in steps)
+    assert isinstance(steps, list)
+    assert not any(s.get("kind") in ("token_batch", "response") for s in steps)
 
 
 @pytest.mark.anyio

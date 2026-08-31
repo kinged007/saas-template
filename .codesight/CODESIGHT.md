@@ -3,9 +3,9 @@
 > **Stack:** fastapi | sqlalchemy | react | typescript
 > **Monorepo:** api, saas-template-web
 
-> 62 routes | 19 models | 68 components | 123 lib files | 34 env vars | 5 middleware | 26% test coverage
-> **Token savings:** this file is ~12,700 tokens. Without it, AI exploration would cost ~108,600 tokens. **Saves ~95,900 tokens per conversation.**
-> **Last scanned:** 2026-08-31 07:43 — re-run after significant changes
+> 62 routes | 19 models | 69 components | 123 lib files | 34 env vars | 5 middleware | 26% test coverage
+> **Token savings:** this file is ~12,700 tokens. Without it, AI exploration would cost ~108,900 tokens. **Saves ~96,200 tokens per conversation.**
+> **Last scanned:** 2026-08-31 09:31 — re-run after significant changes
 
 ---
 
@@ -288,6 +288,7 @@
 - **AppLayout** — `apps/web/src/components/AppLayout.tsx`
 - **NotificationCenter** — `apps/web/src/components/NotificationCenter.tsx`
 - **ComposeDialog** — props: open, onOpenChange, onCreated — `apps/web/src/components/inbox/ComposeDialog.tsx`
+- **SessionStepCard** — props: step — `apps/web/src/components/inbox/SessionStepCard.tsx`
 - **TiptapEditor** — props: value, onChange, placeholder, className, minHeight — `apps/web/src/components/inbox/TiptapEditor.tsx`
 - **CreateButton** [client] — props: resource — `apps/web/src/components/refine-ui/buttons/create.tsx`
 - **DeleteButton** [client] — props: resource, recordItemId — `apps/web/src/components/refine-ui/buttons/delete.tsx`

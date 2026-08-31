@@ -223,6 +223,14 @@ class ChatHandler:
         else:
             body = "…"
 
+        # One timestamp anchors the whole turn: the response message AND any
+        # parts written to SessionStore share this clock, so the frontend can
+        # merge parts (thinking/tool calls, written earlier in the run) and the
+        # reply into a single chronological thread.
+        from datetime import datetime, timezone
+
+        response_at = datetime.now(timezone.utc)
+
         async with SessionFactory() as session:
             from src.models.agent import Agent
             from src.models.conversation import Conversation, ConversationParticipant, Message
@@ -236,7 +244,9 @@ class ChatHandler:
                 logger.warning("post_process: conversation %s not found", req.conversation_id)
                 return
 
-            # Persist agent message — the one thing that lands in messages (tools/thinking live in SessionStore)
+            # Persist agent message — the final reply. Thinking/tool-call parts
+            # live in SessionStore (written mid-run with their own timestamps);
+            # the reply is never duplicated as a session step.
             msg = Message(
                 conversation_id=req.conversation_id,
                 sender_type="agent",
@@ -244,6 +254,7 @@ class ChatHandler:
                 sender_user_id=None,
                 sender_agent_id=req.agent_id,
                 body=body,
+                created_at=response_at,
             )
             session.add(msg)
             await session.flush()
@@ -267,27 +278,26 @@ class ChatHandler:
                 # agent not participant — shouldn't happen (router filters) but be defensive
                 session_id = str(uuid.uuid4())
 
-            # Build collapsed enrichment steps (tool_call/thinking) for Phase 5
+            # SessionStore parts: thinking / tool calls / outcomes only — the
+            # final reply is the message above and is NOT repeated here. No
+            # such parts exist yet (tool loop is Phase 8); when handlers start
+            # yielding tool_call/thinking events they will be appended here
+            # with their own created_at, ordered before response_at.
             steps: list[dict] = []
-            if tokens:
-                steps.append({"message_id": msg.id, "kind": "token_batch", "title": "Response", "content": body, "status": "done"})
-            elif errors:
-                steps.append({"message_id": msg.id, "kind": "error", "title": "Error", "content": body, "status": "failed"})
-            # Append to history: keep prior steps + this turn
+            # Append to history: keep prior steps + this turn (only when parts exist)
             from src.agents.sessions.store import SessionStore as _Store
 
-            store = _Store()
-            prior = await store.read(req.workspace_id, req.agent_id, req.conversation_id, session_id) if session_id else None
-            history = list(prior) if prior else []
-            history.extend(steps)
-            if session_id:
+            if steps and session_id:
+                store = _Store()
+                prior = await store.read(req.workspace_id, req.agent_id, req.conversation_id, session_id)
+                history = list(prior) if prior else []
+                history.extend(steps)
                 await store.write(req.workspace_id, req.agent_id, req.conversation_id, session_id, history)
 
             # bump conversation preview
             from src.services.conversations import _plain_preview
-            from datetime import datetime, timezone
 
-            conv.last_message_at = datetime.now(timezone.utc)
+            conv.last_message_at = response_at
             conv.last_message_preview = _plain_preview(body)
 
             await session.commit()
