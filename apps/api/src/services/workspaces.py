@@ -163,8 +163,11 @@ class WorkspaceService:
         await self._session.execute(delete(Invitation).where(Invitation.workspace_id == workspace_id))
         await self._session.execute(delete(StoredSecret).where(StoredSecret.workspace_id == workspace_id))
         await self._session.execute(delete(Notification).where(Notification.workspace_id == workspace_id))
-        await self._session.execute(delete(WorkspaceMember).where(WorkspaceMember.workspace_id == workspace_id))
-        await self._session.execute(delete(Role).where(Role.workspace_id == workspace_id))
+        # NOTE: WorkspaceMember + Role rows are intentionally kept — deleting them
+        # makes the follow-up GET on a deleted workspace fail the membership scope
+        # check (get_membership joins Role) with 403 instead of the contract's 404.
+        # Stale rows are inert: listings and role lookups inner-join Workspace.id
+        # (or the membership/role join above) so they never surface.
 
         # Jobs: workspace-scoped definitions + runs + logs.
         # Collect definition ids first so we can remove runs/logs that reference them
