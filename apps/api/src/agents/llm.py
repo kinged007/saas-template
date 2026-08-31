@@ -29,19 +29,28 @@ _TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 
 # Key to try per model family; agent secrets win over process env.
 _KEY_ORDER: dict[str, list[str]] = {
+    "openrouter": ["OPENROUTER_API_KEY"],
     "anthropic": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
     "openai": ["OPENAI_API_KEY"],
     "local": ["OPENAI_API_KEY", "LLM_API_KEY", "ANTHROPIC_API_KEY"],
 }
 
+# Base URL per model family (env OPENAI_BASE_URL still overrides).
+_DEFAULT_BASE_URLS: dict[str, str] = {
+    "openrouter": "https://openrouter.ai/api/v1",
+}
+
+
+def _family(model: str) -> str:
+    m = (model or "").lower()
+    for name in _KEY_ORDER:
+        if name in m:
+            return name
+    return "local"
+
 
 def _select_key(model: str, env: dict[str, str]) -> str | None:
-    m = (model or "").lower()
-    family = "local"
-    for name, keys in _KEY_ORDER.items():
-        if name in m:
-            family = name
-            break
+    family = _family(model)
     for key in _KEY_ORDER[family]:
         value = env.get(key) or os.environ.get(key)
         if value:
@@ -74,6 +83,7 @@ async def stream_chat(
 ) -> AsyncIterator[dict]:
     """Yield event dicts: {"type":"token"|"error"|"done", "data": {...}}."""
     model = (model or "").strip() or DEFAULT_MODEL
+    family = _family(model)
     api_key = _select_key(model, env)
     if not api_key:
         yield {
@@ -81,8 +91,9 @@ async def stream_chat(
             "data": {
                 "message": (
                     "No LLM API key configured for this agent. Set the agent secret "
-                    "OPENAI_API_KEY (or ANTHROPIC_API_KEY) in Agents → edit → Secrets & env, "
-                    "or set OPENAI_API_KEY in the server environment."
+                    "OPENROUTER_API_KEY, OPENAI_API_KEY or ANTHROPIC_API_KEY (matching "
+                    "the model's provider) in Agents → edit → Secrets & env, or set the "
+                    "corresponding variable in the server environment."
                 ),
             },
         }
@@ -90,7 +101,7 @@ async def stream_chat(
     base_url = (
         env.get("OPENAI_BASE_URL")
         or os.environ.get("OPENAI_BASE_URL")
-        or DEFAULT_BASE_URL
+        or _DEFAULT_BASE_URLS.get(family, DEFAULT_BASE_URL)
     ).rstrip("/")
     payload: dict[str, Any] = {
         "model": model,

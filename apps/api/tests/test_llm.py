@@ -121,3 +121,23 @@ async def test_stream_chat_overrides_base_url():
     ]
     assert events[-1]["type"] == "done"
     assert fake.calls[0][1] == "http://localhost:11434/v1/chat/completions"
+
+
+@pytest.mark.anyio
+async def test_stream_chat_openrouter_uses_own_key_and_base_url():
+    fake = FakeClient(lines=["data: [DONE]"])
+    events = [
+        e
+        async for e in llm.stream_chat(
+            model="openrouter/free",
+            env={"OPENROUTER_API_KEY": "sk-or"},
+            system_prompt=None,
+            history=[],
+            http=fake,
+        )
+    ]
+    assert events[-1]["type"] == "done"
+    method, url, payload, headers = fake.calls[0]
+    assert url == "https://openrouter.ai/api/v1/chat/completions"
+    assert headers["Authorization"] == "Bearer sk-or"
+    assert payload["model"] == "openrouter/free"
