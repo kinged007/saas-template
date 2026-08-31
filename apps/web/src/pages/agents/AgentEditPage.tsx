@@ -108,7 +108,14 @@ export function AgentEditPage() {
   React.useEffect(() => {
     if (!record || seededRef.current) return;
     seededRef.current = true;
-    form.reset({
+    // Refine's useForm re-applies the raw record (including nulls) to every
+    // registered field in a microtask queued by its own effect. Field values
+    // of null then fail the zod schema ("Expected string, received null").
+    // Queue our reset as a microtask too: refine's effect runs first (hook
+    // declared earlier), so its applier is queued first, and our cleaner
+    // reset runs last — same task, FIFO ordering.
+    queueMicrotask(() => {
+      form.reset({
         name: record.name ?? "",
         slug: record.slug ?? "",
         description: record.description ?? "",
@@ -131,6 +138,7 @@ export function AgentEditPage() {
         is_active: record.is_active ?? true,
         skills: record.skills ?? [],
       });
+    });
   }, [record]);
 
   const mcpServers = useWatch({ control: form.control, name: "mcp_servers" }) ?? [];
