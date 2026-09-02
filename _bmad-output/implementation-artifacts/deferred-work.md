@@ -14,9 +14,6 @@
   summary: Consider POST alternative for DELETE /me confirm to handle proxy stripping
   evidence: Edge case notes DELETE bodies may be stripped by proxies; current spec uses DELETE with JSON body
 - source_spec: none
-  summary: Agent memory (workspace+agent+user scoped) (agent-platform-plan Phase 7)
-  evidence: Split from agent-platform intent — depends on the invocation pipeline, deferred independently
-- source_spec: none
   summary: Platform MCP as extensible tool registry, role-gated (agent-platform-plan Phase 8)
   evidence: Split from agent-platform intent — depends on the invocation pipeline and agent roles, deferred independently
 - source_spec: none
