@@ -23,9 +23,8 @@ apps/web/.vite/
 *.pem
 *.key
 
-# Local demo credentials (real Okta/Microsoft client secrets + private keys)
-demo/tenant-josh-okta.json
-demo/tenant-josh-test.json
+# Local db
+*.db
 
 # IDE / OS
 .idea/
