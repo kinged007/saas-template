@@ -43,23 +43,17 @@ def platform_tool(
 
 
 def _load_tools() -> None:
-    # import every submodule of src.mcp.platform.tools so decorators run
-    for m in pkgutil.iter_modules(["apps/api/src/mcp/platform/tools"]):
+    # Auto-discovery: import every submodule of the tools package so the
+    # @platform_tool decorators run. Iterating the package's own __path__
+    # works from any CWD and any install layout (source tree, wheel in
+    # site-packages, /app copy in a container) — never a hardcoded path.
+    import src.mcp.platform.tools as _pkg
+
+    for m in pkgutil.iter_modules(_pkg.__path__):
         try:
-            importlib.import_module(f"src.mcp.platform.tools.{m.name}")
+            importlib.import_module(f"{_pkg.__name__}.{m.name}")
         except Exception:
             logger.exception("failed to load platform tool module %s", m.name)
-    # also try the installed package path
-    try:
-        import src.mcp.platform.tools as _pkg  # noqa: F401
-
-        for m in pkgutil.iter_modules(_pkg.__path__):  # type: ignore[attr-defined]
-            try:
-                importlib.import_module(f"src.mcp.platform.tools.{m.name}")
-            except Exception:
-                logger.exception("failed to load platform tool module %s", m.name)
-    except Exception:
-        pass
 
 
 _loaded = False
