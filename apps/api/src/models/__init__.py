@@ -15,6 +15,7 @@ from src.models.jobs import (
     JobRun,
 )
 from src.models.agent import Agent
+from src.models.agent_permission import AgentPermissionRequest
 from src.models.memory import AgentMemory
 from src.models.secret import StoredSecret
 from src.models.workspace_setting import WorkspaceSetting
@@ -30,6 +31,7 @@ from src.models.workspace import (
 __all__ = [
     "Agent",
     "AgentMemory",
+    "AgentPermissionRequest",
     "ApiKey",
     "AuditLogEntry",
     "Conversation",
