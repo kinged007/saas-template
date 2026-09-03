@@ -170,3 +170,93 @@ async def stream_chat(
         if http is None:
             await client.aclose()
     yield {"type": "done", "data": {}}
+
+
+async def extract_memories(
+    *,
+    model: str | None,
+    env: dict[str, str],
+    transcript: str,
+    http: Any = None,  # injectable for tests
+) -> list[dict]:
+    """Distill a conversation turn into durable memories via a one-shot LLM call.
+
+    Returns a list of ``{"kind": "fact"|"preference"|"summary", "content": str}``.
+    Never raises: extraction is best-effort, any failure yields [] so memory
+    problems can never break the chat turn itself. With no API key configured
+    the call is skipped entirely (same key resolution as stream_chat).
+    """
+    model = (model or "").strip() or DEFAULT_MODEL
+    api_key = _select_key(model, env)
+    if not api_key:
+        return []
+    base_env = _BASE_URL_ENV.get(_family(model, env), "OPENAI_BASE_URL")
+    base_url = (
+        env.get(base_env)
+        or os.environ.get(base_env)
+        or _DEFAULT_BASE_URLS.get(_family(model, env), DEFAULT_BASE_URL)
+    ).rstrip("/")
+    prompt = (
+        "You distill conversation turns into durable agent memory. From the turn below, "
+        'extract facts (stable facts about the user or their work), preferences (how the '
+        'user wants things done), and summaries (short recap of what was decided or covered). '
+        'Return ONLY a JSON array of objects: [{"kind": "fact"|"preference"|"summary", '
+        '"content": "<one short plain-text statement>"}]. Return [] if nothing durable.\n\n'
+        f"{transcript}"
+    )
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "max_tokens": 500,
+    }
+    client = http or httpx.AsyncClient(timeout=_TIMEOUT)
+    try:
+        resp = await client.post(
+            f"{base_url}/chat/completions",
+            json=payload,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        )
+        if resp.status_code != 200:
+            logger.warning("memory extraction failed with HTTP %s", resp.status_code)
+            return []
+        data = resp.json()
+        content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        return _parse_memories(content)
+    except Exception as exc:  # noqa: BLE001 — extraction must never break the turn
+        logger.warning("memory extraction failed for model %s: %s", model, exc)
+        return []
+    finally:
+        if http is None:
+            await client.aclose()
+
+
+def _parse_memories(content: str) -> list[dict]:
+    """Parse the LLM's JSON answer defensively: strip fences, tolerate junk."""
+    text = content.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.startswith("json"):
+            text = text[4:]
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        # LLMs sometimes wrap the array in prose; take the first [...] block
+        start, end = text.find("["), text.rfind("]")
+        if start == -1 or end <= start:
+            return []
+        try:
+            data = json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(data, list):
+        return []
+    valid: list[dict] = []
+    for item in data[:20]:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("kind")
+        content = (item.get("content") or "").strip()
+        if kind in ("fact", "preference", "summary") and content:
+            valid.append({"kind": kind, "content": content})
+    return valid

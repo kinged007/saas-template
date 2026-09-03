@@ -20,6 +20,7 @@ class AgentContext:
     profile: dict | None = None
     session_ref: str | None = None
     history: list[dict] = field(default_factory=list)
+    memories: list[dict] = field(default_factory=list)
     model: str | None = None
     env: dict[str, str] = field(default_factory=dict)
 

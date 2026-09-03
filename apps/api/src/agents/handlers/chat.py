@@ -16,12 +16,13 @@ logger = logging.getLogger(__name__)
 
 
 class ChatHandler:
-    """Phase 5 handler: real LLM invocation + SessionStore enrichment + final reply persistence.
+    """Phase 5+ handler: real LLM invocation + SessionStore enrichment + final reply persistence.
 
-    Pipeline: on_request → collect_context (profile/history/model/env) → execute
-    (OpenAI-compatible streaming chat via httpx) → post_process (persist final
-    reply as agent message + agent_session_ref + SessionStore + live fanout).
-    Tool/MCP loop, memory injection remain TODO (Phases 7-8).
+    Pipeline: on_request → collect_context (profile/history/model/env + Phase 7
+    memories) → execute (OpenAI-compatible streaming chat via httpx) →
+    post_process (persist final reply as agent message + agent_session_ref +
+    SessionStore + live fanout + Phase 7 memory extraction/upsert/prune).
+    Tool/MCP loop remains TODO (Phase 8).
     """
 
     entity_type = "chat"
@@ -129,6 +130,25 @@ class ChatHandler:
                 for m in msgs:
                     hist.append({"sender_type": m.sender_type, "sender_id": m.sender_id, "body": m.body})
 
+            # Phase 7: top-k memories for the triple (workspace, agent, user).
+            # Recency-only when vector_enabled is off (dev/embedded); embedding
+            # similarity kick in when a provider exists (see MemoryStore.retrieve).
+            memories: list[dict] = []
+            if req.triggering_user_id:
+                try:
+                    from src.agents.memory import MemoryStore
+
+                    memories = await MemoryStore().retrieve(
+                        req.workspace_id, req.agent_id, req.triggering_user_id, limit=10
+                    )
+                except Exception:
+                    logger.warning(
+                        "memory retrieval failed for %s/%s",
+                        req.workspace_id,
+                        req.agent_id,
+                        exc_info=True,
+                    )
+
             # model fallback: agent.model → workspace agents.default_model → settings.agent_default_model
             model = profile.get("model") if profile else None
             if not model:
@@ -163,7 +183,7 @@ class ChatHandler:
                 except Exception:
                     logger.warning("failed to load agent env for %s", req.agent_id, exc_info=True)
 
-        return AgentContext(request=req, profile=profile, session_ref=session_ref, history=hist, model=model, env=env)  # type: ignore
+        return AgentContext(request=req, profile=profile, session_ref=session_ref, history=hist, memories=memories, model=model, env=env)  # type: ignore
 
     async def execute(self, ctx: AgentContext) -> AsyncIterator[AgentEvent]:
         """Stream a real LLM response (OpenAI-compatible endpoint)."""
@@ -171,10 +191,15 @@ class ChatHandler:
         try:
             from src.agents.llm import stream_chat
 
+            system_prompt = profile.get("system_prompt")
+            if ctx.memories:
+                block = "\n".join(f"- ({m.get('kind')}) {m.get('content')}" for m in ctx.memories)
+                system_prompt = (system_prompt or "").strip() + f"\n\nRelevant memory:\n{block}"
+
             async for ev in stream_chat(
                 model=ctx.model,
                 env=ctx.env or {},
-                system_prompt=profile.get("system_prompt"),
+                system_prompt=system_prompt,
                 history=ctx.history or [],
                 temperature=profile.get("temperature"),
                 max_tokens=profile.get("max_tokens"),
@@ -243,6 +268,8 @@ class ChatHandler:
             if conv is None or conv.workspace_id != req.workspace_id:
                 logger.warning("post_process: conversation %s not found", req.conversation_id)
                 return
+            # The triggering user message — used for memory extraction below.
+            trigger_msg = await session.get(Message, req.message_id)
 
             # Persist agent message — the final reply. Thinking/tool-call parts
             # live in SessionStore (written mid-run with their own timestamps);
@@ -341,6 +368,40 @@ class ChatHandler:
                 )
             except Exception:
                 pass
+
+        # Phase 7: extract durable memories from this turn and upsert them under
+        # the (workspace, agent, user) triple, then prune per triple. Best-effort:
+        # extraction failure (no LLM key, network) must never break the reply.
+        try:
+            if req.triggering_user_id:
+                user_text = ""
+                if trigger_msg is not None and trigger_msg.body:
+                    user_text = trigger_msg.body
+                transcript = f"{user_text}\n\n{body}".strip()
+                if transcript:
+                    from src.agents.llm import extract_memories
+                    from src.agents.memory import MemoryStore
+
+                    items = await extract_memories(
+                        model=ctx.model, env=ctx.env or {}, transcript=transcript
+                    )
+                    if items:
+                        store = MemoryStore()
+                        await store.upsert_many(
+                            req.workspace_id,
+                            req.agent_id,
+                            req.triggering_user_id,
+                            req.conversation_id,
+                            items,
+                        )
+                        await store.prune(req.workspace_id, req.agent_id, req.triggering_user_id)
+        except Exception:
+            logger.warning(
+                "memory extraction failed for %s/%s",
+                req.workspace_id,
+                req.agent_id,
+                exc_info=True,
+            )
 
     # stubs for permission flow (Phases 5 plan but deferred UI — no-op to satisfy Protocol)
     async def pause_for_permission(self, req: AgentRequest, ctx: AgentContext, tool: str, args: dict) -> None:  # pragma: no cover

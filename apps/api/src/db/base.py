@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime
 from enum import StrEnum
@@ -6,7 +7,7 @@ from typing import Any
 from sqlalchemy import DateTime, MetaData, func
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.types import CHAR, TypeDecorator
+from sqlalchemy.types import CHAR, Text, TypeDecorator
 
 
 class StringUUID(TypeDecorator):
@@ -45,6 +46,44 @@ class Base(DeclarativeBase):
             "pk": "pk_%(table_name)s",
         }
     )
+
+
+class Vector1536(TypeDecorator):
+    """pgvector ``vector(1536)`` on Postgres; opaque JSON-encoded Text elsewhere.
+
+    pgvector is imported lazily so the app runs without the package (embedded
+    postgres/SQLite dev). The column is only read or written when
+    ``settings.vector_enabled``; on other dialects vectors are round-tripped
+    as JSON text so the schema stays portable.
+    """
+
+    impl = Text
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect: Any) -> Any:
+        if dialect.name == "postgresql":
+            try:
+                from pgvector.sqlalchemy import Vector
+
+                return dialect.type_descriptor(Vector(1536))
+            except Exception:
+                pass
+        return dialect.type_descriptor(Text())
+
+    def process_bind_param(self, value: Any, dialect: Any) -> Any:
+        if value is None or dialect.name == "postgresql":
+            return value
+        if isinstance(value, (list, tuple)):
+            return json.dumps(list(value))
+        return value
+
+    def process_result_value(self, value: Any, dialect: Any) -> Any:
+        if isinstance(value, str) and dialect.name != "postgresql":
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return value
+        return value
 
 
 class TimestampMixin:
