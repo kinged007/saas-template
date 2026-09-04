@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator
 
 from sqlalchemy import select
@@ -15,19 +17,21 @@ from src.settings import settings
 logger = logging.getLogger(__name__)
 
 
-class ChatHandler:
-    """Phase 5+ handler: real LLM invocation + SessionStore enrichment + final reply persistence.
+@dataclass
+class AgentDeps:
+    workspace_id: str
+    agent_id: str
+    triggering_user_id: str
+    agent_perms: set[str]
+    user_perms: set[str]
 
-    Pipeline: on_request → collect_context (profile/history/model/env + Phase 7
-    memories) → execute (OpenAI-compatible streaming chat via httpx) →
-    post_process (persist final reply as agent message + agent_session_ref +
-    SessionStore + live fanout + Phase 7 memory extraction/upsert/prune).
-    Tool/MCP loop remains TODO (Phase 8).
-    """
+
+class ChatHandler:
+    """Phase 5+ handler: pydantic-ai agent loop + SessionStore enrichment."""
 
     entity_type = "chat"
     queue_subject = Subjects.AGENTS_REQUEST_CHAT
-    inject_platform_mcp = False
+    inject_platform_mcp = True
 
     def __init__(self, bus=None, secret_store=None) -> None:
         self._bus = bus
@@ -40,9 +44,13 @@ class ChatHandler:
             ctx = await self.collect_context(req)
             result: dict | None = None
             events: list[AgentEvent] = []
+            paused = False
             async for ev in self.execute(ctx):
+                if ev.type == "permission_request":
+                    events.append(ev)
+                    paused = True
+                    continue
                 events.append(ev)
-                # stream each token/tool event transient so realtime fanout can push it
                 try:
                     await publish_event(
                         self._bus,
@@ -58,6 +66,23 @@ class ChatHandler:
                     )
                 except Exception:
                     logger.exception("failed to publish agents.run.event for %s", req.message_id)
+            if paused:
+                try:
+                    await publish_event(
+                        self._bus,
+                        Subjects.AGENTS_PERMISSION_EVENT,
+                        {
+                            "workspace_id": req.workspace_id,
+                            "conversation_id": req.conversation_id,
+                            "agent_id": req.agent_id,
+                            "message_id": req.message_id,
+                            "events": [e.data for e in events],
+                        },
+                        transient=True,
+                    )
+                except Exception:
+                    pass
+                return
             result = {"events": [e.data for e in events]}
             await self.post_process(req, ctx, events, result)
         except Exception:
@@ -168,6 +193,32 @@ class ChatHandler:
             if not model and settings.agent_default_model:
                 model = settings.agent_default_model
 
+            # agent role perms (deny if role_id null) + triggering user perms for intersection
+            agent_perms: set[str] = set()
+            user_perms: set[str] = set()
+            if agent is not None and agent.workspace_id == req.workspace_id:
+                if agent.role_id:
+                    from src.models.workspace import Role
+
+                    role = await session.get(Role, agent.role_id)
+                    if role is not None:
+                        agent_perms = set(role.permissions or [])
+                        if "*" in agent_perms:
+                            agent_perms.add("*")
+                if req.triggering_user_id:
+                    from src.services.workspaces import WorkspaceService
+
+                    svc = WorkspaceService(session)
+                    try:
+                        mem = await svc.get_membership(req.workspace_id, req.triggering_user_id)
+                        if mem is not None:
+                            _, r = mem
+                            user_perms = set(r.permissions or [])
+                            if "*" in user_perms:
+                                user_perms.add("*")
+                    except Exception:
+                        pass
+
             # env secrets for this agent (host-side only, never logged)
             env: dict[str, str] = {}
             if self._secret_store is not None:
@@ -183,31 +234,188 @@ class ChatHandler:
                 except Exception:
                     logger.warning("failed to load agent env for %s", req.agent_id, exc_info=True)
 
-        return AgentContext(request=req, profile=profile, session_ref=session_ref, history=hist, memories=memories, model=model, env=env)  # type: ignore
+        ctx = AgentContext(request=req, profile=profile, session_ref=session_ref, history=hist, memories=memories, model=model, env=env)  # type: ignore
+        object.__setattr__(ctx, "_agent_perms", agent_perms)  # type: ignore
+        object.__setattr__(ctx, "_user_perms", user_perms)  # type: ignore
+        return ctx
+
+    def _build_model(self, model: str | None, env: dict[str, str]):
+        name = (model or "").strip() or settings.agent_default_model or "openrouter/free"
+        if name == "test" or settings.environment == "test":
+            try:
+                from pydantic_ai.models.test import TestModel
+
+                return TestModel()
+            except Exception:
+                return name
+        if "/" in name and ":" not in name:
+            if name.startswith("openrouter/"):
+                return f"openrouter:{name}"
+            if name.startswith("ollama/"):
+                return name  # pydantic-ai has ollama provider builtin
+            return name
+        return name
 
     async def execute(self, ctx: AgentContext) -> AsyncIterator[AgentEvent]:
-        """Stream a real LLM response (OpenAI-compatible endpoint)."""
         profile = ctx.profile or {}
+        agent_perms: set[str] = getattr(ctx, "_agent_perms", set())  # type: ignore
+        user_perms: set[str] = getattr(ctx, "_user_perms", set())  # type: ignore
+        deps = AgentDeps(
+            workspace_id=ctx.request.workspace_id,
+            agent_id=ctx.request.agent_id,
+            triggering_user_id=ctx.request.triggering_user_id,
+            agent_perms=agent_perms,
+            user_perms=user_perms,
+        )
+        model_name = self._build_model(ctx.model, ctx.env or {})
+        is_test = not isinstance(model_name, str)
+        model_obj: object = model_name if is_test else model_name
+
+        if not is_test:
+            from src.agents.llm import _select_key  # type: ignore
+
+            if not _select_key(model_name if isinstance(model_name, str) else "", ctx.env or {}):  # type: ignore
+                yield AgentEvent(type="error", data={"message": "No LLM API key configured for this agent. Set OPENROUTER_API_KEY / OPENAI_API_KEY in agent secrets or server env."})
+                yield AgentEvent(type="done", data={})
+                return
+
+        tools: list = []
+        toolsets: list = []
+        if self.inject_platform_mcp:
+            try:
+                from src.mcp.platform.registry import build_tools
+
+                tools = build_tools(deps)
+            except Exception:
+                logger.exception("platform tool registry failed")
+
+        system_prompt = profile.get("system_prompt")
+        if ctx.memories:
+            block = "\n".join(f"- ({m.get('kind')}) {m.get('content')}" for m in ctx.memories)
+            system_prompt = (system_prompt or "").strip() + f"\n\nRelevant memory:\n{block}"
+
+        prompt = ""
+        for h in reversed(ctx.history or []):
+            if h.get("sender_type") != "agent" and (h.get("body") or "").strip():
+                prompt = h["body"]
+                break
+        if not prompt:
+            prompt = "hello"
+
         try:
-            from src.agents.llm import stream_chat
+            from pydantic_ai import Agent as PydAgent
+            from pydantic_ai.tools import DeferredToolRequests
 
-            system_prompt = profile.get("system_prompt")
-            if ctx.memories:
-                block = "\n".join(f"- ({m.get('kind')}) {m.get('content')}" for m in ctx.memories)
-                system_prompt = (system_prompt or "").strip() + f"\n\nRelevant memory:\n{block}"
+            test_agent = getattr(ctx, "_test_agent", None)  # type: ignore
+            if test_agent is not None:
+                agent = test_agent
+            else:
+                agent = PydAgent(
+                    model_obj,  # type: ignore[arg-type]
+                    output_type=str | DeferredToolRequests,  # type: ignore[arg-type]
+                    system_prompt=system_prompt,
+                    deps_type=AgentDeps,
+                    tools=tools,
+                    toolsets=toolsets or None,
+                    retries=1,
+                )
+            run_result = await agent.run(prompt, deps=deps)  # type: ignore[arg-type]
+            output = run_result.output
+            if isinstance(output, DeferredToolRequests):
+                for call in output.approvals:
+                    args_summary = {}
+                    try:
+                        args_summary = dict(call.args or {}) if hasattr(call, "args") else {}
+                    except Exception:
+                        pass
+                    await self.pause_for_permission(
+                        ctx.request, ctx, tool=call.tool_name, args=args_summary, tool_call_id=call.tool_call_id, message_history=run_result.all_messages(), deferred=output  # type: ignore[attr-defined]
+                    )
+                    yield AgentEvent(type="permission_request", data={"tool": call.tool_name, "tool_call_id": call.tool_call_id, "args": args_summary})
+                # persist pending tool_call parts so inbox shows pending approval
+                now = datetime.now(timezone.utc)
+                steps: list[dict] = []
+                for call in getattr(output, "approvals", []):
+                    steps.append({"kind": "tool_call", "title": call.tool_name, "content": str(getattr(call, "args", "")), "status": "pending_approval", "created_at": now.isoformat()})
+                if steps:
+                    await self._write_session_steps(ctx.request, deps, steps)
+                return
 
-            async for ev in stream_chat(
-                model=ctx.model,
-                env=ctx.env or {},
-                system_prompt=system_prompt,
-                history=ctx.history or [],
-                temperature=profile.get("temperature"),
-                max_tokens=profile.get("max_tokens"),
-            ):
-                yield AgentEvent(type=ev["type"], data=ev["data"])
+            # normal output — token + thinking/tool parts from message history
+            for msg in run_result.all_messages():  # type: ignore[attr-defined]
+                for part in getattr(msg, "parts", []) or []:
+                    kind = getattr(part, "part_kind", "")
+                    if kind == "thinking":
+                        yield AgentEvent(type="thinking", data={"title": "Thinking", "content": getattr(part, "content", "")})
+                    elif kind == "tool-call":
+                        yield AgentEvent(type="tool_call", data={"title": getattr(part, "tool_name", "tool"), "content": str(getattr(part, "args", ""))})
+                    elif kind == "tool-return":
+                        yield AgentEvent(type="tool_result", data={"title": getattr(part, "tool_name", ""), "content": str(getattr(part, "content", ""))})
+            text = str(output) if output is not None else ""
+            if text.strip():
+                yield AgentEvent(type="token", data={"text": text})
+            yield AgentEvent(type="done", data={})
+            # also persist tool/thinking parts for inbox timeline
+            now = datetime.now(timezone.utc)
+            steps = []
+            for msg in run_result.all_messages():  # type: ignore[attr-defined]
+                for part in getattr(msg, "parts", []) or []:
+                    kind = getattr(part, "part_kind", "")
+                    if kind == "thinking":
+                        steps.append({"kind": "thinking", "title": "Thinking", "content": getattr(part, "content", ""), "created_at": now.isoformat()})
+                    elif kind == "tool-call":
+                        steps.append({"kind": "tool_call", "title": getattr(part, "tool_name", "tool"), "content": str(getattr(part, "args", "")), "created_at": now.isoformat()})
+                    elif kind == "tool-return":
+                        steps.append({"kind": "tool_result", "title": getattr(part, "tool_name", ""), "content": str(getattr(part, "content", "")), "created_at": now.isoformat()})
+            if steps:
+                await self._write_session_steps(ctx.request, deps, steps)
         except Exception:
             logger.exception("ChatHandler execute failed")
-            yield AgentEvent(type="error", data={"message": "agent execution failed"})
+            try:
+                from src.agents.llm import stream_chat
+
+                system_prompt2 = profile.get("system_prompt")
+                if ctx.memories:
+                    block = "\n".join(f"- ({m.get('kind')}) {m.get('content')}" for m in ctx.memories)
+                    system_prompt2 = (system_prompt2 or "").strip() + f"\n\nRelevant memory:\n{block}"
+                async for ev in stream_chat(
+                    model=ctx.model,
+                    env=ctx.env or {},
+                    system_prompt=system_prompt2,
+                    history=ctx.history or [],
+                    temperature=profile.get("temperature"),
+                    max_tokens=profile.get("max_tokens"),
+                ):
+                    yield AgentEvent(type=ev["type"], data=ev["data"])
+            except Exception:
+                yield AgentEvent(type="error", data={"message": "agent execution failed"})
+
+    async def _write_session_steps(self, req: AgentRequest, deps: AgentDeps, steps: list[dict]) -> None:
+        async with SessionFactory() as session:
+            from src.models.conversation import ConversationParticipant
+
+            res = await session.execute(
+                select(ConversationParticipant).where(
+                    ConversationParticipant.conversation_id == req.conversation_id,
+                    ConversationParticipant.participant_type == "agent",
+                    ConversationParticipant.participant_id == req.agent_id,
+                )
+            )
+            participant = res.scalar_one_or_none()
+            if participant is None:
+                return
+            session_id = participant.agent_session_ref
+            if not session_id:
+                session_id = str(uuid.uuid4())
+                participant.agent_session_ref = session_id
+                await session.commit()
+        from src.agents.sessions.store import SessionStore
+
+        store = SessionStore()
+        prior = await store.read(req.workspace_id, req.agent_id, req.conversation_id, session_id)
+        history = list(prior) if prior else []
+        history.extend(steps)
+        await store.write(req.workspace_id, req.agent_id, req.conversation_id, session_id, history)
 
     async def retrieve_session_history(self, req: AgentRequest) -> list[dict]:
         if not req.workspace_id or not req.conversation_id or not req.agent_id:
@@ -403,9 +611,35 @@ class ChatHandler:
                 exc_info=True,
             )
 
-    # stubs for permission flow (Phases 5 plan but deferred UI — no-op to satisfy Protocol)
-    async def pause_for_permission(self, req: AgentRequest, ctx: AgentContext, tool: str, args: dict) -> None:  # pragma: no cover
-        return
+    async def pause_for_permission(self, req: AgentRequest, ctx: AgentContext, tool: str, args: dict, tool_call_id: str = "", message_history=None, deferred=None) -> None:  # type: ignore[no-untyped-def]
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.agent_permission_ttl)
+        async with SessionFactory() as session:
+            from src.models.agent_permission import AgentPermissionRequest
+
+            row = AgentPermissionRequest(
+                workspace_id=req.workspace_id,
+                conversation_id=req.conversation_id,
+                agent_id=req.agent_id,
+                triggering_user_id=req.triggering_user_id,
+                run_message_id=req.message_id,
+                tool_name=tool,
+                tool_call_id=tool_call_id or str(uuid.uuid4()),
+                args_summary=args or {},
+                status="pending",
+                expires_at=expires_at,
+            )
+            session.add(row)
+            try:
+                if message_history is not None:
+                    from pydantic_core import to_jsonable_python
+
+                    from pydantic_ai.messages import ModelMessagesTypeAdapter
+
+                    serial = ModelMessagesTypeAdapter.dump_python(message_history)  # type: ignore
+                    row.args_summary = {**row.args_summary, "_history": to_jsonable_python(serial)}
+            except Exception:
+                pass
+            await session.commit()
 
     async def resume(self, req: AgentRequest, decision: dict) -> None:  # pragma: no cover
         return

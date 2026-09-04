@@ -21,6 +21,8 @@ dependencies = [
     "python-multipart>=0.0.12",
     "email-validator>=2.2",
     "pgserver>=0.1.4",
+    "pydantic-ai>=2.38",
+    "fastmcp-slim[server]>=2.13",
 ]
 
 [project.optional-dependencies]

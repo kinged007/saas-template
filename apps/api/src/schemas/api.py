@@ -198,3 +198,8 @@ class AgentUpdate(BaseModel):
 
 class AgentSecretPut(BaseModel):
     value: str = Field(min_length=1, max_length=10000)
+
+
+class PermissionDecision(BaseModel):
+    approved: bool
+    note: str | None = Field(default=None, max_length=1000)
