@@ -122,11 +122,18 @@ async def stream_chat(
         "messages": _to_messages(system_prompt, history),
         "stream": True,
     }
+    # Ask providers that report cost/usage in-stream to include the final
+    # usage chunk (OpenRouter: usage accounting incl. cost; OpenAI: usage chunk).
+    if family == "openrouter":
+        payload["usage"] = {"include": True}
+    elif family == "openai":
+        payload["stream_options"] = {"include_usage": True}
     if temperature is not None:
         payload["temperature"] = temperature
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
 
+    final_usage: dict[str, Any] | None = None
     client = http or httpx.AsyncClient(timeout=_TIMEOUT)
     try:
         async with client.stream(
@@ -156,6 +163,10 @@ async def stream_chat(
                     chunk = json.loads(data)
                 except json.JSONDecodeError:
                     continue  # keepalive/empty frames
+                # Final usage chunk (empty choices) — provider-reported tokens
+                # and cost (OpenRouter includes `cost` in USD when enabled).
+                if chunk.get("usage"):
+                    final_usage = chunk["usage"]
                 choices = chunk.get("choices") or []
                 if not choices:
                     continue
@@ -169,7 +180,7 @@ async def stream_chat(
     finally:
         if http is None:
             await client.aclose()
-    yield {"type": "done", "data": {}}
+    yield {"type": "done", "data": {"usage": final_usage} if final_usage else {}}
 
 
 async def extract_memories(

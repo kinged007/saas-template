@@ -256,6 +256,26 @@ export type AgentSecretInfo = {
   created_at?: string | null;
 };
 
+/** One row per agent run — GET /agents/usage. */
+export type AgentUsageEntry = {
+  id: string;
+  workspace_id: string;
+  agent_id: string;
+  user_id?: string | null;
+  conversation_id?: string | null;
+  message_id?: string | null;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  /** Cost in cents (Numeric(10,4)). */
+  cost_cents: number;
+  latency_ms: number;
+  tool_calls_count: number;
+  status: string;
+  created_at?: string;
+};
+
 export type AuditLogEntry = {
   id: string;
   workspace_id: string;

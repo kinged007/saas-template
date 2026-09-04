@@ -78,6 +78,53 @@ async def test_stream_chat_yields_tokens_and_done():
 
 
 @pytest.mark.anyio
+async def test_stream_chat_captures_provider_usage_and_cost():
+    """The final usage chunk (empty choices) is captured and reported on done."""
+    fake = FakeClient(
+        lines=[
+            'data: {"choices":[{"delta":{"content":"Hi"}}]}',
+            'data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,'
+            '"total_tokens":14,"cost":0.0021}}',
+            "data: [DONE]",
+        ]
+    )
+    events = [
+        e
+        async for e in llm.stream_chat(
+            model="openrouter/free",
+            env={"OPENROUTER_API_KEY": "sk-or"},
+            system_prompt=None,
+            history=[],
+            http=fake,
+        )
+    ]
+    assert [e["type"] for e in events] == ["token", "done"]
+    done = events[-1]
+    assert done["data"]["usage"]["cost"] == 0.0021
+    assert done["data"]["usage"]["total_tokens"] == 14
+
+    # OpenRouter is asked to include usage accounting (incl. cost) in-stream
+    _, _, payload, _ = fake.calls[0]
+    assert payload["usage"] == {"include": True}
+
+
+@pytest.mark.anyio
+async def test_stream_chat_openai_asks_for_stream_usage():
+    fake = FakeClient(lines=['data: {"choices":[{"delta":{"content":"x"}}]}', "data: [DONE]"])
+    async for _ in llm.stream_chat(
+        model="openai/gpt-4o-mini",
+        env={"OPENAI_API_KEY": "k"},
+        system_prompt=None,
+        history=[],
+        http=fake,
+    ):
+        pass
+    _, _, payload, _ = fake.calls[0]
+    assert payload["stream_options"] == {"include_usage": True}
+    assert "usage" not in payload
+
+
+@pytest.mark.anyio
 async def test_stream_chat_no_key_reports_configuration_error():
     events = [
         e

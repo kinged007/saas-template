@@ -80,6 +80,7 @@ def permissions_for_role(role_name: str) -> list[str]:
                 MESSAGE_SEND,
                 AGENT_READ,
                 AGENT_INVOKE,
+                AGENT_USAGE_READ,
             ]
         case "viewer":
             return [

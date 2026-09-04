@@ -7,7 +7,10 @@ from tests.conftest import auth_headers, create_workspace, register_user, ws_hea
 
 
 @pytest.mark.anyio
-async def test_chat_with_agent_replies_and_session_history(app_client):
+async def test_chat_with_agent_replies_and_session_history(app_client, monkeypatch):
+    # Deterministic reply path: without platform MCP tools the test model
+    # cannot hit the Phase-8 approval gate (paused runs write no reply).
+    monkeypatch.setattr("src.mcp.platform.registry.build_tools", lambda deps: [])
     client = app_client
     owner = await register_user(client, "chat-owner@example.com")
     ws = await create_workspace(client, owner)
@@ -173,8 +176,10 @@ async def test_chat_cross_workspace_agent_rejected(app_client):
 
 
 @pytest.mark.anyio
-async def test_agent_only_conversation(app_client):
+async def test_agent_only_conversation(app_client, monkeypatch):
     """A conversation with no humans — just one or more agents — is valid."""
+    # see test_chat_with_agent_replies_and_session_history
+    monkeypatch.setattr("src.mcp.platform.registry.build_tools", lambda deps: [])
     client = app_client
     owner = await register_user(client, "agent-only-owner@example.com")
     ws = await create_workspace(client, owner)
