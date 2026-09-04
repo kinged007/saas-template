@@ -38,6 +38,7 @@ import {
   Building2,
   ChevronsUpDown,
   CircleUser,
+  Gauge,
   Inbox,
   KeyRound,
   LayoutDashboard,
@@ -60,6 +61,7 @@ const MENU_ITEMS = [
   { key: "/", label: "Dashboard", icon: LayoutDashboard, permission: "workspace:read" },
   { key: "/inbox", label: "Inbox", icon: Inbox, permission: "notification:read" },
   { key: "/agents", label: "Agents", icon: Bot, permission: "agent:read" },
+  { key: "/agents/usage", label: "Usage", icon: Gauge, permission: "agent:usage:read" },
   { key: "/members", label: "Members", icon: Users, permission: "member:read" },
 ];
 
@@ -70,8 +72,16 @@ function SidebarNav() {
   const permissions = activeWorkspacePermissions(identity);
   const can = (p: string) => permissions.includes("*") || permissions.includes(p);
   const items = MENU_ITEMS.filter((i) => can(i.permission));
-  const activeKey = `/${location.pathname.split("/")[1] || ""}`;
-  const isActive = (key: string) => (key === "/" ? location.pathname === "/" : activeKey === key);
+  const isActive = (key: string) => {
+    if (key === "/") return location.pathname === "/";
+    if (!location.pathname.startsWith(key)) return false;
+    // A more specific menu entry (e.g. /agents/usage under /agents) owns the
+    // highlight — both must not light up at once.
+    const moreSpecific = items.some(
+      (i) => i.key !== key && i.key.startsWith(key) && location.pathname.startsWith(i.key),
+    );
+    return !moreSpecific;
+  };
 
   const { result: convUnreadResult } = useCustom<{ count: number; unread_conversations: number }>({
     url: "conversations/unread-count",
