@@ -64,6 +64,9 @@ const PERMISSION_MAP: Record<string, Record<string, string>> = {
     edit: "agent:manage",
     delete: "agent:manage",
   },
+  "agent-usage": {
+    list: "agent:usage:read",
+  },
 };
 
 export const accessControlProvider: AccessControlBindings = {

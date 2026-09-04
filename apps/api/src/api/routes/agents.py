@@ -1,14 +1,19 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import func, select
+import csv
+import io
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.crud import InvalidQuery, apply_query, parse_query
+from src.api.crud import InvalidQuery, QuerySpec, apply_query, parse_query
 from src.api.deps import get_container, get_current_user, get_current_workspace_id, require_permission
-from src.core.permissions import AGENT_MANAGE, AGENT_READ
+from src.core.permissions import AGENT_MANAGE, AGENT_READ, AGENT_USAGE_READ
 from src.db.session import SessionFactory, get_db
 from src.models.agent import Agent
+from src.models.agent_usage import AgentUsage
 from src.schemas.api import AgentCreate, AgentSecretPut, AgentUpdate, PermissionDecision
 from src.services.agents import AgentConflict, AgentNotFound, AgentService, AgentValidation
 
@@ -16,6 +21,130 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 
 _AGENT_FILTERABLE = {"name", "slug", "model", "is_active", "execution_target"}
 _AGENT_SORTABLE = {"name", "slug", "created_at", "model"}
+
+_USAGE_FILTERABLE = {"agent_id", "user_id", "model", "status"}
+_USAGE_SORTABLE = {
+    "created_at",
+    "total_tokens",
+    "cost_cents",
+    "latency_ms",
+    "tool_calls_count",
+    "status",
+}
+_USAGE_CSV_COLUMNS = [
+    "id",
+    "workspace_id",
+    "agent_id",
+    "user_id",
+    "conversation_id",
+    "message_id",
+    "model",
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "cost_cents",
+    "latency_ms",
+    "tool_calls_count",
+    "status",
+    "created_at",
+]
+
+
+def _usage_dict(u: AgentUsage) -> dict:
+    return {
+        "id": u.id,
+        "workspace_id": u.workspace_id,
+        "agent_id": u.agent_id,
+        "user_id": u.user_id,
+        "conversation_id": u.conversation_id,
+        "message_id": u.message_id,
+        "model": u.model,
+        "input_tokens": u.input_tokens,
+        "output_tokens": u.output_tokens,
+        "total_tokens": u.total_tokens,
+        "cost_cents": float(u.cost_cents or 0),
+        "latency_ms": u.latency_ms,
+        "tool_calls_count": u.tool_calls_count,
+        "status": u.status,
+        "created_at": u.created_at.isoformat() if u.created_at else None,
+    }
+
+
+def _parse_date_bound(value: str | None, *, end: bool) -> datetime | None:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"invalid date: {value}") from None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    # Date-only `to` becomes exclusive after +1 day so the whole day is included.
+    if end and len(value.strip()) == 10:
+        dt += timedelta(days=1)
+    return dt
+
+
+def _usage_query(
+    request: Request,
+    workspace_id: str,
+    agent_id: str | None,
+    from_: str | None,
+    to: str | None,
+) -> tuple[QuerySpec, Select]:
+    spec = parse_query(request)
+    # from/to/format are handled here — they are not AgentUsage columns.
+    spec.filters = [(f, o, v) for f, o, v in spec.filters if f not in {"from", "to", "format"}]
+    stmt = select(AgentUsage).where(AgentUsage.workspace_id == workspace_id)
+    if agent_id:
+        stmt = stmt.where(AgentUsage.agent_id == agent_id)
+    bound_from = _parse_date_bound(from_, end=False)
+    bound_to = _parse_date_bound(to, end=True)
+    if bound_from is not None:
+        stmt = stmt.where(AgentUsage.created_at >= bound_from)
+    if bound_to is not None:
+        stmt = stmt.where(AgentUsage.created_at < bound_to)
+    stmt = apply_query(stmt, AgentUsage, spec, sortable=_USAGE_SORTABLE, filterable=_USAGE_FILTERABLE)
+    if not spec.sort_by:
+        stmt = stmt.order_by(AgentUsage.created_at.desc())
+    return spec, stmt
+
+
+async def _usage_payload(
+    request: Request,
+    response: Response,
+    db: AsyncSession,
+    *,
+    workspace_id: str,
+    agent_id: str | None = None,
+    from_: str | None = None,
+    to: str | None = None,
+    export_format: str | None = None,
+):
+    try:
+        spec, stmt = _usage_query(request, workspace_id, agent_id, from_, to)
+    except InvalidQuery as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
+    total = count.scalar_one()
+    if export_format == "csv":
+        rows = (await db.execute(stmt)).scalars().all()
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=_USAGE_CSV_COLUMNS)
+        writer.writeheader()
+        for r in rows:
+            d = _usage_dict(r)
+            writer.writerow({k: d[k] for k in _USAGE_CSV_COLUMNS})
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={"X-Total-Count": str(total)},
+        )
+    rows = (
+        await db.execute(stmt.offset(spec.offset).limit(spec.limit))
+    ).scalars().all()
+    response.headers["X-Total-Count"] = str(total)
+    return [_usage_dict(r) for r in rows]
 
 
 def _agent_dict(a: Agent) -> dict:
@@ -194,6 +323,59 @@ async def decide_permission_request(
     except Exception:
         pass
     return {"id": req_row.id, "status": req_row.status}
+
+
+# ---- usage monitoring (Phase 9) — declared before /{agent_id} so the
+# literal /usage segment wins over a dynamic agent id.
+
+
+@router.get("/usage")
+async def list_agent_usage(
+    request: Request,
+    response: Response,
+    from_: str | None = Query(default=None, alias="from"),
+    to: str | None = Query(default=None),
+    format: str | None = Query(default=None, alias="format"),
+    workspace_id: str = Depends(get_current_workspace_id),
+    _=Depends(require_permission(AGENT_USAGE_READ)),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _usage_payload(
+        request,
+        response,
+        db,
+        workspace_id=workspace_id,
+        from_=from_,
+        to=to,
+        export_format=format,
+    )
+
+
+@router.get("/{agent_id}/usage")
+async def list_agent_usage_by_agent(
+    agent_id: str,
+    request: Request,
+    response: Response,
+    from_: str | None = Query(default=None, alias="from"),
+    to: str | None = Query(default=None),
+    format: str | None = Query(default=None, alias="format"),
+    workspace_id: str = Depends(get_current_workspace_id),
+    _=Depends(require_permission(AGENT_USAGE_READ)),
+    db: AsyncSession = Depends(get_db),
+):
+    agent = await db.get(Agent, agent_id)
+    if agent is None or agent.workspace_id != workspace_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "agent not found")
+    return await _usage_payload(
+        request,
+        response,
+        db,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        from_=from_,
+        to=to,
+        export_format=format,
+    )
 
 
 @router.get("/{agent_id}")

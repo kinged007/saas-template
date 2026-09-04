@@ -35,6 +35,7 @@ import { AgentsSandboxSection } from "./pages/settings/workspace/sections/Agents
 import { AgentsPage } from "./pages/agents/AgentsPage";
 import { AgentCreatePage } from "./pages/agents/AgentCreatePage";
 import { AgentEditPage } from "./pages/agents/AgentEditPage";
+import { AgentUsageDashboardPage } from "./pages/agents/AgentUsageDashboardPage";
 
 export function App() {
   return (
@@ -91,6 +92,7 @@ export function App() {
               <Route path="invitations" element={<ReceivedInvitationsPage />} />
               <Route path="agents/create" element={<AgentCreatePage />} />
               <Route path="agents/edit/:id" element={<AgentEditPage />} />
+              <Route path="agents/usage" element={<AgentUsageDashboardPage />} />
               <Route path="agents" element={<AgentsPage />} />
               <Route path="api-keys/create" element={<ApiKeyCreatePage />} />
               <Route path="api-keys" element={<ApiKeysPage />} />

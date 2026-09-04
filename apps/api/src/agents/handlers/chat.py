@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
 import logging
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from functools import lru_cache
 from typing import AsyncIterator
 
 from sqlalchemy import select
@@ -15,6 +19,38 @@ from src.events.subjects import Subjects
 from src.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _cost_table() -> dict[str, dict[str, float]]:
+    """Parsed AGENT_COST_TABLE: {model: {input: cents_per_1k_in, output: cents_per_1k_out}}."""
+    raw = (settings.agent_cost_table or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        logger.warning("agent_cost_table is not valid JSON; costs will be 0")
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(k): v for k, v in parsed.items() if isinstance(v, dict)}
+
+
+def compute_cost_cents(model: str, input_tokens: int, output_tokens: int) -> Decimal:
+    """Cost in cents from AGENT_COST_TABLE; 0 when the model is not listed."""
+    row = _cost_table().get(model or "")
+    if not row:
+        return Decimal("0")
+    try:
+        in_rate = Decimal(str(row.get("input", 0)))
+        out_rate = Decimal(str(row.get("output", 0)))
+    except Exception:
+        return Decimal("0")
+    cents = (Decimal(input_tokens) / Decimal(1000) * in_rate) + (
+        Decimal(output_tokens) / Decimal(1000) * out_rate
+    )
+    return cents.quantize(Decimal("0.0001"))
 
 
 @dataclass
@@ -40,6 +76,8 @@ class ChatHandler:
     # ---------------------------------------------------------------- entry
 
     async def on_request(self, req: AgentRequest) -> None:
+        started = time.monotonic()
+        ctx: AgentContext | None = None
         try:
             ctx = await self.collect_context(req)
             result: dict | None = None
@@ -84,7 +122,7 @@ class ChatHandler:
                     pass
                 return
             result = {"events": [e.data for e in events]}
-            await self.post_process(req, ctx, events, result)
+            await self.post_process(req, ctx, events, result, started=started)
         except Exception:
             logger.exception("ChatHandler on_request failed for %s", req.message_id)
             # publish error so frontend can show failure
@@ -103,6 +141,22 @@ class ChatHandler:
                 )
             except Exception:
                 pass
+            # The run never reached post_process — still record a failed usage row
+            # so cost/usage monitoring sees every attempted run. Best-effort.
+            try:
+                usage = getattr(ctx, "_usage", None) if ctx is not None else None
+                await self._record_usage(
+                    req,
+                    model=(ctx.model if ctx is not None else None) or settings.agent_default_model or "",
+                    status="error",
+                    input_tokens=int((usage or {}).get("input_tokens") or 0),
+                    output_tokens=int((usage or {}).get("output_tokens") or 0),
+                    total_tokens=int((usage or {}).get("total_tokens") or 0),
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                    tool_calls_count=0,
+                )
+            except Exception:
+                logger.warning("failed to record error usage row for %s", req.message_id, exc_info=True)
 
     # ---------------------------------------------------------------- phases
 
@@ -310,16 +364,37 @@ class ChatHandler:
             if test_agent is not None:
                 agent = test_agent
             else:
+                # pydantic-ai requires a str; None (prompt-less agents) crashes
+                # the constructor, so only pass it when non-empty.
+                prompt_kwargs = {"system_prompt": system_prompt} if system_prompt else {}
                 agent = PydAgent(
                     model_obj,  # type: ignore[arg-type]
                     output_type=str | DeferredToolRequests,  # type: ignore[arg-type]
-                    system_prompt=system_prompt,
                     deps_type=AgentDeps,
                     tools=tools,
                     toolsets=toolsets or None,
                     retries=1,
+                    **prompt_kwargs,
                 )
             run_result = await agent.run(prompt, deps=deps)  # type: ignore[arg-type]
+            # Phase 9: keep the run's token usage for the post_process usage row.
+            try:
+                usage = getattr(run_result, "usage", None)
+                if usage is not None:
+                    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+                    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+                    object.__setattr__(
+                        ctx,
+                        "_usage",
+                        {
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "total_tokens": int(getattr(usage, "total_tokens", 0) or 0)
+                            or (input_tokens + output_tokens),
+                        },
+                    )
+            except Exception:
+                logger.debug("could not extract usage for %s", req.message_id, exc_info=True)
             output = run_result.output
             if isinstance(output, DeferredToolRequests):
                 for call in output.approvals:
@@ -443,7 +518,15 @@ class ChatHandler:
         data = await store.read(req.workspace_id, req.agent_id, req.conversation_id, session_id)
         return data or []
 
-    async def post_process(self, req: AgentRequest, ctx: AgentContext, events: list[AgentEvent], result: dict | None) -> None:
+    async def post_process(
+        self,
+        req: AgentRequest,
+        ctx: AgentContext,
+        events: list[AgentEvent],
+        result: dict | None,
+        *,
+        started: float | None = None,
+    ) -> None:
         """Persist final assistant reply, update session_ref + SessionStore, audit, push."""
         # Compose final text from token events; LLM errors land as a visible
         # agent message so misconfiguration is actionable in the thread.
@@ -466,6 +549,7 @@ class ChatHandler:
 
         async with SessionFactory() as session:
             from src.models.agent import Agent
+            from src.models.agent_usage import AgentUsage
             from src.models.conversation import Conversation, ConversationParticipant, Message
 
             agent = await session.get(Agent, req.agent_id)
@@ -534,6 +618,33 @@ class ChatHandler:
 
             conv.last_message_at = response_at
             conv.last_message_preview = _plain_preview(body)
+
+            # Phase 9: exactly one usage row per completed run, in the same
+            # transaction as the reply message. Runs paused on a permission
+            # request never reach post_process and record nothing (they are
+            # not complete); resumed runs go through execute again.
+            model_name = (ctx.model or "").strip() or settings.agent_default_model or ""
+            usage = getattr(ctx, "_usage", None) or {}
+            input_tokens = int(usage.get("input_tokens") or 0)
+            output_tokens = int(usage.get("output_tokens") or 0)
+            session.add(
+                AgentUsage(
+                    workspace_id=req.workspace_id,
+                    agent_id=req.agent_id,
+                    user_id=req.triggering_user_id,
+                    conversation_id=req.conversation_id,
+                    message_id=req.message_id,
+                    model=model_name,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=int(usage.get("total_tokens") or 0)
+                    or (input_tokens + output_tokens),
+                    cost_cents=compute_cost_cents(model_name, input_tokens, output_tokens),
+                    latency_ms=int((time.monotonic() - started) * 1000) if started else 0,
+                    tool_calls_count=sum(1 for e in events if e.type == "tool_call"),
+                    status="error" if any(e.type == "error" for e in events) else "success",
+                )
+            )
 
             await session.commit()
             await session.refresh(msg)
@@ -610,6 +721,52 @@ class ChatHandler:
                 req.agent_id,
                 exc_info=True,
             )
+
+    async def _record_usage(
+        self,
+        req: AgentRequest,
+        *,
+        model: str,
+        status: str,
+        input_tokens: int,
+        output_tokens: int,
+        total_tokens: int,
+        latency_ms: int,
+        tool_calls_count: int,
+    ) -> None:
+        from src.models.agent_usage import AgentUsage
+
+        async with SessionFactory() as session:
+            # post_process may have committed its row before failing — never
+            # double-record a run.
+            existing = await session.execute(
+                select(AgentUsage.id)
+                .where(
+                    AgentUsage.message_id == req.message_id,
+                    AgentUsage.agent_id == req.agent_id,
+                )
+                .limit(1)
+            )
+            if existing.scalar_one_or_none() is not None:
+                return
+            session.add(
+                AgentUsage(
+                    workspace_id=req.workspace_id,
+                    agent_id=req.agent_id,
+                    user_id=req.triggering_user_id,
+                    conversation_id=req.conversation_id,
+                    message_id=req.message_id,
+                    model=model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens or (input_tokens + output_tokens),
+                    cost_cents=compute_cost_cents(model, input_tokens, output_tokens),
+                    latency_ms=latency_ms,
+                    tool_calls_count=tool_calls_count,
+                    status=status,
+                )
+            )
+            await session.commit()
 
     async def pause_for_permission(self, req: AgentRequest, ctx: AgentContext, tool: str, args: dict, tool_call_id: str = "", message_history=None, deferred=None) -> None:  # type: ignore[no-untyped-def]
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.agent_permission_ttl)
