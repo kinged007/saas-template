@@ -54,7 +54,6 @@ class Settings(BaseSettings):
     agent_mcp_enabled: bool = False
     vector_enabled: bool = False
     agent_memory_prune_keep: int = 100  # max memories per kind per (workspace, agent, user) triple
-    agent_cost_table: str = ""
     agent_permission_ttl: int = 3600
 
     # Scheduled jobs

@@ -51,25 +51,17 @@ async def _usage_rows(client, headers, path="/api/v1/agents/usage"):
     return r.json(), r.headers.get("X-Total-Count")
 
 
-def test_compute_cost_cents(monkeypatch):
-    """AGENT_COST_TABLE: cents per 1k tokens in/out; unlisted models cost 0."""
+def test_cost_from_provider_reported_usd():
+    """Provider-reported USD cost (e.g. OpenRouter `usage.cost`) → cents."""
     from decimal import Decimal
 
-    from src.agents.handlers import chat as chat_module
+    from src.agents.handlers.chat import _cost_cents_from
 
-    monkeypatch.setattr(
-        chat_module.settings,
-        "agent_cost_table",
-        '{"gpt-4o": {"input": 0.25, "output": 1.0}}',
-    )
-    chat_module._cost_table.cache_clear()
-    try:
-        assert chat_module.compute_cost_cents("gpt-4o", 1000, 1000) == Decimal("1.2500")
-        assert chat_module.compute_cost_cents("gpt-4o", 500, 0) == Decimal("0.1250")
-        assert chat_module.compute_cost_cents("unknown-model", 99999, 99999) == Decimal("0")
-        assert chat_module.compute_cost_cents("", 1000, 1000) == Decimal("0")
-    finally:
-        chat_module._cost_table.cache_clear()
+    assert _cost_cents_from({"cost_usd": 0.0021}) == Decimal("0.2100")
+    assert _cost_cents_from({"cost_usd": "0.5"}) == Decimal("50.0000")
+    assert _cost_cents_from({}) == Decimal("0")
+    assert _cost_cents_from({"cost_usd": None}) == Decimal("0")
+    assert _cost_cents_from(None) == Decimal("0")
 
 
 @pytest.mark.anyio

@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import json
 import logging
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from functools import lru_cache
 from typing import AsyncIterator
 
 from sqlalchemy import select
@@ -21,36 +19,16 @@ from src.settings import settings
 logger = logging.getLogger(__name__)
 
 
-@lru_cache(maxsize=1)
-def _cost_table() -> dict[str, dict[str, float]]:
-    """Parsed AGENT_COST_TABLE: {model: {input: cents_per_1k_in, output: cents_per_1k_out}}."""
-    raw = (settings.agent_cost_table or "").strip()
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw)
-    except ValueError:
-        logger.warning("agent_cost_table is not valid JSON; costs will be 0")
-        return {}
-    if not isinstance(parsed, dict):
-        return {}
-    return {str(k): v for k, v in parsed.items() if isinstance(v, dict)}
-
-
-def compute_cost_cents(model: str, input_tokens: int, output_tokens: int) -> Decimal:
-    """Cost in cents from AGENT_COST_TABLE; 0 when the model is not listed."""
-    row = _cost_table().get(model or "")
-    if not row:
+def _cost_cents_from(usage: dict | None) -> Decimal:
+    """Cost in cents from the provider-reported USD cost (OpenRouter reports
+    `usage.cost` in the response); 0 when the provider did not report one."""
+    cost_usd = (usage or {}).get("cost_usd")
+    if cost_usd is None:
         return Decimal("0")
     try:
-        in_rate = Decimal(str(row.get("input", 0)))
-        out_rate = Decimal(str(row.get("output", 0)))
+        return (Decimal(str(cost_usd)) * 100).quantize(Decimal("0.0001"))
     except Exception:
         return Decimal("0")
-    cents = (Decimal(input_tokens) / Decimal(1000) * in_rate) + (
-        Decimal(output_tokens) / Decimal(1000) * out_rate
-    )
-    return cents.quantize(Decimal("0.0001"))
 
 
 @dataclass
@@ -144,14 +122,11 @@ class ChatHandler:
             # The run never reached post_process — still record a failed usage row
             # so cost/usage monitoring sees every attempted run. Best-effort.
             try:
-                usage = getattr(ctx, "_usage", None) if ctx is not None else None
                 await self._record_usage(
                     req,
                     model=(ctx.model if ctx is not None else None) or settings.agent_default_model or "",
                     status="error",
-                    input_tokens=int((usage or {}).get("input_tokens") or 0),
-                    output_tokens=int((usage or {}).get("output_tokens") or 0),
-                    total_tokens=int((usage or {}).get("total_tokens") or 0),
+                    usage=getattr(ctx, "_usage", None) if ctx is not None else None,
                     latency_ms=int((time.monotonic() - started) * 1000),
                     tool_calls_count=0,
                 )
@@ -376,25 +351,36 @@ class ChatHandler:
                     retries=1,
                     **prompt_kwargs,
                 )
-            run_result = await agent.run(prompt, deps=deps)  # type: ignore[arg-type]
-            # Phase 9: keep the run's token usage for the post_process usage row.
+            run_result = await agent.run(
+                prompt,
+                deps=deps,
+                # Ask OpenRouter to return usage accounting (incl. its
+                # provider-reported `cost`) in the response.
+                model_settings=(
+                    {"openrouter_usage": {"include": True}}
+                    if isinstance(model_name, str) and model_name.lower().startswith("openrouter")
+                    else None
+                ),
+            )  # type: ignore[arg-type]
+            # Phase 9: keep the run's token usage + provider-reported cost for
+            # the post_process usage row (pydantic-ai surfaces cost as USD).
             try:
                 usage = getattr(run_result, "usage", None)
                 if usage is not None:
                     input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
                     output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
-                    object.__setattr__(
-                        ctx,
-                        "_usage",
-                        {
-                            "input_tokens": input_tokens,
-                            "output_tokens": output_tokens,
-                            "total_tokens": int(getattr(usage, "total_tokens", 0) or 0)
-                            or (input_tokens + output_tokens),
-                        },
-                    )
+                    cost = getattr(usage, "cost", None)
+                    stash: dict = {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": int(getattr(usage, "total_tokens", 0) or 0)
+                        or (input_tokens + output_tokens),
+                    }
+                    if cost is not None:
+                        stash["cost_usd"] = float(cost)
+                    object.__setattr__(ctx, "_usage", stash)
             except Exception:
-                logger.debug("could not extract usage for %s", req.message_id, exc_info=True)
+                logger.debug("could not extract usage for %s", ctx.request.message_id, exc_info=True)
             output = run_result.output
             if isinstance(output, DeferredToolRequests):
                 for call in output.approvals:
@@ -461,6 +447,21 @@ class ChatHandler:
                     temperature=profile.get("temperature"),
                     max_tokens=profile.get("max_tokens"),
                 ):
+                    # The fallback client reports provider usage (tokens + USD
+                    # cost when the provider returns it) on its done event.
+                    if ev["type"] == "done" and ev["data"].get("usage"):
+                        raw = ev["data"]["usage"]
+                        input_tokens = int(raw.get("prompt_tokens") or raw.get("input_tokens") or 0)
+                        output_tokens = int(raw.get("completion_tokens") or raw.get("output_tokens") or 0)
+                        stash = {
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "total_tokens": int(raw.get("total_tokens") or 0)
+                            or (input_tokens + output_tokens),
+                        }
+                        if raw.get("cost") is not None:
+                            stash["cost_usd"] = float(raw["cost"])
+                        object.__setattr__(ctx, "_usage", stash)
                     yield AgentEvent(type=ev["type"], data=ev["data"])
             except Exception:
                 yield AgentEvent(type="error", data={"message": "agent execution failed"})
@@ -639,7 +640,7 @@ class ChatHandler:
                     output_tokens=output_tokens,
                     total_tokens=int(usage.get("total_tokens") or 0)
                     or (input_tokens + output_tokens),
-                    cost_cents=compute_cost_cents(model_name, input_tokens, output_tokens),
+                    cost_cents=_cost_cents_from(usage),
                     latency_ms=int((time.monotonic() - started) * 1000) if started else 0,
                     tool_calls_count=sum(1 for e in events if e.type == "tool_call"),
                     status="error" if any(e.type == "error" for e in events) else "success",
@@ -728,14 +729,14 @@ class ChatHandler:
         *,
         model: str,
         status: str,
-        input_tokens: int,
-        output_tokens: int,
-        total_tokens: int,
+        usage: dict | None = None,
         latency_ms: int,
         tool_calls_count: int,
     ) -> None:
         from src.models.agent_usage import AgentUsage
 
+        input_tokens = int((usage or {}).get("input_tokens") or 0)
+        output_tokens = int((usage or {}).get("output_tokens") or 0)
         async with SessionFactory() as session:
             # post_process may have committed its row before failing — never
             # double-record a run.
@@ -759,8 +760,9 @@ class ChatHandler:
                     model=model,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
-                    total_tokens=total_tokens or (input_tokens + output_tokens),
-                    cost_cents=compute_cost_cents(model, input_tokens, output_tokens),
+                    total_tokens=int((usage or {}).get("total_tokens") or 0)
+                    or (input_tokens + output_tokens),
+                    cost_cents=_cost_cents_from(usage),
                     latency_ms=latency_ms,
                     tool_calls_count=tool_calls_count,
                     status=status,
