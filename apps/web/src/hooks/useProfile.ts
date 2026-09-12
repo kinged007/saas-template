@@ -1,4 +1,5 @@
 import { useCustom, useCustomMutation, useGetIdentity, useInvalidate } from "@refinedev/core";
+import { useQuery } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 
@@ -181,4 +182,17 @@ export function useDeleteAccount() {
   );
 
   return { mutate: deleteMyAccount, mutateAsync: deleteMyAccountAsync, mutation };
+}
+
+export function usePublicProfile(userId: string | null | undefined) {
+  const enabled = Boolean(userId);
+  const q = useQuery<UserProfile>({
+    queryKey: ["public-profile", userId],
+    enabled,
+    queryFn: async () => {
+      const res = await httpClient.get<UserProfile>(`${API_URL}/users/${userId}/profile`);
+      return res.data;
+    },
+  });
+  return { data: q.data, isLoading: q.isPending, isError: q.isError, query: q };
 }

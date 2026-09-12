@@ -75,12 +75,16 @@ def profile_to_dict(p: UserProfile) -> dict:
     }
 
 
-def public_projection(p: UserProfile) -> dict:
+def public_projection(p: UserProfile, user: User | None = None) -> dict:
     """
     Redacted projection for cross-user reads: strips phone_number, date_of_birth,
     and any custom_data keys prefixed with _private.
     """
     data = profile_to_dict(p)
+    if user is not None:
+        data["display_name"] = user.display_name
+        data["email"] = user.email
+        data["avatar_url"] = user.avatar_url
     # Redact private fields
     data["phone_number"] = None
     data["date_of_birth"] = None
