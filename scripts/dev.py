@@ -54,32 +54,36 @@ def main() -> int:
     for sig in HANDLED:
         signal.signal(sig, handle)
 
+    exit_code = None
     try:
-        procs = {s["name"]: subprocess.Popen(s["cmd"], cwd=s["cwd"], start_new_session=True) for s in SERVERS}
+        for s in SERVERS:
+            procs[s["name"]] = subprocess.Popen(s["cmd"], cwd=s["cwd"], start_new_session=True)
+
+        print("==> api on :8000, web on :5173 (open http://localhost:5173) — Ctrl-C stops both")
+
+        while True:
+            if stop_signal is not None:
+                break
+            for name, proc in procs.items():
+                status = proc.poll()
+                if status is not None:
+                    print(f"{name} exited (status {status}), stopping the other...")
+                    exit_code = status if status != 0 else exit_code
+                    break
+            if exit_code is not None:
+                break
+            time.sleep(0.1)
     except FileNotFoundError as e:
         print(f"error: could not start a server: {e}", file=sys.stderr)
-        return 127
-
-    print("==> api on :8000, web on :5173 (open http://localhost:5173) — Ctrl-C stops both")
-
-    exit_code = None
-    while True:
-        if stop_signal is not None:
-            break
-        for name, proc in procs.items():
-            status = proc.poll()
-            if status is not None:
-                print(f"{name} exited (status {status}), stopping the other...")
-                exit_code = status if status != 0 else exit_code
-                break
-        if exit_code is not None:
-            break
-        time.sleep(0.1)
-
-    kill_all(procs, signal.SIGTERM)
-    wait_all(procs, GRACE_SECONDS)
-    kill_all(procs, signal.SIGKILL)
-    wait_all(procs, None)
+        exit_code = 127
+    except Exception as e:
+        print(f"error: unexpected failure: {e}", file=sys.stderr)
+        exit_code = 1
+    finally:
+        kill_all(procs, signal.SIGTERM)
+        wait_all(procs, GRACE_SECONDS)
+        kill_all(procs, signal.SIGKILL)
+        wait_all(procs, None)
 
     if stop_signal is not None:
         return 128 + stop_signal
@@ -92,8 +96,11 @@ def kill_all(procs: dict, sig: int) -> None:
             continue
         try:
             os.killpg(proc.pid, sig)
-        except (ProcessLookupError, PermissionError):
-            pass
+        except (ProcessLookupError, PermissionError, AttributeError):
+            try:
+                proc.send_signal(sig)
+            except Exception:
+                pass
 
 
 def wait_all(procs: dict, timeout: float | None) -> None:
