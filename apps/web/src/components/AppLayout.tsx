@@ -322,7 +322,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             <ThemeToggle />
           </div>
         </header>
-        <main className="container mx-auto flex min-h-0 flex-1 flex-col gap-4 p-4 md:p-6">{children}</main>
+        <main className="container mx-auto flex min-h-0 flex-1 flex-col gap-4 p-4 md:p-6">
+          {/* Global page bottom padding; full-height pages opt out via .page-flush (see InboxPage). */}
+          <div className="flex min-h-0 flex-1 flex-col [&>*:not(.page-flush)]:pb-[2em]">{children}</div>
+        </main>
       </SidebarInset>
     </SidebarProvider>
   );

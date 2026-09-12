@@ -67,29 +67,60 @@ export function UserAvatar({
   );
 
   const clickable = !!onClick;
-  const wrappedAvatar = clickable ? (
-    <button
-      type="button"
-      aria-label={`Open profile for ${displayName}`}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick!(e);
-      }}
-      className="inline-flex shrink-0 cursor-pointer rounded-full transition-opacity hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
-    >
-      {avatar}
-    </button>
-  ) : (
-    <span className="inline-flex shrink-0 cursor-default">{avatar}</span>
-  );
 
-  if (!withTooltip) return wrappedAvatar;
+  if (!withTooltip) {
+    // ponytail: no TooltipTrigger wrapper here to avoid stacking native components under Tooltip internals; add when avatar needs non-clickable outside-tooltip a11y.
+    return clickable ? (
+      <button
+        type="button"
+        aria-label={`Open profile for ${displayName}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClick!(e);
+        }}
+        className="inline-flex shrink-0 cursor-pointer rounded-full transition-opacity hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
+      >
+        {avatar}
+      </button>
+    ) : (
+      <span className="inline-flex shrink-0 cursor-default">{avatar}</span>
+    );
+  }
 
-  // TooltipProvider can be nested; keep it local so callers don't need to wrap pages.
+  // TooltipTrigger defaults to a <button>; use asChild with a span because
+  // avatars render inside native <button> rows (conversation list).
   return (
     <TooltipProvider>
       <Tooltip>
-        <TooltipTrigger asChild>{wrappedAvatar}</TooltipTrigger>
+        <TooltipTrigger asChild>
+          <span
+            {...(clickable
+              ? {
+                  role: "button",
+                  tabIndex: 0,
+                  "aria-label": `Open profile for ${displayName}`,
+                  onClick: (e: React.MouseEvent<HTMLSpanElement>) => {
+                    e.stopPropagation();
+                    onClick!(e);
+                  },
+                  onKeyDown: (e: React.KeyboardEvent<HTMLSpanElement>) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      onClick!(e as unknown as React.MouseEvent<HTMLSpanElement>);
+                    }
+                  },
+                }
+              : {})}
+            className={
+              clickable
+                ? "inline-flex shrink-0 cursor-pointer rounded-full transition-opacity hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
+                : "inline-flex shrink-0 cursor-default"
+            }
+          >
+            {avatar}
+          </span>
+        </TooltipTrigger>
         <TooltipContent side="top" className="max-w-[240px]">
           <div className="flex flex-col text-xs">
             <span className="font-medium leading-tight">{displayName}</span>

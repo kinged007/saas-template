@@ -5,7 +5,7 @@ import { useForm } from "@refinedev/react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { toast } from "sonner";
-import { useWatch } from "react-hook-form";
+import { useWatch, type Resolver } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -61,6 +61,22 @@ const agentSchema = z.object({
 });
 
 type AgentFormData = z.infer<typeof agentSchema>;
+
+const NULL_AS_LIST = new Set(["mcp_servers", "skills"]);
+
+// Refine's record sync writes raw API nulls into fields; zod rejects nulls on
+// submit ("Expected string, received null"), blocking save. Clean them first.
+function cleanNulls(value: unknown, key = ""): unknown {
+  if (value === null) return NULL_AS_LIST.has(key) ? [] : key === "is_active" || key === "enabled" ? true : "";
+  if (Array.isArray(value)) return value.map((item) => cleanNulls(item));
+  if (typeof value === "object")
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, cleanNulls(v, k)]));
+  return value;
+}
+
+const agentResolver: Resolver<AgentFormData> = (values, context, options) =>
+  zodResolver(agentSchema)(cleanNulls(values) as AgentFormData, context, options);
+
 const emptyMcp = { id: "", url: "", transport: "http" as const, auth_secret_ref: "", enabled: true, timeout_ms: "" };
 
 export function AgentEditPage() {
@@ -71,7 +87,7 @@ export function AgentEditPage() {
   const roles = (rolesResult?.data ?? []) as Role[];
 
   const form = useForm<BaseRecord, HttpError, AgentFormData>({
-    resolver: zodResolver(agentSchema),
+    resolver: agentResolver,
     defaultValues: {
       name: "",
       slug: "",

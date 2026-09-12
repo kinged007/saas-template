@@ -121,7 +121,7 @@ export function AgentUsageDashboardPage() {
     return map;
   }, [agentsResult]);
 
-  const rows = result?.data ?? [];
+  const rows = Array.isArray(result?.data) ? result.data : [];
 
   const kpis = useMemo(() => {
     const runs = rows.length;
