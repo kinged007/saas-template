@@ -24,6 +24,8 @@ export type UserAvatarProps = {
   /** Alternative: derive initials from first/last name fields */
   firstName?: string | null;
   lastName?: string | null;
+  /** Optional click handler (e.g. to open user profile) */
+  onClick?: (e: React.MouseEvent<HTMLElement>) => void;
 };
 
 /**
@@ -45,6 +47,7 @@ export function UserAvatar({
   withTooltip = true,
   firstName,
   lastName,
+  onClick,
 }: UserAvatarProps) {
   const displayName = (name ?? "").trim() || "U";
   const initials = React.useMemo(() => {
@@ -63,15 +66,30 @@ export function UserAvatar({
     </Avatar>
   );
 
-  if (!withTooltip) return avatar;
+  const clickable = !!onClick;
+  const wrappedAvatar = clickable ? (
+    <button
+      type="button"
+      aria-label={`Open profile for ${displayName}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick!(e);
+      }}
+      className="inline-flex shrink-0 cursor-pointer rounded-full transition-opacity hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
+    >
+      {avatar}
+    </button>
+  ) : (
+    <span className="inline-flex shrink-0 cursor-default">{avatar}</span>
+  );
+
+  if (!withTooltip) return wrappedAvatar;
 
   // TooltipProvider can be nested; keep it local so callers don't need to wrap pages.
   return (
     <TooltipProvider>
       <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex shrink-0 cursor-default">{avatar}</span>
-        </TooltipTrigger>
+        <TooltipTrigger asChild>{wrappedAvatar}</TooltipTrigger>
         <TooltipContent side="top" className="max-w-[240px]">
           <div className="flex flex-col text-xs">
             <span className="font-medium leading-tight">{displayName}</span>

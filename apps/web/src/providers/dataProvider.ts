@@ -53,15 +53,22 @@ type RetriableRequest = AxiosRequestConfig & { _retried?: boolean };
 // fail with an already-revoked token and log the user out.
 let refreshPromise: Promise<boolean> | null = null;
 
+export function cancelPendingRefresh() {
+  refreshPromise = null;
+}
+
 async function tryRefresh(): Promise<boolean> {
   if (!refreshPromise) {
+    const capturedRefresh = tokenStore.getRefresh();
+    if (!capturedRefresh) return false;
     refreshPromise = (async () => {
-      const refresh = tokenStore.getRefresh();
-      if (!refresh) return false;
       try {
         const { data } = await axios.post(`${API_URL}/auth/refresh`, {
-          refresh_token: refresh,
+          refresh_token: capturedRefresh,
         });
+        // Logout may have cleared tokens while refresh was in-flight —
+        // don't restore a session the user just ended.
+        if (tokenStore.getRefresh() !== capturedRefresh) return false;
         tokenStore.setTokens(data.access_token, data.refresh_token);
         return true;
       } catch {

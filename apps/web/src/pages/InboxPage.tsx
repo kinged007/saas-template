@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { AgentAvatar } from "@/components/ui/agent-avatar";
+import { UserProfileDialog } from "@/components/UserProfileDialog";
 import { formatDate } from "../components/ui";
 import { TabbedPageHeader } from "../components/refine-ui/layout/tabbed-page-header";
 import { cn } from "@/lib/utils";
@@ -64,6 +65,10 @@ export function InboxPage() {
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
+  const [selectedUser, setSelectedUser] = useState<
+    | { userId: string; fallback: { display_name?: string; email?: string | null; avatar_url?: string | null } }
+    | null
+  >(null);
   const selectedRef = useRef<Notification | null>(null);
   const openedAtRef = useRef(0);
   const pendingTimerRef = useRef<number | null>(null);
@@ -668,16 +673,19 @@ export function InboxPage() {
                               p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null },
                             );
                             const isAgent = (p as unknown as { type?: string }).type === "agent";
-                            return isAgent ? (
-                              <AgentAvatar key={p.id} value={p.avatar_url} name={name} sizeClassName="h-5 w-5 border-2 border-background" />
-                            ) : (
+                            const pEmail = (p as unknown as { email?: string | null }).email ?? null;
+                            if (isAgent) {
+                              return <AgentAvatar key={p.id} value={p.avatar_url} name={name} sizeClassName="h-5 w-5 border-2 border-background" />;
+                            }
+                            return (
                               <UserAvatar
                                 key={p.id}
                                 name={name}
-                                email={(p as unknown as { email?: string | null }).email ?? null}
+                                email={pEmail}
                                 avatarUrl={p.avatar_url}
                                 sizeClassName="h-5 w-5 border-2 border-background"
                                 fallbackClassName="text-[9px]"
+                                onClick={p.id === identity?.id ? undefined : () => setSelectedUser({ userId: p.id, fallback: { display_name: name, email: pEmail, avatar_url: p.avatar_url } })}
                               />
                             );
                           })}
@@ -850,24 +858,51 @@ export function InboxPage() {
                             p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null },
                           );
                           const isAgent = (p as unknown as { type?: string }).type === "agent";
-                          return (
-                            <Badge key={p.id} variant="secondary" className="gap-1">
-                              {isAgent ? (
+                          const pEmail = (p as unknown as { email?: string | null }).email ?? null;
+                          if (isAgent) {
+                            return (
+                              <Badge key={p.id} variant="secondary" className="gap-1">
                                 <AgentAvatar value={p.avatar_url} name={name} sizeClassName="h-4 w-4" />
-                              ) : (
-                                <UserAvatar
-                                  name={name}
-                                  email={(p as unknown as { email?: string | null }).email ?? null}
-                                  avatarUrl={p.avatar_url}
-                                  sizeClassName="h-4 w-4"
-                                  fallbackClassName="text-[8px]"
-                                  firstName={(p as unknown as { first_name?: string | null }).first_name ?? null}
-                                  lastName={(p as unknown as { last_name?: string | null }).last_name ?? null}
-                                />
-                              )}
+                                {name}
+                              </Badge>
+                            );
+                          }
+                          const clickable = p.id !== identity?.id;
+                          const badgeInner = (
+                            <Badge
+                              key={p.id}
+                              variant="secondary"
+                              className={clickable ? "cursor-pointer gap-1 hover:opacity-80" : "gap-1"}
+                              {...(clickable
+                                ? {
+                                    role: "button" as const,
+                                    tabIndex: 0,
+                                    onClick: () =>
+                                      setSelectedUser({ userId: p.id, fallback: { display_name: name, email: pEmail, avatar_url: p.avatar_url } }),
+                                    onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => {
+                                      if (e.key === "Enter" || e.key === " ") {
+                                        e.stopPropagation();
+                                        e.preventDefault();
+                                        setSelectedUser({ userId: p.id, fallback: { display_name: name, email: pEmail, avatar_url: p.avatar_url } });
+                                      }
+                                    },
+                                  }
+                                : {})}
+                            >
+                              <UserAvatar
+                                name={name}
+                                email={pEmail}
+                                avatarUrl={p.avatar_url}
+                                sizeClassName="h-4 w-4"
+                                fallbackClassName="text-[8px]"
+                                firstName={(p as unknown as { first_name?: string | null }).first_name ?? null}
+                                lastName={(p as unknown as { last_name?: string | null }).last_name ?? null}
+                                onClick={p.id === identity?.id ? undefined : () => setSelectedUser({ userId: p.id, fallback: { display_name: name, email: pEmail, avatar_url: p.avatar_url } })}
+                              />
                               {name}
                             </Badge>
                           );
+                          return badgeInner;
                         })}
                         {selectedConversation.participants.length > 2 && (
                           <TooltipProvider>
@@ -929,6 +964,7 @@ export function InboxPage() {
                                   avatarUrl={m.sender_avatar_url ?? null}
                                   sizeClassName="h-7 w-7 shrink-0"
                                   fallbackClassName="text-xs"
+                                  onClick={m.sender_id === identity?.id ? undefined : () => setSelectedUser({ userId: m.sender_id, fallback: { display_name: m.sender_name, email: m.sender_email ?? null, avatar_url: m.sender_avatar_url ?? null } })}
                                 />
                               )
                             )}
@@ -971,6 +1007,15 @@ export function InboxPage() {
                     <div ref={messagesEndRef} />
                   </div>
                 </div>
+
+                <UserProfileDialog
+                  userId={selectedUser?.userId ?? null}
+                  open={!!selectedUser}
+                  onOpenChange={(open) => {
+                    if (!open) setSelectedUser(null);
+                  }}
+                  fallback={selectedUser?.fallback}
+                />
 
                 {/* Composer */}
                 <div className="border-t p-3">
