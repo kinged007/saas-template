@@ -1,7 +1,7 @@
 import type { AuthProvider } from "@refinedev/core";
 
 import { activeWorkspacePermissions } from "../utils/permissions";
-import { API_URL, httpClient } from "./dataProvider";
+import { API_URL, cancelPendingRefresh, httpClient } from "./dataProvider";
 import { identityStore, tokenStore } from "../utils/storage";
 import { clearAllCaches, queryClient } from "./queryClient";
 import type { Identity } from "../types";
@@ -65,6 +65,7 @@ export const authProvider: AuthProvider = {
     if (refresh) {
       post("/auth/logout", { refresh_token: refresh }).catch(() => null);
     }
+    cancelPendingRefresh();
     tokenStore.clear();
     // Hard-reset before the router navigates to /login: every list/detail
     // query is workspace/user-scoped, so retaining it would flash the
