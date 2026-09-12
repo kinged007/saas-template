@@ -13,6 +13,9 @@ export type Workspace = {
 export type UserProfile = {
   id: string;
   user_id: string;
+  display_name?: string | null;
+  email?: string | null;
+  avatar_url?: string | null;
   first_name?: string | null;
   last_name?: string | null;
   bio?: string | null;

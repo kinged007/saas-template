@@ -212,10 +212,14 @@ class ProfileService:
                 viewer_wids = [row[0] for row in v_result.all()]
                 if not viewer_wids:
                     return None
-                target_stmt = select(WorkspaceMember.id).where(
-                    WorkspaceMember.user_id == target_user_id,
-                    WorkspaceMember.workspace_id.in_(viewer_wids),
-                    WorkspaceMember.status == "active",
+                target_stmt = (
+                    select(WorkspaceMember.id)
+                    .where(
+                        WorkspaceMember.user_id == target_user_id,
+                        WorkspaceMember.workspace_id.in_(viewer_wids),
+                        WorkspaceMember.status == "active",
+                    )
+                    .limit(1)
                 )
                 t_result = await self._session.execute(target_stmt)
                 if t_result.scalar_one_or_none() is None:
@@ -223,7 +227,7 @@ class ProfileService:
         profile = await self.get_or_create(target_user_id)
         from src.services.serializers import public_projection
 
-        return public_projection(profile)
+        return public_projection(profile, target_user)
 
     async def export_bundle(self, user_id: str) -> dict[str, Any]:
         user = await self._session.get(User, user_id)

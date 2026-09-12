@@ -23,6 +23,8 @@ import { DeleteButton } from "../components/refine-ui/buttons/delete";
 import { ListView, ListViewHeader } from "../components/refine-ui/views/list-view";
 import { EmptyRow, StatusBadge, formatDate } from "../components/ui";
 import { UserAvatar } from "@/components/ui/user-avatar";
+import { UserProfileDialog } from "@/components/UserProfileDialog";
+
 import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceContext";
 import type { Identity, Invitation, Member, Role } from "../types";
 import { getMemberDisplayName } from "../types";
@@ -30,6 +32,7 @@ import { getMemberDisplayName } from "../types";
 const MANAGER_ROLES = ["owner", "admin"];
 
 export function MembersPage() {
+  const [selectedMember, setSelectedMember] = useState<Member | null>(null);
   const { workspace } = useWorkspace();
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
   const { result: membersResult } = useList<Member>({ resource: "members" });
@@ -102,6 +105,7 @@ export function MembersPage() {
                         fallbackClassName="text-xs"
                         firstName={m.first_name}
                         lastName={m.last_name}
+                        onClick={() => setSelectedMember(m)}
                       />
                       <div className="flex flex-col">
                         <p className="font-medium">{name}</p>
@@ -237,6 +241,24 @@ export function MembersPage() {
           </div>
         </section>
       )}
+      <UserProfileDialog
+        userId={selectedMember?.id ?? null}
+        open={!!selectedMember}
+        onOpenChange={(open) => {
+          if (!open) setSelectedMember(null);
+        }}
+        fallback={
+          selectedMember
+            ? {
+                display_name: getMemberDisplayName(selectedMember),
+                email: selectedMember.email,
+                avatar_url: selectedMember.avatar_url,
+                first_name: selectedMember.first_name,
+                last_name: selectedMember.last_name,
+              }
+            : undefined
+        }
+      />
     </ListView>
   );
 }
