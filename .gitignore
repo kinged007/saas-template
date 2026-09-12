@@ -41,5 +41,10 @@ crash.log
 # Helm
 *.tgz
 
+# Database / SQLite
+*.db
+*.sqlite
+*.sqlite3
+
 # Logs
 *.log
