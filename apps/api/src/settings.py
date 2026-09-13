@@ -2,6 +2,7 @@ import os
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.email.base import EmailDriver  # noqa: E402  (base has no settings import)
 from src.events.subjects import EventBusDriver
 
 
@@ -37,6 +38,16 @@ class Settings(BaseSettings):
     # Events
     event_bus_driver: EventBusDriver = EventBusDriver.INPROCESS
     nats_url: str = "nats://localhost:4222"
+
+    # Email: console (dev log + in-memory capture) | smtp (real delivery)
+    email_driver: EmailDriver = EmailDriver.CONSOLE
+    email_from: str = ""
+    smtp_host: str = "localhost"
+    smtp_port: int = 1025
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
+    smtp_timeout_s: float = 10.0
 
     # CORS / frontend (comma-separated)
     cors_origins: str = "http://localhost:5173"

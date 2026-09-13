@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 
 from src.core.cache import TtlCache
 from src.core.security.crypto import SecretCipher
+from src.email.base import EmailSender
+from src.email.factory import build_email_sender
 from src.events.bus import EventBus
 from src.events.factory import build_event_bus
 from src.realtime.manager import ConnectionManager
@@ -29,6 +31,7 @@ class Container:
         )
     )
     secret_store: SecretStore = field(default_factory=build_secret_store)
+    email_sender: EmailSender = field(default_factory=build_email_sender)
     connection_manager: ConnectionManager = field(default_factory=ConnectionManager)
     cache: TtlCache = field(
         default_factory=lambda: TtlCache(ttl_seconds=PROVIDER_CACHE_TTL_SECONDS)
