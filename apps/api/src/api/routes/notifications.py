@@ -10,6 +10,7 @@ from src.api.crud import InvalidQuery, QuerySpec, apply_query, parse_query
 from src.api.deps import (
     get_container,
     get_current_user,
+    get_current_workspace_id,
     get_optional_workspace_id,
     require_key_permission,
     resolve_auth_principal,
@@ -64,17 +65,14 @@ async def list_notifications(
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
     _=Depends(require_key_permission(NOTIFICATION_READ)),
-    workspace_id: str | None = Depends(get_optional_workspace_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ):
     stmt = (
         select(Notification, Workspace.name)
         .outerjoin(Workspace, Workspace.id == Notification.workspace_id)
-        .where(Notification.user_id == user.id)
+        .where(Notification.user_id == user.id, Notification.workspace_id == workspace_id)
     )
-    if principal.api_key is not None:
-        # API keys are workspace-scoped: only ever surface the key's workspace.
-        stmt = stmt.where(Notification.workspace_id == workspace_id)
     try:
         spec = parse_query(request)
         stmt = _apply_notification_spec(stmt, spec)
@@ -93,15 +91,27 @@ async def unread_count(
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
     _=Depends(require_key_permission(NOTIFICATION_READ)),
-    workspace_id: str | None = Depends(get_optional_workspace_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = await NotificationService(db).list_for_user(
-        user.id,
-        acknowledged=False,
-        workspace_id=workspace_id if principal.api_key is not None else None,
-    )
-    return {"count": len(rows)}
+    count = await NotificationService(db).unread_count(user.id, workspace_id=workspace_id)
+    return {"count": count}
+
+
+@router.patch("/read-all")
+async def acknowledge_all(
+    request: Request,
+    user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
+    _=Depends(require_key_permission(NOTIFICATION_ACK)),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    service = NotificationService(db, container.bus)
+    ip = request.client.host if request.client else None
+    count = await service.acknowledge_all(user.id, workspace_id=workspace_id, ip_address=ip)
+    return {"acknowledged": count}
 
 
 @router.patch("/{notification_id}")
@@ -118,7 +128,7 @@ async def acknowledge(
 ):
     service = NotificationService(db, container.bus)
     ip = request.client.host if request.client else None
-    ws = workspace_id if principal.api_key is not None else None
+    ws = workspace_id  # already optional; when provided, enforce workspace scoping
     if body.acknowledged:
         n = await service.acknowledge(user.id, notification_id, workspace_id=ws, ip_address=ip)
     else:
@@ -145,7 +155,7 @@ async def delete_notification(
     stmt = select(Notification).where(
         Notification.id == notification_id, Notification.user_id == user.id
     )
-    if principal.api_key is not None:
+    if workspace_id is not None:
         stmt = stmt.where(Notification.workspace_id == workspace_id)
     n = (await db.execute(stmt)).scalar_one_or_none()
     if n is None:

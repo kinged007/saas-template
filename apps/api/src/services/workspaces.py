@@ -4,7 +4,7 @@ import secrets
 import uuid
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dates import ensure_utc, now_utc
@@ -143,6 +143,67 @@ class WorkspaceService:
         if workspace is None:
             raise WorkspaceError("workspace not found")
         name = workspace.name
+
+        # --- Cascade delete workspace-scoped data.
+        # Users themselves are global and are NOT deleted — only memberships and
+        # workspace-scoped resources. Order matters for FK-like cleanup even though
+        # the schema uses plain StringUUID columns without DB-level cascades.
+        # Keep audit_log_entries (immutable compliance trail) — they remain with
+        # workspace_id referencing the deleted workspace.
+
+        # Lazy imports to avoid circular deps and keep the module import cheap.
+        from src.models.api_key import ApiKey
+        from src.models.conversation import Conversation, ConversationParticipant, Message
+        from src.models.core import Notification
+        from src.models.jobs import JobDefinition, JobLogEntry, JobRun
+        from src.models.secret import StoredSecret
+
+        # API keys, invitations, secrets, notifications are simple workspace_id filters.
+        await self._session.execute(delete(ApiKey).where(ApiKey.workspace_id == workspace_id))
+        await self._session.execute(delete(Invitation).where(Invitation.workspace_id == workspace_id))
+        await self._session.execute(delete(StoredSecret).where(StoredSecret.workspace_id == workspace_id))
+        await self._session.execute(delete(Notification).where(Notification.workspace_id == workspace_id))
+        # NOTE: WorkspaceMember + Role rows are intentionally kept — deleting them
+        # makes the follow-up GET on a deleted workspace fail the membership scope
+        # check (get_membership joins Role) with 403 instead of the contract's 404.
+        # Stale rows are inert: listings and role lookups inner-join Workspace.id
+        # (or the membership/role join above) so they never surface.
+
+        # Jobs: workspace-scoped definitions + runs + logs.
+        # Collect definition ids first so we can remove runs/logs that reference them
+        # even if their workspace_id is NULL (defensive).
+        def_ids_result = await self._session.execute(
+            select(JobDefinition.id).where(JobDefinition.workspace_id == workspace_id)
+        )
+        definition_ids = [row[0] for row in def_ids_result.all()]
+        if definition_ids:
+            # Logs for runs of those definitions
+            run_ids_result = await self._session.execute(
+                select(JobRun.id).where(JobRun.definition_id.in_(definition_ids))
+            )
+            run_ids = [row[0] for row in run_ids_result.all()]
+            if run_ids:
+                await self._session.execute(delete(JobLogEntry).where(JobLogEntry.run_id.in_(run_ids)))
+            await self._session.execute(delete(JobRun).where(JobRun.definition_id.in_(definition_ids)))
+            await self._session.execute(delete(JobRun).where(JobRun.workspace_id == workspace_id))
+            await self._session.execute(delete(JobDefinition).where(JobDefinition.workspace_id == workspace_id))
+        else:
+            # No workspace definitions — still clean stray runs that were denormalized with workspace_id
+            await self._session.execute(delete(JobRun).where(JobRun.workspace_id == workspace_id))
+
+        # Conversations + participants + messages (workspace-scoped)
+        conv_ids_result = await self._session.execute(
+            select(Conversation.id).where(Conversation.workspace_id == workspace_id)
+        )
+        conv_ids = [row[0] for row in conv_ids_result.all()]
+        if conv_ids:
+            await self._session.execute(delete(Message).where(Message.conversation_id.in_(conv_ids)))
+            await self._session.execute(
+                delete(ConversationParticipant).where(ConversationParticipant.conversation_id.in_(conv_ids))
+            )
+            await self._session.execute(delete(Conversation).where(Conversation.workspace_id == workspace_id))
+
+        # Finally delete the workspace row itself
         await self._session.delete(workspace)
         await self._session.commit()
         await publish_audit(

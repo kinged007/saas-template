@@ -12,4 +12,9 @@ export const ALL_PERMISSIONS = [
   "apikey:manage",
   "notification:read",
   "notification:acknowledge",
+  "message:read",
+  "message:send",
+  "jobs:view",
+  "jobs:edit",
+  "audit:read",
 ];

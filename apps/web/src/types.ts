@@ -10,15 +10,102 @@ export type Workspace = {
   created_at?: string;
 };
 
+export type UserProfile = {
+  id: string;
+  user_id: string;
+  display_name?: string | null;
+  email?: string | null;
+  avatar_url?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  bio?: string | null;
+  phone_number?: string | null;
+  timezone?: string | null;
+  locale?: string | null;
+  date_of_birth?: string | null;
+  website_url?: string | null;
+  location?: string | null;
+  custom_data: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+} & Record<string, unknown>;
+
+export function getProfileField(
+  profile: UserProfile | null | undefined,
+  key: string,
+  fallback: unknown = null
+): unknown {
+  if (!profile) return fallback ?? null;
+  if (key === "__proto__" || key === "constructor" || key === "prototype") return fallback ?? null;
+  const top = (profile as Record<string, unknown>)[key];
+  if (top !== undefined) return top;
+  if (profile.custom_data && (profile.custom_data as Record<string, unknown>)[key] !== undefined) {
+    return (profile.custom_data as Record<string, unknown>)[key];
+  }
+  return fallback ?? null;
+}
+
+export function formatDisplayName(firstName?: string | null, lastName?: string | null, fallback?: string | null): string {
+  const fn = (firstName ?? "").trim();
+  const ln = (lastName ?? "").trim();
+  if (fn && ln) return `${fn} ${ln[0].toUpperCase()}.`;
+  if (fn) return fn;
+  if (ln) return ln;
+  return (fallback ?? "").trim();
+}
+
+export function getDisplayNameFromProfile(profile?: UserProfile | null, fallback?: string | null): string {
+  if (!profile) return (fallback ?? "").trim();
+  return formatDisplayName(profile.first_name, profile.last_name, fallback ?? undefined);
+}
+
+export function getDisplayName(identity?: Identity | null): string {
+  if (!identity) return "U";
+  const fromProfile = getDisplayNameFromProfile(identity.profile, undefined);
+  if (fromProfile) return fromProfile;
+  // Fallback to deprecated display_name or email prefix
+  if (identity.display_name) {
+    // If display_name looks like "First Last", convert to "First L." for consistency
+    const parts = identity.display_name.trim().split(/\s+/);
+    if (parts.length >= 2) return formatDisplayName(parts[0], parts.slice(1).join(" "), identity.display_name);
+    return identity.display_name;
+  }
+  return identity.email?.split("@")[0] ?? "U";
+}
+
+export function getMemberDisplayName(member: { display_name: string; first_name?: string | null; last_name?: string | null; email?: string }): string {
+  const anyM = member as { first_name?: string | null; last_name?: string | null };
+  if (anyM.first_name || anyM.last_name) return formatDisplayName(anyM.first_name, anyM.last_name, member.display_name);
+  // Fallback: convert legacy "First Last" display_name to "First L." for consistency
+  if (member.display_name) {
+    const parts = member.display_name.trim().split(/\s+/);
+    if (parts.length >= 2) return formatDisplayName(parts[0], parts.slice(1).join(" "), member.display_name);
+    return member.display_name;
+  }
+  return member.display_name;
+}
+
+export function getParticipantDisplayName(participant: { display_name: string; first_name?: string | null; last_name?: string | null }): string {
+  if (participant.first_name || participant.last_name) return formatDisplayName(participant.first_name, participant.last_name, participant.display_name);
+  if (participant.display_name) {
+    const parts = participant.display_name.trim().split(/\s+/);
+    if (parts.length >= 2) return formatDisplayName(parts[0], parts.slice(1).join(" "), participant.display_name);
+    return participant.display_name;
+  }
+  return participant.display_name;
+}
+
 export type Identity = {
   id: string;
   email: string;
+  /** @deprecated — use profile.first_name/last_name via getDisplayName() */
   display_name: string;
   avatar_url?: string;
   workspaces: Workspace[];
   permissions: string[];
   /** Bootstrap superuser (SUPERADMIN_EMAIL): manages global scheduled jobs. */
   is_superuser?: boolean;
+  profile?: UserProfile;
 };
 
 export type Role = {
@@ -34,7 +121,10 @@ export type Role = {
 export type Member = {
   id: string;
   email: string;
+  /** @deprecated — use first_name/last_name via getMemberDisplayName() */
   display_name: string;
+  first_name?: string | null;
+  last_name?: string | null;
   avatar_url?: string;
   membership_id: string;
   role_id: string;
@@ -73,6 +163,46 @@ export type Notification = {
   acknowledged: boolean;
   acknowledged_at?: string;
   created_at?: string;
+};
+
+export type Conversation = {
+  id: string;
+  workspace_id: string;
+  title: string | null;
+  created_by_user_id: string;
+  last_message_at: string | null;
+  last_message_preview: string | null;
+  unread_count: number;
+  is_archived: boolean;
+  participants: Array<{
+    type: "user" | "agent";
+    id: string;
+    /** @deprecated — use first_name/last_name via formatDisplayName */
+    display_name: string;
+    first_name?: string | null;
+    last_name?: string | null;
+    avatar_url?: string | null;
+    email?: string | null;
+  }>;
+  message_count?: number;
+  created_at: string;
+  updated_at: string;
+  /** Embedded first message when the conversation was just created */
+  first_message?: Message;
+};
+
+export type Message = {
+  id: string;
+  conversation_id: string;
+  sender_type: "user" | "agent";
+  sender_id: string;
+  sender_name: string;
+  sender_avatar_url?: string | null;
+  sender_email?: string | null;
+  body: string;
+  body_html?: string | null;
+  created_at: string;
+  updated_at?: string;
 };
 
 export type ApiKey = {

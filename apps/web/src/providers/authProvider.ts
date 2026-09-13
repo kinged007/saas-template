@@ -1,8 +1,9 @@
 import type { AuthProvider } from "@refinedev/core";
 
 import { activeWorkspacePermissions } from "../utils/permissions";
-import { API_URL, httpClient } from "./dataProvider";
+import { API_URL, cancelPendingRefresh, httpClient } from "./dataProvider";
 import { identityStore, tokenStore } from "../utils/storage";
+import { clearAllCaches, queryClient } from "./queryClient";
 import type { Identity } from "../types";
 
 const post = async (path: string, body: unknown) => {
@@ -21,6 +22,10 @@ const post = async (path: string, body: unknown) => {
 export const authProvider: AuthProvider = {
   login: async ({ email, password }) => {
     try {
+      // If a previous user was cached (logout without reload, or stale
+      // token), drop it before storing the new tokens so the next
+      // identity fetch cannot flash the previous user's workspaces.
+      if (tokenStore.getAccess()) clearAllCaches(queryClient);
       const tokens = await post("/auth/login", { email, password });
       tokenStore.setTokens(tokens.access_token, tokens.refresh_token);
       return { success: true, redirectTo: "/" };
@@ -29,9 +34,25 @@ export const authProvider: AuthProvider = {
     }
   },
 
-  register: async ({ email, password, display_name }) => {
+  register: async ({ email, password, display_name, first_name, last_name }) => {
     try {
-      const tokens = await post("/auth/register", { email, password, display_name });
+      if (tokenStore.getAccess()) clearAllCaches(queryClient);
+      // Prefer first/last; fall back to deprecated display_name for compat
+      const body: Record<string, unknown> = { email, password };
+      if (first_name || last_name) {
+        body.first_name = first_name;
+        body.last_name = last_name;
+      } else if (display_name) {
+        body.display_name = display_name;
+      } else {
+        // Keep for type compat — backend will 422
+        body.display_name = display_name;
+      }
+      // Always forward first/last if present alongside display_name for transition
+      if (first_name) body.first_name = first_name;
+      if (last_name) body.last_name = last_name;
+      if (display_name && !body.display_name) body.display_name = display_name;
+      const tokens = await post("/auth/register", body);
       tokenStore.setTokens(tokens.access_token, tokens.refresh_token);
       return { success: true, redirectTo: "/" };
     } catch (error) {
@@ -44,7 +65,12 @@ export const authProvider: AuthProvider = {
     if (refresh) {
       post("/auth/logout", { refresh_token: refresh }).catch(() => null);
     }
+    cancelPendingRefresh();
     tokenStore.clear();
+    // Hard-reset before the router navigates to /login: every list/detail
+    // query is workspace/user-scoped, so retaining it would flash the
+    // previous user's rows when a different user logs in without a reload.
+    clearAllCaches(queryClient);
     return { success: true, redirectTo: "/login" };
   },
 
@@ -57,6 +83,7 @@ export const authProvider: AuthProvider = {
   onError: async (error) => {
     if ((error as { statusCode?: number })?.statusCode === 401) {
       tokenStore.clear();
+      clearAllCaches(queryClient);
       return { logout: true, redirectTo: "/login" };
     }
     return { error };

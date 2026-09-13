@@ -29,6 +29,7 @@ STREAM_SUBJECTS = [
     f"{Subjects.APIKEYS}.>",
     f"{Subjects.AUDIT}.>",
     f"{Subjects.JOBS}.>",
+    f"{Subjects.CONVERSATIONS}.>",
 ]
 MAX_DELIVER = 10
 ACK_WAIT_SECONDS = 30.0
@@ -38,7 +39,8 @@ class NatsEventBus(EventBus):
     """Production event bus backed by NATS JetStream.
 
     - One stream (SAAS_TEMPLATE, workqueue retention) with subjects for each
-      durable namespace (workspaces.>, apikeys.>, audit.>).
+      durable namespace (workspaces.>, apikeys.>, audit.>, jobs.>,
+      conversations.>).
     - Each durable subscription is a durable consumer: events survive
       restarts, are delivered with acks, and load-balance across replicas
       (shared durable name = queue-group semantics). Messages are acked after

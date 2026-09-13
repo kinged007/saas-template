@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
+from typing import Any, Sequence, TypedDict
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.events.bus import EventBus
@@ -13,6 +15,17 @@ from src.models.core import Notification
 from src.services.serializers import notification_to_dict
 
 logger = logging.getLogger(__name__)
+
+
+class NotificationSpec(TypedDict):
+    """Input for a notification to persist via `create_many`."""
+
+    user_id: str
+    workspace_id: str
+    type: str
+    title: str
+    body: str | None
+    metadata: dict[str, Any] | None
 
 
 class NotificationService:
@@ -54,6 +67,52 @@ class NotificationService:
                 transient=True,
             )
         return n
+
+    async def create_many(
+        self,
+        specs: Sequence[NotificationSpec],
+        *,
+        correlation_id: str | None = None,
+    ) -> list[Notification]:
+        """Persist many notifications in a single transaction and fan them out.
+
+        All rows share one commit; the realtime publishes are issued
+        concurrently after it, so callers never pay per-notification
+        round-trips. Used by the conversation-message workflow, where a group
+        conversation would otherwise mean one transaction per participant.
+        """
+        rows: list[Notification] = []
+        for spec in specs:
+            if not spec["workspace_id"]:
+                raise ValueError("notifications require a workspace_id")
+            rows.append(
+                Notification(
+                    user_id=spec["user_id"],
+                    workspace_id=spec["workspace_id"],
+                    type=spec["type"],
+                    title=spec["title"],
+                    body=spec.get("body"),
+                    payload=spec.get("metadata") or {},
+                )
+            )
+        if not rows:
+            return []
+        self._session.add_all(rows)
+        await self._session.commit()
+        if self._bus is not None:
+            # Transient: realtime fan-out to live sessions (see `create`).
+            await asyncio.gather(
+                *(
+                    self._bus.publish(
+                        Subjects.NOTIFICATIONS_CREATED,
+                        notification_to_dict(n),
+                        correlation_id=correlation_id,
+                        transient=True,
+                    )
+                    for n in rows
+                )
+            )
+        return rows
 
     async def list_for_user(
         self,
@@ -121,6 +180,96 @@ class NotificationService:
             ip_address=ip_address,
         )
         return n
+
+    async def acknowledge_all(
+        self,
+        user_id: str,
+        *,
+        workspace_id: str,
+        ip_address: str | None = None,
+    ) -> int:
+        """Acknowledge all unread notifications in one UPDATE, excluding
+        conversation_message pointers (surfaced via conversation unread counts).
+        Returns the number acknowledged."""
+        result = await self._session.execute(
+            update(Notification)
+            .where(
+                Notification.user_id == user_id,
+                Notification.workspace_id == workspace_id,
+                Notification.acknowledged_at.is_(None),
+                Notification.type != "conversation_message",
+            )
+            .values(acknowledged_at=datetime.now(UTC))
+        )
+        count = int(result.rowcount or 0)
+        if count:
+            await self._session.commit()
+            await publish_audit(
+                self._bus,
+                workspace_id=workspace_id,
+                resource_type="notification",
+                resource_id="all",
+                action="notifications.acknowledged",
+                actor_user_id=user_id,
+                details={"count": count},
+                ip_address=ip_address,
+            )
+        return count
+
+    async def acknowledge_for_conversation(
+        self,
+        user_id: str,
+        workspace_id: str,
+        conversation_id: str,
+    ) -> int:
+        """Acknowledge all unread conversation_message notifications for a
+        conversation in one UPDATE, with a single aggregated audit event."""
+        stmt = select(Notification.id, Notification.payload).where(
+            Notification.user_id == user_id,
+            Notification.workspace_id == workspace_id,
+            Notification.type == "conversation_message",
+            Notification.acknowledged_at.is_(None),
+        )
+        result = await self._session.execute(stmt)
+        ids = [
+            notification_id
+            for notification_id, payload in result.all()
+            if (payload or {}).get("conversation_id") == conversation_id
+        ]
+        if not ids:
+            return 0
+        await self._session.execute(
+            update(Notification)
+            .where(Notification.id.in_(ids))
+            .values(acknowledged_at=datetime.now(UTC))
+        )
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="conversation",
+            resource_id=conversation_id,
+            action="notifications.acknowledged",
+            actor_user_id=user_id,
+            details={"count": len(ids)},
+        )
+        return len(ids)
+
+    async def unread_count(self, user_id: str, *, workspace_id: str) -> int:
+        """Count unread notifications, excluding conversation_message pointers
+        (they are surfaced through the conversation unread counts instead)."""
+        stmt = (
+            select(func.count())
+            .select_from(Notification)
+            .where(
+                Notification.user_id == user_id,
+                Notification.workspace_id == workspace_id,
+                Notification.acknowledged_at.is_(None),
+                Notification.type != "conversation_message",
+            )
+        )
+        result = await self._session.execute(stmt)
+        return int(result.scalar_one())
 
     async def _get_for_user(
         self,

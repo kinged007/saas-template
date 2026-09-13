@@ -12,6 +12,7 @@ import asyncio
 import logging
 
 from src.db.session import SessionFactory
+from src.events.bus import EventBus
 from src.services.jobs import JobService
 from src.settings import settings
 
@@ -21,12 +22,15 @@ HOUSEKEEPING_INTERVAL_SECONDS = 3600.0
 
 
 class JobScheduler:
-    def __init__(self, *, tick_seconds: float | None = None) -> None:
+    def __init__(
+        self, *, tick_seconds: float | None = None, bus: EventBus | None = None
+    ) -> None:
         self._tick_seconds = (
             tick_seconds
             if tick_seconds is not None
             else max(1.0, settings.jobs_scheduler_tick_seconds)
         )
+        self._bus = bus
         self._task: asyncio.Task | None = None
         self._last_housekeeping = 0.0
 
@@ -63,7 +67,7 @@ class JobScheduler:
     async def tick(self) -> int:
         """One scheduling pass. Returns the number of runs scheduled."""
         async with SessionFactory() as session:
-            scheduled = await JobService(session).schedule_due()
+            scheduled = await JobService(session, self._bus).schedule_due()
         await self._housekeeping_if_due()
         return scheduled
 

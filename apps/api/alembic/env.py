@@ -47,6 +47,14 @@ async def run_migrations_online() -> None:
     engine = create_async_engine(settings.resolved_database_url, pool_pre_ping=True)
     async with engine.connect() as connection:
         await connection.run_sync(do_run_migrations)
+        # In async mode `context.begin_transaction()` does not always auto-commit
+        # on `engine.dispose()` — explicitly commit so migrations are visible to
+        # other connections (fixes fresh DB where `alembic upgrade head` would
+        # otherwise appear to run but leave no tables).
+        try:
+            await connection.commit()
+        except Exception:
+            pass
     await engine.dispose()
 
 

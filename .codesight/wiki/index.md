@@ -1,6 +1,6 @@
 # saas-template — Wiki
 
-_Generated 2026-08-25 — re-run `npx codesight --wiki` if the codebase has changed._
+_Generated 2026-08-30 — re-run `npx codesight --wiki` if the codebase has changed._
 
 Structural map compiled from source code via AST. No LLM — deterministic, 200ms.
 
@@ -12,10 +12,12 @@ Structural map compiled from source code via AST. No LLM — deterministic, 200m
 - [Database](./database.md)
 - [Auth](./auth.md)
 - [Api_keys](./api_keys.md)
+- [Conversations](./conversations.md)
 - [Invitations](./invitations.md)
 - [Jobs](./jobs.md)
 - [Members](./members.md)
 - [Notifications](./notifications.md)
+- [Profiles](./profiles.md)
 - [Roles](./roles.md)
 - [Workspaces](./workspaces.md)
 - [Infra](./infra.md)
@@ -24,10 +26,10 @@ Structural map compiled from source code via AST. No LLM — deterministic, 200m
 
 ## Quick Stats
 
-- Routes: **37**
-- Models: **13**
-- Components: **31**
-- Env vars: **2** required, **20** with defaults
+- Routes: **52**
+- Models: **17**
+- Components: **55**
+- Env vars: **12** required, **21** with defaults
 
 ## How to Use
 
@@ -54,4 +56,4 @@ These exist in your codebase but are **not** reflected in wiki articles:
 When in doubt, search the source. The wiki is a starting point, not a complete inventory.
 
 ---
-_Last compiled: 2026-08-25 · 14 articles · [codesight](https://github.com/Houseofmvps/codesight)_
+_Last compiled: 2026-08-30 · 16 articles · [codesight](https://github.com/Houseofmvps/codesight)_

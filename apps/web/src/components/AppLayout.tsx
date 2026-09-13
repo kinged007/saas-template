@@ -20,8 +20,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { UserAvatar } from "@/components/ui/user-avatar";
 import {
   Select,
   SelectContent,
@@ -30,21 +30,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useGetIdentity, useLogout } from "@refinedev/core";
+import { useCustom, useGetIdentity, useLogout } from "@refinedev/core";
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import {
   Building2,
   ChevronsUpDown,
   CircleUser,
-  Clock,
   Inbox,
   KeyRound,
   LayoutDashboard,
   LogOut,
   Mail,
   Plus,
-  ShieldCheck,
+  Settings,
   Users,
 } from "lucide-react";
 
@@ -54,6 +53,7 @@ import { ThemeToggle } from "./refine-ui/theme/theme-toggle";
 import { NotificationCenter } from "./NotificationCenter";
 import { cn } from "@/lib/utils";
 import type { Identity } from "../types";
+import { getDisplayName } from "../types";
 
 const MENU_ITEMS = [
   { key: "/", label: "Dashboard", icon: LayoutDashboard, permission: "workspace:read" },
@@ -64,11 +64,22 @@ const MENU_ITEMS = [
 function SidebarNav() {
   const location = useLocation();
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
+  const { workspace } = useWorkspace();
   const permissions = activeWorkspacePermissions(identity);
   const can = (p: string) => permissions.includes("*") || permissions.includes(p);
   const items = MENU_ITEMS.filter((i) => can(i.permission));
   const activeKey = `/${location.pathname.split("/")[1] || ""}`;
   const isActive = (key: string) => (key === "/" ? location.pathname === "/" : activeKey === key);
+
+  const { result: convUnreadResult } = useCustom<{ count: number; unread_conversations: number }>({
+    url: "conversations/unread-count",
+    method: "get",
+    queryOptions: {
+      enabled: !!workspace?.id,
+    },
+  });
+  const convUnreadCount =
+    (convUnreadResult?.data as { count?: number } | undefined)?.count ?? 0;
 
   return (
     <SidebarGroup>
@@ -76,12 +87,26 @@ function SidebarNav() {
         {items.map((item) => {
           const Icon = item.icon;
           const active = isActive(item.key);
+          const isInbox = item.key === "/inbox";
+          const badgeCount = isInbox ? convUnreadCount : 0;
           return (
             <SidebarMenuItem key={item.key}>
               <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
                 <Link to={item.key}>
-                  <Icon />
+                  <span className="relative">
+                    <Icon />
+                    {badgeCount > 0 && (
+                      <span className="absolute -right-1.5 -top-1.5 hidden h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-0.5 text-[10px] font-medium leading-none text-destructive-foreground group-data-[collapsible=icon]:flex">
+                        {badgeCount > 99 ? "99+" : badgeCount}
+                      </span>
+                    )}
+                  </span>
                   <span>{item.label}</span>
+                  {badgeCount > 0 && (
+                    <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-xs font-medium text-destructive-foreground group-data-[collapsible=icon]:hidden">
+                      {badgeCount > 99 ? "99+" : badgeCount}
+                    </span>
+                  )}
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
@@ -111,7 +136,11 @@ function WorkspaceSwitcher() {
         if (id === CREATE_WORKSPACE_VALUE) {
           navigate("/workspaces/create");
         } else {
-          setWorkspace(workspaces.find((w) => w.id === id)!);
+          const target = workspaces.find((w) => w.id === id);
+          if (target && target.id !== workspace?.id) {
+            setWorkspace(target);
+            navigate("/");
+          }
         }
       }}
     >
@@ -147,28 +176,39 @@ function WorkspaceSwitcher() {
 
 function UserMenu() {
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
+  const { workspace } = useWorkspace();
   const { mutate: logout } = useLogout();
   const navigate = useNavigate();
-  const initial = (identity?.display_name ?? "U").slice(0, 2).toUpperCase();
+  const displayName = getDisplayName(identity);
   const permissions = activeWorkspacePermissions(identity);
-  const canManageRoles = permissions.includes("*") || permissions.includes("role:manage");
   const canViewApiKeys = permissions.includes("*") || permissions.includes("apikey:read");
-  // Global jobs are superuser-only; workspace jobs need the permission in the
-  // active workspace.
-  const canViewJobs =
+
+  // Workspace settings — only owners and admins may see this entry. The page
+  // itself re-checks this gate and renders an "Access denied" fallback if the
+  // role was downgraded after the menu rendered.
+  const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
+  const isWorkspaceAdmin =
     identity?.is_superuser === true ||
+    (myRole !== undefined && ["owner", "admin"].includes(myRole)) ||
     permissions.includes("*") ||
-    permissions.includes("jobs:view");
+    permissions.includes("workspace:update");
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" className="h-10 w-full justify-start gap-2 px-2 group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:p-0">
-          <Avatar className="h-7 w-7 rounded-lg">
-            <AvatarFallback className="rounded-lg text-xs">{initial}</AvatarFallback>
-          </Avatar>
+          <UserAvatar
+            name={displayName}
+            email={identity?.email}
+            avatarUrl={identity?.avatar_url}
+            sizeClassName="h-7 w-7 rounded-lg"
+            fallbackClassName="rounded-lg text-xs"
+            firstName={identity?.profile?.first_name}
+            lastName={identity?.profile?.last_name}
+            withTooltip={false}
+          />
           <div className="flex flex-1 flex-col items-start text-left group-data-[collapsible=icon]:hidden">
-            <span className="text-sm font-medium leading-none">{identity?.display_name ?? "…"}</span>
+            <span className="text-sm font-medium leading-none">{displayName}</span>
             <span className="text-muted-foreground text-xs leading-tight truncate w-36">
               {identity?.email ?? ""}
             </span>
@@ -179,29 +219,27 @@ function UserMenu() {
       <DropdownMenuContent align="end" side="top" className="w-56">
         <DropdownMenuLabel className="flex items-center gap-2">
           <CircleUser className="h-4 w-4" />
-          {identity?.display_name ?? ""}
+          {displayName}
         </DropdownMenuLabel>
+        <DropdownMenuItem onClick={() => navigate("/settings/profile")}>
+          <Settings />
+          Profile Settings
+        </DropdownMenuItem>
+        {isWorkspaceAdmin && (
+          <DropdownMenuItem onClick={() => navigate("/settings/workspace")}>
+            <Building2 />
+            Workspace Settings
+          </DropdownMenuItem>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => navigate("/invitations")}>
           <Mail />
           Invitations
         </DropdownMenuItem>
-        {canManageRoles && (
-          <DropdownMenuItem onClick={() => navigate("/roles")}>
-            <ShieldCheck />
-            Roles
-          </DropdownMenuItem>
-        )}
         {canViewApiKeys && (
           <DropdownMenuItem onClick={() => navigate("/api-keys")}>
             <KeyRound />
             API Keys
-          </DropdownMenuItem>
-        )}
-        {canViewJobs && (
-          <DropdownMenuItem onClick={() => navigate("/jobs")}>
-            <Clock />
-            Scheduled Jobs
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
@@ -272,7 +310,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             <ThemeToggle />
           </div>
         </header>
-        <main className="container mx-auto flex min-h-0 flex-1 flex-col gap-4 p-4 md:p-6">{children}</main>
+        <main className="container mx-auto flex min-h-0 flex-1 flex-col gap-4 p-4 md:p-6">
+          {/* Global page bottom padding; full-height pages opt out via .page-flush (see InboxPage). */}
+          <div className="flex min-h-0 flex-1 flex-col [&>*:not(.page-flush)]:pb-[2em]">{children}</div>
+        </main>
       </SidebarInset>
     </SidebarProvider>
   );

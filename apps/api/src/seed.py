@@ -25,9 +25,9 @@ logger = logging.getLogger(__name__)
 DEMO_PASSWORD = "password"
 
 DEMO_USERS = [
-    ("admin@example.com", "Admin User"),
-    ("user1@example.com", "User One"),
-    ("user2@example.com", "User Two"),
+    ("admin@example.com", "Admin", "User"),
+    ("user1@example.com", "User", "One"),
+    ("user2@example.com", "User", "Two"),
 ]
 
 WORKSPACES = [
@@ -172,13 +172,14 @@ async def main() -> None:
             logger.info("updated %d system role(s) to current defaults", changed_roles)
 
         users: dict[str, User] = {}
-        for email, display_name in DEMO_USERS:
+        for email, first_name, last_name in DEMO_USERS:
             user = await auth.get_by_email(email)
             if user is None:
                 user = await auth.register(
                     email=email,
                     password=DEMO_PASSWORD,
-                    display_name=display_name,
+                    first_name=first_name,
+                    last_name=last_name,
                 )
                 logger.info("created demo user %s", email)
             users[email] = user
@@ -296,8 +297,9 @@ async def main() -> None:
 
     print("seed complete — demo login (all users share this password):")
     print(f"  password: {DEMO_PASSWORD}")
-    for email, display_name in DEMO_USERS:
-        print(f"  {email:<28} {display_name}")
+    for email, first_name, last_name in DEMO_USERS:
+        display = f"{first_name} {last_name[0].upper()}." if last_name else first_name
+        print(f"  {email:<28} {display}")
     if api_keys:
         print("  api keys (secrets shown once, at creation):")
         for name, slug, raw in api_keys:

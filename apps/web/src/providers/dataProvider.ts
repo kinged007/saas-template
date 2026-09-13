@@ -3,6 +3,7 @@ import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import dataProviderModule from "@refinedev/simple-rest";
 
 import { tokenStore, workspaceStore } from "../utils/storage";
+import { clearAllCaches, queryClient } from "./queryClient";
 
 // Same-origin API path: the vite dev proxy (and nginx in production) forwards
 // /api → backend, so no CORS/absolute-URL issues regardless of how the app is
@@ -52,15 +53,22 @@ type RetriableRequest = AxiosRequestConfig & { _retried?: boolean };
 // fail with an already-revoked token and log the user out.
 let refreshPromise: Promise<boolean> | null = null;
 
+export function cancelPendingRefresh() {
+  refreshPromise = null;
+}
+
 async function tryRefresh(): Promise<boolean> {
   if (!refreshPromise) {
+    const capturedRefresh = tokenStore.getRefresh();
+    if (!capturedRefresh) return false;
     refreshPromise = (async () => {
-      const refresh = tokenStore.getRefresh();
-      if (!refresh) return false;
       try {
         const { data } = await axios.post(`${API_URL}/auth/refresh`, {
-          refresh_token: refresh,
+          refresh_token: capturedRefresh,
         });
+        // Logout may have cleared tokens while refresh was in-flight —
+        // don't restore a session the user just ended.
+        if (tokenStore.getRefresh() !== capturedRefresh) return false;
         tokenStore.setTokens(data.access_token, data.refresh_token);
         return true;
       } catch {
@@ -107,6 +115,7 @@ httpClient.interceptors.response.use(
     }
     if (error.response?.status === 401) {
       tokenStore.clear();
+      clearAllCaches(queryClient);
       if (window.location.pathname !== "/login") {
         window.location.assign("/login");
       }

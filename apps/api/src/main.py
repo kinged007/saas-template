@@ -8,12 +8,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routes import (
     api_keys,
+    audit,
     auth,
+    conversations,
     invitations,
     jobs,
     members,
     meta,
     notifications,
+    profiles,
     roles,
     workspaces,
     ws,
@@ -46,9 +49,17 @@ async def lifespan(app: FastAPI):
     # start the due-job scheduler loop. Log capture must be installed before
     # any run can execute.
     async with SessionFactory() as session:
+        # Keep system roles converged on the code defaults (e.g. new audit:read
+        # permission for admin/owner). Idempotent and cheap.
+        from src.services.workspaces import WorkspaceService
+
+        try:
+            await WorkspaceService(session).sync_system_role_permissions()
+        except Exception:
+            logger.exception("failed to sync system role permissions")
         await JobService(session, container.bus, container.cipher).sync_definitions()
     install_run_capture()
-    scheduler = JobScheduler()
+    scheduler = JobScheduler(bus=container.bus)
     app.state.job_scheduler = scheduler
     await scheduler.start()
     logger.info(
@@ -98,4 +109,7 @@ app.include_router(roles.router, prefix=API)
 app.include_router(api_keys.router, prefix=API)
 app.include_router(jobs.router, prefix=API)
 app.include_router(notifications.router, prefix=API)
+app.include_router(conversations.router, prefix=API)
+app.include_router(profiles.router, prefix=API)
+app.include_router(audit.router, prefix=API)
 app.include_router(ws.router, prefix=API)

@@ -14,7 +14,8 @@ from src.schemas.api import (
     TokenResponse,
 )
 from src.services.auth import AuthError, AuthService
-from src.services.serializers import user_to_dict, workspace_to_dict
+from src.services.profiles import ProfileService
+from src.services.serializers import profile_to_dict, user_to_dict, workspace_to_dict
 from src.services.workspaces import WorkspaceService
 
 logger = logging.getLogger(__name__)
@@ -34,15 +35,25 @@ async def register(
     container=Depends(get_container),
 ) -> TokenResponse:
     service = AuthService(db, container.bus)
+    # Validate naming: prefer first/last, fallback to deprecated display_name
+    if not body.first_name and not body.last_name and not body.display_name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "first_name and last_name are required (or display_name deprecated)")
+    # If only one of first/last provided without the other, still allow but derive
     try:
         user = await service.register(
             email=body.email,
             password=body.password,
+            first_name=body.first_name,
+            last_name=body.last_name,
             display_name=body.display_name,
             ip_address=_client_ip(request),
         )
     except AuthError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+        msg = str(exc)
+        # Map missing names to 422, else 409
+        if "first_name and last_name" in msg:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, msg) from None
+        raise HTTPException(status.HTTP_409_CONFLICT, msg) from None
     pair = await service.issue_tokens(user)
     return TokenResponse(**pair.__dict__)
 
@@ -93,7 +104,11 @@ async def logout(
 
 
 @router.get("/me")
-async def me(user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def me(
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
     service = WorkspaceService(db)
     data = user_to_dict(user)
     memberships = await service.list_workspaces(user.id)
@@ -102,4 +117,27 @@ async def me(user=Depends(get_current_user), db: AsyncSession = Depends(get_db))
         for w, role, _ in memberships
     ]
     data["permissions"] = sorted({p for _, role, _ in memberships for p in role.permissions})
+    # Embed profile (lazy create)
+    try:
+        profile = await ProfileService(db, container.bus).get_or_create(user.id)
+        data["profile"] = profile_to_dict(profile)
+    except Exception:
+        logger.exception("failed to embed profile for user %s", user.id)
+        # Fallback: minimal empty profile
+        data["profile"] = {
+            "id": user.id,
+            "user_id": user.id,
+            "first_name": None,
+            "last_name": None,
+            "bio": None,
+            "phone_number": None,
+            "timezone": None,
+            "locale": None,
+            "date_of_birth": None,
+            "website_url": None,
+            "location": None,
+            "custom_data": {},
+            "created_at": None,
+            "updated_at": None,
+        }
     return data

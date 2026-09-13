@@ -23,6 +23,12 @@ class Subjects:
     NOTIFICATIONS = "notifications"
     NOTIFICATIONS_CREATED = "notifications.created"
 
+    CONVERSATIONS = "conversations"
+    CONVERSATION_CREATED = "conversations.created"
+    CONVERSATION_MESSAGE_CREATED = "conversations.message.created"
+    CONVERSATION_MESSAGE_LIVE = "conversations.message.live"
+    CONVERSATION_RENAMED = "conversations.renamed"
+
     WORKSPACES = "workspaces"
     WORKSPACE_CREATED = "workspaces.created"
     WORKSPACE_INVITATION_CREATED = "workspaces.invitation.created"
@@ -47,11 +53,17 @@ class Subjects:
 # subject into the durable set and switch its publisher to transient=False.
 TRANSIENT_SUBJECTS: set[str] = {
     Subjects.NOTIFICATIONS_CREATED,
+    Subjects.CONVERSATION_MESSAGE_LIVE,
+    Subjects.CONVERSATION_RENAMED,
 }
 
 
 ALL = [
     Subjects.NOTIFICATIONS_CREATED,
+    Subjects.CONVERSATION_MESSAGE_CREATED,
+    Subjects.CONVERSATION_MESSAGE_LIVE,
+    Subjects.CONVERSATION_RENAMED,
+    Subjects.CONVERSATION_CREATED,
     Subjects.WORKSPACE_CREATED,
     Subjects.WORKSPACE_INVITATION_CREATED,
     Subjects.WORKSPACE_MEMBER_INVITED,

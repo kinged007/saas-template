@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.models.core import Notification
+from src.models.user_profile import UserProfile
 from src.models.workspace import User, Workspace
 
 
@@ -52,4 +53,42 @@ def workspace_to_dict(
         data["role"] = role
     if permissions is not None:
         data["permissions"] = permissions
+    return data
+
+
+def profile_to_dict(p: UserProfile) -> dict:
+    return {
+        "id": p.user_id,
+        "user_id": p.user_id,
+        "first_name": p.first_name,
+        "last_name": p.last_name,
+        "bio": p.bio,
+        "phone_number": p.phone_number,
+        "timezone": p.timezone,
+        "locale": p.locale,
+        "date_of_birth": p.date_of_birth.isoformat() if p.date_of_birth else None,
+        "website_url": p.website_url,
+        "location": p.location,
+        "custom_data": p.custom_data if p.custom_data is not None else {},
+        "created_at": _to_iso(p.created_at),
+        "updated_at": _to_iso(p.updated_at),
+    }
+
+
+def public_projection(p: UserProfile, user: User | None = None) -> dict:
+    """
+    Redacted projection for cross-user reads: strips phone_number, date_of_birth,
+    and any custom_data keys prefixed with _private.
+    """
+    data = profile_to_dict(p)
+    if user is not None:
+        data["display_name"] = user.display_name
+        data["email"] = user.email
+        data["avatar_url"] = user.avatar_url
+    # Redact private fields
+    data["phone_number"] = None
+    data["date_of_birth"] = None
+    custom = data.get("custom_data") or {}
+    filtered = {k: v for k, v in custom.items() if not k.startswith("_private")}
+    data["custom_data"] = filtered
     return data
