@@ -612,3 +612,55 @@ async def test_runs_history_pagination(app_client):
     assert resp.status_code == 200
     assert resp.headers["X-Total-Count"] == "3"
     assert len(resp.json()) == 2
+
+
+async def test_scheduled_tick_with_bus_executes_via_worker(app_client):
+    """Regression: scheduler tick must publish jobs.execute so the worker picks it up.
+
+    Before the fix, JobScheduler.tick() used JobService(session) without a bus,
+    so schedule_due() created a pending JobRun but never published jobs.execute.
+    The run stayed pending until fail_stale_runs marked it
+    'abandoned: no worker completed this run'. This test wires the bus into
+    schedule_due and asserts the scheduled run reaches success with logs.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from src.core.dates import now_utc
+    from src.db.session import SessionFactory
+    from src.jobs.scheduler import JobScheduler
+    from src.models.jobs import JobDefinition, JobRun
+    from src.main import app as fastapi_app
+
+    client = app_client
+    _, ws, headers, _ = await setup_workspace(client, "sched-bus-owner@example.com")
+    job = _by_key((await client.get("/api/v1/jobs", headers=headers)).json(), "test.echo")
+
+    async with SessionFactory() as session:
+        definition = await session.get(JobDefinition, job["id"])
+        definition.enabled = True
+        definition.next_run_at = now_utc() - timedelta(seconds=5)
+        await session.commit()
+
+    bus = fastapi_app.state.container.bus
+    scheduler = JobScheduler(bus=bus)
+    scheduled = await scheduler.tick()
+    assert scheduled == 1
+
+    # The run was published via bus; wait for the durable consumer to execute it.
+    async with SessionFactory() as session:
+        runs = (
+            await session.execute(select(JobRun).where(JobRun.definition_id == job["id"]))
+        ).scalars().all()
+        assert len(runs) == 1
+        run_id = runs[0].id
+        assert runs[0].trigger == "scheduled"
+
+    finished = await wait_for_terminal(client, headers, run_id, timeout_s=10.0)
+    assert finished["status"] == "success", finished
+
+    logs = await client.get(f"/api/v1/jobs/runs/{run_id}/logs", headers=headers)
+    assert logs.status_code == 200
+    messages = [e["message"] for e in logs.json()]
+    assert any("echo: hello" in m for m in messages), messages

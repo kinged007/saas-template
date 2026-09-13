@@ -1,13 +1,23 @@
-import { useState } from "react";
-import { useCreate, useList } from "@refinedev/core";
+import { useMemo, useState } from "react";
+import { useCreate, useGetIdentity, useList } from "@refinedev/core";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { toast } from "sonner";
+import { Check, ChevronsUpDown, X } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 
 import {
   Dialog,
@@ -19,9 +29,11 @@ import {
 } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { TiptapEditor } from "./TiptapEditor";
-import type { Member, Conversation } from "@/types";
+import type { Identity, Member, Conversation } from "@/types";
 import { getMemberDisplayName } from "@/types";
-import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { UserAvatar } from "@/components/ui/user-avatar";
+import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "@/contexts/WorkspaceContext";
+import { cn } from "@/lib/utils";
 
 const schema = z.object({
   title: z.string().max(300, "Title must be at most 300 characters").optional(),
@@ -39,6 +51,9 @@ type Props = {
 
 export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
   const { workspace } = useWorkspace();
+  const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
+  const currentUserId = identity?.id ?? null;
+
   const { result } = useList<Member>({
     resource: "members",
     pagination: { pageSize: 100 },
@@ -46,10 +61,11 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
   });
   const members = result?.data ?? [];
 
-  // Filter out current user? The API will add self automatically, but show all for selection; we'll exclude self from checkbox list for clarity.
-  // Need identity to know self id
-  // Use member list includes self; we can allow selecting self but it will be deduped. Prefer excluding self.
-  // We'll fetch identity via useOne? For now, include all and let backend dedupe.
+  const selectableMembers = useMemo(() => {
+    if (!currentUserId) return members;
+    return members.filter((m) => m.id !== currentUserId);
+  }, [members, currentUserId]);
+
   const { mutateAsync, mutation } = useCreate<Conversation>();
   const isPending = (mutation as unknown as { isPending?: boolean })?.isPending ?? false;
 
@@ -59,6 +75,7 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
   });
 
   const [editorKey, setEditorKey] = useState(0);
+  const [comboOpen, setComboOpen] = useState(false);
 
   const onSubmit = async (data: FormData) => {
     const payload = {
@@ -77,6 +94,7 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
       toast.success("Conversation created");
       form.reset({ title: "", participantIds: [], initialMessage: "" });
       setEditorKey((k) => k + 1);
+      setComboOpen(false);
       onOpenChange(false);
       if (conv && onCreated) onCreated(conv);
     } catch (err: unknown) {
@@ -90,6 +108,7 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
       if (!v) {
         form.reset({ title: "", participantIds: [], initialMessage: "" });
         setEditorKey(k=>k+1);
+        setComboOpen(false);
       }
       onOpenChange(v);
     }}>
@@ -115,40 +134,145 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
               )}
             />
 
-            <FormField
-              control={form.control}
-              name="participantIds"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Participants</FormLabel>
-                  <FormDescription>Select 1 to 19 other members (max 20 including you).</FormDescription>
-                  <FormControl>
-                    <div className="max-h-48 overflow-y-auto rounded border p-2">
-                      {members.length === 0 ? (
-                        <p className="text-muted-foreground text-sm">No members found.</p>
-                      ) : (
-                        members.map((m) => (
-                          <label key={m.id} className="flex cursor-pointer items-center gap-2 py-1 text-sm">
-                            <Checkbox
-                              checked={field.value.includes(m.id)}
-                              onCheckedChange={(checked) => {
-                                const next = checked
-                                  ? [...field.value, m.id]
-                                  : field.value.filter((x) => x !== m.id);
-                                field.onChange(next);
-                              }}
-                            />
-                            <span className="flex-1 truncate">{getMemberDisplayName(m)} <span className="text-muted-foreground">({m.email})</span></span>
-                            <span className="text-muted-foreground text-xs">{m.role}</span>
-                          </label>
-                        ))
-                      )}
-                    </div>
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {/* Flex container for participant selector + future select box */}
+            <div className="flex gap-2">
+              <FormField
+                control={form.control}
+                name="participantIds"
+                render={({ field }) => {
+                  const selectedIds = field.value as string[];
+                  const toggle = (id: string) => {
+                    const next = selectedIds.includes(id)
+                      ? selectedIds.filter((x) => x !== id)
+                      : [...selectedIds, id];
+                    field.onChange(next);
+                  };
+                  const selectedMembers = selectableMembers.filter((m) => selectedIds.includes(m.id));
+
+                  return (
+                    <FormItem className="flex-1 min-w-0">
+                      <FormLabel>Participants</FormLabel>
+                      <FormDescription>Select 1 to 19 other members (max 20 including you).</FormDescription>
+                      <Popover open={comboOpen} onOpenChange={setComboOpen}>
+                        <PopoverTrigger asChild>
+                          <FormControl>
+                            <Button
+                              variant="outline"
+                              role="combobox"
+                              aria-expanded={comboOpen}
+                              className={cn(
+                                "w-full justify-between h-auto min-h-9 px-3 py-2 font-normal",
+                                selectedIds.length === 0 && "text-muted-foreground"
+                              )}
+                            >
+                              <span className="flex flex-wrap gap-1 flex-1 text-left items-center min-w-0">
+                                {selectedIds.length === 0 ? (
+                                  "Select participants..."
+                                ) : selectedMembers.length === 0 ? (
+                                  `${selectedIds.length} selected`
+                                ) : (
+                                  <>
+                                    {selectedMembers.slice(0, 3).map((m) => {
+                                      const name = getMemberDisplayName(m);
+                                      return (
+                                        <span
+                                          key={m.id}
+                                          className="inline-flex items-center gap-1 rounded-md border bg-secondary px-1.5 py-0.5 text-xs font-medium"
+                                          onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            toggle(m.id);
+                                          }}
+                                        >
+                                          <UserAvatar
+                                            name={name}
+                                            email={m.email}
+                                            avatarUrl={m.avatar_url}
+                                            sizeClassName="h-4 w-4"
+                                            fallbackClassName="text-[8px]"
+                                            firstName={m.first_name}
+                                            lastName={m.last_name}
+                                            withTooltip={false}
+                                          />
+                                          <span className="max-w-[80px] truncate">{name}</span>
+                                          <X className="h-3 w-3 opacity-60 hover:opacity-100 shrink-0" />
+                                        </span>
+                                      );
+                                    })}
+                                    {selectedMembers.length > 3 && (
+                                      <Badge variant="secondary" className="px-1.5 py-0.5 text-xs">
+                                        +{selectedMembers.length - 3}
+                                      </Badge>
+                                    )}
+                                    {selectedIds.length !== selectedMembers.length && selectedMembers.length <= 3 && (
+                                      <span className="text-xs text-muted-foreground">
+                                        +{selectedIds.length - selectedMembers.length} more
+                                      </span>
+                                    )}
+                                  </>
+                                )}
+                              </span>
+                              <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                            </Button>
+                          </FormControl>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                          <Command>
+                            <CommandInput placeholder="Search members..." className="h-9" />
+                            <CommandList className="max-h-[200px] overflow-y-auto">
+                              <CommandEmpty>No members found.</CommandEmpty>
+                              <CommandGroup>
+                                {selectableMembers.length === 0 ? (
+                                  <div className="py-6 text-center text-sm text-muted-foreground">
+                                    No other members found.
+                                  </div>
+                                ) : (
+                                  selectableMembers.map((m) => {
+                                    const name = getMemberDisplayName(m);
+                                    const isSelected = selectedIds.includes(m.id);
+                                    return (
+                                      <CommandItem
+                                        key={m.id}
+                                        value={`${name} ${m.email} ${m.id}`}
+                                        onSelect={() => toggle(m.id)}
+                                        className="flex items-center gap-2 px-2 py-1.5"
+                                      >
+                                        <UserAvatar
+                                          name={name}
+                                          email={m.email}
+                                          avatarUrl={m.avatar_url}
+                                          sizeClassName="h-6 w-6"
+                                          fallbackClassName="text-[10px]"
+                                          firstName={m.first_name}
+                                          lastName={m.last_name}
+                                          withTooltip={false}
+                                        />
+                                        <span className="flex flex-1 min-w-0 flex-col text-left">
+                                          <span className="truncate text-sm font-medium leading-none">{name}</span>
+                                          <span className="truncate text-xs text-muted-foreground leading-none">{m.email}</span>
+                                        </span>
+                                        <span className="text-muted-foreground text-xs hidden sm:inline shrink-0">{m.role}</span>
+                                        <Check
+                                          className={cn(
+                                            "ml-auto h-4 w-4 shrink-0",
+                                            isSelected ? "opacity-100" : "opacity-0"
+                                          )}
+                                        />
+                                      </CommandItem>
+                                    );
+                                  })
+                                )}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                      <FormMessage />
+                    </FormItem>
+                  );
+                }}
+              />
+            </div>
 
             <FormField
               control={form.control}

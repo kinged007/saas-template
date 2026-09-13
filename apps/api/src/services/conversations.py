@@ -74,6 +74,7 @@ def _message_event_payload(
         "sender_type": "user",
         "sender_name": sender.display_name,
         "sender_avatar_url": sender.avatar_url,
+        "sender_email": sender.email,
         "body": message.body,
         "body_preview": preview,
         "title": conversation.title,
@@ -264,6 +265,7 @@ class ConversationService:
                         "first_name": first_name,
                         "last_name": last_name,
                         "avatar_url": u.avatar_url,
+                        "email": u.email,
                     }
                 )
             else:
@@ -275,6 +277,7 @@ class ConversationService:
                         "first_name": None,
                         "last_name": None,
                         "avatar_url": None,
+                        "email": None,
                     }
                 )
         data = {
@@ -294,7 +297,13 @@ class ConversationService:
             data["message_count"] = message_count
         return data
 
-    def _message_to_dict(self, msg: Message, sender_name: str | None = None, sender_avatar: str | None = None) -> dict:
+    def _message_to_dict(
+        self,
+        msg: Message,
+        sender_name: str | None = None,
+        sender_avatar: str | None = None,
+        sender_email: str | None = None,
+    ) -> dict:
         return {
             "id": msg.id,
             "conversation_id": msg.conversation_id,
@@ -302,6 +311,7 @@ class ConversationService:
             "sender_id": msg.sender_id,
             "sender_name": sender_name or msg.sender_id,
             "sender_avatar_url": sender_avatar,
+            "sender_email": sender_email,
             "body": msg.body,
             "body_html": msg.body_html,
             "created_at": msg.created_at.isoformat() if msg.created_at else None,
@@ -446,7 +456,9 @@ class ConversationService:
         part_for_creator = next((p for p, *_ in participants if p.participant_id == creator.id), None)  # type: ignore
         is_arch = bool(part_for_creator.archived_at) if part_for_creator else False
         conv_dict = self._conversation_to_dict(conv, participants, unread_for_creator, is_arch, message_count=1)
-        msg_dict = self._message_to_dict(msg, sender_name=creator.display_name, sender_avatar=creator.avatar_url)
+        msg_dict = self._message_to_dict(
+            msg, sender_name=creator.display_name, sender_avatar=creator.avatar_url, sender_email=creator.email
+        )
 
         workspace_name = await self._workspace_name(workspace_id)
 
@@ -841,7 +853,14 @@ class ConversationService:
         result = []
         for m in msgs:
             u = user_map.get(m.sender_id) if m.sender_type == "user" else None
-            result.append(self._message_to_dict(m, sender_name=u.display_name if u else m.sender_id, sender_avatar=u.avatar_url if u else None))
+            result.append(
+                self._message_to_dict(
+                    m,
+                    sender_name=u.display_name if u else m.sender_id,
+                    sender_avatar=u.avatar_url if u else None,
+                    sender_email=u.email if u else None,
+                )
+            )
         return result, total
 
     async def send_message(
@@ -897,7 +916,7 @@ class ConversationService:
         )
         participant_ids = [r[0] for r in result.all()]
 
-        msg_dict = self._message_to_dict(msg, sender_name=sender.display_name, sender_avatar=sender.avatar_url)
+        msg_dict = self._message_to_dict(msg, sender_name=sender.display_name, sender_avatar=sender.avatar_url, sender_email=sender.email)
 
         # Durable event for notification pointers + transient fan-out for the
         # realtime thread push (every replica forwards to its local sessions).

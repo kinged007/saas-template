@@ -22,6 +22,7 @@ import {
 import { DeleteButton } from "../components/refine-ui/buttons/delete";
 import { ListView, ListViewHeader } from "../components/refine-ui/views/list-view";
 import { EmptyRow, StatusBadge, formatDate } from "../components/ui";
+import { UserAvatar } from "@/components/ui/user-avatar";
 import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceContext";
 import type { Identity, Invitation, Member, Role } from "../types";
 import { getMemberDisplayName } from "../types";
@@ -87,12 +88,27 @@ export function MembersPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map((m) => (
-              <TableRow key={m.membership_id}>
-                <TableCell>
-                  <p className="font-medium">{getMemberDisplayName(m)}</p>
-                  <p className="text-muted-foreground text-xs">{m.email}</p>
-                </TableCell>
+            {rows.map((m) => {
+              const name = getMemberDisplayName(m);
+              return (
+                <TableRow key={m.membership_id}>
+                  <TableCell>
+                    <div className="flex items-center gap-3">
+                      <UserAvatar
+                        name={name}
+                        email={m.email}
+                        avatarUrl={m.avatar_url}
+                        sizeClassName="h-8 w-8"
+                        fallbackClassName="text-xs"
+                        firstName={m.first_name}
+                        lastName={m.last_name}
+                      />
+                      <div className="flex flex-col">
+                        <p className="font-medium">{name}</p>
+                        <p className="text-muted-foreground text-xs">{m.email}</p>
+                      </div>
+                    </div>
+                  </TableCell>
                 <TableCell>{m.role}</TableCell>
                 <TableCell>
                   {canManageRoles && m.role !== "owner" ? (
@@ -134,7 +150,8 @@ export function MembersPage() {
                   )}
                 </TableCell>
               </TableRow>
-            ))}
+              );
+            })}
             {rows.length === 0 && <EmptyRow colSpan={5}>No members yet.</EmptyRow>}
           </TableBody>
         </Table>

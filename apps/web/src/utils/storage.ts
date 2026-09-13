@@ -98,4 +98,5 @@ export const identityStore = {
 export const workspaceStore = {
   get: () => storage.get(WORKSPACE_KEY),
   set: (id: string) => storage.set(WORKSPACE_KEY, id),
+  clear: () => storage.remove(WORKSPACE_KEY),
 };

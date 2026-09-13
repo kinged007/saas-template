@@ -115,6 +115,7 @@ interface MessageFrame {
   sender_type?: string;
   sender_name?: string;
   sender_avatar_url?: string | null;
+  sender_email?: string | null;
   body?: string;
   body_preview?: string;
   created_at?: string;
@@ -130,6 +131,7 @@ function messageFromFrame(frame: MessageFrame): Message | null {
     sender_id: frame.sender_id ?? "",
     sender_name: frame.sender_name ?? frame.sender_id ?? "",
     sender_avatar_url: frame.sender_avatar_url ?? null,
+    sender_email: frame.sender_email ?? null,
     body: frame.body ?? "",
     body_html: null,
     created_at: frame.created_at ?? new Date().toISOString(),
