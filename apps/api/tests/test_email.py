@@ -185,10 +185,15 @@ def test_templates_build_valid_messages():
     from src.email import templates
 
     invite = templates.invitation(
-        "invitee@example.com", workspace_name="Acme", invite_url="https://x/invite/abc"
+        "invitee@example.com",
+        workspace_name="Acme",
+        invite_url="https://x/invite/abc",
+        invited_by="Ada",
     )
     invite.validate()
-    assert "Acme" in invite.subject and "https://x/invite/abc" in invite.text_body
+    assert "Acme" in invite.subject
+    for body in (invite.text_body, invite.html_body or ""):
+        assert "Acme" in body and "Ada" in body and "https://x/invite/abc" in body
     reset = templates.password_reset("u@example.com", reset_url="https://x/reset/abc")
     reset.validate()
     assert "https://x/reset/abc" in reset.text_body
