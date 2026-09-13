@@ -451,7 +451,7 @@ export function InboxPage() {
   }, [selectedConversation?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+    <div className="page-flush flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
       <TabbedPageHeader
         title="Inbox"
         tabs={
