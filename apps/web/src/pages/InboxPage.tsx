@@ -127,7 +127,7 @@ export function InboxPage() {
   }, [archivedFilter, tab]);
 
   // Notifications data (workspace-scoped) – hide conversation_message pointers; they are surfaced via Messages tab + right sidebar grouped
-  const { result: notifResult } = useList<Notification>({
+  const { result: notifResult, query: notifListQuery } = useList<Notification>({
     resource: "notifications",
     pagination: { pageSize: 200 },
     sorters: [{ field: "created_at", order: "desc" }],
@@ -139,12 +139,39 @@ export function InboxPage() {
     ] as never,
     queryOptions: { enabled: tab === "notifications" },
   });
-  const { mutate: updateNotif } = useUpdate();
-
   const allNotifications = useMemo(() => {
     const data = (notifResult?.data ?? []) as Notification[];
     return data.filter((n) => n.type !== "conversation_message");
   }, [notifResult?.data]);
+
+  const { mutate: updateNotif } = useUpdate();
+  const { mutate: markAllNotif, mutation: markAllMutation } = useCustomMutation();
+  const markingAll = markAllMutation.isPending;
+  const unreadCount = allNotifications.filter((n) => !n.acknowledged).length;
+
+  const markAllRead = () => {
+    markAllNotif(
+      {
+        url: "notifications/read-all",
+        method: "patch",
+        values: {},
+        successNotification: (res) => {
+          const count = (res as unknown as { data?: { acknowledged?: number } })?.data?.acknowledged ?? 0;
+          return {
+            message: count > 0 ? `${count} notification${count > 1 ? "s" : ""} marked as read` : "No unread notifications",
+            type: "success",
+          };
+        },
+      },
+      {
+        onSuccess: () => {
+          notifListQuery.refetch();
+          selectedRef.current = null;
+          setSelectedNotif(null);
+        },
+      }
+    );
+  };
 
   // Conversations data
   const convFilters = useMemo(() => {
@@ -960,18 +987,31 @@ export function InboxPage() {
               leftCollapsed ? "md:hidden" : "md:w-80 md:flex"
             )}
           >
-            <div className="flex items-center justify-between border-b p-3">
+            <div className="flex items-center justify-between gap-2 border-b p-3">
               <span className="text-sm font-medium">Notifications</span>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setLeftCollapsed((v) => !v)}
-                aria-label={leftCollapsed ? "Expand panel" : "Collapse panel"}
-                title={leftCollapsed ? "Expand" : "Collapse"}
-                className="hidden h-9 w-9 shrink-0 md:inline-flex"
-              >
-                <PanelLeftClose className="h-4 w-4" />
-              </Button>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={markAllRead}
+                  disabled={markingAll || unreadCount === 0}
+                  aria-label="Mark all as read"
+                  title="Mark all as read"
+                  className="h-9 w-9 shrink-0"
+                >
+                  <MailOpen className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setLeftCollapsed((v) => !v)}
+                  aria-label={leftCollapsed ? "Expand panel" : "Collapse panel"}
+                  title={leftCollapsed ? "Expand" : "Collapse"}
+                  className="hidden h-9 w-9 shrink-0 md:inline-flex"
+                >
+                  <PanelLeftClose className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto">
               {allNotifications.map((n) => {

@@ -181,6 +181,41 @@ class NotificationService:
         )
         return n
 
+    async def acknowledge_all(
+        self,
+        user_id: str,
+        *,
+        workspace_id: str,
+        ip_address: str | None = None,
+    ) -> int:
+        """Acknowledge all unread notifications in one UPDATE, excluding
+        conversation_message pointers (surfaced via conversation unread counts).
+        Returns the number acknowledged."""
+        result = await self._session.execute(
+            update(Notification)
+            .where(
+                Notification.user_id == user_id,
+                Notification.workspace_id == workspace_id,
+                Notification.acknowledged_at.is_(None),
+                Notification.type != "conversation_message",
+            )
+            .values(acknowledged_at=datetime.now(UTC))
+        )
+        count = int(result.rowcount or 0)
+        if count:
+            await self._session.commit()
+            await publish_audit(
+                self._bus,
+                workspace_id=workspace_id,
+                resource_type="notification",
+                resource_id="all",
+                action="notifications.acknowledged",
+                actor_user_id=user_id,
+                details={"count": count},
+                ip_address=ip_address,
+            )
+        return count
+
     async def acknowledge_for_conversation(
         self,
         user_id: str,

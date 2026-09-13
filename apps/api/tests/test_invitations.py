@@ -267,6 +267,39 @@ async def test_expired_invitation_shows_expired_and_rejects_accept(app_client):
     assert resp.status_code == 409
 
 
+async def test_notification_read_all(app_client):
+    client = app_client
+    owner = await register_user(client, "tess@example.com")
+    ws = await create_workspace(client, owner)
+    invitee = await register_user(client, "ursula@example.com")
+    roles = await client.get("/api/v1/roles", headers=ws_headers(owner, ws["id"]))
+    viewer = next(r for r in roles.json() if r["name"] == "viewer")
+    await client.post(
+        "/api/v1/invitations",
+        json={"email": "ursula@example.com", "role_id": viewer["id"]},
+        headers=ws_headers(owner, ws["id"]),
+    )
+    await _wait_for_notifications(client, ws_headers(invitee, ws["id"]))
+
+    resp = await client.patch(
+        "/api/v1/notifications/read-all", headers=ws_headers(invitee, ws["id"])
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["acknowledged"] == 1
+
+    notes = await client.get(
+        "/api/v1/notifications?acknowledged=false", headers=ws_headers(invitee, ws["id"])
+    )
+    assert notes.json() == []
+
+    # idempotent — second call acknowledges nothing
+    resp = await client.patch(
+        "/api/v1/notifications/read-all", headers=ws_headers(invitee, ws["id"])
+    )
+    assert resp.status_code == 200
+    assert resp.json()["acknowledged"] == 0
+
+
 async def test_notification_acknowledge_persists(app_client):
     client = app_client
     owner = await register_user(client, "pam@example.com")
@@ -309,31 +342,26 @@ async def test_notification_unacknowledge_and_filter(app_client):
         headers=ws_headers(owner, ws["id"]),
     )
 
-    notes = await _wait_for_notifications(client, ws_headers(invitee, ws["id"]))
+    headers = ws_headers(invitee, ws["id"])
+    notes = await _wait_for_notifications(client, headers)
     nid = notes[0]["id"]
 
     # mark read, then back to unread
-    await client.patch(
-        f"/api/v1/notifications/{nid}", json={"acknowledged": True}, headers=ws_headers(invitee, ws["id"])
-    )
+    await client.patch(f"/api/v1/notifications/{nid}", json={"acknowledged": True}, headers=headers)
     resp = await client.patch(
-        f"/api/v1/notifications/{nid}", json={"acknowledged": False}, headers=ws_headers(invitee, ws["id"])
+        f"/api/v1/notifications/{nid}", json={"acknowledged": False}, headers=headers
     )
     assert resp.status_code == 200
     assert resp.json()["acknowledged"] is False
 
     # bare `acknowledged=false` filter (simple-rest flat style) → unread only
-    resp = await client.get(
-        "/api/v1/notifications?acknowledged=false", headers=ws_headers(invitee, ws["id"])
-    )
+    resp = await client.get("/api/v1/notifications?acknowledged=false", headers=headers)
     assert resp.status_code == 200
     assert len(resp.json()) == 1
     assert resp.json()[0]["acknowledged"] is False
 
     # legacy `filter[acknowledged]=true` style → read only
-    await client.patch(
-        f"/api/v1/notifications/{nid}", json={"acknowledged": True}, headers=ws_headers(invitee, ws["id"])
-    )
+    await client.patch(f"/api/v1/notifications/{nid}", json={"acknowledged": True}, headers=headers)
     resp = await client.get(
         "/api/v1/notifications?filter[acknowledged]=true", headers=ws_headers(invitee, ws["id"])
     )

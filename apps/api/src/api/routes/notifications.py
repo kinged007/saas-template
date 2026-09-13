@@ -98,6 +98,22 @@ async def unread_count(
     return {"count": count}
 
 
+@router.patch("/read-all")
+async def acknowledge_all(
+    request: Request,
+    user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
+    _=Depends(require_key_permission(NOTIFICATION_ACK)),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    service = NotificationService(db, container.bus)
+    ip = request.client.host if request.client else None
+    count = await service.acknowledge_all(user.id, workspace_id=workspace_id, ip_address=ip)
+    return {"acknowledged": count}
+
+
 @router.patch("/{notification_id}")
 async def acknowledge(
     notification_id: str,
