@@ -89,11 +89,12 @@ class ConversationRead(BaseModel):
 
 
 class WebhookSubscriptionCreate(BaseModel):
-    url: str = Field(max_length=2000)
-    events: list[str] = Field(min_length=1, max_length=50)
+    url: AnyHttpUrl = Field(max_length=2000)
+    events: list[str] = Field(default_factory=list, max_length=50)
+    active: bool = True
 
 class WebhookSubscriptionUpdate(BaseModel):
-    url: str | None = Field(default=None, max_length=2000)
+    url: AnyHttpUrl | None = None
     events: list[str] | None = Field(default=None, max_length=50)
     active: bool | None = None
 
