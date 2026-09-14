@@ -3,7 +3,15 @@ SHELL := /bin/bash
 
 SUDO := $(shell [ "$$(id -u)" -eq 0 ] 2>/dev/null && echo "" || echo sudo)
 
-.PHONY: help setup dev api api-install api-migrate api-seed api-test api-lint web web-install web-build infra-up infra-down nats-up nats-down nats-status nats-logs
+.PHONY: help setup dev api api-install api-migrate api-seed api-test api-test-sqlite api-lint web web-install web-build infra-up infra-down nats-up nats-down nats-status nats-logs
+
+# USE_SQLITE=1 (env or `make <target> USE_SQLITE=1`): use the per-checkout
+# sqlite dev DB (apps/api/dev.db) instead of embedded postgres. Exported so it
+# reaches sub-makes and dev.py's child processes. (A trailing `--sqlite` flag
+# is not possible: GNU make parses `--long` args as its own options.)
+ifdef USE_SQLITE
+export USE_SQLITE
+endif
 
 help:
 	@echo "SaaS Template targets (development runs from the terminal — no docker needed):"
@@ -11,6 +19,7 @@ help:
 	@echo "  make dev          install deps, migrate, seed, then run api (:8000) + web (:5173)"
 	@echo "  make api-install  install backend deps (uv sync)"
 	@echo "  make api-migrate  run alembic migrations (starts embedded postgres)"
+	@echo "  USE_SQLITE=1 make dev  sqlite dev DB (apps/api/dev.db) instead of postgres"
 	@echo "  make api-seed     seed default demo users + workspaces"
 	@echo "  make api          run backend (uvicorn, :8000)"
 	@echo "  make api-test     run backend tests (sqlite in-memory)"
