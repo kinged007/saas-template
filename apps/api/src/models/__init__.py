@@ -16,6 +16,7 @@ from src.models.jobs import (
 )
 from src.models.secret import StoredSecret
 from src.models.user_profile import UserProfile
+from src.models.webhook import WebhookDelivery, WebhookSubscription
 from src.models.workspace import (
     RefreshToken,
     Role,
@@ -40,6 +41,8 @@ __all__ = [
     "StoredSecret",
     "User",
     "UserProfile",
+    "WebhookDelivery",
+    "WebhookSubscription",
     "Workspace",
     "WorkspaceMember",
 ]

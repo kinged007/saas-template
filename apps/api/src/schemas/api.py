@@ -88,6 +88,15 @@ class ConversationRead(BaseModel):
     last_read_message_id: str | None = None
 
 
+class WebhookSubscriptionCreate(BaseModel):
+    url: str = Field(max_length=2000)
+    events: list[str] = Field(min_length=1, max_length=50)
+
+class WebhookSubscriptionUpdate(BaseModel):
+    url: str | None = Field(default=None, max_length=2000)
+    events: list[str] | None = Field(default=None, max_length=50)
+    active: bool | None = None
+
 class JobUpdate(BaseModel):
     """Editable job configuration. All fields optional (partial patch)."""
 

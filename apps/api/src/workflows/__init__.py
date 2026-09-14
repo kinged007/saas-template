@@ -39,6 +39,7 @@ from src.db.session import SessionFactory
 from src.events.bus import EventBus
 from src.events.factory import WorkflowRegistry
 from src.events.subjects import Subjects
+from src.events.webhook_events import webhook_subject_events
 from src.jobs.executor import execute_run
 from src.models.workspace import WorkspaceMember
 from src.realtime.manager import ConnectionManager
@@ -374,6 +375,31 @@ def build_workflows(
             return
         await execute_run(run_id)
 
+    # Outbound webhooks: wrap each durable domain handler so the same event
+    # also fans out to matching subscriptions (at-least-once, unordered).
+    # Installed BEFORE the registrations below so every handler is wrapped.
+    from src.services.webhooks import fan_out_event as _fan_out_event
+
+    _FANOUT_SUBJECTS = set(webhook_subject_events())
+    _orig_register = registry.register
+
+    def _register_with_fanout(subject, handler, *, fanout: bool = False):
+        if subject in _FANOUT_SUBJECTS and not fanout:
+            async def _wrapped(payload: dict, metadata) -> None:
+                try:
+                    await _fan_out_event(subject, payload, metadata)
+                except Exception:
+                    logger.exception("webhook fan-out failed for %s", subject)
+                await handler(payload, metadata)
+
+            return _orig_register(subject, _wrapped, fanout=fanout)
+        return _orig_register(subject, handler, fanout=fanout)
+
+    registry.register = _register_with_fanout  # type: ignore[method-assign]
+
+    async def _noop(payload: dict, metadata) -> None:
+        return None
+
     registry.register(Subjects.WORKSPACE_MEMBER_INVITED, on_member_invited)
     registry.register(Subjects.WORKSPACE_MEMBER_JOINED, on_member_joined)
     registry.register(Subjects.WORKSPACE_MEMBER_ROLE_CHANGED, on_member_role_changed)
@@ -383,7 +409,9 @@ def build_workflows(
     registry.register(Subjects.AUDIT_ENTRY_CREATED, on_audit_entry)
     registry.register(Subjects.APIKEY_CREATED, on_apikey_created)
     registry.register(Subjects.APIKEY_REVOKED, on_apikey_revoked)
-    registry.register(Subjects.JOBS_EXECUTE, on_job_execute)
+    # conversations.created has no durable handler yet; the wrapped noop keeps
+    # the event durably consumed while still fanning out to subscribers.
+    registry.register(Subjects.CONVERSATION_CREATED, _noop)
     registry.register(Subjects.NOTIFICATIONS_CREATED, on_notification_created, fanout=True)
     registry.register(Subjects.CONVERSATION_MESSAGE_CREATED, on_conversation_message)
     registry.register(Subjects.CONVERSATION_MESSAGE_LIVE, on_conversation_message_live, fanout=True)
