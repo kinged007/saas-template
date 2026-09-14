@@ -374,17 +374,60 @@ def build_workflows(
             return
         await execute_run(run_id)
 
-    registry.register(Subjects.WORKSPACE_MEMBER_INVITED, on_member_invited)
-    registry.register(Subjects.WORKSPACE_MEMBER_JOINED, on_member_joined)
-    registry.register(Subjects.WORKSPACE_MEMBER_ROLE_CHANGED, on_member_role_changed)
-    registry.register(Subjects.WORKSPACE_MEMBER_REMOVED, on_member_removed)
-    registry.register(Subjects.WORKSPACE_INVITATION_CREATED, on_invitation_created)
-    registry.register(Subjects.WORKSPACE_CREATED, on_workspace_created)
-    registry.register(Subjects.AUDIT_ENTRY_CREATED, on_audit_entry)
-    registry.register(Subjects.APIKEY_CREATED, on_apikey_created)
-    registry.register(Subjects.APIKEY_REVOKED, on_apikey_revoked)
+    async def _fan_out_webhooks(payload: dict, metadata) -> None:
+        """Fan one domain event out into pending webhook deliveries.
+
+        Called at the top of every durable domain handler with a registered
+        webhook event (one subscription per subject exists, so the fan-out
+        chains off the existing handlers instead of adding its own). Failures
+        stay pending for the dispatcher retry tick.
+        """
+        from src.secrets.factory import build_secret_store
+        from src.services.webhooks import dispatch_due, fan_out_event
+
+        async with SessionFactory() as session:
+            count = await fan_out_event(
+                session,
+                subject=metadata.subject,
+                payload=payload,
+                event_id=metadata.event_id,
+                correlation_id=metadata.correlation_id,
+                occurred_at=metadata.occurred_at,
+            )
+        if not count:
+            return
+        # Best-effort immediate dispatch so the first attempt does not wait
+        # for the dispatcher tick; failures stay pending for retry.
+        try:
+            async with SessionFactory() as session:
+                await dispatch_due(session, build_secret_store())
+        except Exception:
+            logger.exception("webhook immediate dispatch failed")
+
+    def _with_webhooks(handler):
+        """Chain webhook fan-out off an existing durable handler.
+
+        The registry allows one handler per subject, so deliverable domain
+        events fan out from inside the existing handlers instead of adding
+        their own subscriptions (which would double-consume or collide).
+        """
+        async def wrapped(payload: dict, metadata) -> None:
+            await _fan_out_webhooks(payload, metadata)
+            await handler(payload, metadata)
+        return wrapped
+
+    _hooked = _with_webhooks
+    registry.register(Subjects.WORKSPACE_MEMBER_INVITED, _hooked(on_member_invited))
+    registry.register(Subjects.WORKSPACE_MEMBER_JOINED, _hooked(on_member_joined))
+    registry.register(Subjects.WORKSPACE_MEMBER_ROLE_CHANGED, _hooked(on_member_role_changed))
+    registry.register(Subjects.WORKSPACE_MEMBER_REMOVED, _hooked(on_member_removed))
+    registry.register(Subjects.WORKSPACE_INVITATION_CREATED, _hooked(on_invitation_created))
+    registry.register(Subjects.WORKSPACE_CREATED, _hooked(on_workspace_created))
+    registry.register(Subjects.AUDIT_ENTRY_CREATED, _hooked(on_audit_entry))
+    registry.register(Subjects.APIKEY_CREATED, _hooked(on_apikey_created))
+    registry.register(Subjects.APIKEY_REVOKED, _hooked(on_apikey_revoked))
     registry.register(Subjects.JOBS_EXECUTE, on_job_execute)
     registry.register(Subjects.NOTIFICATIONS_CREATED, on_notification_created, fanout=True)
-    registry.register(Subjects.CONVERSATION_MESSAGE_CREATED, on_conversation_message)
+    registry.register(Subjects.CONVERSATION_MESSAGE_CREATED, _hooked(on_conversation_message))
     registry.register(Subjects.CONVERSATION_MESSAGE_LIVE, on_conversation_message_live, fanout=True)
     registry.register(Subjects.CONVERSATION_RENAMED, on_conversation_renamed, fanout=True)

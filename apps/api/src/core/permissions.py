@@ -26,6 +26,9 @@ MESSAGE_SEND = "message:send"
 JOB_VIEW = "jobs:view"
 JOB_EDIT = "jobs:edit"
 
+WEBHOOK_READ = "webhook:read"
+WEBHOOK_MANAGE = "webhook:manage"
+
 AUDIT_READ = "audit:read"
 
 ALL_PERMISSIONS = [
@@ -45,6 +48,8 @@ ALL_PERMISSIONS = [
     MESSAGE_SEND,
     JOB_VIEW,
     JOB_EDIT,
+    WEBHOOK_READ,
+    WEBHOOK_MANAGE,
     AUDIT_READ,
 ]
 

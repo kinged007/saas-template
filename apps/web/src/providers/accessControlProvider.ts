@@ -53,6 +53,11 @@ const PERMISSION_MAP: Record<string, Record<string, string>> = {
     show: "jobs:view",
     edit: "jobs:edit",
   },
+  webhooks: {
+    list: "webhook:read",
+    create: "webhook:manage",
+    delete: "webhook:manage",
+  },
   audit: {
     list: "audit:read",
     show: "audit:read",

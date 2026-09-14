@@ -18,6 +18,7 @@ from src.api.routes import (
     notifications,
     profiles,
     roles,
+    webhooks,
     workspaces,
     ws,
 )
@@ -27,6 +28,7 @@ from src.events.factory import WorkflowRegistry
 from src.jobs.capture import install_run_capture, uninstall_run_capture
 from src.jobs.scheduler import JobScheduler
 from src.services.jobs import JobService
+from src.services.webhook_dispatcher import WebhookDispatcher
 from src.settings import settings
 from src.workflows import build_workflows
 
@@ -62,6 +64,9 @@ async def lifespan(app: FastAPI):
     scheduler = JobScheduler(bus=container.bus)
     app.state.job_scheduler = scheduler
     await scheduler.start()
+    dispatcher = WebhookDispatcher(secret_store=container.secret_store)
+    app.state.webhook_dispatcher = dispatcher
+    await dispatcher.start()
     logger.info(
         "event bus (%s) started; workflows: %s",
         container.bus.name,
@@ -70,6 +75,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await dispatcher.stop()
         await scheduler.stop()
         uninstall_run_capture()
         await registry.stop()
@@ -108,6 +114,7 @@ app.include_router(invitations.router, prefix=API)
 app.include_router(roles.router, prefix=API)
 app.include_router(api_keys.router, prefix=API)
 app.include_router(jobs.router, prefix=API)
+app.include_router(webhooks.router, prefix=API)
 app.include_router(notifications.router, prefix=API)
 app.include_router(conversations.router, prefix=API)
 app.include_router(profiles.router, prefix=API)

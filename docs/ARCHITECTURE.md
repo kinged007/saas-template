@@ -12,7 +12,8 @@ as a coherent, tested reference implementation you can build a product on.
 
 ```
 apps/api        FastAPI service: auth, workspaces, members, roles, invitations,
-                API keys, notifications, scheduled jobs, WS realtime.
+                API keys, notifications, scheduled jobs, outbound webhooks,
+                WS realtime.
 apps/web        Refine.dev SPA (React + Antd).
 infra/          docker-compose, Dockerfiles, Helm chart, Terraform.
 ```
@@ -30,6 +31,8 @@ User ──< WorkspaceMember >── Workspace (slug, name)
   │                                  ├──< Role >── (permissions: string set)
   │                                  ├──< Invitation > (email, role_id, token, status)
   │                                  ├──< ApiKey > (name, key_prefix, permissions, revoked_at)
+  │                                  ├──< WebhookSubscription > (url, event filter, active)
+  │                                  │     └──< WebhookDelivery > (status, attempts, backoff)
   │                                  ├──< JobDefinition > (cron, params, enabled)
   │                                  │     └──< JobRun > (status, params snapshot, logs)
   │                                  └──< AuditLogEntry > (immutable, workspace-wide)
@@ -49,6 +52,12 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 - **ApiKey** — per-user machine credentials with assignable permissions
   (capped by the minting principal's own permissions). Only the raw key is
   returned once at creation.
+- **WebhookSubscription / WebhookDelivery** — workspace-scoped outbound
+  webhooks: a subscription is a callback URL + event filter (empty = all);
+  each matching domain event fans out into one delivery row per
+  subscription, HMAC-signed, retried with backoff (1m→5m→30m→2h→12h, 6
+  attempts) until success or `exhausted`. The signing secret lives in the
+  `SecretStore`, returned once at creation. See `docs/WEBHOOKS.md`.
 - **UserProfile** — 1:1 with `User` (`user_id` PK FK CASCADE), 9 common columns (`first_name`, `last_name`, `bio`, `phone_number`, `timezone`, `locale`, `date_of_birth`, `website_url`, `location`) + schemaless `custom_data JSON DEFAULT {}` (Merge Patch, 50 keys / 16 KiB). Lazily auto-created on `GET /me/profile` or `GET /auth/me` (ON CONFLICT), cascade-deleted with `User`. Cross-user read is workspace-bounded (404 if not co-member nor superuser) with redacted projection (`phone_number`, `date_of_birth`, `_private*` stripped). See `docs/providers/profile.md` for extension seam.
 - **JobDefinition / JobRun** — DB-backed scheduled jobs (see §7).
 - **Notification** — persisted per user/workspace, acknowledged via
@@ -100,6 +109,10 @@ workflows/*.py         subscribers orchestrated by a small WorkflowRegistry
   (`PATCH /notifications/{id}` → `acknowledged_at`).
 - **Job subjects** (`jobs.*`): `jobs.execute` (durable) — published when a
   scheduled job should run; consumed by the framework-level job scheduler.
+- **Outbound webhooks**: every durable domain handler chains a fan-out
+  (one pending `webhook_deliveries` row per matching subscription); a
+  dispatcher loop CAS-claims due rows and POSTs them HMAC-signed, with
+  backoff retry. See `docs/WEBHOOKS.md`.
 - `NatsEventBus` uses JetStream:
   - One workqueue stream (`SAAS_TEMPLATE`) with subjects `workspaces.>`,
     `apikeys.>`, `audit.>`; durable consumers are **shared by name across

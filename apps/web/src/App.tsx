@@ -20,6 +20,8 @@ import { MembersPage } from "./pages/MembersPage";
 import { ReceivedInvitationsPage } from "./pages/ReceivedInvitationsPage";
 import { ApiKeyCreatePage } from "./pages/ApiKeyCreatePage";
 import { ApiKeysPage } from "./pages/ApiKeysPage";
+import { WebhookCreatePage } from "./pages/WebhookCreatePage";
+import { WebhooksPage } from "./pages/WebhooksPage";
 import { InboxPage } from "./pages/InboxPage";
 import { JobDetailPage } from "./pages/JobDetailPage";
 import { JobRunPage } from "./pages/JobRunPage";
@@ -54,6 +56,7 @@ export function App() {
           { name: "members", list: "/members" },
           { name: "roles", list: "/settings/workspace/roles" },
           { name: "api-keys", list: "/api-keys", create: "/api-keys/create" },
+          { name: "webhooks", list: "/webhooks", create: "/webhooks/create" },
           { name: "invitations", list: "/invitations" },
           { name: "notifications", list: "/inbox", meta: { label: "Inbox" } },
           { name: "conversations", list: "/inbox", meta: { hide: true } },
@@ -85,6 +88,8 @@ export function App() {
               <Route path="invitations" element={<ReceivedInvitationsPage />} />
               <Route path="api-keys/create" element={<ApiKeyCreatePage />} />
               <Route path="api-keys" element={<ApiKeysPage />} />
+              <Route path="webhooks/create" element={<WebhookCreatePage />} />
+              <Route path="webhooks" element={<WebhooksPage />} />
               <Route path="inbox" element={<InboxPage />} />
               {/* Jobs detail stays top-level; list moved into workspace settings */}
               <Route path="jobs/:id" element={<JobDetailPage />} />

@@ -63,13 +63,18 @@ async def _clean_db():
 
 
 @pytest.fixture
-async def app_client():
-    from src.main import app
+async def app():
+    from src.main import app as fastapi_app
 
-    async with LifespanManager(app) as manager:
-        transport = ASGITransport(app=manager.app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            yield client
+    async with LifespanManager(fastapi_app):
+        yield fastapi_app
+
+
+@pytest.fixture
+async def app_client(app):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
 
 
 async def register_user(client: AsyncClient, email: str = "user@example.com", first_name: str = "Test", last_name: str = "User") -> dict:
