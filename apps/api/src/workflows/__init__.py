@@ -39,7 +39,6 @@ from src.db.session import SessionFactory
 from src.events.bus import EventBus
 from src.events.factory import WorkflowRegistry
 from src.events.subjects import Subjects
-from src.events.webhook_events import webhook_subject_events
 from src.jobs.executor import execute_run
 from src.models.workspace import WorkspaceMember
 from src.realtime.manager import ConnectionManager

@@ -295,3 +295,39 @@ export type JobLogEntry = {
   level: string;
   message: string;
 };
+
+export type WebhookSubscription = {
+  id: string;
+  workspace_id: string;
+  url: string;
+  events: string[];
+  active: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type WebhookSubscriptionCreated = WebhookSubscription & {
+  secret: string;
+};
+
+export type WebhookDeliveryStatus =
+  | "pending"
+  | "success"
+  | "failed"
+  | "exhausted";
+
+export type WebhookDelivery = {
+  id: string;
+  subscription_id: string;
+  workspace_id: string;
+  event_type: string;
+  subject: string;
+  status: WebhookDeliveryStatus;
+  attempt_count: number;
+  next_retry_at?: string | null;
+  response_status?: number | null;
+  error?: string | null;
+  event_id?: string | null;
+  correlation_id?: string | null;
+  created_at?: string;
+};
