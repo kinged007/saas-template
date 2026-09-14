@@ -51,11 +51,12 @@ WS3 = str(uuid.uuid4())
 WS4 = str(uuid.uuid4())
 
 
-async def _service():
-    session = SessionFactory()
-    from src.main import app
+async def _service(app):
+    from src.container import Container
 
+    assert isinstance(app.state.container, Container)
     store = app.state.container.secret_store
+    session = SessionFactory()
     return session, WebhookService(session, store)
 
 
@@ -70,8 +71,8 @@ async def _deliveries(session, workspace_id):
     return list(rows.scalars().all())
 
 
-async def test_enqueue_filters_by_event():
-    session, service = await _service()
+async def test_enqueue_filters_by_event(app):
+    session, service = await _service(app)
     try:
         sub, _ = await service.create_subscription(
             WS1, url="https://example.com/hook", events=["member.joined"]
@@ -104,7 +105,7 @@ async def test_enqueue_filters_by_event():
         await session.close()
 
 
-async def test_dispatch_success_with_mock_transport():
+async def test_dispatch_success_with_mock_transport(app):
     seen: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -112,7 +113,7 @@ async def test_dispatch_success_with_mock_transport():
         seen["body"] = request.content
         return httpx.Response(200, json={"ok": True})
 
-    session, service = await _service()
+    session, service = await _service(app)
     try:
         sub, secret = await service.create_subscription(
             WS2, url="https://example.com/hook", events=["member.joined"]
@@ -148,11 +149,11 @@ async def test_dispatch_success_with_mock_transport():
         await session.close()
 
 
-async def test_retry_then_exhaustion():
+async def test_retry_then_exhaustion(app):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"err": True})
 
-    session, service = await _service()
+    session, service = await _service(app)
     try:
         await service.create_subscription(
             WS3, url="https://example.com/hook", events=["member.joined"]
@@ -275,11 +276,11 @@ async def test_private_url_rejected(app_client):
     assert resp.status_code == 422
 
 
-async def test_redeliver_resets_failed():
+async def test_redeliver_resets_failed(app):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"err": True})
 
-    session, service = await _service()
+    session, service = await _service(app)
     try:
         await service.create_subscription(
             WS4, url="https://example.com/hook", events=["member.joined"]

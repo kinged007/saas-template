@@ -1,5 +1,5 @@
+import { Fragment, useState } from "react";
 import { useCan, useList } from "@refinedev/core";
-import { useState } from "react";
 import { Webhook } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -115,8 +115,8 @@ export function WebhooksPage() {
           </TableHeader>
           <TableBody>
             {rows.map((sub) => (
-              <>
-                <TableRow key={sub.id}>
+              <Fragment key={sub.id}>
+                <TableRow>
                   <TableCell>
                     <p className="flex items-center gap-2 font-medium">
                       <Webhook className="text-muted-foreground h-4 w-4" />
@@ -166,13 +166,13 @@ export function WebhooksPage() {
                   </TableCell>
                 </TableRow>
                 {openId === sub.id && (
-                  <TableRow key={`${sub.id}-log`}>
+                  <TableRow>
                     <TableCell colSpan={5}>
                       <DeliveryLog subscriptionId={sub.id} />
                     </TableCell>
                   </TableRow>
                 )}
-              </>
+              </Fragment>
             ))}
             {rows.length === 0 && (
               <EmptyRow colSpan={5}>No webhook subscriptions yet.</EmptyRow>

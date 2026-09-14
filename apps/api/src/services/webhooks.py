@@ -1,6 +1,6 @@
 """Outbound webhook signing, dispatch, and retry.
 
-Signature scheme (documented for subscribers, see docs/WEBHOOKS.md):
+Signature scheme (documented for subscribers, see `docs/WEBHOOKS.md`):
   `X-Webhook-Signature: sha256=<hmac_sha256_hex(secret, timestamp + "." + raw_body)>`
 plus `X-Webhook-Event` (public event name), `X-Webhook-Delivery` (delivery
 id, for dedupe), and `X-Webhook-Timestamp`. Success is any 2xx; anything else

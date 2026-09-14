@@ -31,9 +31,6 @@ WEBHOOK_MANAGE = "webhook:manage"
 
 AUDIT_READ = "audit:read"
 
-WEBHOOK_READ = "webhook:read"
-WEBHOOK_MANAGE = "webhook:manage"
-
 ALL_PERMISSIONS = [
     WORKSPACE_READ,
     WORKSPACE_UPDATE,
@@ -54,8 +51,6 @@ ALL_PERMISSIONS = [
     WEBHOOK_READ,
     WEBHOOK_MANAGE,
     AUDIT_READ,
-    WEBHOOK_READ,
-    WEBHOOK_MANAGE,
 ]
 
 
