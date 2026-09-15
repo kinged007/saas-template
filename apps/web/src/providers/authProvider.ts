@@ -2,7 +2,7 @@ import type { AuthProvider } from "@refinedev/core";
 
 import { activeWorkspacePermissions } from "../utils/permissions";
 import { API_URL, cancelPendingRefresh, httpClient } from "./dataProvider";
-import { identityStore, tokenStore } from "../utils/storage";
+import { identityStore, tokenStore, workspaceStore } from "../utils/storage";
 import { clearAllCaches, queryClient } from "./queryClient";
 import type { Identity } from "../types";
 
@@ -22,11 +22,16 @@ const post = async (path: string, body: unknown) => {
 export const authProvider: AuthProvider = {
   login: async ({ email, password }) => {
     try {
-      // If a previous user was cached (logout without reload, or stale
-      // token), drop it before storing the new tokens so the next
-      // identity fetch cannot flash the previous user's workspaces.
-      if (tokenStore.getAccess()) clearAllCaches(queryClient);
       const tokens = await post("/auth/login", { email, password });
+      // Drop the previous session's caches, workspace selection, and cached
+      // identity before storing the new tokens: refine navigates to "/"
+      // immediately and only invalidates the identity query ~32ms later, so
+      // without this the app would mount with the previous user's workspace
+      // id and rows (dashboard empty / notifications from the old workspace).
+      // Unconditional — a no-op when logout already cleared.
+      workspaceStore.clear();
+      identityStore.set(null);
+      clearAllCaches(queryClient);
       tokenStore.setTokens(tokens.access_token, tokens.refresh_token);
       return { success: true, redirectTo: "/" };
     } catch (error) {
@@ -36,7 +41,6 @@ export const authProvider: AuthProvider = {
 
   register: async ({ email, password, display_name, first_name, last_name }) => {
     try {
-      if (tokenStore.getAccess()) clearAllCaches(queryClient);
       // Prefer first/last; fall back to deprecated display_name for compat
       const body: Record<string, unknown> = { email, password };
       if (first_name || last_name) {
@@ -53,6 +57,10 @@ export const authProvider: AuthProvider = {
       if (last_name) body.last_name = last_name;
       if (display_name && !body.display_name) body.display_name = display_name;
       const tokens = await post("/auth/register", body);
+      // Same stale-session reset as login (see above).
+      workspaceStore.clear();
+      identityStore.set(null);
+      clearAllCaches(queryClient);
       tokenStore.setTokens(tokens.access_token, tokens.refresh_token);
       return { success: true, redirectTo: "/" };
     } catch (error) {
