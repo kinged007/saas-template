@@ -68,6 +68,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // ---- Identity / user change: logout or login as different user ----------
   // useLayoutEffect → state update is flushed before browser paint, so the
   // stale subtree never reaches the screen.
+  // Also handles the same-user stale case: when the token changed (logout +
+  // login without an identity-id change), the authProvider cleared the
+  // caches, but the stale `useGetIdentity` data may still be served first
+  // (invalidate refetch resolves later). Clearing the selection up-front
+  // forces the auto-selection effect below to re-pick from the FRESH
+  // workspace list instead of keeping the previous session's id.
   useLayoutEffect(() => {
     if (isLoading || !hasHydratedRef.current) {
       if (identityId) hasHydratedRef.current = true;
@@ -75,6 +81,25 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (identityId && prevIdentityIdRef.current === null) {
         prevIdentityIdRef.current = identityId;
         prevWorkspaceIdRef.current = workspaceStore.get();
+      }
+      return;
+    }
+    // Fresh login over an unhydrated state (e.g. identity cleared on login
+    // but the invalidation refetch has not resolved): drop any selection
+    // restored from the previous session's stored workspace so the new
+    // list picks its own default.
+    // Skip when the restored selection already matches the fresh list —
+    // e.g. a same-user re-login or a boot-time hydration where clearing
+    // would only flash the "No workspace yet" empty state for a frame.
+    if (prevIdentityIdRef.current === null && identityId !== null) {
+      prevIdentityIdRef.current = identityId;
+      if (selected) {
+        const stored = workspaceStore.get();
+        const restored = stored === selected.id && workspaces.some((w) => w.id === stored);
+        if (!restored) {
+          prevWorkspaceIdRef.current = stored;
+          setSelected(undefined);
+        }
       }
       return;
     }

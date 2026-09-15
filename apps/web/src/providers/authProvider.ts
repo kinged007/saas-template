@@ -22,10 +22,10 @@ const post = async (path: string, body: unknown) => {
 export const authProvider: AuthProvider = {
   login: async ({ email, password }) => {
     try {
-      // If a previous user was cached (logout without reload, or stale
-      // token), drop it before storing the new tokens so the next
-      // identity fetch cannot flash the previous user's workspaces.
-      if (tokenStore.getAccess()) clearAllCaches(queryClient);
+      // Drop any cached identity from a previous session/user BEFORE the
+      // tokens are replaced, so the stale identity can never be rendered
+      // or used for workspace selection after login lands.
+      clearAllCaches(queryClient);
       const tokens = await post("/auth/login", { email, password });
       tokenStore.setTokens(tokens.access_token, tokens.refresh_token);
       return { success: true, redirectTo: "/" };
@@ -36,7 +36,7 @@ export const authProvider: AuthProvider = {
 
   register: async ({ email, password, display_name, first_name, last_name }) => {
     try {
-      if (tokenStore.getAccess()) clearAllCaches(queryClient);
+      clearAllCaches(queryClient);
       // Prefer first/last; fall back to deprecated display_name for compat
       const body: Record<string, unknown> = { email, password };
       if (first_name || last_name) {
