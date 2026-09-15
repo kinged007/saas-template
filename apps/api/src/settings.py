@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.events.subjects import EventBusDriver
@@ -25,6 +26,11 @@ class Settings(BaseSettings):
     # Per-checkout file, so multiple worktrees don't share a server or data
     # dir; startup is instant (no postgres boot). Explicit DATABASE_URL wins.
     use_sqlite: bool = False
+
+    @field_validator("use_sqlite", mode="before")
+    @classmethod
+    def _empty_string_is_unset(cls, v):
+        return False if v == "" else v
 
     # Security
     secret_key: str = "dev-secret-change-me"

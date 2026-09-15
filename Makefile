@@ -3,7 +3,7 @@ SHELL := /bin/bash
 
 SUDO := $(shell [ "$$(id -u)" -eq 0 ] 2>/dev/null && echo "" || echo sudo)
 
-.PHONY: help setup dev api api-install api-migrate api-seed api-test api-test-sqlite api-lint web web-install web-build infra-up infra-down nats-up nats-down nats-status nats-logs
+.PHONY: help setup dev api api-install api-migrate api-seed api-test api-lint web web-install web-build infra-up infra-down nats-up nats-down nats-status nats-logs
 
 # USE_SQLITE=1 (env or `make <target> USE_SQLITE=1`): use the per-checkout
 # sqlite dev DB (apps/api/dev.db) instead of embedded postgres. Exported so it
