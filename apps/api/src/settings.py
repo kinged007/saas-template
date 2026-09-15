@@ -1,5 +1,7 @@
 import os
+from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.email.base import EmailDriver  # noqa: E402  (base has no settings import)
@@ -20,6 +22,16 @@ class Settings(BaseSettings):
     # Database. Empty → embedded PostgreSQL (pgserver; dev, no external deps).
     # Set DATABASE_URL (e.g. managed postgres) to override in production.
     database_url: str = ""
+
+    # USE_SQLITE=1 → file DB at apps/api/dev.db instead of embedded postgres.
+    # Per-checkout file, so multiple worktrees don't share a server or data
+    # dir; startup is instant (no postgres boot). Explicit DATABASE_URL wins.
+    use_sqlite: bool = False
+
+    @field_validator("use_sqlite", mode="before")
+    @classmethod
+    def _empty_string_is_unset(cls, v):
+        return False if v == "" else v
 
     # Security
     secret_key: str = "dev-secret-change-me"
@@ -68,9 +80,11 @@ class Settings(BaseSettings):
 
     @property
     def resolved_database_url(self) -> str:
-        """Effective DB URL: explicit DATABASE_URL or embedded postgres."""
+        """Effective DB URL: explicit DATABASE_URL, USE_SQLITE file, or embedded postgres."""
         if self.database_url:
             return self.database_url
+        if self.use_sqlite:
+            return f"sqlite+aiosqlite:///{Path(__file__).resolve().parents[1] / 'dev.db'}"
         from src.db.embedded import embedded_uri
 
         return embedded_uri()
