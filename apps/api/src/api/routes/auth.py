@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import get_container, get_current_user
 from src.core.dates import ensure_utc, now_utc
 from src.core.security.ratelimit import get_auth_limiter
+from src.core.security.tokens import OpaqueToken
 from src.db.session import get_db
 from src.email import factory as email_factory
 from src.email import templates
@@ -212,7 +213,8 @@ async def refresh(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> TokenResponse:
-    get_auth_limiter().check(_limit_key(request))
+    key = _limit_key(request, OpaqueToken.hash(body.refresh_token))
+    get_auth_limiter().check(key)
     service = AuthService(db, container.bus)
     try:
         pair = await service.rotate_refresh(
@@ -221,9 +223,9 @@ async def refresh(
             user_agent=_user_agent(request),
         )
     except AuthError as exc:
-        get_auth_limiter().fail(_limit_key(request))
+        get_auth_limiter().fail(key)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
-    get_auth_limiter().reset(_limit_key(request))
+    get_auth_limiter().reset(key)
     return TokenResponse(**pair.__dict__)
 
 
