@@ -16,7 +16,7 @@ import { UserProfileDialog } from "@/components/UserProfileDialog";
 import { formatDate } from "../components/ui";
 import { TabbedPageHeader } from "../components/refine-ui/layout/tabbed-page-header";
 import { cn } from "@/lib/utils";
-import type { Notification, NotificationChannel, NotificationPreferences, Conversation, Message, Identity } from "../types";
+import type { Notification, Conversation, Message, Identity } from "../types";
 import { getDisplayName, getParticipantDisplayName } from "../types";
 import { ComposeDialog } from "../components/inbox/ComposeDialog";
 import { TiptapEditor } from "../components/inbox/TiptapEditor";
@@ -35,19 +35,6 @@ const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
   { value: "unread", label: "Unread" },
   { value: "read", label: "Read" },
   { value: "all", label: "All" },
-];
-
-const KNOWN_NOTIFICATION_TYPES = [
-  "workspace_invitation",
-  "member_joined",
-  "member_role_changed",
-  "member_removed",
-] as const;
-
-const CHANNEL_OPTIONS: Array<{ value: NotificationChannel; label: string }> = [
-  { value: "in-app", label: "In-app" },
-  { value: "email", label: "Email" },
-  { value: "off", label: "Off" },
 ];
 
 function truncateEscaped(text: string | undefined | null, max: number): string {
@@ -158,56 +145,6 @@ export function InboxPage() {
   }, [notifResult?.data]);
 
   const { mutate: updateNotif } = useUpdate();
-  const { result: prefsResult, query: prefsQuery } = useCustom<NotificationPreferences>({
-    url: "notifications/preferences",
-    method: "get",
-    queryOptions: { enabled: tab === "notifications" },
-  });
-  const { mutateAsync: savePrefsAsync, mutation: savePrefsMutation } = useCustomMutation<NotificationPreferences>();
-  const savingPrefs = savePrefsMutation.isPending;
-  const prefs = prefsResult?.data;
-  const channels = prefs?.channels ?? {};
-  const digestEnabled = prefs?.digest_enabled ?? false;
-  const visibleTypes = useMemo(() => {
-    const seen = new Set<string>(KNOWN_NOTIFICATION_TYPES as unknown as string[]);
-    for (const n of allNotifications) seen.add(n.type);
-    for (const t of Object.keys(channels)) seen.add(t);
-    return [...seen].filter((t) => t !== "conversation_message");
-  }, [allNotifications, channels]);
-
-  const setChannel = async (type: string, channel: NotificationChannel) => {
-    try {
-      await savePrefsAsync(
-        {
-          url: "notifications/preferences",
-          method: "put",
-          values: { channels: { [type]: channel } },
-          successNotification: false,
-        },
-        { onSuccess: () => prefsQuery.refetch() }
-      );
-    } catch (e) {
-      toast.error(String((e as { message?: string })?.message ?? e));
-    }
-  };
-  const setDigest = async (enabled: boolean) => {
-    try {
-      await savePrefsAsync(
-        {
-          url: "notifications/preferences",
-          method: "put",
-          values: { digest_enabled: enabled },
-          successNotification: {
-            message: enabled ? "Daily digest enabled" : "Daily digest disabled",
-            type: "success",
-          },
-        },
-        { onSuccess: () => prefsQuery.refetch() }
-      );
-    } catch (e) {
-      toast.error(String((e as { message?: string })?.message ?? e));
-    }
-  };
   const { mutate: markAllNotif, mutation: markAllMutation } = useCustomMutation();
   const markingAll = markAllMutation.isPending;
   const unreadCount = allNotifications.filter((n) => !n.acknowledged).length;
@@ -1107,44 +1044,6 @@ export function InboxPage() {
                 <p className="text-muted-foreground text-sm">No notifications.</p>
               </div>
             )}
-              <div className="border-t p-3">
-                <p className="mb-2 text-xs font-semibold tracking-wide uppercase text-muted-foreground">
-                  Delivery preferences
-                </p>
-                <div className="flex flex-col gap-2">
-                  {visibleTypes.map((t) => (
-                    <div key={t} className="flex items-center justify-between gap-2">
-                      <span className="truncate text-xs text-muted-foreground">{t}</span>
-                      <Select
-                        value={channels[t] ?? "in-app"}
-                        disabled={savingPrefs}
-                        onValueChange={(v) => setChannel(t, v as NotificationChannel)}
-                      >
-                        <SelectTrigger className="h-7 w-28 text-xs">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {CHANNEL_OPTIONS.map((o) => (
-                            <SelectItem key={o.value} value={o.value}>
-                              {o.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  ))}
-                  <label className="mt-1 flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-                    <input
-                      type="checkbox"
-                      checked={digestEnabled}
-                      disabled={savingPrefs}
-                      onChange={(e) => setDigest(e.target.checked)}
-                      className="h-3.5 w-3.5 accent-primary"
-                    />
-                    Daily digest email (unread summary at 07:00 UTC)
-                  </label>
-                </div>
-              </div>
             </div>
           </div>
 

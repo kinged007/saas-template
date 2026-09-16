@@ -37,6 +37,7 @@ import {
 import { useDeleteAccount, useExportProfile, useProfile, useUpdateProfile } from "@/hooks/useProfile";
 import type { Identity, UserProfile } from "@/types";
 import { getProfileField } from "@/types";
+import { NotificationPreferencesCard } from "./NotificationPreferencesCard";
 
 const profileSchema = z.object({
   first_name: z.string().max(100, "Max 100 characters").optional().or(z.literal("")),
@@ -263,7 +264,7 @@ export function ProfileSettingsPage() {
       <div className="flex flex-col gap-2">
         <h2 className="text-2xl font-bold tracking-tight">Profile Settings</h2>
         <p className="text-muted-foreground text-sm">
-          Update your personal information and preferences. Changes are visible to workspace members.
+          Update your personal information. Profile changes are visible to workspace members.
         </p>
       </div>
 
@@ -452,6 +453,8 @@ export function ProfileSettingsPage() {
           </Form>
         </CardContent>
       </Card>
+
+      <NotificationPreferencesCard />
 
       <Card>
         <CardHeader>
