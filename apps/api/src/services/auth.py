@@ -228,8 +228,10 @@ class AuthService:
         user_agent: str | None = None,
     ) -> TokenPair:
         """Rotate a refresh token: revoke the presented one, issue a new pair."""
-        stmt = select(RefreshToken).where(
-            RefreshToken.token_hash == OpaqueToken.hash(refresh_token)
+        stmt = (
+            select(RefreshToken)
+            .where(RefreshToken.token_hash == OpaqueToken.hash(refresh_token))
+            .with_for_update()
         )
         result = await self._session.execute(stmt)
         row = result.scalar_one_or_none()
