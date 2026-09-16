@@ -1,5 +1,5 @@
 from src.core.security.ratelimit import SlidingWindowLimiter
-from src.core.security.totp import current_code, secret_from_base32
+from src.core.security.totp import current_code, otpauth_uri, secret_from_base32
 from tests.conftest import auth_headers, login, register_user
 
 
@@ -10,6 +10,19 @@ async def _totp_for(client, headers):
     uri = setup["otpauth_uri"]
     b32 = uri.split("secret=")[1].split("&")[0]
     return setup["setup_token"], current_code(secret_from_base32(b32))
+
+
+def test_otpauth_uri_encodes_issuer_and_email():
+    uri = otpauth_uri(
+        secret_b32="ABC123",
+        issuer="SaaS Template API",
+        email="user+test@example.com",
+    )
+
+    assert uri == (
+        "otpauth://totp/SaaS%20Template%20API:user%2Btest%40example.com"
+        "?secret=ABC123&issuer=SaaS+Template+API&algorithm=SHA1&digits=6&period=30"
+    )
 
 
 async def test_sessions_list_and_revoke(app_client):

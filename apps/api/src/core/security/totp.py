@@ -11,6 +11,7 @@ import hmac
 import secrets
 import struct
 import time
+from urllib.parse import quote, urlencode
 
 STEP_SECONDS = 30
 DIGITS = 6
@@ -31,12 +32,17 @@ def secret_from_base32(encoded: str) -> bytes:
 
 
 def otpauth_uri(*, secret_b32: str, email: str, issuer: str) -> str:
-    label = f"{issuer}:{email}"
-    return (
-        f"otpauth://totp/{label}"
-        f"?secret={secret_b32}&issuer={issuer}&algorithm=SHA1"
-        f"&digits={DIGITS}&period={STEP_SECONDS}"
+    label = f"{quote(issuer, safe='')}:{quote(email, safe='')}"
+    query = urlencode(
+        {
+            "secret": secret_b32,
+            "issuer": issuer,
+            "algorithm": "SHA1",
+            "digits": DIGITS,
+            "period": STEP_SECONDS,
+        }
     )
+    return f"otpauth://totp/{label}?{query}"
 
 
 def _hotp(secret: bytes, counter: int) -> str:
