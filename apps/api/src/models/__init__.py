@@ -16,6 +16,7 @@ from src.models.jobs import (
     JobRun,
 )
 from src.models.secret import StoredSecret
+from src.models.two_factor import UserTotpCredential
 from src.models.user_profile import UserProfile
 from src.models.webhook import WebhookDelivery, WebhookSubscription
 from src.models.workspace import (
@@ -42,6 +43,7 @@ __all__ = [
     "Role",
     "StoredSecret",
     "User",
+    "UserTotpCredential",
     "UserProfile",
     "WebhookDelivery",
     "WebhookSubscription",

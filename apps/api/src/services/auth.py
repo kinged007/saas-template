@@ -201,13 +201,17 @@ class AuthService:
         )
         return user
 
-    async def issue_tokens(self, user: User) -> TokenPair:
+    async def issue_tokens(
+        self, user: User, *, ip_address: str | None = None, user_agent: str | None = None
+    ) -> TokenPair:
         refresh = OpaqueToken.generate()
         self._session.add(
             RefreshToken(
                 user_id=user.id,
                 token_hash=OpaqueToken.hash(refresh),
                 expires_at=now_utc() + timedelta(days=settings.refresh_token_expire_days),
+                ip_address=ip_address,
+                user_agent=user_agent,
             )
         )
         await self._session.commit()

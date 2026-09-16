@@ -86,6 +86,12 @@ async function tryRefresh(): Promise<boolean> {
 // direct callers) show *why* a request failed instead of just the status code.
 function enrichErrorMessage(error: AxiosError): AxiosError {
   const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail;
+  // 2FA challenge responses carry an object detail ({code: "2fa_required",
+  // challenge_token}) — leave the message alone so the login page can branch
+  // on the structured payload instead of showing "[object Object]".
+  if (typeof detail === "object" && detail !== null && !Array.isArray(detail)) {
+    return error;
+  }
   if (typeof detail === "string" && detail) {
     error.message = detail;
   } else if (Array.isArray(detail) && detail.length > 0) {

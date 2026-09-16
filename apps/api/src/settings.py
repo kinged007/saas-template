@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     # superuser (global jobs, etc.). Empty disables the bootstrap.
     superadmin_email: str = ""
 
+    # Auth brute-force protection: failures allowed per (IP, account) per window.
+    auth_rate_limit_max_attempts: int = 10
+    auth_rate_limit_window_seconds: int = 300
+
     # Scheduled jobs
     jobs_scheduler_tick_seconds: float = 10.0
     jobs_default_timeout_seconds: int = 600

@@ -44,6 +44,7 @@ import {
   Mail,
   Plus,
   Settings,
+  ShieldCheck,
   Users,
 } from "lucide-react";
 
@@ -224,6 +225,10 @@ function UserMenu() {
         <DropdownMenuItem onClick={() => navigate("/settings/profile")}>
           <Settings />
           Profile Settings
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => navigate("/settings/security")}>
+          <ShieldCheck />
+          Security
         </DropdownMenuItem>
         {isWorkspaceAdmin && (
           <DropdownMenuItem onClick={() => navigate("/settings/workspace")}>

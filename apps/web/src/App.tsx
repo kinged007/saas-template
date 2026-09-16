@@ -26,6 +26,7 @@ import { InboxPage } from "./pages/InboxPage";
 import { JobDetailPage } from "./pages/JobDetailPage";
 import { JobRunPage } from "./pages/JobRunPage";
 import { ProfileSettingsPage } from "./pages/settings/ProfileSettingsPage";
+import { SecuritySection } from "./pages/settings/SecuritySection";
 import { WorkspaceSettingsLayout } from "./pages/settings/workspace/WorkspaceSettingsLayout";
 import { GeneralSection } from "./pages/settings/workspace/sections/GeneralSection";
 import { RolesSection } from "./pages/settings/workspace/sections/RolesSection";
@@ -95,6 +96,7 @@ export function App() {
               <Route path="jobs/:id" element={<JobDetailPage />} />
               <Route path="jobs/:id/runs/:runId" element={<JobRunPage />} />
               <Route path="settings/profile" element={<ProfileSettingsPage />} />
+              <Route path="settings/security" element={<SecuritySection />} />
               <Route path="settings/workspace" element={<WorkspaceSettingsLayout />}>
                 <Route index element={<Navigate to="general" replace />} />
                 <Route path="general" element={<GeneralSection />} />

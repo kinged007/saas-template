@@ -31,6 +31,33 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class TwoFactorChallenge(BaseModel):
+    challenge_token: str
+
+
+class TwoFactorSetupConfirm(BaseModel):
+    setup_token: str
+    code: str = Field(min_length=6, max_length=8)
+
+
+class TwoFactorLogin(BaseModel):
+    challenge_token: str
+    code: str = Field(min_length=6, max_length=10)
+
+
+class TwoFactorDisable(BaseModel):
+    password: str = Field(min_length=8)
+
+
+class SessionRead(BaseModel):
+    id: str
+    created_at: datetime | None = None
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+    ip_address: str | None = None
+    user_agent: str | None = None
+
+
 class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     slug: str | None = Field(default=None, max_length=100)
