@@ -69,7 +69,7 @@ export function SecuritySection() {
   const revokeAll = async () => {
     try {
       await call("auth/sessions", "delete");
-      toast.success("All other sessions revoked — you will be signed out on next refresh");
+      toast.success("All sessions revoked — sign in again to continue");
       refresh();
     } catch (e) {
       toast.error((e as Error)?.message ?? "Revoke failed");
@@ -159,7 +159,7 @@ export function SecuritySection() {
           {list.length > 1 && (
             <div className="flex justify-end p-4">
               <Button variant="destructive" size="sm" onClick={revokeAll} disabled={mutation.isPending}>
-                Revoke all
+                Revoke all sessions
               </Button>
             </div>
           )}

@@ -215,7 +215,11 @@ async def refresh(
     get_auth_limiter().check(_limit_key(request))
     service = AuthService(db, container.bus)
     try:
-        pair = await service.rotate_refresh(body.refresh_token, ip_address=_client_ip(request))
+        pair = await service.rotate_refresh(
+            body.refresh_token,
+            ip_address=_client_ip(request),
+            user_agent=_user_agent(request),
+        )
     except AuthError as exc:
         get_auth_limiter().fail(_limit_key(request))
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
