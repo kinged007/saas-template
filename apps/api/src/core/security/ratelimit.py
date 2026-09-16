@@ -28,13 +28,16 @@ class SlidingWindowLimiter:
         self._failures: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
 
-    def _prune(self, key: str, now: float) -> deque[float]:
+    def _prune(self, key: str, now: float) -> deque[float] | None:
         hits = self._failures.get(key)
         if hits is None:
-            hits = self._failures[key] = deque()
+            return None
         cutoff = now - self.window_seconds
         while hits and hits[0] <= cutoff:
             hits.popleft()
+        if not hits:
+            del self._failures[key]
+            return None
         return hits
 
     def check(self, key: str) -> None:
@@ -42,7 +45,7 @@ class SlidingWindowLimiter:
         now = time.monotonic()
         with self._lock:
             hits = self._prune(key, now)
-            if len(hits) >= self.max_attempts:
+            if hits is not None and len(hits) >= self.max_attempts:
                 retry_after = int(hits[0] + self.window_seconds - now) + 1
                 raise HTTPException(
                     status.HTTP_429_TOO_MANY_REQUESTS,
@@ -52,9 +55,13 @@ class SlidingWindowLimiter:
 
     def fail(self, key: str) -> None:
         with self._lock:
-            if key not in self._failures and len(self._failures) >= self.max_keys:
-                self._failures.pop(next(iter(self._failures)))
-            self._prune(key, time.monotonic()).append(time.monotonic())
+            now = time.monotonic()
+            hits = self._prune(key, now)
+            if hits is None:
+                if len(self._failures) >= self.max_keys:
+                    self._failures.pop(next(iter(self._failures)))
+                hits = self._failures[key] = deque()
+            hits.append(now)
 
     def reset(self, key: str) -> None:
         with self._lock:

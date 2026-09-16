@@ -160,6 +160,8 @@ def test_auth_rate_limiter_bounds_distinct_keys():
     limiter.fail("first")
     limiter.fail("second")
     limiter.fail("third")
+    limiter.check("fourth")
 
     assert len(limiter._failures) == 2
     assert "first" not in limiter._failures
+    assert "fourth" not in limiter._failures
