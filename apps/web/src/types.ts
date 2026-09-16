@@ -152,6 +152,13 @@ export type Invitation = {
   expired?: boolean;
 };
 
+export type NotificationChannel = "in-app" | "email" | "off";
+
+export type NotificationPreferences = {
+  channels: Record<string, NotificationChannel>;
+  digest_enabled: boolean;
+};
+
 export type Notification = {
   id: string;
   workspace_id: string;

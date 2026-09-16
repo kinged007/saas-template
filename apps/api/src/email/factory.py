@@ -6,7 +6,9 @@ drivers raise `ValueError`, same shape as the secret-store factory.
 
 from __future__ import annotations
 
-from src.email.base import EmailDriver, EmailSender
+import logging
+
+from src.email.base import EmailDriver, EmailMessage, EmailSender
 from src.email.console import ConsoleEmailSender
 from src.email.smtp import SmtpConfig, SmtpEmailSender
 
@@ -35,3 +37,20 @@ def build_email_sender() -> EmailSender:
     if driver == EmailDriver.CONSOLE.value:
         return ConsoleEmailSender(from_addr=settings.email_from)
     raise ValueError(f"unsupported EMAIL_DRIVER: {driver!r} (available: {sorted(_EMAIL_DRIVERS)})")
+
+
+logger = logging.getLogger(__name__)
+
+
+async def send_email(message: EmailMessage) -> bool:
+    """Send one message via the configured driver; fail closed (False).
+
+    Single monkeypatch point for tests (`src.email.factory.send_email`).
+    Callers keep their in-app row and log; they never raise on email failure.
+    """
+    try:
+        await build_email_sender().send(message)
+    except Exception:
+        logger.warning("email send failed for %s", message.to, exc_info=True)
+        return False
+    return True

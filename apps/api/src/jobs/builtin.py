@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from src.core.dates import ensure_utc, now_utc
 from src.jobs.registry import JobContext, JobSpec, job_registry
-from src.models.core import Invitation
+from src.models.core import Invitation, Notification, NotificationPreference
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +105,95 @@ async def expire_stale_invitations(ctx: JobContext) -> None:
             print("[Demo] Step 4/4 — no changes to commit")
     logger.info("[Demo] Workspace demo job completed — expired %d invitation(s)", len(stale))
     print(f"[Demo] Workspace demo completed — expired {len(stale)} stale invitation(s) ✓")
+
+
+async def _digest_unsub_url(session, user_id: str) -> str:
+    """Unsubscribe URL for the digest (token on the sentinel row)."""
+    from src.services.notifications import DIGEST_TYPE, unsubscribe_url_for
+    from src.settings import settings
+
+    result = await session.execute(
+        select(NotificationPreference).where(
+            NotificationPreference.user_id == user_id,
+            NotificationPreference.type == DIGEST_TYPE,
+        )
+    )
+    pref = result.scalar_one_or_none()
+    if pref is None:
+        pref = NotificationPreference(user_id=user_id, type=DIGEST_TYPE)
+        session.add(pref)
+    token = pref.ensure_token()
+    await session.commit()
+    return unsubscribe_url_for(token, "all", settings.frontend_url)
+
+
+@job_registry.register(
+    JobSpec(
+        key="notifications.daily_digest",
+        name="Daily notification digest",
+        description=(
+            "Emails one summary per user with digest enabled, listing their "
+            "unread non-conversation notifications. Per-user opt-in gates "
+            "sending; unconfigured email fails closed (skipped with a log)."
+        ),
+        scope="global",
+        schedule="0 7 * * *",
+        params_schema={},
+        default_enabled=True,
+        missed_policy="single",
+        timeout_seconds=300,
+    )
+)
+async def notifications_daily_digest(ctx: JobContext) -> None:
+    from src.email.factory import send_email
+    from src.email.templates import digest_email
+    from src.models.workspace import User
+    from src.services.notifications import DIGEST_EXCLUDED_TYPES, DIGEST_TYPE
+
+    logger.info("digest starting (run %s)", ctx.run_id[:8])
+    sent = 0
+    async with ctx.session() as session:
+        opted = (
+            (
+                await session.execute(
+                    select(NotificationPreference.user_id).where(
+                        NotificationPreference.type == DIGEST_TYPE,
+                        NotificationPreference.digest_enabled.is_(True),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for user_id in opted:
+            user = await session.get(User, user_id)
+            if user is None or not user.is_active or not user.email:
+                continue
+            unread = (
+                (
+                    await session.execute(
+                        select(Notification)
+                        .where(
+                            Notification.user_id == user_id,
+                            Notification.acknowledged_at.is_(None),
+                            Notification.type.not_in(DIGEST_EXCLUDED_TYPES),
+                        )
+                        .order_by(Notification.created_at.desc())
+                        .limit(50)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not unread:
+                continue
+            items = [{"title": n.title, "body": n.body} for n in unread]
+            unsub = await _digest_unsub_url(session, user_id)
+            ok = await send_email(digest_email(user.email, items=items, unsubscribe_url=unsub))
+            if ok:
+                sent += 1
+    logger.info("digest completed — %d email(s) sent", sent)
+    print(f"digest completed — {sent} email(s) sent")
 
 
 @job_registry.register(

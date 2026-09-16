@@ -66,6 +66,11 @@ class NotificationAck(BaseModel):
     acknowledged: bool = True
 
 
+class NotificationPreferencesUpdate(BaseModel):
+    channels: dict[str, str] = Field(default_factory=dict, max_length=50)
+    digest_enabled: bool | None = None
+
+
 class ConversationCreate(BaseModel):
     title: str | None = Field(default=None, max_length=300)
     participant_user_ids: list[str] = Field(min_length=1, max_length=19)
@@ -93,10 +98,12 @@ class WebhookSubscriptionCreate(BaseModel):
     events: list[str] = Field(default_factory=list, max_length=50)
     active: bool = True
 
+
 class WebhookSubscriptionUpdate(BaseModel):
     url: AnyHttpUrl | None = None
     events: list[str] | None = Field(default=None, max_length=50)
     active: bool | None = None
+
 
 class JobUpdate(BaseModel):
     """Editable job configuration. All fields optional (partial patch)."""
