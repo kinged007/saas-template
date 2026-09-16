@@ -15,9 +15,16 @@ from fastapi import HTTPException, status
 
 
 class SlidingWindowLimiter:
-    def __init__(self, *, max_attempts: int = 10, window_seconds: int = 300) -> None:
+    def __init__(
+        self,
+        *,
+        max_attempts: int = 10,
+        window_seconds: int = 300,
+        max_keys: int = 10_000,
+    ) -> None:
         self.max_attempts = max_attempts
         self.window_seconds = window_seconds
+        self.max_keys = max_keys
         self._failures: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
 
@@ -45,6 +52,8 @@ class SlidingWindowLimiter:
 
     def fail(self, key: str) -> None:
         with self._lock:
+            if key not in self._failures and len(self._failures) >= self.max_keys:
+                self._failures.pop(next(iter(self._failures)))
             self._prune(key, time.monotonic()).append(time.monotonic())
 
     def reset(self, key: str) -> None:
