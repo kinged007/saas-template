@@ -24,16 +24,15 @@ const CHANNEL_OPTIONS: Array<{ value: NotificationChannel; label: string }> = [
 
 export function NotificationPreferencesCard() {
   const { workspace } = useWorkspace();
-  const enabled = Boolean(workspace?.id);
+  const hasWorkspace = Boolean(workspace?.id);
   const { result: notificationsResult } = useList<Notification>({
     resource: "notifications",
     pagination: { pageSize: 200 },
-    queryOptions: { enabled },
+    queryOptions: { enabled: hasWorkspace },
   });
   const { result: preferencesResult, query: preferencesQuery } = useCustom<NotificationPreferences>({
     url: "notifications/preferences",
     method: "get",
-    queryOptions: { enabled },
   });
   const { mutateAsync: savePreferences, mutation } = useCustomMutation<NotificationPreferences>();
   const preferences = preferencesResult?.data;
@@ -61,8 +60,6 @@ export function NotificationPreferencesCard() {
       toast.error((error as { message?: string }).message ?? "Failed to update notification preferences");
     }
   };
-
-  if (!enabled) return null;
 
   return (
     <Card>
