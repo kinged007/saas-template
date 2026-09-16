@@ -14,19 +14,26 @@ async def _totp_for(client, headers):
 async def test_sessions_list_and_revoke(app_client):
     client = app_client
     tokens = await register_user(client, "sess@example.com")
-    headers = auth_headers(tokens)
+    refreshed = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": tokens["refresh_token"]},
+        headers={"user-agent": "rotated-session-agent"},
+    )
+    assert refreshed.status_code == 200, refreshed.text
+    headers = auth_headers(refreshed.json())
     resp = await client.get("/api/v1/auth/sessions", headers=headers)
     assert resp.status_code == 200
     sessions = resp.json()
     assert len(sessions) == 1
     assert sessions[0]["ip_address"] is not None or True  # test client may lack IP
+    assert sessions[0]["user_agent"] == "rotated-session-agent"
     assert sessions[0]["revoked_at"] is None
 
     # revoke the session -> refresh stops working
     resp = await client.delete(f"/api/v1/auth/sessions/{sessions[0]['id']}", headers=headers)
     assert resp.status_code == 204
     resp = await client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+        "/api/v1/auth/refresh", json={"refresh_token": refreshed.json()["refresh_token"]}
     )
     assert resp.status_code == 401
     # revoked sessions disappear from the list

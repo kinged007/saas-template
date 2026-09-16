@@ -221,7 +221,11 @@ class AuthService:
         )
 
     async def rotate_refresh(
-        self, refresh_token: str, *, ip_address: str | None = None
+        self,
+        refresh_token: str,
+        *,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
     ) -> TokenPair:
         """Rotate a refresh token: revoke the presented one, issue a new pair."""
         stmt = select(RefreshToken).where(
@@ -238,7 +242,7 @@ class AuthService:
             raise AuthError("account is disabled")
         row.revoked_at = now_utc()
         await self._session.commit()
-        pair = await self.issue_tokens(user)
+        pair = await self.issue_tokens(user, ip_address=ip_address, user_agent=user_agent)
         await publish_audit(
             self._bus,
             workspace_id=None,

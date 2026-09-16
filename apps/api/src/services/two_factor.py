@@ -147,7 +147,12 @@ class TwoFactorService:
 
     async def verify_login_code(self, user: User, *, code: str) -> bool:
         """Verify a TOTP code or backup code. Backup codes are single-use."""
-        cred = await self.get_credential(user.id)
+        result = await self._session.execute(
+            select(UserTotpCredential)
+            .where(UserTotpCredential.user_id == user.id)
+            .with_for_update()
+        )
+        cred = result.scalar_one_or_none()
         if cred is None or not user.totp_enabled:
             raise TwoFactorError("two-factor authentication is not enabled")
         secret = secret_from_base32(self._cipher.decrypt(cred.secret_ciphertext))
