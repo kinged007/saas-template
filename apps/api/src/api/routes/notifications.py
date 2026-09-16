@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,8 +21,12 @@ from src.db.session import get_db
 from src.events.publisher import publish_audit
 from src.models.core import Notification
 from src.models.workspace import Workspace
-from src.schemas.api import NotificationAck
-from src.services.notifications import NotificationService
+from src.schemas.api import NotificationAck, NotificationPreferencesUpdate
+from src.services.notifications import (
+    CHANNELS,
+    DIGEST_TYPE,
+    NotificationService,
+)
 from src.services.serializers import notification_to_dict
 
 logger = logging.getLogger(__name__)
@@ -96,6 +101,61 @@ async def unread_count(
 ):
     count = await NotificationService(db).unread_count(user.id, workspace_id=workspace_id)
     return {"count": count}
+
+
+@router.get("/preferences")
+async def get_preferences(
+    user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
+    _=Depends(require_key_permission(NOTIFICATION_READ)),
+    db: AsyncSession = Depends(get_db),
+):
+    prefs = await NotificationService(db).get_preferences(user.id)
+    digest = next((p.digest_enabled for p in prefs if p.type == DIGEST_TYPE), False)
+    return {
+        "channels": {p.type: p.channel for p in prefs if p.type != DIGEST_TYPE},
+        "digest_enabled": digest,
+    }
+
+
+@router.put("/preferences")
+async def update_preferences(
+    body: NotificationPreferencesUpdate,
+    user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
+    _=Depends(require_key_permission(NOTIFICATION_ACK)),
+    db: AsyncSession = Depends(get_db),
+):
+    for type, channel in body.channels.items():
+        if len(type) > 50:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"unknown type {type!r}")
+        if channel not in CHANNELS:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, f"invalid channel {channel!r}"
+            )
+    service = NotificationService(db)
+    if body.channels:
+        await service.upsert_channels(user.id, body.channels)
+    if body.digest_enabled is not None:
+        await service.set_digest(user.id, body.digest_enabled)
+    prefs = await service.get_preferences(user.id)
+    digest = next((p.digest_enabled for p in prefs if p.type == DIGEST_TYPE), False)
+    return {
+        "channels": {p.type: p.channel for p in prefs if p.type != DIGEST_TYPE},
+        "digest_enabled": digest,
+    }
+
+
+@router.get("/unsubscribe", response_class=PlainTextResponse)
+async def unsubscribe(
+    token: str = Query(min_length=1, max_length=128),
+    type: str = Query(default="all", max_length=50),
+    db: AsyncSession = Depends(get_db),
+):
+    """One-click email opt-out (no auth): the token proves mailbox ownership."""
+    if not await NotificationService(db).unsubscribe(token, type):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "invalid unsubscribe link")
+    return "You have been unsubscribed from these emails. In-app notifications are unaffected."
 
 
 @router.patch("/read-all")

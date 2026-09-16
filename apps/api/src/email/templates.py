@@ -48,6 +48,79 @@ def invitation(
     )
 
 
+def notification_email(
+    to: str,
+    *,
+    title: str,
+    body: str | None = None,
+    workspace_name: str = "",
+    unsubscribe_url: str = "",
+) -> EmailMessage:
+    lead = f"New notification from {workspace_name}:" if workspace_name else "New notification:"
+    text = f"Hi there,\n\n{lead}\n{title}\n"
+    if body:
+        text += f"\n{body}\n"
+    if unsubscribe_url:
+        text += f"\nUnsubscribe:\n{unsubscribe_url}\n"
+    head_html = (
+        escape(lead)
+        if not workspace_name
+        else (f"New notification from <strong>{escape(workspace_name)}</strong>:")
+    )
+    html = f"<p>Hi there,</p><p>{head_html}<br><strong>{escape(title)}</strong></p>"
+    if body:
+        html += f"<p>{escape(body)}</p>"
+    if unsubscribe_url:
+        html += (
+            f'<p><a href="{escape(unsubscribe_url, quote=True)}">Unsubscribe</a> '
+            "from these emails.</p>"
+        )
+    return EmailMessage(
+        to=to,
+        subject=title[:200],
+        text_body=text,
+        html_body=html,
+    )
+
+
+def digest_email(
+    to: str,
+    *,
+    items: list[dict],
+    unsubscribe_url: str = "",
+) -> EmailMessage:
+    lines = [f"{i.get('title', 'Notification')}" for i in items]
+    detail = [
+        f"- {t}" + (f" — {i.get('body')}" if i.get("body") else "")
+        for t, i in zip(lines, items, strict=True)
+    ]
+    text = (
+        f"Hi there,\n\nYou have {len(items)} unread notification(s):\n\n" + "\n".join(detail) + "\n"
+    )
+    if unsubscribe_url:
+        text += f"\nUnsubscribe:\n{unsubscribe_url}\n"
+    html_items = "".join(
+        f"<li><strong>{escape(str(i.get('title', 'Notification')))}</strong>"
+        + (f" — {escape(str(i.get('body')))}" if i.get("body") else "")
+        + "</li>"
+        for i in items
+    )
+    html = (
+        f"<p>Hi there,</p><p>You have {len(items)} unread notification(s):</p><ul>{html_items}</ul>"
+    )
+    if unsubscribe_url:
+        html += (
+            f'<p><a href="{escape(unsubscribe_url, quote=True)}">Unsubscribe</a> '
+            "from digest emails.</p>"
+        )
+    return EmailMessage(
+        to=to,
+        subject=f"Your daily digest: {len(items)} unread notification(s)",
+        text_body=text,
+        html_body=html,
+    )
+
+
 def password_reset(to: str, *, reset_url: str) -> EmailMessage:
     return EmailMessage(
         to=to,

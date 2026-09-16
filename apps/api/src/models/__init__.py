@@ -8,6 +8,7 @@ from src.models.conversation import (
 from src.models.core import (
     Invitation,
     Notification,
+    NotificationPreference,
 )
 from src.models.jobs import (
     JobDefinition,
@@ -36,6 +37,7 @@ __all__ = [
     "JobRun",
     "Message",
     "Notification",
+    "NotificationPreference",
     "RefreshToken",
     "Role",
     "StoredSecret",

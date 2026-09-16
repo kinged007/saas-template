@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any, Sequence, TypedDict
+from typing import Any, TypedDict
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,10 +12,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
 from src.events.subjects import Subjects
-from src.models.core import Notification
+from src.models.core import Notification, NotificationPreference
 from src.services.serializers import notification_to_dict
 
 logger = logging.getLogger(__name__)
+
+
+DIGEST_TYPE = "*"
+DIGEST_EXCLUDED_TYPES = ("conversation_message",)
+CHANNELS = ("in-app", "email", "off")
+DEFAULT_CHANNEL = "in-app"
+
+
+def unsubscribe_url_for(token: str, type: str, frontend_url: str) -> str:
+    base = (frontend_url or "").rstrip("/")
+    return f"{base}/api/v1/notifications/unsubscribe?token={token}&type={type}"
 
 
 class NotificationSpec(TypedDict):
@@ -254,6 +266,130 @@ class NotificationService:
             details={"count": len(ids)},
         )
         return len(ids)
+
+    async def get_preferences(self, user_id: str) -> list[NotificationPreference]:
+        result = await self._session.execute(
+            select(NotificationPreference).where(NotificationPreference.user_id == user_id)
+        )
+        return list(result.scalars().all())
+
+    async def resolve_channel(self, user_id: str, type: str) -> str:
+        """Channel for (user, type); missing row means `in-app`."""
+        result = await self._session.execute(
+            select(NotificationPreference.channel).where(
+                NotificationPreference.user_id == user_id,
+                NotificationPreference.type == type,
+            )
+        )
+        return result.scalar_one_or_none() or DEFAULT_CHANNEL
+
+    async def upsert_channels(
+        self, user_id: str, channels: dict[str, str]
+    ) -> list[NotificationPreference]:
+        """Bulk upsert of per-type channels; generates tokens on email opt-in."""
+        rows: list[NotificationPreference] = []
+        for type, channel in channels.items():
+            if channel not in CHANNELS:
+                raise ValueError(f"invalid channel {channel!r}")
+            result = await self._session.execute(
+                select(NotificationPreference).where(
+                    NotificationPreference.user_id == user_id,
+                    NotificationPreference.type == type,
+                )
+            )
+            pref = result.scalar_one_or_none()
+            if pref is None:
+                pref = NotificationPreference(user_id=user_id, type=type, channel=channel)
+                self._session.add(pref)
+            else:
+                pref.channel = channel
+            if channel == "email":
+                pref.ensure_token()
+            rows.append(pref)
+        await self._session.commit()
+        return rows
+
+    async def set_digest(self, user_id: str, enabled: bool) -> NotificationPreference:
+        """Get-or-create the sentinel digest row and flip its flag."""
+        result = await self._session.execute(
+            select(NotificationPreference).where(
+                NotificationPreference.user_id == user_id,
+                NotificationPreference.type == DIGEST_TYPE,
+            )
+        )
+        pref = result.scalar_one_or_none()
+        if pref is None:
+            pref = NotificationPreference(user_id=user_id, type=DIGEST_TYPE)
+            self._session.add(pref)
+        pref.digest_enabled = enabled
+        await self._session.commit()
+        return pref
+
+    async def digest_enabled(self, user_id: str) -> bool:
+        result = await self._session.execute(
+            select(NotificationPreference.digest_enabled).where(
+                NotificationPreference.user_id == user_id,
+                NotificationPreference.type == DIGEST_TYPE,
+            )
+        )
+        return bool(result.scalar_one_or_none())
+
+    async def token_for(self, user_id: str, type: str) -> str | None:
+        """Unsubscribe token for (user, type), generating it lazily."""
+        result = await self._session.execute(
+            select(NotificationPreference).where(
+                NotificationPreference.user_id == user_id,
+                NotificationPreference.type == type,
+            )
+        )
+        pref = result.scalar_one_or_none()
+        if pref is None:
+            pref = NotificationPreference(user_id=user_id, type=type)
+            self._session.add(pref)
+        token = pref.ensure_token()
+        await self._session.commit()
+        return token
+
+    async def unsubscribe(self, token: str, type: str) -> bool:  # noqa: A002 (shadows builtin, matches domain)
+        """Flip email rows for the token owner to `in-app` (no auth).
+
+        Any valid per-row token of a user authorizes that user's rows: the
+        token proves ownership of the recipient mailbox. `all` flips every
+        email row and clears the digest flag; otherwise only that type.
+        Returns False when the token matches nothing (caller → 404).
+        """
+        result = await self._session.execute(
+            select(NotificationPreference).where(NotificationPreference.unsubscribe_token == token)
+        )
+        anchor = result.scalars().first()
+        if anchor is None:
+            return False
+        owner = anchor.user_id
+        stmt = (
+            select(NotificationPreference)
+            .where(NotificationPreference.user_id == owner)
+            .where(
+                NotificationPreference.channel == "email"
+                if type == "all"
+                else (NotificationPreference.type == type)
+            )
+        )
+        rows = list((await self._session.execute(stmt)).scalars().all())
+        for pref in rows:
+            pref.channel = DEFAULT_CHANNEL
+        if type == "all":
+            digest = (
+                await self._session.execute(
+                    select(NotificationPreference).where(
+                        NotificationPreference.user_id == owner,
+                        NotificationPreference.type == DIGEST_TYPE,
+                    )
+                )
+            ).scalar_one_or_none()
+            if digest is not None:
+                digest.digest_enabled = False
+        await self._session.commit()
+        return True
 
     async def unread_count(self, user_id: str, *, workspace_id: str) -> int:
         """Count unread notifications, excluding conversation_message pointers

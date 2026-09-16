@@ -52,9 +52,40 @@ logger = logging.getLogger(__name__)
 async def _create_notification(
     session, bus: EventBus, *, correlation_id: str | None = None, **kwargs
 ) -> None:
-    """Persist a notification and fan it out over the bus in one call."""
+    """Persist a notification and fan it out over the bus in one call.
+
+    Honors the recipient's channel preference: `off` skips the insert;
+    `email` inserts and sends an immediate email, fail-closed (the in-app
+    row is kept and the failure logged when sending fails).
+    """
     service = NotificationService(session, bus)
-    await service.create(**kwargs, correlation_id=correlation_id)
+    n_type = kwargs.get("type", "")
+    n_user_id = kwargs.get("user_id")
+    channel = await service.resolve_channel(n_user_id, n_type) if n_user_id else "in-app"
+    if channel == "off":
+        return
+    notification = await service.create(**kwargs, correlation_id=correlation_id)
+    if channel != "email":
+        return
+    from src.email.factory import send_email
+    from src.email.templates import notification_email
+    from src.models.workspace import User
+    from src.services.notifications import unsubscribe_url_for
+    from src.settings import settings
+
+    recipient = await session.get(User, n_user_id)
+    if recipient is None or not recipient.email:
+        return
+    token = await service.token_for(n_user_id, n_type)
+    await send_email(
+        notification_email(
+            recipient.email,
+            title=notification.title,
+            body=notification.body,
+            workspace_name=(notification.payload or {}).get("workspace_name", ""),
+            unsubscribe_url=unsubscribe_url_for(token or "", n_type, settings.frontend_url),
+        )
+    )
 
 
 def build_workflows(
@@ -216,10 +247,9 @@ def build_workflows(
         if not workspace_id:
             return
         async with SessionFactory() as session:
-            await JobService(session, bus, cipher).sync_definitions(
-                workspace_ids=[workspace_id]
-            )
-        logger.info("workspace.created: %s (%s) by %s",
+            await JobService(session, bus, cipher).sync_definitions(workspace_ids=[workspace_id])
+        logger.info(
+            "workspace.created: %s (%s) by %s",
             payload.get("workspace_id"),
             payload.get("name"),
             payload.get("created_by_user_id"),
@@ -291,6 +321,28 @@ def build_workflows(
             return
 
         recipients = [uid for uid in participant_ids if uid != sender_id or sender_type != "user"]
+        if not recipients:
+            return
+        # Honor per-user channel prefs: `off` recipients get no pointer row.
+        # conversation_message pointers never get immediate email (surfaced
+        # via thread unread counts instead); digests exclude them too.
+        from src.models.core import NotificationPreference
+
+        async with SessionFactory() as _pref_session:
+            pref_rows = (
+                (
+                    await _pref_session.execute(
+                        select(NotificationPreference).where(
+                            NotificationPreference.user_id.in_(recipients),
+                            NotificationPreference.type == "conversation_message",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        off = {p.user_id for p in pref_rows if p.channel == "off"}
+        recipients = [uid for uid in recipients if uid not in off]
         if not recipients:
             return
         title = payload.get("title") or payload.get("workspace_name") or "New message"
@@ -411,9 +463,11 @@ def build_workflows(
         events fan out from inside the existing handlers instead of adding
         their own subscriptions (which would double-consume or collide).
         """
+
         async def wrapped(payload: dict, metadata) -> None:
             await _fan_out_webhooks(payload, metadata)
             await handler(payload, metadata)
+
         return wrapped
 
     _hooked = _with_webhooks
