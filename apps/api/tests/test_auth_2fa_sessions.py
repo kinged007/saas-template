@@ -133,3 +133,21 @@ async def test_login_rate_limited(app_client, monkeypatch):
     resp = await client.post("/api/v1/auth/login", json=bad)
     assert resp.status_code == 429
     assert "Retry-After" in resp.headers
+
+
+async def test_refresh_rate_limit_does_not_block_other_sessions(app_client, monkeypatch):
+    from src.settings import settings
+
+    monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 3)
+    client = app_client
+    tokens = await register_user(client, "refresh-limit@example.com")
+    for _ in range(3):
+        resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": "invalid-token"})
+        assert resp.status_code == 401
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": "invalid-token"})
+    assert resp.status_code == 429
+
+    resp = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert resp.status_code == 200, resp.text
