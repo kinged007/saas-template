@@ -35,7 +35,11 @@ export function LoginPage() {
           storeTokens(data);
           window.location.assign("/");
         })
-        .catch((err) => setError(err?.response?.data?.detail ?? err?.message ?? "Login failed"));
+        .catch(() => {
+          setChallenge(null);
+          setCode("");
+          setError("Verification failed. Sign in again.");
+        });
       return;
     }
     login(
