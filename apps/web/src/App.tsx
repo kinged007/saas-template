@@ -32,6 +32,7 @@ import { JobRunPage } from "./pages/JobRunPage";
 import { ProfileSettingsLayout } from "./pages/settings/profile/ProfileSettingsLayout";
 import { GeneralSection as ProfileGeneralSection } from "./pages/settings/profile/sections/GeneralSection";
 import { NotificationsSection as ProfileNotificationsSection } from "./pages/settings/profile/sections/NotificationsSection";
+import { SecuritySection } from "./pages/settings/SecuritySection";
 import { WorkspaceSettingsLayout } from "./pages/settings/workspace/WorkspaceSettingsLayout";
 import { GeneralSection } from "./pages/settings/workspace/sections/GeneralSection";
 import { RolesSection } from "./pages/settings/workspace/sections/RolesSection";
@@ -107,6 +108,7 @@ export function App() {
                 <Route path="general" element={<ProfileGeneralSection />} />
                 <Route path="notifications" element={<ProfileNotificationsSection />} />
               </Route>
+              <Route path="settings/security" element={<SecuritySection />} />
               <Route path="settings/workspace" element={<WorkspaceSettingsLayout />}>
                 <Route index element={<Navigate to="general" replace />} />
                 <Route path="general" element={<GeneralSection />} />

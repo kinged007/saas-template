@@ -19,7 +19,13 @@ const post = async (path: string, body: unknown) => {
   });
   if (!resp.ok) {
     const detail = (await resp.json().catch(() => null))?.detail;
-    throw new Error(detail || `request failed (${resp.status})`);
+    // Preserve structured details (e.g. the 2FA challenge object) for callers
+    // that branch on them; string details stay plain messages.
+    throw new Error(
+      typeof detail === "string" || detail == null
+        ? detail || `request failed (${resp.status})`
+        : JSON.stringify(detail),
+    );
   }
   return resp.status === 204 ? null : resp.json();
 };
@@ -46,7 +52,31 @@ async function seedWorkspace(identity: Identity): Promise<void> {
 export const authProvider: AuthProvider = {
   login: async ({ email, password }) => {
     try {
-      const tokens = await post("/auth/login", { email, password });
+      const tokens = await post("/auth/login", { email, password }).catch((err: unknown) => {
+        // 2FA challenge: raw fetch stringifies an object detail — recover the
+        // payload from the message when it parses as the challenge shape.
+        const msg = (err as Error)?.message ?? "";
+        let detail: unknown = null;
+        try {
+          detail = JSON.parse(msg);
+        } catch {
+          throw err;
+        }
+        if (
+          typeof detail === "object" &&
+          detail !== null &&
+          (detail as { code?: string }).code === "2fa_required"
+        ) {
+          return { __challenge: (detail as { challenge_token: string }).challenge_token };
+        }
+        throw err;
+      });
+      if ("__challenge" in (tokens as object)) {
+        return {
+          success: false,
+          error: new Error("2fa_required:" + (tokens as { __challenge: string }).__challenge),
+        };
+      }
       // Drop the previous session's caches, workspace selection, and cached
       // identity before storing the new tokens: refine navigates to "/"
       // immediately and only invalidates the identity query ~32ms later, so

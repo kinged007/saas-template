@@ -244,6 +244,10 @@ function UserMenu() {
           <Settings />
           Profile Settings
         </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => navigate("/settings/security")}>
+          <ShieldCheck />
+          Security
+        </DropdownMenuItem>
         {isWorkspaceAdmin && (
           <DropdownMenuItem onClick={() => navigate("/settings/workspace")}>
             <Building2 />
