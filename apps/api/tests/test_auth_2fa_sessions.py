@@ -1,3 +1,4 @@
+from src.core.security.ratelimit import SlidingWindowLimiter
 from src.core.security.totp import current_code, secret_from_base32
 from tests.conftest import auth_headers, login, register_user
 
@@ -151,3 +152,14 @@ async def test_refresh_rate_limit_does_not_block_other_sessions(app_client, monk
         "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
     )
     assert resp.status_code == 200, resp.text
+
+
+def test_auth_rate_limiter_bounds_distinct_keys():
+    limiter = SlidingWindowLimiter(max_keys=2)
+
+    limiter.fail("first")
+    limiter.fail("second")
+    limiter.fail("third")
+
+    assert len(limiter._failures) == 2
+    assert "first" not in limiter._failures
