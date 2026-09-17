@@ -14,6 +14,7 @@ from src.api.routes import (
     audit,
     auth,
     conversations,
+    files,
     invitations,
     jobs,
     members,
@@ -153,6 +154,7 @@ app.include_router(jobs.router, prefix=API)
 app.include_router(webhooks.router, prefix=API)
 app.include_router(notifications.router, prefix=API)
 app.include_router(conversations.router, prefix=API)
+app.include_router(files.router, prefix=API)
 app.include_router(profiles.router, prefix=API)
 app.include_router(audit.router, prefix=API)
 app.include_router(ws.router, prefix=API)

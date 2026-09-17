@@ -5,6 +5,7 @@ from src.models.conversation import (
     ConversationParticipant,
     Message,
 )
+from src.models.file_object import FileObject
 from src.models.core import (
     Invitation,
     Notification,

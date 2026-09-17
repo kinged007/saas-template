@@ -18,6 +18,8 @@ from src.realtime.manager import ConnectionManager
 from src.secrets.base import SecretStore
 from src.secrets.factory import build_secret_store
 from src.settings import settings
+from src.storage.base import FileStorage
+from src.storage.factory import build_storage
 
 PROVIDER_CACHE_TTL_SECONDS = 300.0
 
@@ -31,6 +33,7 @@ class Container:
         )
     )
     secret_store: SecretStore = field(default_factory=build_secret_store)
+    storage: FileStorage = field(default_factory=build_storage)
     email_sender: EmailSender = field(default_factory=build_email_sender)
     connection_manager: ConnectionManager = field(default_factory=ConnectionManager)
     cache: TtlCache = field(
