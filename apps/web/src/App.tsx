@@ -14,6 +14,9 @@ import { WorkspaceProvider } from "./contexts/WorkspaceContext";
 import { AppLayout } from "./components/AppLayout";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
+import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
+import { ResetPasswordPage } from "./pages/ResetPasswordPage";
+import { VerifyEmailPage } from "./pages/VerifyEmailPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { WorkspaceCreatePage } from "./pages/WorkspaceCreatePage";
 import { MembersPage } from "./pages/MembersPage";
@@ -116,6 +119,9 @@ export function App() {
               }
             />
             <Route path="/register" element={<RegisterPage />} />
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/verify-email" element={<VerifyEmailPage />} />
           </Routes>
           <Toaster />
         </WorkspaceProvider>

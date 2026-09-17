@@ -19,6 +19,7 @@ from src.models.secret import StoredSecret
 from src.models.user_profile import UserProfile
 from src.models.webhook import WebhookDelivery, WebhookSubscription
 from src.models.workspace import (
+    AuthToken,
     RefreshToken,
     Role,
     User,
@@ -31,6 +32,7 @@ __all__ = [
     "AuditLogEntry",
     "Conversation",
     "ConversationParticipant",
+    "AuthToken",
     "Invitation",
     "JobDefinition",
     "JobLogEntry",

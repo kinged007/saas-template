@@ -29,12 +29,14 @@ def notification_to_dict(n: Notification, *, workspace_name: str | None = None) 
 
 
 def user_to_dict(u: User) -> dict:
+    verified = getattr(u, "email_verified_at", None)
     return {
         "id": u.id,
         "email": u.email,
         "display_name": u.display_name,
         "avatar_url": u.avatar_url,
         "is_superuser": bool(u.is_superuser),
+        "email_verified": verified is not None,
     }
 
 

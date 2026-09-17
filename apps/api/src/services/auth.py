@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dates import ensure_utc, now_utc
@@ -12,9 +12,15 @@ from src.core.security.password import PasswordHasher
 from src.core.security.tokens import OpaqueToken, create_access_token
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
-from src.models.workspace import RefreshToken, User
+from src.models.workspace import AuthToken, RefreshToken, User
 from src.services.profile_helpers import format_display_name
 from src.settings import settings
+
+RESET_TOKEN_TTL = timedelta(hours=1)
+VERIFY_TOKEN_TTL = timedelta(hours=24)
+
+RESET_PURPOSE = "password_reset"
+VERIFY_PURPOSE = "email_verification"
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +53,9 @@ class AuthService:
         return result.scalar_one_or_none()
 
     @staticmethod
-    def _format_display_name(first_name: str | None, last_name: str | None, fallback: str | None = None) -> str:
+    def _format_display_name(
+        first_name: str | None, last_name: str | None, fallback: str | None = None
+    ) -> str:
         """Format as 'First L.' — delegates to profile_helpers for single source."""
         return format_display_name(first_name, last_name, fallback)
 
@@ -82,7 +90,9 @@ class AuthService:
                 first_name = display_name.strip().split()[0] if display_name.strip() else None
             if not first_name:
                 raise AuthError("first_name is required")
-        display = self._format_display_name(first_name, last_name, display_name) or (display_name or "User")
+        display = self._format_display_name(first_name, last_name, display_name) or (
+            display_name or "User"
+        )
         user = User(
             email=email,
             password_hash=PasswordHasher.hash(password) if password else None,
@@ -129,13 +139,22 @@ class AuthService:
         return user
 
     async def upsert_oauth_user(
-        self, *, provider: str, subject: str, email: str, display_name: str | None = None, first_name: str | None = None, last_name: str | None = None
+        self,
+        *,
+        provider: str,
+        subject: str,
+        email: str,
+        display_name: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
     ) -> User:
         """Find or create a user for an OAuth identity. Links by verified email."""
         # Derive first/last from display_name if not provided (OAuth often gives display_name)
         if not first_name and not last_name and display_name:
             first_name, last_name = self._split_display_name(display_name)
-        display = self._format_display_name(first_name, last_name, display_name) or (display_name or email.split("@")[0])
+        display = self._format_display_name(first_name, last_name, display_name) or (
+            display_name or email.split("@")[0]
+        )
         user = await self.get_by_email(email)
         if user is None:
             email = email.lower()
@@ -266,3 +285,124 @@ class AuthService:
                 actor_user_id=user_id,
                 ip_address=ip_address,
             )
+
+    # ------------------------------------------- password reset + verification
+
+    def _mint_token(self, user_id: str, purpose: str, ttl: timedelta) -> str:
+        raw = OpaqueToken.generate()
+        self._session.add(
+            AuthToken(
+                user_id=user_id,
+                purpose=purpose,
+                token_hash=OpaqueToken.hash(raw),
+                expires_at=now_utc() + ttl,
+            )
+        )
+        return raw
+
+    async def _consume_token(self, raw: str, purpose: str) -> AuthToken:
+        stmt = (
+            select(AuthToken)
+            .where(
+                AuthToken.token_hash == OpaqueToken.hash(raw),
+                AuthToken.purpose == purpose,
+            )
+            .with_for_update()
+        )
+        row = (await self._session.execute(stmt)).scalar_one_or_none()
+        if row is None or row.consumed_at is not None:
+            raise AuthError("invalid or expired token")
+        if ensure_utc(row.expires_at) < now_utc():
+            raise AuthError("invalid or expired token")
+        row.consumed_at = now_utc()
+        return row
+
+    async def request_password_reset(
+        self, email: str, *, ip_address: str | None = None
+    ) -> str | None:
+        """Mint a reset token; None when unknown (callers must not reveal which)."""
+        user = await self.get_by_email(email)
+        if user is None:
+            return None
+        now = now_utc()
+        await self._session.execute(
+            update(AuthToken)
+            .where(
+                AuthToken.user_id == user.id,
+                AuthToken.purpose == RESET_PURPOSE,
+                AuthToken.consumed_at.is_(None),
+            )
+            .values(consumed_at=now)
+        )
+        raw = self._mint_token(user.id, RESET_PURPOSE, RESET_TOKEN_TTL)
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=None,
+            resource_type="user",
+            resource_id=user.id,
+            action="user.password_reset_requested",
+            actor_user_id=user.id,
+            details={"email": user.email},
+            ip_address=ip_address,
+        )
+        return raw
+
+    async def reset_password(
+        self, token: str, new_password: str, *, ip_address: str | None = None
+    ) -> User:
+        row = await self._consume_token(token, RESET_PURPOSE)
+        user = await self._session.get(User, row.user_id)
+        if user is None or not user.is_active:
+            raise AuthError("account is disabled")
+        user.password_hash = PasswordHasher.hash(new_password)
+        await self._session.execute(
+            update(RefreshToken)
+            .where(
+                RefreshToken.user_id == user.id,
+                RefreshToken.revoked_at.is_(None),
+            )
+            .values(revoked_at=now_utc())
+        )
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=None,
+            resource_type="user",
+            resource_id=user.id,
+            action="user.password_reset_completed",
+            actor_user_id=user.id,
+            ip_address=ip_address,
+        )
+        return user
+
+    async def request_verification(self, user: User) -> str:
+        raw = self._mint_token(user.id, VERIFY_PURPOSE, VERIFY_TOKEN_TTL)
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=None,
+            resource_type="user",
+            resource_id=user.id,
+            action="user.email_verification_sent",
+            actor_user_id=user.id,
+            details={"email": user.email},
+        )
+        return raw
+
+    async def verify_email(self, token: str) -> User:
+        row = await self._consume_token(token, VERIFY_PURPOSE)
+        user = await self._session.get(User, row.user_id)
+        if user is None or not user.is_active:
+            raise AuthError("account is disabled")
+        user.email_verified_at = now_utc()
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=None,
+            resource_type="user",
+            resource_id=user.id,
+            action="user.email_verified",
+            actor_user_id=user.id,
+        )
+        return user

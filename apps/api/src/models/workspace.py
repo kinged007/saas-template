@@ -23,6 +23,27 @@ class User(Base, TimestampMixin):
     # deployment-wide administration are gated on this flag.
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_login_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    email_verified_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AuthToken(Base, TimestampMixin):
+    """Single-use opaque token for password-reset and email-verification flows.
+
+    Raw value is never stored — only its SHA-256 (via OpaqueToken), same as
+    refresh tokens. One table, `purpose` discriminates; `consumed_at` enforces
+    single-use."""
+
+    __tablename__ = "auth_tokens"
+
+    id: Mapped[str] = mapped_column(
+        StringUUID(), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(StringUUID(), index=True, nullable=False)
+    purpose: Mapped[str] = mapped_column(String(20), nullable=False)
+    # password_reset | email_verification
+    token_hash: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    expires_at: Mapped[object] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class RefreshToken(Base, TimestampMixin):
