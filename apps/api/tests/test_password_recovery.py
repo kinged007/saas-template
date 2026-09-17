@@ -118,6 +118,20 @@ async def test_forgot_unknown_email_still_202(app_client, monkeypatch):
     assert sent == []
 
 
+async def test_forgot_email_failure_still_202(app_client, monkeypatch):
+    import src.email.factory as factory
+
+    async def _send(_message):
+        raise RuntimeError("email unavailable")
+
+    monkeypatch.setattr(factory, "send_email", _send)
+    await register_user(app_client, "email-failure@example.com")
+    resp = await app_client.post(
+        "/api/v1/auth/forgot-password", json={"email": "email-failure@example.com"}
+    )
+    assert resp.status_code == 202
+
+
 async def test_reset_invalid_token_rejected(app_client):
     await register_user(app_client, "badtoken@example.com")
     resp = await app_client.post(

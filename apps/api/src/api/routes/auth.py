@@ -99,11 +99,14 @@ async def forgot_password(
         str(body.email), ip_address=_client_ip(request)
     )
     if raw is not None:
-        await email_factory.send_email(
-            templates.password_reset(
-                str(body.email), reset_url=_frontend_url("/reset-password?token=", raw)
+        try:
+            await email_factory.send_email(
+                templates.password_reset(
+                    str(body.email), reset_url=_frontend_url("/reset-password?token=", raw)
+                )
             )
-        )
+        except Exception:
+            logger.exception("failed to send password-reset email for %s", body.email)
     return {"detail": "if an account exists for this email, a reset link was sent"}
 
 
@@ -146,7 +149,10 @@ async def resend_verification(
         return {"detail": "email already verified"}
     service = AuthService(db, container.bus)
     fresh = await db.get(type(user), user.id)
-    await _send_verification(service, fresh or user)
+    try:
+        await _send_verification(service, fresh or user)
+    except Exception:
+        logger.exception("failed to resend verification email for user %s", user.id)
     return {"detail": "if unverified, a verification link was sent"}
 
 
