@@ -64,7 +64,7 @@ async def test_forgot_reset_flow_end_to_end(app_client, monkeypatch):
         return True
 
     monkeypatch.setattr(factory, "send_email", _send)
-    await register_user(app_client, "reset@example.com")
+    tokens = await register_user(app_client, "reset@example.com")
     sent.clear()
 
     resp = await app_client.post(
@@ -86,6 +86,12 @@ async def test_forgot_reset_flow_end_to_end(app_client, monkeypatch):
         json={"email": "reset@example.com", "password": "NewPassword123!"},
     )
     assert resp.status_code == 200, resp.text
+
+    # Password recovery invalidates the session established before the reset.
+    resp = await app_client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert resp.status_code == 401
 
     # single-use: reuse rejected
     resp = await app_client.post(

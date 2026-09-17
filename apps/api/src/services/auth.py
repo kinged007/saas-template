@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dates import ensure_utc, now_utc
@@ -301,9 +301,13 @@ class AuthService:
         return raw
 
     async def _consume_token(self, raw: str, purpose: str) -> AuthToken:
-        stmt = select(AuthToken).where(
-            AuthToken.token_hash == OpaqueToken.hash(raw),
-            AuthToken.purpose == purpose,
+        stmt = (
+            select(AuthToken)
+            .where(
+                AuthToken.token_hash == OpaqueToken.hash(raw),
+                AuthToken.purpose == purpose,
+            )
+            .with_for_update()
         )
         row = (await self._session.execute(stmt)).scalar_one_or_none()
         if row is None or row.consumed_at is not None:
@@ -320,6 +324,16 @@ class AuthService:
         user = await self.get_by_email(email)
         if user is None:
             return None
+        now = now_utc()
+        await self._session.execute(
+            update(AuthToken)
+            .where(
+                AuthToken.user_id == user.id,
+                AuthToken.purpose == RESET_PURPOSE,
+                AuthToken.consumed_at.is_(None),
+            )
+            .values(consumed_at=now)
+        )
         raw = self._mint_token(user.id, RESET_PURPOSE, RESET_TOKEN_TTL)
         await self._session.commit()
         await publish_audit(
@@ -342,6 +356,14 @@ class AuthService:
         if user is None or not user.is_active:
             raise AuthError("account is disabled")
         user.password_hash = PasswordHasher.hash(new_password)
+        await self._session.execute(
+            update(RefreshToken)
+            .where(
+                RefreshToken.user_id == user.id,
+                RefreshToken.revoked_at.is_(None),
+            )
+            .values(revoked_at=now_utc())
+        )
         await self._session.commit()
         await publish_audit(
             self._bus,
