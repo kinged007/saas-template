@@ -21,7 +21,7 @@ from src.api.deps import (
 from src.core.permissions import AUDIT_READ, WORKSPACE_DELETE, WORKSPACE_READ, WORKSPACE_UPDATE
 from src.db.session import get_db
 from src.models.workspace import Workspace, WorkspaceMember
-from src.schemas.api import WorkspaceCreate, WorkspaceUpdate
+from src.schemas.api import OwnershipTransfer, WorkspaceCreate, WorkspaceUpdate
 from src.services.conversations import ConversationForbidden
 from src.services.search_export import CSV_RESOURCES, SearchExportService
 from src.services.serializers import workspace_to_dict
@@ -126,7 +126,7 @@ async def list_workspaces(
         workspace = await service.get_workspace(workspace_id)
         if workspace is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
-        membership = await service.get_membership(workspace_id, user.id)
+        membership = await service.get_membership(workspace_id, user.id, active_only=True)
         role = membership[1] if membership else None
         response.headers["X-Total-Count"] = "1"
         return [workspace_to_dict(workspace, role=role.name if role else None)]
@@ -197,7 +197,7 @@ async def get_workspace(
     workspace = await service.get_workspace(workspace_id)
     if workspace is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
-    membership = await service.get_membership(workspace_id, user.id)
+    membership = await service.get_membership(workspace_id, user.id, active_only=True)
     role = membership[1] if membership else None
     return workspace_to_dict(workspace, role=role.name if role else None)
 
@@ -228,6 +228,32 @@ async def update_workspace(
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     return workspace_to_dict(workspace)
+
+
+@router.post("/{workspace_id}/transfer")
+async def transfer_ownership(
+    workspace_id: str,
+    body: OwnershipTransfer,
+    request: Request,
+    user=Depends(get_current_user),
+    _=Depends(require_permission(WORKSPACE_UPDATE)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    try:
+        member = await WorkspaceService(db, container.bus).transfer_ownership(
+            workspace_id,
+            body.new_owner_membership_id,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    except WorkspaceError as exc:
+        msg = str(exc)
+        code = status.HTTP_404_NOT_FOUND if "not found" in msg else status.HTTP_409_CONFLICT
+        raise HTTPException(code, msg) from None
+    return {"id": member.id, "user_id": member.user_id, "role_id": member.role_id}
 
 
 @router.delete("/{workspace_id}", status_code=204)

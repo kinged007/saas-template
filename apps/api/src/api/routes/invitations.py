@@ -181,6 +181,28 @@ async def my_invitations(
     ]
 
 
+@router.post("/{invitation_id}/resend", status_code=200)
+async def resend_invitation(
+    invitation_id: str,
+    request: Request,
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    _=Depends(require_permission(MEMBER_INVITE)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    try:
+        invite = await WorkspaceService(db, container.bus).resend_invitation(
+            workspace_id,
+            invitation_id,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    return _invite_dict(invite)
+
+
 @router.post("/{invitation_id}/decline")
 async def decline_invitation(
     invitation_id: str,

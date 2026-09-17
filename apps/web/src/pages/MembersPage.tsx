@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { useCan, useCreate, useGetIdentity, useUpdate } from "@refinedev/core";
+import { toast } from "sonner";
+import { useCan, useCreate, useCustomMutation, useGetIdentity, useUpdate } from "@refinedev/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 
@@ -58,6 +59,7 @@ export function MembersPage() {
   });
   const { mutate: changeRole } = useUpdate();
   const { mutate: invite, mutation } = useCreate();
+  const { mutate: resend } = useCustomMutation();
   const [email, setEmail] = useState("");
   const [inviteRoleId, setInviteRoleId] = useState("");
 
@@ -79,6 +81,39 @@ export function MembersPage() {
 
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
   const canManageRoles = !!canManage?.can && MANAGER_ROLES.includes(myRole ?? "");
+  const isOwner = myRole === "owner";
+  const { mutate: memberAction } = useCustomMutation();
+  const [transferId, setTransferId] = useState("");
+
+  const suspend = (m: Member, suspendIt: boolean) => {
+    memberAction(
+      {
+        url: `members/${m.membership_id}/${suspendIt ? "suspend" : "reactivate"}`,
+        method: "post",
+        values: {},
+        successNotification: { message: suspendIt ? "Member suspended" : "Member reactivated", type: "success" },
+      },
+    );
+  };
+
+  const transfer = () => {
+    if (!transferId || !workspace) return;
+    memberAction(
+      {
+        url: `workspaces/${workspace.id}/transfer`,
+        method: "post",
+        values: { new_owner_membership_id: transferId },
+        successNotification: { message: "Ownership transferred", type: "success" },
+        errorNotification: false,
+      },
+      {
+        onSuccess: () => setTransferId(""),
+        onError: (err: unknown) => {
+          toast.error(String((err as { message?: string })?.message ?? err));
+        },
+      },
+    );
+  };
   const roleName = (roleId: string) => roleOptions.find((r) => r.id === roleId)?.name;
 
   const submit = (e: React.FormEvent) => {
@@ -110,6 +145,7 @@ export function MembersPage() {
               <TableHead>Name</TableHead>
               <TableHead>Role</TableHead>
               <TableHead>Change role</TableHead>
+              <TableHead>Status</TableHead>
               <TableHead>Joined</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -169,20 +205,35 @@ export function MembersPage() {
                   )}
                 </TableCell>
                 <TableCell className="text-muted-foreground">{formatDate(m.joined_at)}</TableCell>
+                <TableCell>
+                  <StatusBadge status={m.status} />
+                </TableCell>
                 <TableCell className="text-right">
-                  {canDelete?.can && m.role !== "owner" && (
-                    <DeleteButton
-                      resource="members"
-                      recordItemId={m.membership_id}
-                      variant="ghost"
-                      size="sm"
-                    />
-                  )}
+                  <div className="flex justify-end gap-1">
+                    {canManageRoles && m.role !== "owner" && m.status !== "suspended" && (
+                      <Button variant="ghost" size="sm" onClick={() => suspend(m, true)}>
+                        Suspend
+                      </Button>
+                    )}
+                    {canManageRoles && m.status === "suspended" && (
+                      <Button variant="ghost" size="sm" onClick={() => suspend(m, false)}>
+                        Reactivate
+                      </Button>
+                    )}
+                    {canDelete?.can && m.role !== "owner" && (
+                      <DeleteButton
+                        resource="members"
+                        recordItemId={m.membership_id}
+                        variant="ghost"
+                        size="sm"
+                      />
+                    )}
+                  </div>
                 </TableCell>
               </TableRow>
               );
             })}
-            {rows.length === 0 && <EmptyRow colSpan={5}>No members yet.</EmptyRow>}
+            {rows.length === 0 && <EmptyRow colSpan={6}>No members yet.</EmptyRow>}
           </TableBody>
         </Table>
       </div>
@@ -215,6 +266,40 @@ export function MembersPage() {
           </Button>
         </div>
       </div>
+      )}
+
+      {isOwner && (
+        <section className="border-border flex flex-col gap-3 rounded-lg border p-4">
+          <div className="flex flex-col gap-1">
+            <h3 className="text-lg font-semibold">Transfer ownership</h3>
+            <p className="text-muted-foreground text-sm">
+              The new owner must be an active member. You are demoted to admin — the workspace is
+              never left without an owner.
+            </p>
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="flex flex-1 flex-col gap-2">
+              <Label>New owner</Label>
+              <Select value={transferId} onValueChange={setTransferId}>
+                <SelectTrigger className="w-full sm:w-64">
+                  <SelectValue placeholder="Select member" />
+                </SelectTrigger>
+                <SelectContent>
+                  {rows
+                    .filter((m) => m.role !== "owner" && m.status === "active")
+                    .map((m) => (
+                      <SelectItem key={m.membership_id} value={m.membership_id}>
+                        {getMemberDisplayName(m)} ({m.email})
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button onClick={transfer} disabled={!transferId}>
+              Transfer ownership
+            </Button>
+          </div>
+        </section>
       )}
 
       {canInvite?.can && (
@@ -287,6 +372,24 @@ export function MembersPage() {
                           variant="ghost"
                           size="sm"
                         />
+                      )}
+                      {i.status !== "pending" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            resend(
+                              {
+                                url: `invitations/${i.id}/resend`,
+                                method: "post",
+                                values: {},
+                                successNotification: { message: "Invitation re-sent", type: "success" },
+                              },
+                            )
+                          }
+                        >
+                          Re-send
+                        </Button>
                       )}
                     </TableCell>
                   </TableRow>

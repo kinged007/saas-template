@@ -113,4 +113,4 @@ class WorkspaceMember(Base, TimestampMixin):
     role_id: Mapped[str] = mapped_column(StringUUID(), index=True, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), default="active", nullable=False
-    )  # active | invited
+    )  # active | invited | suspended

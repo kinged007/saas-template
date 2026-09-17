@@ -85,7 +85,7 @@ class ApiKeyService:
         own permission list. Returns (key, raw_secret); the raw secret is
         only ever returned once.
         """
-        membership = await WorkspaceService(self._session).get_membership(workspace_id, actor.id)
+        membership = await WorkspaceService(self._session).get_membership(workspace_id, actor.id, active_only=True)
         if membership is None:
             raise ApiKeyForbidden("you are not a member of this workspace")
         _, role = membership
