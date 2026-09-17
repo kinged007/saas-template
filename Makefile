@@ -102,7 +102,7 @@ api-migrate:
 	cd apps/api && uv run alembic upgrade head
 
 api-seed:
-	cd apps/api && uv run python src/seed.py
+	cd apps/api && uv run python -m src.seed
 
 api:
 	cd apps/api && uv run uvicorn src.main:app --reload --port 8000

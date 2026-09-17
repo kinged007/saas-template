@@ -45,6 +45,7 @@ crash.log
 *.db
 *.sqlite
 *.sqlite3
+*.db-journal
 
 # Logs
 *.log
