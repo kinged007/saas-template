@@ -3,6 +3,7 @@ import { PlusCircle } from "lucide-react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
+import { WorkspaceSearch } from "@/components/WorkspaceSearch";
 import { useWorkspace } from "../contexts/WorkspaceContext";
 
 export function DashboardPage() {
@@ -37,6 +38,8 @@ export function DashboardPage() {
           Manage your team and collaborate effectively.
         </p>
       </div>
+
+      <WorkspaceSearch />
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Card>

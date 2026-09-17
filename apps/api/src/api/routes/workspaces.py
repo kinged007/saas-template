@@ -10,6 +10,7 @@ from src.api.crud import InvalidQuery, apply_query, parse_query
 from src.api.deps import (
     get_container,
     get_current_user,
+    get_current_workspace_id,
     get_optional_workspace_id,
     require_key_permission,
     require_permission,
@@ -25,6 +26,75 @@ from src.services.workspaces import WorkspaceError, WorkspaceService
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
+
+
+@router.get("/search")
+async def search_workspace(
+    q: str,
+    user=Depends(get_current_user),
+    workspace_id: str = Depends(get_current_workspace_id),
+    _=Depends(require_permission(WORKSPACE_READ)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    if not q or not q.strip() or len(q.strip()) > 200:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "q must be 1-200 characters")
+    from src.services.search_export import SearchExportService
+
+    try:
+        return await SearchExportService(db, container.bus).search(
+            workspace_id=workspace_id, user_id=user.id, q=q.strip()
+        )
+    except Exception as exc:
+        if type(exc).__name__ == "ConversationForbidden":
+            raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+        raise
+
+
+@router.get("/export")
+async def export_workspace(
+    user=Depends(get_current_user),
+    workspace_id: str = Depends(get_current_workspace_id),
+    _=Depends(require_permission(WORKSPACE_READ)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+    format: str = "json",
+    resource: str = "members",
+):
+    import json as _json
+
+    from src.services.search_export import CSV_RESOURCES, SearchExportService
+
+    service = SearchExportService(db, container.bus)
+    try:
+        bundle = await service.export_json(workspace_id=workspace_id, user_id=user.id)
+    except Exception as exc:
+        if type(exc).__name__ == "ConversationForbidden":
+            raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+        raise
+    if format == "csv":
+        if resource not in CSV_RESOURCES:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"unknown resource: {resource} (choose from {', '.join(sorted(CSV_RESOURCES))})",
+            )
+        body = service.export_csv(bundle, resource)
+        return Response(
+            content=body,
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f'attachment; filename="workspace-{workspace_id}-{resource}.csv"'
+            },
+        )
+    body = _json.dumps(bundle)
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="workspace-{workspace_id}-export.json"'
+        },
+    )
+
 
 _WORKSPACE_SORTABLE = {"name", "slug", "created_at"}
 _WORKSPACE_FILTERABLE = {"name", "slug"}

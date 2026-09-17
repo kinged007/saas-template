@@ -1,0 +1,484 @@
+"""Workspace-scoped search and data export.
+
+Search is DB LIKE/ILIKE first (no extra dependency, works on sqlite and
+postgres). ponytail: ceiling is pg_trgm/GIN or a dedicated engine
+(meilisearch/typesense) when result ranking or scale outgrows ILIKE; the
+per-type result shape here ({type,id,title,snippet}) already matches what a
+ranked engine would return, so only the query layer needs swapping.
+"""
+
+from __future__ import annotations
+
+import csv
+import io
+from datetime import UTC, datetime
+
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.events.bus import EventBus
+from src.events.publisher import publish_audit
+from src.models.api_key import ApiKey
+from src.models.conversation import Conversation, Message
+from src.models.core import Invitation, Notification
+from src.models.jobs import JobDefinition
+from src.models.user_profile import UserProfile
+from src.models.webhook import WebhookSubscription
+from src.models.workspace import Role, User, Workspace, WorkspaceMember
+from src.services.jobs import _mask_params
+from src.services.serializers import (
+    notification_to_dict,
+    profile_to_dict,
+    user_to_dict,
+    workspace_to_dict,
+)
+
+# (resource label, per-query row cap)
+_SEARCH_LIMIT = 5
+
+# resource -> tabular CSV columns for ?format=csv&resource=<name>
+CSV_RESOURCES: dict[str, list[str]] = {
+    "members": ["email", "display_name", "role", "status", "joined_at"],
+    "invitations": ["email", "status", "expires_at", "created_at"],
+    "api_keys": ["name", "key_prefix", "permissions", "revoked_at", "created_at"],
+    "jobs": ["key", "name", "enabled", "cron_schedule", "next_run_at"],
+    "conversations": ["title", "last_message_preview", "last_message_at", "created_at"],
+    "notifications": ["type", "title", "acknowledged_at", "created_at"],
+}
+
+
+def _snippet(text: str | None, q: str, width: int = 120) -> str | None:
+    if not text:
+        return None
+    low = text.lower()
+    idx = low.find(q.lower())
+    if idx == -1:
+        text = text.strip()
+        return text[:width] + ("…" if len(text) > width else "")
+    start = max(0, idx - 40)
+    end = min(len(text), idx + len(q) + 40)
+    frag = text[start:end].strip()
+    return ("…" if start > 0 else "") + frag + ("…" if end < len(text) else "")
+
+
+async def _ensure_membership(session: AsyncSession, workspace_id: str, user_id: str) -> None:
+    from src.services.conversations import ConversationForbidden
+
+    result = await session.execute(
+        select(WorkspaceMember).where(
+            WorkspaceMember.workspace_id == workspace_id,
+            WorkspaceMember.user_id == user_id,
+            WorkspaceMember.status == "active",
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise ConversationForbidden("you are not a member of this workspace")
+
+
+class SearchExportService:
+    def __init__(self, session: AsyncSession, bus: EventBus | None = None) -> None:
+        self._session = session
+        self._bus = bus
+
+    async def search(self, *, workspace_id: str, user_id: str, q: str) -> dict:
+        await _ensure_membership(self._session, workspace_id, user_id)
+        like = f"%{q.strip()}%"
+        results: list[dict] = []
+
+        conv_rows = (
+            (
+                await self._session.execute(
+                    select(Conversation)
+                    .join(
+                        WorkspaceMember,
+                        WorkspaceMember.workspace_id == Conversation.workspace_id,
+                    )
+                    .where(
+                        Conversation.workspace_id == workspace_id,
+                        WorkspaceMember.user_id == user_id,
+                        WorkspaceMember.status == "active",
+                        or_(
+                            Conversation.title.ilike(like),
+                            Conversation.last_message_preview.ilike(like),
+                        ),
+                    )
+                    .limit(_SEARCH_LIMIT)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for c in conv_rows:
+            results.append(
+                {
+                    "type": "conversation",
+                    "id": c.id,
+                    "title": c.title,
+                    "snippet": _snippet(c.last_message_preview, q),
+                }
+            )
+
+        msg_rows = (
+            await self._session.execute(
+                select(Message, Conversation.title)
+                .join(Conversation, Conversation.id == Message.conversation_id)
+                .where(Conversation.workspace_id == workspace_id, Message.body.ilike(like))
+                .order_by(Message.created_at.desc())
+                .limit(_SEARCH_LIMIT)
+            )
+        ).all()
+        for m, title in msg_rows:
+            results.append(
+                {
+                    "type": "message",
+                    "id": m.id,
+                    "title": title,
+                    "snippet": _snippet(m.body, q),
+                    "conversation_id": m.conversation_id,
+                }
+            )
+
+        member_rows = (
+            await self._session.execute(
+                select(User, Role.name, WorkspaceMember)
+                .join(WorkspaceMember, WorkspaceMember.user_id == User.id)
+                .join(Role, Role.id == WorkspaceMember.role_id)
+                .outerjoin(UserProfile, UserProfile.user_id == User.id)
+                .where(
+                    WorkspaceMember.workspace_id == workspace_id,
+                    or_(
+                        User.email.ilike(like),
+                        User.display_name.ilike(like),
+                        UserProfile.first_name.ilike(like),
+                        UserProfile.last_name.ilike(like),
+                    ),
+                )
+                .limit(_SEARCH_LIMIT)
+            )
+        ).all()
+        for u, role_name, _m in member_rows:
+            results.append(
+                {
+                    "type": "member",
+                    "id": u.id,
+                    "title": u.display_name,
+                    "snippet": f"{u.email} · {role_name}",
+                }
+            )
+
+        job_rows = (
+            (
+                await self._session.execute(
+                    select(JobDefinition)
+                    .where(
+                        JobDefinition.workspace_id == workspace_id,
+                        or_(
+                            JobDefinition.name.ilike(like),
+                            JobDefinition.key.ilike(like),
+                            JobDefinition.description.ilike(like),
+                        ),
+                    )
+                    .limit(_SEARCH_LIMIT)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for j in job_rows:
+            results.append(
+                {
+                    "type": "job",
+                    "id": j.id,
+                    "title": j.name,
+                    "snippet": _snippet(j.description or j.key, q),
+                }
+            )
+
+        notif_rows = (
+            (
+                await self._session.execute(
+                    select(Notification)
+                    .where(
+                        Notification.workspace_id == workspace_id,
+                        Notification.user_id == user_id,
+                        or_(Notification.title.ilike(like), Notification.body.ilike(like)),
+                    )
+                    .limit(_SEARCH_LIMIT)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for n in notif_rows:
+            results.append(
+                {
+                    "type": "notification",
+                    "id": n.id,
+                    "title": n.title,
+                    "snippet": _snippet(n.body, q),
+                }
+            )
+
+        return {"query": q, "results": results}
+
+    async def export_json(self, *, workspace_id: str, user_id: str) -> dict:
+        workspace = await self._session.get(Workspace, workspace_id)
+        if workspace is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="workspace not found")
+        await _ensure_membership(self._session, workspace_id, user_id)
+
+        member_rows = (
+            await self._session.execute(
+                select(WorkspaceMember, User, Role, UserProfile)
+                .join(User, User.id == WorkspaceMember.user_id)
+                .join(Role, Role.id == WorkspaceMember.role_id)
+                .outerjoin(UserProfile, UserProfile.user_id == User.id)
+                .where(WorkspaceMember.workspace_id == workspace_id)
+            )
+        ).all()
+        members = []
+        for m, u, r, p in member_rows:
+            entry = user_to_dict(u)
+            entry.update(
+                {
+                    "membership_id": m.id,
+                    "role": r.name,
+                    "status": m.status,
+                    "joined_at": m.created_at.isoformat() if m.created_at else None,
+                }
+            )
+            if p is not None:
+                entry["profile"] = profile_to_dict(p)
+            members.append(entry)
+
+        roles = (
+            (await self._session.execute(select(Role).where(Role.workspace_id == workspace_id)))
+            .scalars()
+            .all()
+        )
+        invites = (
+            (
+                await self._session.execute(
+                    select(Invitation).where(Invitation.workspace_id == workspace_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        keys = (
+            (await self._session.execute(select(ApiKey).where(ApiKey.workspace_id == workspace_id)))
+            .scalars()
+            .all()
+        )
+        jobs = (
+            (
+                await self._session.execute(
+                    select(JobDefinition).where(JobDefinition.workspace_id == workspace_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        convs = (
+            (
+                await self._session.execute(
+                    select(Conversation).where(Conversation.workspace_id == workspace_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        conv_ids = [c.id for c in convs]
+        messages: list[Message] = []
+        if conv_ids:
+            messages = (
+                (
+                    await self._session.execute(
+                        select(Message)
+                        .where(Message.conversation_id.in_(conv_ids))
+                        .order_by(Message.created_at.asc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        notifs = (
+            (
+                await self._session.execute(
+                    select(Notification).where(Notification.workspace_id == workspace_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        subs = (
+            (
+                await self._session.execute(
+                    select(WebhookSubscription).where(
+                        WebhookSubscription.workspace_id == workspace_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        exported_at = datetime.now(UTC).isoformat()
+        bundle = {
+            "exported_at": exported_at,
+            "workspace": workspace_to_dict(workspace),
+            "members": members,
+            "roles": [
+                {
+                    "name": r.name,
+                    "description": r.description,
+                    "permissions": r.permissions,
+                    "system": r.system,
+                }
+                for r in roles
+            ],
+            "invitations": [
+                {
+                    "email": i.email,
+                    "status": i.status,
+                    "expires_at": i.expires_at.isoformat() if i.expires_at else None,
+                    "created_at": i.created_at.isoformat() if i.created_at else None,
+                }
+                for i in invites
+            ],
+            # Secrets never leave the server: key hashes and webhook signing
+            # secrets stay out; the shape still imports cleanly (names +
+            # permissions re-mint on import).
+            "api_keys": [
+                {
+                    "name": k.name,
+                    "key_prefix": k.key_prefix,
+                    "permissions": k.permissions,
+                    "revoked_at": k.revoked_at.isoformat() if k.revoked_at else None,
+                    "created_at": k.created_at.isoformat() if k.created_at else None,
+                }
+                for k in keys
+            ],
+            "jobs": [
+                {
+                    "key": j.key,
+                    "name": j.name,
+                    "description": j.description,
+                    "cron_schedule": j.cron_schedule,
+                    "params": _mask_params(j.params_schema or {}, j.params or {}),
+                    "enabled": j.enabled,
+                    "next_run_at": j.next_run_at.isoformat() if j.next_run_at else None,
+                }
+                for j in jobs
+            ],
+            "conversations": [
+                {
+                    "id": c.id,
+                    "title": c.title,
+                    "created_by_user_id": c.created_by_user_id,
+                    "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
+                    "last_message_preview": c.last_message_preview,
+                    "created_at": c.created_at.isoformat() if c.created_at else None,
+                }
+                for c in convs
+            ],
+            "messages": [
+                {
+                    "id": m.id,
+                    "conversation_id": m.conversation_id,
+                    "sender_type": m.sender_type,
+                    "sender_id": m.sender_id,
+                    "body": m.body,
+                    "created_at": m.created_at.isoformat() if m.created_at else None,
+                }
+                for m in messages
+            ],
+            "notifications": [notification_to_dict(n) for n in notifs],
+            "webhook_subscriptions": [
+                {"url": s.url, "events": s.events or [], "active": s.active} for s in subs
+            ],
+        }
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="workspace",
+            resource_id=workspace_id,
+            action="workspace.exported",
+            actor_user_id=user_id,
+            details={"exported_at": exported_at},
+        )
+        return bundle
+
+    def export_csv(self, bundle: dict, resource: str) -> str:
+        columns = CSV_RESOURCES[resource]
+        rows = bundle.get(resource, [])
+        if resource == "members":
+            flat = [
+                {
+                    "email": r.get("email"),
+                    "display_name": r.get("display_name"),
+                    "role": r.get("role"),
+                    "status": r.get("status"),
+                    "joined_at": r.get("joined_at"),
+                }
+                for r in rows
+            ]
+        elif resource == "api_keys":
+            flat = [
+                {
+                    "name": r.get("name"),
+                    "key_prefix": r.get("key_prefix"),
+                    "permissions": ";".join(r.get("permissions") or []),
+                    "revoked_at": r.get("revoked_at"),
+                    "created_at": r.get("created_at"),
+                }
+                for r in rows
+            ]
+        elif resource == "jobs":
+            flat = [
+                {
+                    "key": r.get("key"),
+                    "name": r.get("name"),
+                    "enabled": r.get("enabled"),
+                    "cron_schedule": r.get("cron_schedule"),
+                    "next_run_at": r.get("next_run_at"),
+                }
+                for r in rows
+            ]
+        elif resource == "conversations":
+            flat = [
+                {
+                    "title": r.get("title"),
+                    "last_message_preview": r.get("last_message_preview"),
+                    "last_message_at": r.get("last_message_at"),
+                    "created_at": r.get("created_at"),
+                }
+                for r in rows
+            ]
+        elif resource == "notifications":
+            flat = [
+                {
+                    "type": r.get("type"),
+                    "title": r.get("title"),
+                    "acknowledged_at": r.get("acknowledged_at"),
+                    "created_at": r.get("created_at"),
+                }
+                for r in rows
+            ]
+        else:  # invitations
+            flat = [
+                {
+                    "email": r.get("email"),
+                    "status": r.get("status"),
+                    "expires_at": r.get("expires_at"),
+                    "created_at": r.get("created_at"),
+                }
+                for r in rows
+            ]
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(flat)
+        return buf.getvalue()

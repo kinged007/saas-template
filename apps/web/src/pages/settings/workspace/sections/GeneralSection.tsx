@@ -31,6 +31,7 @@ import {
   FormDescription,
 } from "@/components/ui/form";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { WorkspaceExportCard } from "@/components/WorkspaceExportCard";
 import { workspaceStore } from "@/utils/storage";
 
 const schema = z.object({
@@ -164,6 +165,8 @@ export function GeneralSection() {
           )}
         </CardContent>
       </Card>
+
+      <WorkspaceExportCard />
 
       <Separator />
 
