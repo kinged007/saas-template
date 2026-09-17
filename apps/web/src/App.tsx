@@ -17,6 +17,7 @@ import { RegisterPage } from "./pages/RegisterPage";
 import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
 import { ResetPasswordPage } from "./pages/ResetPasswordPage";
 import { VerifyEmailPage } from "./pages/VerifyEmailPage";
+import { AdminPage } from "./pages/AdminPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { WorkspaceCreatePage } from "./pages/WorkspaceCreatePage";
 import { MembersPage } from "./pages/MembersPage";
@@ -94,6 +95,7 @@ export function App() {
               <Route path="webhooks/create" element={<WebhookCreatePage />} />
               <Route path="webhooks" element={<WebhooksPage />} />
               <Route path="inbox" element={<InboxPage />} />
+              <Route path="admin" element={<AdminPage />} />
               {/* Jobs detail stays top-level; list moved into workspace settings */}
               <Route path="jobs/:id" element={<JobDetailPage />} />
               <Route path="jobs/:id/runs/:runId" element={<JobRunPage />} />

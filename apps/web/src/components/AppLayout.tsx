@@ -44,6 +44,7 @@ import {
   Mail,
   Plus,
   Settings,
+  ShieldCheck,
   Users,
 } from "lucide-react";
 
@@ -68,6 +69,9 @@ function SidebarNav() {
   const permissions = activeWorkspacePermissions(identity);
   const can = (p: string) => permissions.includes("*") || permissions.includes(p);
   const items = MENU_ITEMS.filter((i) => can(i.permission));
+  if (identity?.is_superuser === true) {
+    items.push({ key: "/admin", label: "Admin", icon: ShieldCheck, permission: "" });
+  }
   const activeKey = `/${location.pathname.split("/")[1] || ""}`;
   const isActive = (key: string) => (key === "/" ? location.pathname === "/" : activeKey === key);
 

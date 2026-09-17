@@ -25,6 +25,7 @@ from src.schemas.api import InvitationCreate
 from src.services.workspaces import (
     WorkspaceConflict,
     WorkspaceError,
+    WorkspaceForbidden,
     WorkspaceService,
 )
 
@@ -104,6 +105,8 @@ async def create_invitation(
             invited_by=user,
             ip_address=request.client.host if request.client else None,
         )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
     return _invite_dict(invite)

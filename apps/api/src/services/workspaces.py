@@ -378,6 +378,9 @@ class WorkspaceService:
         email = email.lower()
         if role.name == "owner":
             raise WorkspaceConflict("cannot invite a user to the owner role")
+        # ponytail: single hardcoded flag; add a registry/DB table when flags grow past ~5.
+        if (workspace.flags or {}).get("invites_enabled") is False:
+            raise WorkspaceForbidden("invitations are disabled for this workspace")
         duplicate = await self._session.execute(
             select(Invitation).where(
                 Invitation.workspace_id == workspace.id,
