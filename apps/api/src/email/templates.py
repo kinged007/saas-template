@@ -121,6 +121,24 @@ def digest_email(
     )
 
 
+def email_verification(to: str, *, verify_url: str) -> EmailMessage:
+    return EmailMessage(
+        to=to,
+        subject="Verify your email",
+        text_body=(
+            "Hi there,\n\nThanks for registering — please confirm this email address.\n\n"
+            f"Verify your email:\n{verify_url}\n\n"
+            "If you didn't create this account, you can safely ignore this email.\n"
+        ),
+        html_body=(
+            "<p>Hi there,</p>"
+            "<p>Thanks for registering — please confirm this email address.</p>"
+            f'<p><a href="{escape(verify_url, quote=True)}">Verify your email</a></p>'
+            "<p>If you didn't create this account, you can safely ignore this email.</p>"
+        ),
+    )
+
+
 def password_reset(to: str, *, reset_url: str) -> EmailMessage:
     return EmailMessage(
         to=to,

@@ -57,6 +57,11 @@ export function LoginPage() {
             <Button type="submit" disabled={isPending}>
               {isPending ? "Signing in…" : "Sign in"}
             </Button>
+            <p className="text-muted-foreground text-center text-sm">
+              <Link to="/forgot-password" className="text-primary underline underline-offset-4">
+                Forgot password?
+              </Link>
+            </p>
           </form>
         </CardContent>
         <CardFooter className="justify-center">

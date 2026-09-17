@@ -31,6 +31,19 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str = Field(min_length=1)
+
+
 class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     slug: str | None = Field(default=None, max_length=100)
