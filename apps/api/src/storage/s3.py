@@ -40,12 +40,11 @@ def _sign_v4(
     def _h(k: bytes, msg: str) -> bytes:
         return hmac.new(k, msg.encode(), hashlib.sha256).digest()
 
-    scope = f"{date_stamp}/{region}/{service}/aws4_request"
     k = _h(("AWS4" + secret_key).encode(), date_stamp)
     k = _h(k, region)
     k = _h(k, service)
     k = _h(k, "aws4_request")
-    return hmac.new(k, string_to_sign.encode(), hashlib.sha256).hexdigest() + f"::{scope}"
+    return hmac.new(k, string_to_sign.encode(), hashlib.sha256).hexdigest()
 
 
 class S3FileStorage(FileStorage):
@@ -82,7 +81,7 @@ class S3FileStorage(FileStorage):
         scope = f"{date_stamp}/{self.config.region}/s3/aws4_request"
         digest = hashlib.sha256(canonical.encode()).hexdigest()
         to_sign = f"AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{digest}"
-        sig_with_scope = _sign_v4(
+        signature = _sign_v4(
             secret_key=self.config.secret_key,
             region=self.config.region,
             service="s3",
@@ -90,7 +89,6 @@ class S3FileStorage(FileStorage):
             date_stamp=date_stamp,
             string_to_sign=to_sign,
         )
-        signature = sig_with_scope.split("::")[0]
         headers["Authorization"] = (
             f"AWS4-HMAC-SHA256 Credential={self.config.access_key}/{scope}, "
             f"SignedHeaders={signed}, Signature={signature}"

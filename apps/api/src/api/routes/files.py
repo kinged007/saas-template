@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.crud import parse_query
+from src.api.crud import InvalidQuery, parse_query
 from src.api.deps import (
     get_container,
     get_current_user,
@@ -45,6 +45,11 @@ async def upload_file(
     container=Depends(get_container),
 ):
     content = await file.read()
+    if len(content) > settings.storage_max_upload_bytes:
+        raise HTTPException(
+            status.HTTP_413_CONTENT_TOO_LARGE,
+            f"file exceeds {settings.storage_max_upload_bytes} bytes",
+        ) from None
     try:
         return await _service(db, container).upload(
             workspace_id=workspace_id,
@@ -57,7 +62,7 @@ async def upload_file(
     except FileForbidden as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     except FileTooLarge as exc:
-        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, str(exc)) from None
+        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, str(exc)) from None
     except FileTypeRejected as exc:
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, str(exc)) from None
     except FileError as exc:
@@ -75,7 +80,10 @@ async def list_files(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    spec = parse_query(request)
+    try:
+        spec = parse_query(request)
+    except InvalidQuery as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     try:
         items, total = await _service(db, container).list_files(
             workspace_id=workspace_id, user_id=user.id, offset=spec.offset, limit=spec.limit

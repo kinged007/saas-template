@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from pathlib import Path
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +20,7 @@ from src.storage.factory import storage_public_path
 logger = logging.getLogger(__name__)
 
 ALLOWED_AVATAR_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 _FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
@@ -99,6 +101,9 @@ class FileService:
         mime = (content_type or "").split(";")[0].strip().lower()
         if mime not in ALLOWED_AVATAR_TYPES:
             raise FileTypeRejected(f"unsupported content type: {content_type or 'unknown'}")
+        ext = Path(_safe_filename(filename)).suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            raise FileTypeRejected(f"unsupported file extension: {ext or 'none'}")
         if len(content) > self._max_bytes:
             raise FileTooLarge(f"file exceeds {self._max_bytes} bytes")
         if not content:
@@ -118,7 +123,13 @@ class FileService:
             storage_key=key,
         )
         self._session.add(row)
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except Exception:
+            # Row insert failed (e.g. transient DB error): remove the
+            # orphaned bytes so storage never holds unreferenced objects.
+            await self._storage.delete(key=key)
+            raise
         await self._session.refresh(row)
         await publish_audit(
             self._bus,

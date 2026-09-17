@@ -142,3 +142,32 @@ async def test_factories_reject_unknown_drivers(monkeypatch):
     monkeypatch.setattr(settings_module.settings, "storage_driver", "gcs")
     with pytest.raises(ValueError):
         build_storage()
+
+
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+
+
+async def test_spoofed_extension_rejected(app_client):
+    from tests.conftest import create_workspace, login, register_user, ws_headers
+
+    await register_user(app_client, email="files-spoof@example.com")
+    tokens = await login(app_client, email="files-spoof@example.com")
+    ws = await create_workspace(app_client, tokens, name="Spoof WS")
+    headers = ws_headers(tokens, ws["id"])
+    resp = await app_client.post(
+        "/api/v1/files",
+        files={"file": ("evil.php", io.BytesIO(PNG_BYTES), "image/png")},
+        headers=headers,
+    )
+    assert resp.status_code == 415, resp.text
+
+
+async def test_list_rejects_bad_pagination(app_client):
+    from tests.conftest import create_workspace, login, register_user, ws_headers
+
+    await register_user(app_client, email="files-badq@example.com")
+    tokens = await login(app_client, email="files-badq@example.com")
+    ws = await create_workspace(app_client, tokens, name="BadQ WS")
+    headers = ws_headers(tokens, ws["id"])
+    resp = await app_client.get("/api/v1/files?limit=abc", headers=headers)
+    assert resp.status_code == 422, resp.text
