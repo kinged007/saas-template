@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
 from src.models.api_key import ApiKey
-from src.models.conversation import Conversation, Message
+from src.models.conversation import Conversation, ConversationParticipant, Message
 from src.models.core import Invitation, Notification
 from src.models.jobs import JobDefinition
 from src.models.user_profile import UserProfile
@@ -28,7 +28,7 @@ from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.services.jobs import _mask_params
 from src.services.serializers import (
     notification_to_dict,
-    profile_to_dict,
+    public_projection,
     user_to_dict,
     workspace_to_dict,
 )
@@ -90,13 +90,13 @@ class SearchExportService:
                 await self._session.execute(
                     select(Conversation)
                     .join(
-                        WorkspaceMember,
-                        WorkspaceMember.workspace_id == Conversation.workspace_id,
+                        ConversationParticipant,
+                        (ConversationParticipant.conversation_id == Conversation.id)
+                        & (ConversationParticipant.participant_type == "user")
+                        & (ConversationParticipant.participant_id == user_id),
                     )
                     .where(
                         Conversation.workspace_id == workspace_id,
-                        WorkspaceMember.user_id == user_id,
-                        WorkspaceMember.status == "active",
                         or_(
                             Conversation.title.ilike(like),
                             Conversation.last_message_preview.ilike(like),
@@ -122,6 +122,12 @@ class SearchExportService:
             await self._session.execute(
                 select(Message, Conversation.title)
                 .join(Conversation, Conversation.id == Message.conversation_id)
+                .join(
+                    ConversationParticipant,
+                    (ConversationParticipant.conversation_id == Conversation.id)
+                    & (ConversationParticipant.participant_type == "user")
+                    & (ConversationParticipant.participant_id == user_id),
+                )
                 .where(Conversation.workspace_id == workspace_id, Message.body.ilike(like))
                 .order_by(Message.created_at.desc())
                 .limit(_SEARCH_LIMIT)
@@ -140,12 +146,13 @@ class SearchExportService:
 
         member_rows = (
             await self._session.execute(
-                select(User, Role.name, WorkspaceMember)
+                select(User, Role.name, WorkspaceMember, UserProfile)
                 .join(WorkspaceMember, WorkspaceMember.user_id == User.id)
                 .join(Role, Role.id == WorkspaceMember.role_id)
                 .outerjoin(UserProfile, UserProfile.user_id == User.id)
                 .where(
                     WorkspaceMember.workspace_id == workspace_id,
+                    WorkspaceMember.status == "active",
                     or_(
                         User.email.ilike(like),
                         User.display_name.ilike(like),
@@ -156,15 +163,15 @@ class SearchExportService:
                 .limit(_SEARCH_LIMIT)
             )
         ).all()
-        for u, role_name, _m in member_rows:
-            results.append(
-                {
-                    "type": "member",
-                    "id": u.id,
-                    "title": u.display_name,
-                    "snippet": f"{u.email} · {role_name}",
-                }
-            )
+        for u, role_name, _m, p in member_rows:
+            entry: dict = {"type": "member", "id": u.id}
+            if p is not None:
+                proj = public_projection(p, u)
+                entry["title"] = proj.get("display_name") or u.display_name
+            else:
+                entry["title"] = u.display_name
+            entry["snippet"] = f"{u.email} · {role_name}"
+            results.append(entry)
 
         job_rows = (
             (
@@ -250,7 +257,7 @@ class SearchExportService:
                 }
             )
             if p is not None:
-                entry["profile"] = profile_to_dict(p)
+                entry["profile"] = public_projection(p, u)
             members.append(entry)
 
         roles = (

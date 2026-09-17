@@ -4,7 +4,9 @@ from tests.conftest import create_workspace, register_user, ws_headers
 
 
 async def _me_id(client, tokens):
-    resp = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"})
+    resp = await client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"}
+    )
     assert resp.status_code == 200, resp.text
     return resp.json()["id"]
 
@@ -73,9 +75,38 @@ async def test_search_scoped_to_active_workspace(app_client):
     assert resp.json()["results"] == []
 
 
+async def test_search_restricted_to_participant_conversations(app_client):
+    """A member who is not a participant must not see others' conversations/messages."""
+    client, h, ws, conv = await _setup(app_client)
+    third_tokens = await register_user(client, "third@example.com")
+    from tests.conftest import auth_headers as _ah2
+
+    roles = (await client.get("/api/v1/roles", headers=h)).json()
+    viewer = next(r for r in roles if r["name"] == "viewer")
+    invite = (
+        await client.post(
+            "/api/v1/invitations",
+            json={"email": "third@example.com", "role_id": viewer["id"]},
+            headers=h,
+        )
+    ).json()
+    await client.post(
+        "/api/v1/invitations/accept",
+        params={"token": invite["token"]},
+        headers=_ah2(third_tokens),
+    )
+    h3 = ws_headers(third_tokens, ws["id"])
+    resp = await client.get("/api/v1/workspaces/search", params={"q": "zebra"}, headers=h3)
+    assert resp.status_code == 200, resp.text
+    leaked = [r for r in resp.json()["results"] if r["type"] in ("conversation", "message")]
+    assert leaked == []
+
+
 async def test_search_rejects_blank_and_non_member(app_client):
     client, h, ws, conv = await _setup(app_client)
-    assert (await client.get("/api/v1/workspaces/search", params={"q": " "}, headers=h)).status_code == 422
+    assert (
+        await client.get("/api/v1/workspaces/search", params={"q": " "}, headers=h)
+    ).status_code == 422
     outsider = await register_user(client, "outsider@example.com")
     from tests.conftest import auth_headers
 
