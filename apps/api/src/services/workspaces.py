@@ -659,6 +659,24 @@ class WorkspaceService:
         invite.expires_at = now_utc() + timedelta(hours=expires_in_hours)
         invite.accepted_at = None
         await self._session.commit()
+        workspace = await self._session.get(Workspace, workspace_id)
+        role = await self._session.get(Role, invite.role_id)
+        invited_by = await self._session.get(User, invite.invited_by_user_id)
+        existing = await AuthService(self._session).get_by_email(invite.email)
+        await publish_event(
+            self._bus,
+            Subjects.WORKSPACE_INVITATION_CREATED,
+            {
+                "invitation_id": invite.id,
+                "workspace_id": workspace_id,
+                "workspace_name": workspace.name if workspace else "workspace",
+                "email": invite.email,
+                "role": role.name if role else None,
+                "invited_by_user_id": invite.invited_by_user_id,
+                "invited_by_name": invited_by.display_name if invited_by else "",
+                "is_registered": existing is not None,
+            },
+        )
         await publish_audit(
             self._bus,
             workspace_id=workspace_id,

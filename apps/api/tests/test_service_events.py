@@ -199,6 +199,21 @@ async def test_invitation_to_unregistered_email_emits_invitation_event_only(bus,
     assert bus.by_subject(Subjects.WORKSPACE_MEMBER_INVITED) == []
 
 
+async def test_resend_invitation_emits_delivery_event(bus, owner):
+    workspace = await _create_workspace(bus, owner.id, slug="acme-resend")
+    invite = await _invite_member(bus, owner.id, workspace, "stranger@example.com")
+    bus.events.clear()
+    async with SessionFactory() as session:
+        service = WorkspaceService(session, bus)
+        await service.revoke_invitation(workspace.id, invite.id, actor=owner)
+        await service.resend_invitation(workspace.id, invite.id, actor=owner)
+
+    invitations = bus.by_subject(Subjects.WORKSPACE_INVITATION_CREATED)
+    assert len(invitations) == 1
+    assert invitations[0][0]["invitation_id"] == invite.id
+    assert invitations[0][0]["is_registered"] is False
+
+
 async def test_accept_invitation_emits_member_joined(bus, owner):
     invitee = await _register(bus, "member@example.com", "Member")
     workspace = await _create_workspace(bus, owner.id, slug="acme4")

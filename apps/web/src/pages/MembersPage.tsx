@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { useCan, useCreate, useCustomMutation, useGetIdentity, useUpdate } from "@refinedev/core";
+import { useCan, useCreate, useCustomMutation, useGetIdentity, useInvalidate, useUpdate } from "@refinedev/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 
@@ -29,6 +29,7 @@ import { UserAvatar } from "@/components/ui/user-avatar";
 import { UserProfileDialog } from "@/components/UserProfileDialog";
 
 import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceContext";
+import { queryClient } from "../providers/queryClient";
 import type { Identity, Invitation, Member, Role } from "../types";
 import { getMemberDisplayName } from "../types";
 
@@ -60,6 +61,7 @@ export function MembersPage() {
   const { mutate: changeRole } = useUpdate();
   const { mutate: invite, mutation } = useCreate();
   const { mutate: resend } = useCustomMutation();
+  const invalidate = useInvalidate();
   const [email, setEmail] = useState("");
   const [inviteRoleId, setInviteRoleId] = useState("");
 
@@ -93,6 +95,7 @@ export function MembersPage() {
         values: {},
         successNotification: { message: suspendIt ? "Member suspended" : "Member reactivated", type: "success" },
       },
+      { onSuccess: () => invalidate({ resource: "members", invalidates: ["list"] }) },
     );
   };
 
@@ -107,7 +110,12 @@ export function MembersPage() {
         errorNotification: false,
       },
       {
-        onSuccess: () => setTransferId(""),
+        onSuccess: () => {
+          setTransferId("");
+          invalidate({ resource: "members", invalidates: ["list"] });
+          invalidate({ resource: "workspaces", invalidates: ["list"] });
+          void queryClient.invalidateQueries({ queryKey: ["getIdentity"] });
+        },
         onError: (err: unknown) => {
           toast.error(String((err as { message?: string })?.message ?? err));
         },
@@ -204,10 +212,10 @@ export function MembersPage() {
                     <span className="text-muted-foreground">—</span>
                   )}
                 </TableCell>
-                <TableCell className="text-muted-foreground">{formatDate(m.joined_at)}</TableCell>
                 <TableCell>
                   <StatusBadge status={m.status} />
                 </TableCell>
+                <TableCell className="text-muted-foreground">{formatDate(m.joined_at)}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-1">
                     {canManageRoles && m.role !== "owner" && m.status !== "suspended" && (
@@ -385,6 +393,7 @@ export function MembersPage() {
                                 values: {},
                                 successNotification: { message: "Invitation re-sent", type: "success" },
                               },
+                              { onSuccess: () => invalidate({ resource: "invitations", invalidates: ["list"] }) },
                             )
                           }
                         >

@@ -165,6 +165,11 @@ def require_key_permission(permission: str):
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, "api key is not scoped to this workspace"
             )
+        membership = await WorkspaceService(db).get_membership(
+            workspace_id, principal.user.id, active_only=True
+        )
+        if membership is None:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
         if "*" in api_key.permissions or permission in api_key.permissions:
             await record_key_use(api_key, db, response)
             return None
@@ -201,6 +206,13 @@ def require_permission(permission: str):
             if api_key.workspace_id != workspace_id:
                 raise HTTPException(
                     status.HTTP_403_FORBIDDEN, "api key is not scoped to this workspace"
+                )
+            membership = await WorkspaceService(db).get_membership(
+                workspace_id, principal.user.id, active_only=True
+            )
+            if membership is None:
+                raise HTTPException(
+                    status.HTTP_403_FORBIDDEN, "you are not a member of this workspace"
                 )
             if "*" in api_key.permissions or permission in api_key.permissions:
                 await record_key_use(api_key, db, response)

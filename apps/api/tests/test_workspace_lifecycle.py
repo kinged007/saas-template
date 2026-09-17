@@ -39,6 +39,16 @@ async def test_suspend_loses_access_without_losing_history(app_client):
     member_tokens = await _invite_and_join(client, owner, ws, "mem@example.com", "editor")
     member = await _member_by_email(client, owner_headers, "mem@example.com")
     member_headers = ws_headers(member_tokens, ws["id"])
+    key = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "member-key", "permissions": ["member:read"]},
+        headers=member_headers,
+    )
+    assert key.status_code == 201, key.text
+    key_headers = {
+        "Authorization": f"Bearer {key.json()['key']}",
+        "X-Workspace-ID": ws["id"],
+    }
 
     assert (
         await client.get("/api/v1/workspaces/" + ws["id"], headers=member_headers)
@@ -58,6 +68,7 @@ async def test_suspend_loses_access_without_losing_history(app_client):
         await client.get("/api/v1/workspaces/" + ws["id"], headers=member_headers)
     ).status_code == 403
     assert (await client.get("/api/v1/members", headers=member_headers)).status_code == 403
+    assert (await client.get("/api/v1/members", headers=key_headers)).status_code == 403
 
     resp = await client.post(
         f"/api/v1/members/{member['membership_id']}/reactivate", headers=owner_headers
