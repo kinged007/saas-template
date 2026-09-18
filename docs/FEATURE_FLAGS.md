@@ -7,7 +7,7 @@ something, so new workspaces need no backfill.
 ## Convention
 
 - Key: `snake_case` capability name, e.g. `invites_enabled`.
-- Value: boolean. Non-boolean values are ignored (treated as default-on).
+- Value: boolean. The write path rejects non-booleans with 422; a non-bool that somehow reaches the DB is ignored on read (treated as default-on).
 - Merge-patch update via `PATCH /admin/workspaces/{id}/flags`
   (`{"flags": {"key": false}}`); keys not mentioned keep their values.
 - Reads use `(workspace.flags or {}).get(key) is False` to decide "disabled".

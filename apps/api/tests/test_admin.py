@@ -125,6 +125,24 @@ async def test_admin_workspace_list_and_flags_gate_invites(app_client):
     assert invite2.status_code == 201, invite2.text
 
 
+async def test_admin_flags_reject_non_bool(app_client):
+    client, tokens = await _superuser_client(app_client)
+    ws = await create_workspace(client, tokens, "Acme")
+
+    for bad in ({"invites_enabled": "yes"}, {"invites_enabled": 1}, {"invites_enabled": 0}):
+        resp = await client.patch(
+            f"/api/v1/admin/workspaces/{ws['id']}/flags",
+            json={"flags": bad},
+            headers=auth_headers(tokens),
+        )
+        assert resp.status_code == 422, (bad, resp.text)
+
+    # Stored flags unchanged after rejected writes.
+    ws_list = await client.get("/api/v1/admin/workspaces", headers=auth_headers(tokens))
+    row = next(w for w in ws_list.json() if w["id"] == ws["id"])
+    assert "invites_enabled" not in row["flags"]
+
+
 async def test_admin_audit_cross_workspace(app_client):
     import asyncio
 
