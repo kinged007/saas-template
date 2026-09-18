@@ -1,0 +1,29 @@
+"""api key usage counting + per-key quota
+
+Revision ID: 0011
+Revises: 0010
+Create Date: 2026-09-18 00:00:00.000000
+"""
+
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+
+from alembic import op
+
+revision: str = "0011"
+down_revision: str | None = "0010"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    op.add_column(
+        "api_keys", sa.Column("usage_count", sa.Integer(), nullable=False, server_default="0")
+    )
+    op.add_column("api_keys", sa.Column("monthly_quota", sa.Integer(), nullable=True))
+
+
+def downgrade() -> None:
+    op.drop_column("api_keys", "monthly_quota")
+    op.drop_column("api_keys", "usage_count")

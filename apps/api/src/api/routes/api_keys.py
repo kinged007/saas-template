@@ -17,7 +17,7 @@ from src.api.deps import (
 from src.core.permissions import APIKEY_MANAGE, APIKEY_READ
 from src.db.session import get_db
 from src.models.api_key import ApiKey
-from src.schemas.api import ApiKeyCreate
+from src.schemas.api import ApiKeyCreate, ApiKeyQuotaUpdate
 from src.services.api_keys import ApiKeyError, ApiKeyForbidden, ApiKeyNotFound, ApiKeyService
 from src.services.workspaces import WorkspaceService
 
@@ -37,6 +37,8 @@ def _key_dict(k: ApiKey) -> dict:
         "key_prefix": k.key_prefix,
         "permissions": k.permissions,
         "created_by_user_id": k.created_by_user_id,
+        "usage_count": k.usage_count,
+        "monthly_quota": k.monthly_quota,
         "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
         "revoked_at": k.revoked_at.isoformat() if k.revoked_at else None,
         "created_at": k.created_at.isoformat() if k.created_at else None,
@@ -104,6 +106,7 @@ async def create_api_key(
             workspace_id=workspace_id,
             name=body.name,
             permissions=body.permissions,
+            monthly_quota=body.monthly_quota,
             actor=user,
             ip_address=request.client.host if request.client else None,
             # When the caller is itself an API key, the new key's permissions
@@ -114,6 +117,27 @@ async def create_api_key(
     except ApiKeyForbidden as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     return {**_key_dict(key), "key": raw}
+
+
+@router.patch("/{api_key_id}")
+async def set_api_key_quota(
+    api_key_id: str,
+    body: ApiKeyQuotaUpdate,
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    _=Depends(require_permission(APIKEY_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+):
+    # Personal scope, like revoke: only the key's owner may change its quota
+    # (404, not 403, so another user's key id is not leaked).
+    key = await db.get(ApiKey, api_key_id)
+    if key is None or key.workspace_id != workspace_id or key.created_by_user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "api key not found")
+    try:
+        key = await ApiKeyService(db).set_quota(workspace_id, api_key_id, body.monthly_quota)
+    except ApiKeyError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    return _key_dict(key)
 
 
 @router.delete("/{api_key_id}", status_code=204)

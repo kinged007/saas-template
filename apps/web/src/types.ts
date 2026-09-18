@@ -221,6 +221,9 @@ export type ApiKey = {
   permissions: string[];
   created_by_user_id?: string;
   last_used_at?: string;
+  /** Lifetime authenticated uses; null monthly_quota = unlimited. */
+  usage_count?: number;
+  monthly_quota?: number | null;
   revoked_at?: string;
   created_at?: string;
 };

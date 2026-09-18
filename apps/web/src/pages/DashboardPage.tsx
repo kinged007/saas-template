@@ -1,12 +1,49 @@
+import { useList } from "@refinedev/core";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { PlusCircle } from "lucide-react";
+import { CheckCircle2, Circle, PlusCircle } from "lucide-react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { useWorkspace } from "../contexts/WorkspaceContext";
+import type { ApiKey, Invitation, Member } from "../types";
+
+function Step({ done, title, hint, to, cta }: { done: boolean; title: string; hint: string; to: string; cta: string }) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-2">
+      <div className="flex items-start gap-3">
+        {done ? (
+          <CheckCircle2 className="mt-0.5 h-5 w-5 text-green-600" />
+        ) : (
+          <Circle className="mt-0.5 h-5 w-5 text-muted-foreground" />
+        )}
+        <div>
+          <p className="font-medium">{title}</p>
+          <p className="text-muted-foreground text-sm">{hint}</p>
+        </div>
+      </div>
+      {!done && (
+        <Link to={to}>
+          <Button variant="outline" size="sm">{cta}</Button>
+        </Link>
+      )}
+    </div>
+  );
+}
 
 export function DashboardPage() {
   const { workspace } = useWorkspace();
+  const { result: membersResult } = useList<Member>({
+    resource: "members",
+    queryOptions: { enabled: !!workspace },
+  });
+  const { result: keysResult } = useList<ApiKey>({
+    resource: "api-keys",
+    queryOptions: { enabled: !!workspace },
+  });
+  const { result: invitationsResult } = useList<Invitation>({
+    resource: "invitations",
+    queryOptions: { enabled: !!workspace },
+  });
 
   if (!workspace) {
     return (
@@ -29,6 +66,18 @@ export function DashboardPage() {
     );
   }
 
+  const members = membersResult?.data ?? [];
+  const keys = keysResult?.data ?? [];
+  const invitations = invitationsResult?.data ?? [];
+  // ponytail: progress is derived per render (no persistence); add a dismissible tour store when onboarding grows past 3 steps.
+  const steps = workspace
+    ? [
+        { done: members.length + invitations.length > 0, title: "Invite your team", hint: "Members get workspace access by role.", to: "/members", cta: "Invite" },
+        { done: keys.length > 0, title: "Create an API key", hint: "Automate with scoped machine credentials.", to: "/api-keys/create", cta: "Create key" },
+      ]
+    : [];
+  const allDone = steps.length > 0 && steps.every((s) => s.done);
+
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -37,6 +86,30 @@ export function DashboardPage() {
           Manage your team and collaborate effectively.
         </p>
       </div>
+
+      {!allDone && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Get set up</CardTitle>
+            <CardDescription>
+              {workspace ? "Finish these steps to get the most out of your workspace." : "Create a workspace to get started with managing your team."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="divide-y">
+            {!workspace && (
+              <Link to="/workspaces/create">
+                <Button>
+                  <PlusCircle className="mr-2 h-4 w-4" />
+                  Create workspace
+                </Button>
+              </Link>
+            )}
+            {steps.map((s) => (
+              <Step key={s.title} {...s} />
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Card>
