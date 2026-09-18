@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routes import (
+    admin,
     api_keys,
     audit,
     auth,
@@ -107,6 +108,7 @@ async def root() -> dict:
 
 API = "/api/v1"
 app.include_router(meta.router, prefix=API)
+app.include_router(admin.router, prefix=API)
 app.include_router(auth.router, prefix=API)
 app.include_router(workspaces.router, prefix=API)
 app.include_router(members.router, prefix=API)

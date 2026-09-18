@@ -68,6 +68,9 @@ class Workspace(Base, TimestampMixin):
     slug: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_by_user_id: Mapped[str] = mapped_column(StringUUID(), index=True, nullable=False)
+    # Workspace-level feature flags: {key: bool}. Absent key = default-on.
+    # See docs/FEATURE_FLAGS.md for the registry.
+    flags: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class Role(Base, TimestampMixin):

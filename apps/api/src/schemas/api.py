@@ -118,6 +118,14 @@ class WebhookSubscriptionUpdate(BaseModel):
     active: bool | None = None
 
 
+class AdminUserUpdate(BaseModel):
+    is_active: bool
+
+
+class AdminWorkspaceFlags(BaseModel):
+    flags: dict[str, bool]
+
+
 class JobUpdate(BaseModel):
     """Editable job configuration. All fields optional (partial patch)."""
 
