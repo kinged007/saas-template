@@ -206,13 +206,22 @@ class ApiKeyService:
         return key
 
     async def touch(self, key: ApiKey) -> None:
+        # ponytail: lifetime counter, never reset (monthly_quota is really a
+        # lifetime cap); add a window start column + rollover here when true
+        # monthly quotas are needed.
         """Record a successful use: bump the usage counter + last_used_at."""
         key.usage_count += 1
         key.last_used_at = now_utc()
         await self._session.commit()
 
     async def set_quota(
-        self, workspace_id: str, api_key_id: str, monthly_quota: int | None
+        self,
+        workspace_id: str,
+        api_key_id: str,
+        monthly_quota: int | None,
+        *,
+        actor: User | None = None,
+        ip_address: str | None = None,
     ) -> ApiKey:
         """Set (or clear with None) a key's quota. Personal scope: checked by route."""
         key = await self._session.get(ApiKey, api_key_id)
@@ -222,4 +231,30 @@ class ApiKeyService:
             raise ApiKeyError("monthly quota cannot be negative")
         key.monthly_quota = monthly_quota
         await self._session.commit()
+        await publish_event(
+            self._bus,
+            Subjects.APIKEY_UPDATED,
+            {
+                "apikey_id": key.id,
+                "workspace_id": workspace_id,
+                "name": key.name,
+                "key_prefix": key.key_prefix,
+                "monthly_quota": monthly_quota,
+                "updated_by_user_id": actor.id if actor else None,
+            },
+        )
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="apikey",
+            resource_id=key.id,
+            action="apikey.updated",
+            actor_user_id=actor.id if actor else None,
+            details={
+                "name": key.name,
+                "key_prefix": key.key_prefix,
+                "monthly_quota": monthly_quota,
+            },
+            ip_address=ip_address,
+        )
         return key

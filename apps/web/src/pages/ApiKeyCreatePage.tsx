@@ -175,7 +175,7 @@ export function ApiKeyCreatePage() {
             name="monthly_quota"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Monthly quota (optional)</FormLabel>
+                <FormLabel>Usage quota (optional)</FormLabel>
                 <FormControl>
                   <Input
                     type="number"

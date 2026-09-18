@@ -123,10 +123,12 @@ async def create_api_key(
 async def set_api_key_quota(
     api_key_id: str,
     body: ApiKeyQuotaUpdate,
+    request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
     _=Depends(require_permission(APIKEY_MANAGE)),
     db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
 ):
     # Personal scope, like revoke: only the key's owner may change its quota
     # (404, not 403, so another user's key id is not leaked).
@@ -134,7 +136,13 @@ async def set_api_key_quota(
     if key is None or key.workspace_id != workspace_id or key.created_by_user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "api key not found")
     try:
-        key = await ApiKeyService(db).set_quota(workspace_id, api_key_id, body.monthly_quota)
+        key = await ApiKeyService(db, container.bus).set_quota(
+            workspace_id,
+            api_key_id,
+            body.monthly_quota,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
     except ApiKeyError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     return _key_dict(key)

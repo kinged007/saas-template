@@ -334,6 +334,21 @@ async def test_api_key_create_and_revoke_emit_events_and_audit(bus, owner):
     assert revoked[0][0]["revoked_by_user_id"] == owner.id
     assert bus.actions()[-1] == "apikey.revoked"
 
+    async with SessionFactory() as session:
+        await ApiKeyService(session, bus).set_quota(
+            workspace.id, key.id, 5, actor=owner, ip_address="10.0.0.1"
+        )
+
+    updated = bus.by_subject(Subjects.APIKEY_UPDATED)
+    assert len(updated) == 1
+    assert updated[0][0]["apikey_id"] == key.id
+    assert updated[0][0]["monthly_quota"] == 5
+    assert updated[0][0]["updated_by_user_id"] == owner.id
+    assert bus.actions()[-1] == "apikey.updated"
+    audit = bus.audit()[-1][0]
+    assert audit["resource_type"] == "apikey"
+    assert audit["ip_address"] == "10.0.0.1"
+
 
 # ------------------------------------------------------------------- roles
 

@@ -1,11 +1,11 @@
-import { useList } from "@refinedev/core";
+import { useCan, useList } from "@refinedev/core";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle2, Circle, PlusCircle } from "lucide-react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { useWorkspace } from "../contexts/WorkspaceContext";
-import type { ApiKey, Invitation, Member } from "../types";
+import type { ApiKey, Invitation } from "../types";
 
 function Step({ done, title, hint, to, cta }: { done: boolean; title: string; hint: string; to: string; cta: string }) {
   return (
@@ -32,17 +32,14 @@ function Step({ done, title, hint, to, cta }: { done: boolean; title: string; hi
 
 export function DashboardPage() {
   const { workspace } = useWorkspace();
-  const { result: membersResult } = useList<Member>({
-    resource: "members",
-    queryOptions: { enabled: !!workspace },
-  });
+  const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
   const { result: keysResult } = useList<ApiKey>({
     resource: "api-keys",
     queryOptions: { enabled: !!workspace },
   });
   const { result: invitationsResult } = useList<Invitation>({
     resource: "invitations",
-    queryOptions: { enabled: !!workspace },
+    queryOptions: { enabled: !!workspace && !!canInvite?.can },
   });
 
   if (!workspace) {
@@ -66,13 +63,12 @@ export function DashboardPage() {
     );
   }
 
-  const members = membersResult?.data ?? [];
   const keys = keysResult?.data ?? [];
   const invitations = invitationsResult?.data ?? [];
   // ponytail: progress is derived per render (no persistence); add a dismissible tour store when onboarding grows past 3 steps.
   const steps = workspace
     ? [
-        { done: members.length + invitations.length > 0, title: "Invite your team", hint: "Members get workspace access by role.", to: "/members", cta: "Invite" },
+        { done: invitations.length > 0, title: "Invite your team", hint: "Members get workspace access by role.", to: "/members", cta: "Invite" },
         { done: keys.length > 0, title: "Create an API key", hint: "Automate with scoped machine credentials.", to: "/api-keys/create", cta: "Create key" },
       ]
     : [];

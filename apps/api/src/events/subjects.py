@@ -40,6 +40,7 @@ class Subjects:
     APIKEYS = "apikeys"
     APIKEY_CREATED = "apikeys.created"
     APIKEY_REVOKED = "apikeys.revoked"
+    APIKEY_UPDATED = "apikeys.updated"
 
     AUDIT = "audit"
     AUDIT_ENTRY_CREATED = "audit.entry.created"
@@ -72,6 +73,7 @@ ALL = [
     Subjects.WORKSPACE_MEMBER_REMOVED,
     Subjects.APIKEY_CREATED,
     Subjects.APIKEY_REVOKED,
+    Subjects.APIKEY_UPDATED,
     Subjects.AUDIT_ENTRY_CREATED,
     Subjects.JOBS_EXECUTE,
 ]
