@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field, StrictBool
 
 
 class LoginRequest(BaseModel):
@@ -123,7 +123,7 @@ class AdminUserUpdate(BaseModel):
 
 
 class AdminWorkspaceFlags(BaseModel):
-    flags: dict[str, bool]
+    flags: dict[str, StrictBool]
 
 
 class JobUpdate(BaseModel):
