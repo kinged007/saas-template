@@ -56,17 +56,20 @@ async def list_users(
     db: AsyncSession = Depends(get_db),
 ):
     stmt = select(User)
-    search = request.query_params.get("search")
-    if search:
-        like = f"%{search}%"
-        stmt = stmt.where(or_(User.email.ilike(like), User.display_name.ilike(like)))
     try:
         spec = parse_query(request)
-        # "search" is a custom param, not a model filter.
+        # "search" is a custom param, not a model filter. It arrives either as
+        # ?search= or ?filter[search]= (legacy style); both parse as filters.
+        searches = [v for k, _, v in spec.filters if k == "search"]
+        if not searches and (plain := request.query_params.get("search")):
+            searches = [plain]
         spec.filters = [f for f in spec.filters if f[0] != "search"]
         stmt = apply_query(stmt, User, spec, sortable=_USER_SORTABLE, filterable=_USER_FILTERABLE)
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    for term in searches:
+        like = f"%{term}%"
+        stmt = stmt.where(or_(User.email.ilike(like), User.display_name.ilike(like)))
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
     stmt = stmt.offset(spec.offset).limit(spec.limit)
