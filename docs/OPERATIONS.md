@@ -42,7 +42,10 @@ Settings (env vars, days; `0` disables that cutoff):
 
 The `system.retention_cleanup` builtin job (global, daily 04:00 UTC, enabled
 by default) enforces the day-based cutoffs. Audit rows are append-only and
-kept forever unless the operator explicitly opts into deletion.
+kept forever unless the operator explicitly opts into deletion by setting a
+non-zero `AUDIT_LOG_RETENTION_DAYS` — this breaks the ARCHITECTURE.md
+"never updated or deleted" guarantee, so only enable it where a data-
+retention policy requires it.
 
 ## Backup / restore
 
