@@ -37,7 +37,7 @@ export function AdminPage() {
     queryOptions: { enabled: isSuperuser },
   });
   const detailQuery = useCustom<AdminUserDetail>({
-    url: `admin/users/${selectedId}`,
+    url: selectedId ? `admin/users/${selectedId}` : "",
     method: "get",
     queryOptions: { enabled: isSuperuser && selectedId !== null },
   });
@@ -53,7 +53,11 @@ export function AdminPage() {
   }
 
   const rows = Array.isArray(result?.data) ? result.data : [];
-  const detail = detailQuery.result?.data;
+  const rawDetail = detailQuery.result?.data;
+  const detail =
+    rawDetail && Array.isArray((rawDetail as AdminUserDetail).workspaces)
+      ? (rawDetail as AdminUserDetail)
+      : undefined;
 
   const toggle = (user: AdminUserDetail, next: boolean) => {
     setActive(

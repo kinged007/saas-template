@@ -37,6 +37,7 @@ def user_to_dict(u: User) -> dict:
         "avatar_url": u.avatar_url,
         "is_superuser": bool(u.is_superuser),
         "email_verified": verified is not None,
+        "created_at": u.created_at.isoformat() if getattr(u, "created_at", None) else None,
     }
 
 

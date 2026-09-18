@@ -73,7 +73,10 @@ async def get_user_detail(
     _=Depends(require_superuser),
     db: AsyncSession = Depends(get_db),
 ):
-    user = await db.get(User, user_id)
+    try:
+        user = await db.get(User, user_id)
+    except Exception:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found") from None
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     workspaces = [
@@ -92,10 +95,13 @@ async def set_user_active(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    user = await db.get(User, user_id)
+    try:
+        user = await db.get(User, user_id)
+    except Exception:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found") from None
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
-    if user.id == admin.id:
+    if user.id == admin.id and not body.is_active:
         raise HTTPException(status.HTTP_409_CONFLICT, "cannot disable your own account")
     user.is_active = body.is_active
     await db.commit()
