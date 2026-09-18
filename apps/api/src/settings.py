@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     jobs_default_timeout_seconds: int = 600
     jobs_run_retention: int = 1000  # per definition; pruned by scheduler housekeeping
 
+    # Retention cleanup (days; enforced by the system.retention_cleanup job).
+    # audit_log_retention_days=0 keeps audit entries forever (compliance trail).
+    jobs_log_retention_days: int = 90
+    notifications_retention_days: int = 90
+    audit_log_retention_days: int = 0
+
     @property
     def database_url_sqlite(self) -> bool:
         return self.resolved_database_url.startswith("sqlite")

@@ -23,6 +23,7 @@ from src.api.routes import (
     ws,
 )
 from src.container import Container
+from src.core.request_id import RequestIdMiddleware
 from src.db.session import SessionFactory
 from src.events.factory import WorkflowRegistry
 from src.jobs.capture import install_run_capture, uninstall_run_capture
@@ -88,6 +89,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(RequestIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
