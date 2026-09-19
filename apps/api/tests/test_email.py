@@ -40,6 +40,19 @@ async def test_invalid_address_raises_send_error():
         await sender.send(_msg(to="not-an-email"))
 
 
+async def test_newline_in_subject_or_to_raises_send_error():
+    import pytest
+
+    from src.email.base import EmailSendError
+    from src.email.console import ConsoleEmailSender
+
+    sender = ConsoleEmailSender()
+    with pytest.raises(EmailSendError, match="must not contain newlines"):
+        await sender.send(_msg(subject="hi\nBcc: evil"))
+    with pytest.raises(EmailSendError, match="must not contain newlines"):
+        await sender.send(_msg(to="a@example.com\r\nBcc: evil@example.com"))
+
+
 async def test_missing_subject_raises_send_error():
     import pytest
 
