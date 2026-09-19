@@ -21,9 +21,9 @@ def upgrade() -> None:
     op.add_column(
         "api_keys", sa.Column("usage_count", sa.Integer(), nullable=False, server_default="0")
     )
-    op.add_column("api_keys", sa.Column("monthly_quota", sa.Integer(), nullable=True))
+    op.add_column("api_keys", sa.Column("usage_quota", sa.Integer(), nullable=True))
 
 
 def downgrade() -> None:
-    op.drop_column("api_keys", "monthly_quota")
+    op.drop_column("api_keys", "usage_quota")
     op.drop_column("api_keys", "usage_count")

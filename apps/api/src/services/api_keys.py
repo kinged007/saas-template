@@ -75,7 +75,7 @@ class ApiKeyService:
         actor: User,
         ip_address: str | None = None,
         minting_key: ApiKey | None = None,
-        monthly_quota: int | None = None,
+        usage_quota: int | None = None,
     ) -> tuple[ApiKey, str]:
         """Create a key whose permissions are capped by the actor's own.
 
@@ -97,8 +97,8 @@ class ApiKeyService:
             denied = sorted(requested - allowed)
             raise ApiKeyForbidden(f"cannot grant permissions you do not have: {', '.join(denied)}")
 
-        if monthly_quota is not None and monthly_quota < 0:
-            raise ApiKeyError("monthly quota cannot be negative")
+        if usage_quota is not None and usage_quota < 0:
+            raise ApiKeyError("usage quota cannot be negative")
 
         raw = self.generate()
         key = ApiKey(
@@ -108,7 +108,7 @@ class ApiKeyService:
             key_hash=self._hash(raw),
             permissions=sorted(requested),
             created_by_user_id=actor.id,
-            monthly_quota=monthly_quota,
+            usage_quota=usage_quota,
         )
         self._session.add(key)
         await self._session.commit()
@@ -206,9 +206,9 @@ class ApiKeyService:
         return key
 
     async def touch(self, key: ApiKey) -> None:
-        # ponytail: lifetime counter, never reset (monthly_quota is really a
-        # lifetime cap); add a window start column + rollover here when true
-        # monthly quotas are needed.
+        # ponytail: lifetime counter, never reset (usage_quota is a lifetime
+        # cap); add a window start column + rollover here when true monthly
+        # quotas are needed.
         """Record a successful use: bump the usage counter + last_used_at."""
         key.usage_count += 1
         key.last_used_at = now_utc()
@@ -218,7 +218,7 @@ class ApiKeyService:
         self,
         workspace_id: str,
         api_key_id: str,
-        monthly_quota: int | None,
+        usage_quota: int | None,
         *,
         actor: User | None = None,
         ip_address: str | None = None,
@@ -227,9 +227,9 @@ class ApiKeyService:
         key = await self._session.get(ApiKey, api_key_id)
         if key is None or key.workspace_id != workspace_id:
             raise ApiKeyNotFound("api key not found")
-        if monthly_quota is not None and monthly_quota < 0:
-            raise ApiKeyError("monthly quota cannot be negative")
-        key.monthly_quota = monthly_quota
+        if usage_quota is not None and usage_quota < 0:
+            raise ApiKeyError("usage quota cannot be negative")
+        key.usage_quota = usage_quota
         await self._session.commit()
         await publish_event(
             self._bus,
@@ -239,7 +239,7 @@ class ApiKeyService:
                 "workspace_id": workspace_id,
                 "name": key.name,
                 "key_prefix": key.key_prefix,
-                "monthly_quota": monthly_quota,
+                "usage_quota": usage_quota,
                 "updated_by_user_id": actor.id if actor else None,
             },
         )
@@ -253,7 +253,7 @@ class ApiKeyService:
             details={
                 "name": key.name,
                 "key_prefix": key.key_prefix,
-                "monthly_quota": monthly_quota,
+                "usage_quota": usage_quota,
             },
             ip_address=ip_address,
         )

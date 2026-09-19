@@ -44,7 +44,7 @@ import type { ApiKeyCreated } from "../types";
 const apiKeySchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
   permissions: z.array(z.string()),
-  monthly_quota: z.number().int().min(0).nullable().optional(),
+  usage_quota: z.number().int().min(0).nullable().optional(),
 });
 
 type ApiKeyFormData = z.infer<typeof apiKeySchema>;
@@ -66,7 +66,7 @@ export function ApiKeyCreatePage() {
     ...form
   } = useForm<BaseRecord, HttpError, ApiKeyFormData>({
     resolver: zodResolver(apiKeySchema),
-    defaultValues: { name: "", permissions: [], monthly_quota: null },
+    defaultValues: { name: "", permissions: [], usage_quota: null },
     refineCoreProps: {
       resource: "api-keys",
       action: "create",
@@ -172,7 +172,7 @@ export function ApiKeyCreatePage() {
           />
           <FormField
             control={form.control}
-            name="monthly_quota"
+            name="usage_quota"
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Usage quota (optional)</FormLabel>

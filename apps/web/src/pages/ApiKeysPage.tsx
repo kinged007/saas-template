@@ -66,7 +66,7 @@ export function ApiKeysPage() {
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {key.usage_count ?? 0}
-                  {key.monthly_quota != null ? ` / ${key.monthly_quota}` : ""}
+                  {key.usage_quota != null ? ` / ${key.usage_quota}` : ""}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {formatDate(key.last_used_at)}

@@ -73,11 +73,11 @@ class RoleCreate(BaseModel):
 class ApiKeyCreate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     permissions: list[str] = Field(default_factory=list)
-    monthly_quota: int | None = Field(default=None, ge=0)
+    usage_quota: int | None = Field(default=None, ge=0)
 
 
 class ApiKeyQuotaUpdate(BaseModel):
-    monthly_quota: int | None = Field(default=None, ge=0)
+    usage_quota: int | None = Field(default=None, ge=0)
 
 
 class NotificationAck(BaseModel):

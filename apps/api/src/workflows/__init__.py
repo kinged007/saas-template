@@ -294,7 +294,7 @@ def build_workflows(
             payload.get("apikey_id"),
             payload.get("name"),
             payload.get("workspace_id"),
-            payload.get("monthly_quota"),
+            payload.get("usage_quota"),
             payload.get("updated_by_user_id"),
         )
 

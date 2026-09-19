@@ -30,7 +30,7 @@ async def test_key_usage_counted_and_visible(app_client):
         )
     ).json()
     assert created["usage_count"] == 0
-    assert created["monthly_quota"] is None
+    assert created["usage_quota"] is None
 
     key_headers = {"Authorization": f"Bearer {created['key']}", "X-Workspace-ID": ws["id"]}
     await client.get("/api/v1/members", headers=key_headers)
@@ -50,11 +50,11 @@ async def test_key_quota_enforced(app_client):
     created = (
         await client.post(
             "/api/v1/api-keys",
-            json={"name": "capped", "permissions": ["member:read"], "monthly_quota": 1},
+            json={"name": "capped", "permissions": ["member:read"], "usage_quota": 1},
             headers=headers,
         )
     ).json()
-    assert created["monthly_quota"] == 1
+    assert created["usage_quota"] == 1
 
     key_headers = {"Authorization": f"Bearer {created['key']}", "X-Workspace-ID": ws["id"]}
     first = await client.get("/api/v1/members", headers=key_headers)
@@ -70,20 +70,20 @@ async def test_key_quota_enforced(app_client):
     # raising the quota unblocks the key
     patched = await client.patch(
         f"/api/v1/api-keys/{created['id']}",
-        json={"monthly_quota": 5},
+        json={"usage_quota": 5},
         headers=headers,
     )
     assert patched.status_code == 200
-    assert patched.json()["monthly_quota"] == 5
+    assert patched.json()["usage_quota"] == 5
     assert (await client.get("/api/v1/members", headers=key_headers)).status_code == 200
 
     # clearing the quota (None) means unlimited
     cleared = await client.patch(
         f"/api/v1/api-keys/{created['id']}",
-        json={"monthly_quota": None},
+        json={"usage_quota": None},
         headers=headers,
     )
-    assert cleared.json()["monthly_quota"] is None
+    assert cleared.json()["usage_quota"] is None
 
 
 async def test_quota_patch_scoped_to_owner(app_client):
@@ -115,7 +115,7 @@ async def test_quota_patch_scoped_to_owner(app_client):
     )
     resp = await client.patch(
         f"/api/v1/api-keys/{created['id']}",
-        json={"monthly_quota": 10},
+        json={"usage_quota": 10},
         headers=ws_headers(member, ws["id"]),
     )
     assert resp.status_code == 404  # not leaked across users
@@ -134,7 +134,7 @@ async def test_quota_patch_validates_and_scopes_to_owner(app_client):
 
     resp = await client.patch(
         f"/api/v1/api-keys/{created['id']}",
-        json={"monthly_quota": -1},
+        json={"usage_quota": -1},
         headers=headers,
     )
     assert resp.status_code == 422
@@ -142,7 +142,7 @@ async def test_quota_patch_validates_and_scopes_to_owner(app_client):
     stranger = await register_user(client, "zane@example.com")
     resp = await client.patch(
         f"/api/v1/api-keys/{created['id']}",
-        json={"monthly_quota": 10},
+        json={"usage_quota": 10},
         headers=auth_headers(stranger),
     )
     assert resp.status_code in (400, 403)  # no workspace scope, no membership

@@ -342,7 +342,7 @@ async def test_api_key_create_and_revoke_emit_events_and_audit(bus, owner):
     updated = bus.by_subject(Subjects.APIKEY_UPDATED)
     assert len(updated) == 1
     assert updated[0][0]["apikey_id"] == key.id
-    assert updated[0][0]["monthly_quota"] == 5
+    assert updated[0][0]["usage_quota"] == 5
     assert updated[0][0]["updated_by_user_id"] == owner.id
     assert bus.actions()[-1] == "apikey.updated"
     audit = bus.audit()[-1][0]

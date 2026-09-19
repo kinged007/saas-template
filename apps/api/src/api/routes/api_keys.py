@@ -38,7 +38,7 @@ def _key_dict(k: ApiKey) -> dict:
         "permissions": k.permissions,
         "created_by_user_id": k.created_by_user_id,
         "usage_count": k.usage_count,
-        "monthly_quota": k.monthly_quota,
+        "usage_quota": k.usage_quota,
         "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
         "revoked_at": k.revoked_at.isoformat() if k.revoked_at else None,
         "created_at": k.created_at.isoformat() if k.created_at else None,
@@ -106,7 +106,7 @@ async def create_api_key(
             workspace_id=workspace_id,
             name=body.name,
             permissions=body.permissions,
-            monthly_quota=body.monthly_quota,
+            usage_quota=body.usage_quota,
             actor=user,
             ip_address=request.client.host if request.client else None,
             # When the caller is itself an API key, the new key's permissions
@@ -139,7 +139,7 @@ async def set_api_key_quota(
         key = await ApiKeyService(db, container.bus).set_quota(
             workspace_id,
             api_key_id,
-            body.monthly_quota,
+            body.usage_quota,
             actor=user,
             ip_address=request.client.host if request.client else None,
         )

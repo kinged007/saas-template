@@ -109,18 +109,18 @@ async def get_optional_workspace_id(
 
 
 def _check_key_quota(api_key: ApiKey) -> None:
-    """Reject keys that exhausted their monthly quota (None = unlimited)."""
-    if api_key.monthly_quota is not None and api_key.usage_count >= api_key.monthly_quota:
+    """Reject keys that exhausted their usage quota (None = unlimited)."""
+    if api_key.usage_quota is not None and api_key.usage_count >= api_key.usage_quota:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "api key quota exceeded")
 
 
 def _quota_headers(api_key: ApiKey) -> dict[str, str]:
     """Quota/remaining headers for key-authenticated responses (empty = unlimited)."""
-    if api_key.monthly_quota is None:
+    if api_key.usage_quota is None:
         return {}
     return {
-        "X-API-Key-Quota": str(api_key.monthly_quota),
-        "X-API-Key-Remaining": str(max(0, api_key.monthly_quota - api_key.usage_count)),
+        "X-API-Key-Quota": str(api_key.usage_quota),
+        "X-API-Key-Remaining": str(max(0, api_key.usage_quota - api_key.usage_count)),
     }
 
 
