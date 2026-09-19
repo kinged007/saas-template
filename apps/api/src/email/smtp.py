@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import smtplib
 from dataclasses import dataclass
 
 from src.email.base import EmailMessage, EmailSender, EmailSendError
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -35,7 +38,7 @@ class SmtpEmailSender(EmailSender):
             raise EmailSendError("no sender address: set EMAIL_FROM or from_addr")
         mime = message.as_mime(sender)
         try:
-            await asyncio.to_thread(self._deliver, mime["From"], message.to, mime.as_string())
+            await asyncio.to_thread(self._deliver, sender, message.to, mime.as_string())
         except EmailSendError:
             raise
         except Exception as exc:
@@ -50,7 +53,11 @@ class SmtpEmailSender(EmailSender):
                     smtp.starttls()
                     smtp.ehlo()
                 if cfg.username:
+                    if not cfg.password:
+                        logger.warning("SMTP username without password; sending unauthenticated")
                     smtp.login(cfg.username, cfg.password)
+                elif cfg.password:
+                    logger.warning("SMTP password set without username; sending unauthenticated")
                 smtp.sendmail(sender, [recipient], raw)
         except Exception as exc:
             raise EmailSendError(f"smtp send failed: {exc}") from exc
