@@ -125,6 +125,28 @@ async def test_admin_workspace_list_and_flags_gate_invites(app_client):
     assert invite2.status_code == 201, invite2.text
 
 
+async def test_admin_user_update_rejects_non_bool(app_client):
+    client, tokens = await _superuser_client(app_client)
+
+    resp = await client.get("/api/v1/admin/users?search=plain@", headers=auth_headers(tokens))
+    assert resp.status_code == 200, resp.text
+    target = next(u for u in resp.json() if u["email"] == "plain@example.com")
+
+    for bad in ("yes", 1, 0):
+        resp = await client.patch(
+            f"/api/v1/admin/users/{target['id']}",
+            json={"is_active": bad},
+            headers=auth_headers(tokens),
+        )
+        assert resp.status_code == 422, (bad, resp.text)
+
+    detail = await client.get(
+        f"/api/v1/admin/users/{target['id']}", headers=auth_headers(tokens)
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["is_active"] is True
+
+
 async def test_admin_flags_reject_non_bool(app_client):
     client, tokens = await _superuser_client(app_client)
     ws = await create_workspace(client, tokens, "Acme")

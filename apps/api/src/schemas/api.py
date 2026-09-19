@@ -119,7 +119,7 @@ class WebhookSubscriptionUpdate(BaseModel):
 
 
 class AdminUserUpdate(BaseModel):
-    is_active: bool
+    is_active: StrictBool
 
 
 class AdminWorkspaceFlags(BaseModel):
