@@ -376,6 +376,8 @@ class WorkspaceService:
         ip_address: str | None = None,
     ) -> Invitation:
         email = email.lower()
+        if (workspace.flags or {}).get("invites_enabled") is False:
+            raise WorkspaceError("invitations are disabled for this workspace")
         if role.name == "owner":
             raise WorkspaceConflict("cannot invite a user to the owner role")
         duplicate = await self._session.execute(

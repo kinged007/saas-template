@@ -45,6 +45,7 @@ import {
   Mail,
   Plus,
   Settings,
+  ShieldCheck,
   Users,
 } from "lucide-react";
 
@@ -69,6 +70,7 @@ function SidebarNav() {
   const permissions = activeWorkspacePermissions(identity);
   const can = (p: string) => permissions.includes("*") || permissions.includes(p);
   const items = MENU_ITEMS.filter((i) => can(i.permission));
+  const isSuperuser = identity?.is_superuser === true;
   const activeKey = `/${location.pathname.split("/")[1] || ""}`;
   const isActive = (key: string) => (key === "/" ? location.pathname === "/" : activeKey === key);
 
@@ -113,6 +115,16 @@ function SidebarNav() {
             </SidebarMenuItem>
           );
         })}
+        {isSuperuser && (
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild isActive={isActive("/admin")} tooltip="Admin">
+              <Link to="/admin">
+                <ShieldCheck />
+                <span>Admin</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        )}
       </SidebarMenu>
     </SidebarGroup>
   );

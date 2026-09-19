@@ -18,6 +18,7 @@ import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
 import { ResetPasswordPage } from "./pages/ResetPasswordPage";
 import { VerifyEmailPage } from "./pages/VerifyEmailPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { AdminPage } from "./pages/AdminPage";
 import { WorkspaceCreatePage } from "./pages/WorkspaceCreatePage";
 import { MembersPage } from "./pages/MembersPage";
 import { ReceivedInvitationsPage } from "./pages/ReceivedInvitationsPage";
@@ -71,6 +72,7 @@ export function App() {
             meta: { label: "Scheduled Jobs" },
           },
           { name: "audit", list: "/audit", meta: { hide: true } },
+          { name: "admin-users", list: "/admin", meta: { hide: true } },
         ]}
       >
         <WorkspaceProvider>
@@ -86,6 +88,7 @@ export function App() {
               }
             >
               <Route index element={<DashboardPage />} />
+              <Route path="admin" element={<AdminPage />} />
               <Route path="workspaces/create" element={<WorkspaceCreatePage />} />
               <Route path="members" element={<MembersPage />} />
               <Route path="invitations" element={<ReceivedInvitationsPage />} />

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field, StrictBool
 
 
 class LoginRequest(BaseModel):
@@ -116,6 +116,14 @@ class WebhookSubscriptionUpdate(BaseModel):
     url: AnyHttpUrl | None = None
     events: list[str] | None = Field(default=None, max_length=50)
     active: bool | None = None
+
+
+class AdminUserUpdate(BaseModel):
+    is_active: bool
+
+
+class AdminWorkspaceFlags(BaseModel):
+    flags: dict[str, StrictBool]
 
 
 class JobUpdate(BaseModel):
