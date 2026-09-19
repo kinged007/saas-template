@@ -23,6 +23,8 @@ def build_email_sender() -> EmailSender:
 
     driver = str(settings.email_driver)
     if driver == EmailDriver.SMTP.value:
+        if not settings.email_from:
+            raise ValueError("EMAIL_FROM is required when EMAIL_DRIVER=smtp")
         return SmtpEmailSender(
             SmtpConfig(
                 host=settings.smtp_host,

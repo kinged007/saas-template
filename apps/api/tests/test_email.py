@@ -104,6 +104,29 @@ async def test_smtp_driver_sends_mime_with_tls_and_login(monkeypatch):
     assert "<p>join us</p>" in raw
 
 
+async def test_missing_sender_raises_send_error():
+    import pytest
+
+    from src.email.base import EmailSendError
+    from src.email.smtp import SmtpConfig, SmtpEmailSender
+
+    with pytest.raises(EmailSendError, match="no sender address"):
+        await SmtpEmailSender(SmtpConfig()).send(_msg())
+
+
+def test_factory_smtp_without_from_raises(monkeypatch):
+    import pytest
+
+    from src.email.base import EmailDriver
+    from src.email.factory import build_email_sender
+    from src.settings import settings
+
+    monkeypatch.setattr(settings, "email_driver", EmailDriver.SMTP)
+    monkeypatch.setattr(settings, "email_from", "")
+    with pytest.raises(ValueError, match="EMAIL_FROM is required"):
+        build_email_sender()
+
+
 async def test_smtp_driver_skips_tls_and_login_without_creds(monkeypatch):
     from src.email.smtp import SmtpConfig, SmtpEmailSender
 
@@ -178,6 +201,7 @@ async def test_factory_builds_each_driver(monkeypatch):
     monkeypatch.setattr(settings, "email_driver", EmailDriver.CONSOLE)
     assert isinstance(build_email_sender(), ConsoleEmailSender)
     monkeypatch.setattr(settings, "email_driver", EmailDriver.SMTP)
+    monkeypatch.setattr(settings, "email_from", "noreply@example.com")
     assert isinstance(build_email_sender(), SmtpEmailSender)
 
 
