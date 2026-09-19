@@ -1,9 +1,10 @@
-import { useCustom, useCustomMutation, useInvalidate } from "@refinedev/core";
+import { useCustomMutation, useInvalidate } from "@refinedev/core";
+import { useWorkspaceCustom } from "../hooks/useWorkspaceQuery";
 
 import type { WebhookDelivery } from "../types";
 
 export function useWebhookDeliveries(subscriptionId: string) {
-  const { result, query } = useCustom<WebhookDelivery[]>({
+  const { result, query } = useWorkspaceCustom<WebhookDelivery[]>({
     url: "webhooks/deliveries",
     method: "get",
     config: { query: { subscription_id: subscriptionId } },

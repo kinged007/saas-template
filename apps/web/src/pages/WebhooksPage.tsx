@@ -1,5 +1,6 @@
 import { Fragment, useState } from "react";
-import { useCan, useList } from "@refinedev/core";
+import { useCan } from "@refinedev/core";
+import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 import { Webhook } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -91,7 +92,7 @@ function DeliveryLog({ subscriptionId }: { subscriptionId: string }) {
 }
 
 export function WebhooksPage() {
-  const { result } = useList<WebhookSubscription>({ resource: "webhooks" });
+  const { result } = useWorkspaceList<WebhookSubscription>({ resource: "webhooks" });
   const { data: canManage } = useCan({ resource: "webhooks", action: "delete" });
   const [openId, setOpenId] = useState<string | null>(null);
 

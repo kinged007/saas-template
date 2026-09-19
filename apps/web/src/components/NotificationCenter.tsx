@@ -10,7 +10,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Bell, ExternalLink, Inbox, MessageSquare } from "lucide-react";
-import { useList, useUpdate, useCustom } from "@refinedev/core";
+import { useUpdate } from "@refinedev/core";
+import { useWorkspaceCustom, useWorkspaceList } from "../hooks/useWorkspaceQuery";
 import { useNavigate } from "react-router";
 
 import type { Notification } from "../types";
@@ -24,7 +25,7 @@ function truncateEscaped(text: string | undefined, max: number): string {
 
 export function NotificationCenter() {
   const [open, setOpen] = useState(false);
-  const { result, query } = useList<Notification>({
+  const { result, query } = useWorkspaceList<Notification>({
     resource: "notifications",
     pagination: { pageSize: 100 },
     sorters: [{ field: "created_at", order: "desc" }],
@@ -60,11 +61,11 @@ export function NotificationCenter() {
     return merged;
   }, [rawItems]);
 
-  const { result: notifUnreadResult, query: notifUnreadQuery } = useCustom<{ count: number }>({
+  const { result: notifUnreadResult, query: notifUnreadQuery } = useWorkspaceCustom<{ count: number }>({
     url: "notifications/unread-count",
     method: "get",
   });
-  const { result: convUnreadResult, query: convUnreadQuery } = useCustom<{ count: number; unread_conversations: number }>({
+  const { result: convUnreadResult, query: convUnreadQuery } = useWorkspaceCustom<{ count: number; unread_conversations: number }>({
     url: "conversations/unread-count",
     method: "get",
   });

@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useCan, useCreate, useGetIdentity, useList, useUpdate } from "@refinedev/core";
+import { useCan, useCreate, useGetIdentity, useUpdate } from "@refinedev/core";
+import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,12 +36,12 @@ export function MembersPage() {
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
   const { workspace } = useWorkspace();
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
-  const { result: membersResult } = useList<Member>({ resource: "members" });
-  const { result: rolesResult } = useList<Role>({ resource: "roles" });
+  const { result: membersResult } = useWorkspaceList<Member>({ resource: "members" });
+  const { result: rolesResult } = useWorkspaceList<Role>({ resource: "roles" });
   const { data: canManage } = useCan({ resource: "members", action: "edit" });
   const { data: canDelete } = useCan({ resource: "members", action: "delete" });
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
-  const { result: invitationsResult } = useList<Invitation>({
+  const { result: invitationsResult } = useWorkspaceList<Invitation>({
     resource: "invitations",
     queryOptions: { enabled: !!canInvite?.can },
   });

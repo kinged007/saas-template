@@ -1,11 +1,5 @@
-import {
-  useCan,
-  useCustom,
-  useCustomMutation,
-  useGetIdentity,
-  useGo,
-  useList,
-} from "@refinedev/core";
+import { useCan, useCustom, useCustomMutation, useGetIdentity, useGo } from "@refinedev/core";
+import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 import { Clock, Play, Settings2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -136,7 +130,7 @@ export function JobsPage() {
   const { data: canEdit } = useCan({ resource: "jobs", action: "edit" });
   const canEditWorkspaceJobs = canEdit?.can ?? false;
 
-  const { result: workspaceJobs } = useList<ScheduledJob>({
+  const { result: workspaceJobs } = useWorkspaceList<ScheduledJob>({
     resource: "jobs",
   });
   // Global jobs exist outside any workspace role; superusers only.

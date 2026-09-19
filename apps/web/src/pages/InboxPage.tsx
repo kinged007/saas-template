@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useList, useUpdate, useCustomMutation, useCustom, useInvalidate, useGetIdentity } from "@refinedev/core";
+import { useUpdate, useCustomMutation, useCustom, useInvalidate, useGetIdentity } from "@refinedev/core";
+import { useWorkspaceList, useWorkspaceCustom } from "../hooks/useWorkspaceQuery";
 import Markdown from "react-markdown";
 import { ArrowLeft, Inbox, Mail, MailOpen, ExternalLink, SendHorizontal, Pencil, Archive, ArchiveRestore, Search, MessageSquare, PanelLeftClose, PanelLeftOpen, X, Check } from "lucide-react";
 import { useSearchParams } from "react-router";
@@ -140,7 +141,7 @@ export function InboxPage() {
   }, [archivedFilter, tab]);
 
   // Notifications data (workspace-scoped) – hide conversation_message pointers; they are surfaced via Messages tab + right sidebar grouped
-  const { result: notifResult, query: notifListQuery } = useList<Notification>({
+  const { result: notifResult, query: notifListQuery } = useWorkspaceList<Notification>({
     resource: "notifications",
     pagination: { pageSize: 200 },
     sorters: [{ field: "created_at", order: "desc" }],
@@ -244,7 +245,7 @@ export function InboxPage() {
     return f;
   }, [archivedFilter, debouncedQ]);
 
-  const { result: convResult, query: convQuery } = useList<Conversation>({
+  const { result: convResult, query: convQuery } = useWorkspaceList<Conversation>({
     resource: "conversations",
     pagination: { pageSize: 20 },
     sorters: [{ field: "last_message_at", order: "desc" }],
@@ -263,7 +264,7 @@ export function InboxPage() {
   const { mutateAsync: customMutateAsync } = useCustomMutation();
 
   // Messages for selected conversation
-  const { result: messagesResult, query: messagesQuery } = useCustom<Message[]>({
+  const { result: messagesResult, query: messagesQuery } = useWorkspaceCustom<Message[]>({
     url: selectedConvId ? `conversations/${selectedConvId}/messages` : "",
     method: "get",
     config: {

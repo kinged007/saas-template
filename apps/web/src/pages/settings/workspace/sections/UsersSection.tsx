@@ -1,4 +1,5 @@
-import { useList } from "@refinedev/core";
+import {  } from "@refinedev/core";
+import { useWorkspaceList } from "../../../../hooks/useWorkspaceQuery";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -8,7 +9,7 @@ import type { Member } from "@/types";
 import { getMemberDisplayName } from "@/types";
 
 export function UsersSection() {
-  const { result, query } = useList<Member>({ resource: "members" });
+  const { result, query } = useWorkspaceList<Member>({ resource: "members" });
   const rows = result?.data ?? [];
   const isLoading = query.isPending;
 

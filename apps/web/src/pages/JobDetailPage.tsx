@@ -1,12 +1,6 @@
 import { useMemo, useState } from "react";
-import {
-  useCan,
-  useCustom,
-  useCustomMutation,
-  useGetIdentity,
-  useGo,
-  useInvalidate,
-} from "@refinedev/core";
+import { useCan, useCustomMutation, useGetIdentity, useGo, useInvalidate } from "@refinedev/core";
+import { useWorkspaceCustom } from "../hooks/useWorkspaceQuery";
 import { useParams } from "react-router";
 import { ArrowLeft, History, Pencil, Play } from "lucide-react";
 
@@ -291,7 +285,7 @@ export function JobDetailPage() {
   const { data: canEdit } = useCan({ resource: "jobs", action: "edit" });
 
   // Unified detail endpoint — backend decides access by job scope (global→superuser, workspace→jobs:view)
-  const { result: jobResult, query: jobQuery } = useCustom<ScheduledJob>({
+  const { result: jobResult, query: jobQuery } = useWorkspaceCustom<ScheduledJob>({
     url: `jobs/${jobId}`,
     method: "get",
   });
@@ -308,7 +302,7 @@ export function JobDetailPage() {
   const {
     result: runsResult,
     query: runsQuery,
-  } = useCustom<JobRun[]>({
+  } = useWorkspaceCustom<JobRun[]>({
     url: `jobs/${jobId}/runs?limit=50&sort[]=scheduled_at&order[]=desc`,
     method: "get",
     queryOptions: { enabled: !!job },

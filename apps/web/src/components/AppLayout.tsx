@@ -30,7 +30,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useCustom, useGetIdentity, useLogout } from "@refinedev/core";
+import { useGetIdentity, useLogout } from "@refinedev/core";
+import { useWorkspaceCustom } from "../hooks/useWorkspaceQuery";
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import {
@@ -71,7 +72,7 @@ function SidebarNav() {
   const activeKey = `/${location.pathname.split("/")[1] || ""}`;
   const isActive = (key: string) => (key === "/" ? location.pathname === "/" : activeKey === key);
 
-  const { result: convUnreadResult } = useCustom<{ count: number; unread_conversations: number }>({
+  const { result: convUnreadResult } = useWorkspaceCustom<{ count: number; unread_conversations: number }>({
     url: "conversations/unread-count",
     method: "get",
     queryOptions: {

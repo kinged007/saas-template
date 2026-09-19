@@ -1,4 +1,5 @@
-import { useCan, useList } from "@refinedev/core";
+import { useCan } from "@refinedev/core";
+import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 import { KeyRound } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +20,7 @@ import { EmptyRow, formatDate } from "../components/ui";
 import type { ApiKey } from "../types";
 
 export function ApiKeysPage() {
-  const { result } = useList<ApiKey>({ resource: "api-keys" });
+  const { result } = useWorkspaceList<ApiKey>({ resource: "api-keys" });
   const { data: canManage } = useCan({ resource: "api-keys", action: "delete" });
 
   const rows = result?.data ?? [];

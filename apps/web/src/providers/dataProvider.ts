@@ -2,7 +2,7 @@ import type { DataProvider } from "@refinedev/core";
 import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import dataProviderModule from "@refinedev/simple-rest";
 
-import { tokenStore, workspaceStore } from "../utils/storage";
+import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId } from "../utils/storage";
 import { clearAllCaches, queryClient } from "./queryClient";
 
 // Same-origin API path: the vite dev proxy (and nginx in production) forwards
@@ -38,7 +38,13 @@ httpClient.interceptors.request.use(async (config) => {
     config.headers = config.headers ?? {};
     config.headers.Authorization = `Bearer ${access}`;
   }
-  const workspaceId = workspaceStore.get();
+  // Single source of truth: the in-memory active id, synchronously
+  // committed by login / switch / logout alongside the persisted store.
+  // The store reads are boot fallbacks only (fresh page load before the
+  // context hydrates) — never a re-derivation that can disagree.
+  const cached = identityStore.get() as { id?: string } | null;
+  const workspaceId =
+    getActiveWorkspaceId() ?? workspaceStore.get(cached?.id) ?? workspaceStore.get();
   if (workspaceId) {
     config.headers = config.headers ?? {};
     config.headers["X-Workspace-ID"] = workspaceId;
