@@ -129,7 +129,7 @@ function getDetectedTimezone(): string {
   }
 }
 
-export function ProfileSettingsPage() {
+export function GeneralSection() {
   const { data: identity } = useGetIdentity<Identity>();
   const profileHook = useProfile();
   const profile = (profileHook.data as UserProfile | undefined) ?? identity?.profile;
@@ -259,14 +259,7 @@ export function ProfileSettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl flex flex-col gap-6">
-      <div className="flex flex-col gap-2">
-        <h2 className="text-2xl font-bold tracking-tight">Profile Settings</h2>
-        <p className="text-muted-foreground text-sm">
-          Update your personal information and preferences. Changes are visible to workspace members.
-        </p>
-      </div>
-
+    <div className="flex flex-col gap-6">
       <Card>
         <CardHeader>
           <CardTitle>Personal Information</CardTitle>
