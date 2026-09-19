@@ -126,6 +126,13 @@ httpClient.interceptors.response.use(
 
 const baseDataProvider = dataProviderModule(API_URL, httpClient);
 
+// Refine resource name → backend path when they differ (hyphenated resource
+// names are not valid backend route prefixes).
+const RESOURCE_PATHS: Record<string, string> = {
+  "admin-users": "admin/users",
+};
+const resourcePath = (resource: string) => RESOURCE_PATHS[resource] ?? resource;
+
 /**
  * simple-rest's `custom` uses the url verbatim — it never prepends the API
  * base URL. Resolve relative custom urls against API_URL so useCustom /
@@ -134,6 +141,12 @@ const baseDataProvider = dataProviderModule(API_URL, httpClient);
  */
 export const dataProvider: DataProvider = {
   ...baseDataProvider,
+  getList: ({ resource, ...params }) =>
+    baseDataProvider.getList({ resource: resourcePath(resource), ...params }),
+  getOne: ({ resource, ...params }) =>
+    baseDataProvider.getOne({ resource: resourcePath(resource), ...params }),
+  update: ({ resource, ...params }) =>
+    baseDataProvider.update({ resource: resourcePath(resource), ...params }),
   custom: async ({ url, ...params }) => {
     const resolved =
       !url || /^https?:\/\//.test(url) || url.startsWith("/")

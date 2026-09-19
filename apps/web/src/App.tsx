@@ -72,6 +72,7 @@ export function App() {
             meta: { label: "Scheduled Jobs" },
           },
           { name: "audit", list: "/audit", meta: { hide: true } },
+          { name: "admin-users", list: "/admin", meta: { hide: true } },
         ]}
       >
         <WorkspaceProvider>
