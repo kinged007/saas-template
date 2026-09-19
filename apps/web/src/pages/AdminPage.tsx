@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useGetIdentity } from "@refinedev/core";
+import { useGetIdentity, useList, useUpdate } from "@refinedev/core";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,27 +17,24 @@ import { EmptyRow, StatusBadge, formatDate } from "../components/ui";
 
 import { IDENTITY_QUERY_OPTIONS } from "../contexts/WorkspaceContext";
 import { API_URL, httpClient } from "../providers/dataProvider";
-import type { Identity } from "../types";
-
-type AdminUser = {
-  id: string;
-  email: string;
-  display_name: string;
-  is_active: boolean;
-  is_superuser: boolean;
-  created_at?: string;
-  workspaces?: Array<{ id: string; name: string; slug: string; role: string }>;
-};
+import type { AdminUser, Identity } from "../types";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : "Request failed");
 
 export function AdminPage() {
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
   const [search, setSearch] = useState("");
-  const [users, setUsers] = useState<AdminUser[] | null>(null);
+  const [submittedSearch, setSubmittedSearch] = useState<string | null>(null);
   const [selected, setSelected] = useState<AdminUser | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [detailBusy, setDetailBusy] = useState(false);
+
+  const { result: usersResult, query: usersQuery } = useList<AdminUser>({
+    resource: "admin-users",
+    filters: submittedSearch ? [{ field: "search", operator: "eq", value: submittedSearch }] : [],
+    queryOptions: { enabled: submittedSearch !== null },
+  });
+  const { mutate: toggleActive, mutation } = useUpdate<AdminUser>();
 
   if (identity && identity.is_superuser !== true) {
     return (
@@ -48,51 +45,50 @@ export function AdminPage() {
     );
   }
 
-  const runSearch = async () => {
-    setError(null);
-    setBusy(true);
-    try {
-      const res = await httpClient.get(`${API_URL}/admin/users?search=${encodeURIComponent(search)}`);
-      setUsers(res.data ?? []);
-    } catch (e) {
-      setError(errMsg(e));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const users = usersResult?.data ?? null;
+  const listError = usersQuery.isError ? errMsg(usersQuery.error) : null;
+  const busy = usersQuery.isFetching || mutation.isPending || detailBusy;
 
   const openUser = async (id: string) => {
-    setError(null);
-    setBusy(true);
+    setDetailError(null);
+    setDetailBusy(true);
     try {
       const res = await httpClient.get(`${API_URL}/admin/users/${id}`);
       setSelected(res.data);
     } catch (e) {
-      setError(errMsg(e));
+      setDetailError(errMsg(e));
     } finally {
-      setBusy(false);
+      setDetailBusy(false);
     }
   };
 
-  const toggleActive = async (user: AdminUser, isActive: boolean) => {
-    setError(null);
-    setBusy(true);
-    try {
-      const res = await httpClient.patch(`${API_URL}/admin/users/${user.id}`, { is_active: isActive });
-      const updated = res.data as AdminUser;
-      setSelected((s) => (s?.id === updated.id ? { ...s, ...updated } : s));
-      setUsers((list) => list?.map((u) => (u.id === updated.id ? { ...u, ...updated } : u)) ?? list);
-    } catch (e) {
-      setError(errMsg(e));
-    } finally {
-      setBusy(false);
-    }
+  const onToggleActive = (user: AdminUser, isActive: boolean) => {
+    setDetailError(null);
+    toggleActive(
+      {
+        resource: "admin-users",
+        id: user.id,
+        values: { is_active: isActive },
+        successNotification: {
+          message: isActive ? "User enabled" : "User disabled",
+          type: "success",
+        },
+        errorNotification: false,
+      },
+      {
+        onSuccess: (response) => {
+          const updated = (response as { data?: AdminUser }).data;
+          if (updated) setSelected((s) => (s?.id === updated.id ? { ...s, ...updated } : s));
+        },
+        onError: (e) => setDetailError(errMsg(e)),
+      },
+    );
   };
 
   return (
     <ListView>
       <ListViewHeader title="Admin" />
-      {error && <p className="text-destructive text-sm">{error}</p>}
+      {(listError ?? detailError) && <p className="text-destructive text-sm">{listError ?? detailError}</p>}
       <div className="flex items-end gap-2">
         <div className="grid gap-1.5">
           <Label htmlFor="admin-search">Find user by email or name</Label>
@@ -101,14 +97,14 @@ export function AdminPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="user@example.com"
-            onKeyDown={(e) => e.key === "Enter" && void runSearch()}
+            onKeyDown={(e) => e.key === "Enter" && setSubmittedSearch(search.trim())}
           />
         </div>
-        <Button onClick={() => void runSearch()} disabled={busy || !search.trim()}>
+        <Button onClick={() => setSubmittedSearch(search.trim())} disabled={busy || !search.trim()}>
           Search
         </Button>
       </div>
-      {users !== null && (
+      {submittedSearch !== null && (
         <Table>
           <TableHeader>
             <TableRow>
@@ -119,8 +115,10 @@ export function AdminPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {users.length === 0 && <EmptyRow colSpan={4}>No users found</EmptyRow>}
-            {users.map((u) => (
+            {users !== null && users.length === 0 && !usersQuery.isFetching && (
+              <EmptyRow colSpan={4}>No users found</EmptyRow>
+            )}
+            {(users ?? []).map((u) => (
               <TableRow key={u.id}>
                 <TableCell>{u.email}</TableCell>
                 <TableCell>
@@ -152,7 +150,7 @@ export function AdminPage() {
                 variant={selected.is_active ? "destructive" : "default"}
                 size="sm"
                 disabled={busy}
-                onClick={() => void toggleActive(selected, !selected.is_active)}
+                onClick={() => onToggleActive(selected, !selected.is_active)}
               >
                 {selected.is_active ? "Disable access" : "Enable access"}
               </Button>
