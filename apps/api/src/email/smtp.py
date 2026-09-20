@@ -36,8 +36,8 @@ class SmtpEmailSender(EmailSender):
         sender = message.from_addr or self.config.from_addr
         if not sender:
             raise EmailSendError("no sender address: set EMAIL_FROM or from_addr")
-        mime = message.as_mime(sender)
         try:
+            mime = message.as_mime(sender)
             await asyncio.to_thread(self._deliver, sender, message.to, mime.as_string())
         except EmailSendError:
             raise
