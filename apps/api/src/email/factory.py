@@ -1,7 +1,7 @@
 """Email sender factory: selects the backend from `EMAIL_DRIVER`.
 
 Console (dev default) logs and captures; SMTP delivers for real. Unknown
-drivers raise `ValueError`, same shape as the secret-store factory.
+drivers raise `ValueError`, mirroring the secret-store factory's message.
 """
 
 from __future__ import annotations
@@ -12,10 +12,7 @@ from src.email.base import EmailDriver, EmailMessage, EmailSender
 from src.email.console import ConsoleEmailSender
 from src.email.smtp import SmtpConfig, SmtpEmailSender
 
-_EMAIL_DRIVERS: dict[str, str] = {
-    EmailDriver.CONSOLE.value: "console",
-    EmailDriver.SMTP.value: "smtp",
-}
+_EMAIL_DRIVERS: tuple[str, ...] = (EmailDriver.CONSOLE.value, EmailDriver.SMTP.value)
 
 
 def build_email_sender() -> EmailSender:
