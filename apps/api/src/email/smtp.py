@@ -52,12 +52,10 @@ class SmtpEmailSender(EmailSender):
                 if cfg.use_tls:
                     smtp.starttls()
                     smtp.ehlo()
-                if cfg.username:
-                    if not cfg.password:
-                        logger.warning("SMTP username without password; sending unauthenticated")
+                if cfg.username and cfg.password:
                     smtp.login(cfg.username, cfg.password)
-                elif cfg.password:
-                    logger.warning("SMTP password set without username; sending unauthenticated")
+                elif cfg.username or cfg.password:
+                    logger.warning("SMTP credentials incomplete; sending unauthenticated")
                 smtp.sendmail(sender, [recipient], raw)
         except Exception as exc:
             raise EmailSendError(f"smtp send failed: {exc}") from exc
