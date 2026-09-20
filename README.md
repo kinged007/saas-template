@@ -54,7 +54,7 @@ make web          # vite dev on :5173 (open http://localhost:5173)
 OpenAPI docs: http://localhost:8000/docs
 
 Demo logins (from `make api-seed`): all seeded users share the password
-`password` — e.g. `admin@example.com` / `password`.
+`password` — e.g. `admin@example.com` / `password` (`admin@example.com` is the dev superuser).
 
 ## Env
 
