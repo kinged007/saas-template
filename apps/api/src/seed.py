@@ -184,6 +184,12 @@ async def main() -> None:
                 logger.info("created demo user %s", email)
             users[email] = user
 
+        # Dev-only ceiling: prod superuser still comes from SUPERADMIN_EMAIL.
+        admin = users["admin@example.com"]
+        if not admin.is_superuser:
+            admin.is_superuser = True
+            logger.info("promoted admin@example.com to superuser")
+
         workspaces: dict[str, Workspace] = {}
         for spec in WORKSPACES:
             result = await session.execute(select(Workspace).where(Workspace.slug == spec["slug"]))
