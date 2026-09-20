@@ -229,6 +229,47 @@ async def test_smtp_driver_skips_tls_and_login_without_creds(monkeypatch):
     assert calls["sent"] is True
 
 
+async def test_smtp_driver_skips_login_with_half_set_creds(monkeypatch, caplog):
+    import logging
+
+    from src.email.smtp import SmtpConfig, SmtpEmailSender
+
+    calls: dict = {}
+
+    class FakeSMTP:
+        def __init__(self, *args, **kwargs):
+            calls["login"] = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def ehlo(self):
+            pass
+
+        def starttls(self):
+            pass
+
+        def login(self, user, password):
+            calls["login"] = (user, password)
+
+        def sendmail(self, *args):
+            calls["sent"] = True
+
+    import smtplib
+
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    with caplog.at_level(logging.WARNING, logger="src.email.smtp"):
+        await SmtpEmailSender(
+            SmtpConfig(username="user", use_tls=False, from_addr="noreply@example.com")
+        ).send(_msg(html_body=None))
+    assert calls["login"] is False
+    assert calls["sent"] is True
+    assert "incomplete" in caplog.text
+
+
 async def test_smtp_failure_raises_send_error(monkeypatch):
     import smtplib
 
