@@ -19,6 +19,7 @@ from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.services.api_keys import ApiKeyService
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
+from src.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -184,9 +185,10 @@ async def main() -> None:
                 logger.info("created demo user %s", email)
             users[email] = user
 
-        # Dev-only ceiling: prod superuser still comes from SUPERADMIN_EMAIL.
+        # Dev-only ceiling: only when SUPERADMIN_EMAIL is unset. A set value
+        # means the bootstrap account (via register) is the real superuser.
         admin = users["admin@example.com"]
-        if not admin.is_superuser:
+        if not settings.superadmin_email.strip() and not admin.is_superuser:
             admin.is_superuser = True
             logger.info("promoted admin@example.com to superuser")
 
