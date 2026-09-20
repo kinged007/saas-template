@@ -29,6 +29,58 @@ async def test_console_driver_captures_message():
     assert captured.html_body == "<p>join us</p>"
 
 
+async def test_per_message_from_addr_overrides_default(monkeypatch):
+    import smtplib
+
+    from src.email.smtp import SmtpConfig, SmtpEmailSender
+
+    calls: dict = {}
+
+    class FakeSMTP:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def ehlo(self):
+            pass
+
+        def starttls(self):
+            pass
+
+        def sendmail(self, sender, recipients, raw):
+            calls["sent"] = (sender, recipients, raw)
+
+    monkeypatch.setattr(smtplib, "SMTP", lambda *a, **k: FakeSMTP())
+    sender = SmtpEmailSender(SmtpConfig(from_addr="default@example.com"))
+    await sender.send(_msg(from_addr="override@example.com"))
+    assert calls["sent"][0] == "override@example.com"
+
+
+async def test_console_outbox_skips_invalid_messages():
+    import pytest
+
+    from src.email.base import EmailSendError
+    from src.email.console import ConsoleEmailSender
+
+    sender = ConsoleEmailSender()
+    with pytest.raises(EmailSendError):
+        await sender.send(_msg(to="not-an-email"))
+    assert len(sender.outbox) == 0
+
+
+def test_as_mime_builds_multipart_alternative():
+    msg = _msg()
+    mime = msg.as_mime("noreply@example.com")
+    assert mime.is_multipart()
+    parts = mime.get_payload()
+    assert [p.get_content_type() for p in parts] == ["text/plain", "text/html"]
+    single = _msg(html_body=None).as_mime("noreply@example.com")
+    assert not single.is_multipart()
+    assert single.get_content_type() == "text/plain"
+
+
 async def test_invalid_address_raises_send_error():
     import pytest
 
