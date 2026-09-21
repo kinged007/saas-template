@@ -63,6 +63,22 @@ const MENU_ITEMS = [
   { key: "/members", label: "Members", icon: Users, permission: "member:read" },
 ];
 
+function AdminMenuItem() {
+  const location = useLocation();
+  const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
+  if (identity?.is_superuser !== true) return null;
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild isActive={location.pathname === "/admin"} tooltip="Admin">
+        <Link to="/admin">
+          <ShieldCheck className="h-4 w-4 shrink-0" />
+          <span>Admin</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
 function SidebarNav() {
   const location = useLocation();
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
@@ -70,7 +86,6 @@ function SidebarNav() {
   const permissions = activeWorkspacePermissions(identity);
   const can = (p: string) => permissions.includes("*") || permissions.includes(p);
   const items = MENU_ITEMS.filter((i) => can(i.permission));
-  const isSuperuser = identity?.is_superuser === true;
   const activeKey = `/${location.pathname.split("/")[1] || ""}`;
   const isActive = (key: string) => (key === "/" ? location.pathname === "/" : activeKey === key);
 
@@ -115,16 +130,7 @@ function SidebarNav() {
             </SidebarMenuItem>
           );
         })}
-        {isSuperuser && (
-          <SidebarMenuItem>
-            <SidebarMenuButton asChild isActive={isActive("/admin")} tooltip="Admin">
-              <Link to="/admin">
-                <ShieldCheck className="h-4 w-4 shrink-0" />
-                <span>Admin</span>
-              </Link>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        )}
+        <AdminMenuItem />
       </SidebarMenu>
     </SidebarGroup>
   );
@@ -289,18 +295,25 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         </SidebarHeader>
         <SidebarContent>
           {workspaces.length === 0 ? (
-            <div className="flex flex-col gap-3 p-4">
-              <p className="text-muted-foreground text-sm">
-                You're not a member of any workspace yet.
-              </p>
-              <Button
-                onClick={() => navigate("/workspaces/create")}
-                className="gap-2 justify-start"
-              >
-                <Building2 className="h-4 w-4" />
-                Create workspace
-              </Button>
-            </div>
+            <>
+              <div className="flex flex-col gap-3 p-4">
+                <p className="text-muted-foreground text-sm">
+                  You're not a member of any workspace yet.
+                </p>
+                <Button
+                  onClick={() => navigate("/workspaces/create")}
+                  className="gap-2 justify-start"
+                >
+                  <Building2 className="h-4 w-4" />
+                  Create workspace
+                </Button>
+              </div>
+              <SidebarGroup>
+                <SidebarMenu>
+                  <AdminMenuItem />
+                </SidebarMenu>
+              </SidebarGroup>
+            </>
           ) : (
             <SidebarNav />
           )}
