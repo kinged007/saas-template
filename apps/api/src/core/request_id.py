@@ -44,10 +44,17 @@ def _route_template(request: Request) -> str:
 
     Built from url.path (which keeps the router prefix that
     `scope["route"].path` drops) so cardinality stays bounded without
-    losing the prefix.
+    losing the prefix. Unknown routes fall back to the raw path —
+    conservatively counting a 404 burst under one label per distinct
+    path beats mislabeling it as a real route.
     """
-    template = request.url.path
-    for name, value in (request.scope.get("path_params") or {}).items():
+    path = request.url.path
+    path_params = request.scope.get("path_params")
+    if path_params is None:
+        # No route matched (404): nothing to template against.
+        return path
+    template = path
+    for name, value in path_params.items():
         template = template.replace(f"/{value}", f"/{{{name}}}", 1)
     return template
 
