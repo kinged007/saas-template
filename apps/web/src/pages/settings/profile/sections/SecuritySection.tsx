@@ -123,6 +123,49 @@ export function SecuritySection() {
     <div className="flex flex-col gap-6">
       <Card>
         <CardHeader>
+          <CardTitle>Two-factor authentication</CardTitle>
+          <CardDescription>
+            {enabled ? "TOTP is enabled. Login requires a code from your authenticator app." : "Add a second factor with any authenticator app (TOTP)."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {!enabled && !setupUri && (
+            <div>
+              <Button variant="outline" onClick={startSetup} disabled={mutation.isPending}>
+                Set up authenticator
+              </Button>
+            </div>
+          )}
+          {!enabled && setupUri && (
+            <div className="flex flex-col gap-3">
+              <p className="text-sm">Scan this URI in your authenticator app, then enter the 6-digit code:</p>
+              <code className="bg-muted block rounded p-2 font-mono text-xs break-all">{setupUri}</code>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="totp-code">Code</Label>
+                <Input id="totp-code" inputMode="numeric" maxLength={8} value={setupCode} onChange={(e) => setSetupCode(e.target.value)} placeholder="123456" />
+              </div>
+              <div className="flex gap-2">
+                <Button onClick={confirmSetup} disabled={!setupCode || mutation.isPending}>Enable</Button>
+                <Button variant="outline" onClick={() => { setSetupUri(null); setSetupToken(null); }}>Cancel</Button>
+              </div>
+            </div>
+          )}
+          {backupCodes && (
+            <div className="flex flex-col gap-2">
+              <p className="text-sm font-medium">Backup codes — store these now, each works once:</p>
+              <code className="bg-muted block rounded p-2 font-mono text-xs">{backupCodes.join("  ")}</code>
+              <Button variant="outline" size="sm" className="self-start" onClick={() => setBackupCodes(null)}>Done</Button>
+            </div>
+          )}
+          {enabled && (
+            <div>
+              <Separator className="mb-4" />
+              <Button variant="destructive" onClick={() => setDisableOpen(true)}>Disable two-factor</Button>
+            </div>
+          )}
+        </CardContent>
+      <Card>
+        <CardHeader>
           <CardTitle>Active sessions</CardTitle>
           <CardDescription>Devices signed in to your account. Revoking stops that session refreshing.</CardDescription>
         </CardHeader>
@@ -166,49 +209,6 @@ export function SecuritySection() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Two-factor authentication</CardTitle>
-          <CardDescription>
-            {enabled ? "TOTP is enabled. Login requires a code from your authenticator app." : "Add a second factor with any authenticator app (TOTP)."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          {!enabled && !setupUri && (
-            <div>
-              <Button variant="outline" onClick={startSetup} disabled={mutation.isPending}>
-                Set up authenticator
-              </Button>
-            </div>
-          )}
-          {!enabled && setupUri && (
-            <div className="flex flex-col gap-3">
-              <p className="text-sm">Scan this URI in your authenticator app, then enter the 6-digit code:</p>
-              <code className="bg-muted block rounded p-2 font-mono text-xs break-all">{setupUri}</code>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="totp-code">Code</Label>
-                <Input id="totp-code" inputMode="numeric" maxLength={8} value={setupCode} onChange={(e) => setSetupCode(e.target.value)} placeholder="123456" />
-              </div>
-              <div className="flex gap-2">
-                <Button onClick={confirmSetup} disabled={!setupCode || mutation.isPending}>Enable</Button>
-                <Button variant="outline" onClick={() => { setSetupUri(null); setSetupToken(null); }}>Cancel</Button>
-              </div>
-            </div>
-          )}
-          {backupCodes && (
-            <div className="flex flex-col gap-2">
-              <p className="text-sm font-medium">Backup codes — store these now, each works once:</p>
-              <code className="bg-muted block rounded p-2 font-mono text-xs">{backupCodes.join("  ")}</code>
-              <Button variant="outline" size="sm" className="self-start" onClick={() => setBackupCodes(null)}>Done</Button>
-            </div>
-          )}
-          {enabled && (
-            <div>
-              <Separator className="mb-4" />
-              <Button variant="destructive" onClick={() => setDisableOpen(true)}>Disable two-factor</Button>
-            </div>
-          )}
-        </CardContent>
       </Card>
 
       <Dialog open={disableOpen} onOpenChange={setDisableOpen}>

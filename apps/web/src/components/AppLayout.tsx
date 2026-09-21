@@ -240,13 +240,9 @@ function UserMenu() {
           <CircleUser className="h-4 w-4" />
           {displayName}
         </DropdownMenuLabel>
-        <DropdownMenuItem onClick={() => navigate("/settings/profile")}>
+        <DropdownMenuItem onClick={() => navigate("/settings/profile/security")}>
           <Settings />
           Profile Settings
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => navigate("/settings/security")}>
-          <ShieldCheck />
-          Security
         </DropdownMenuItem>
         {isWorkspaceAdmin && (
           <DropdownMenuItem onClick={() => navigate("/settings/workspace")}>
