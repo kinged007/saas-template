@@ -19,6 +19,16 @@ async def test_request_id_default_outside_request():
     assert get_request_id() == "-"
 
 
+async def test_request_id_rejects_unsafe_incoming(app_client):
+    resp = await app_client.get("/api/v1/healthz", headers={"X-Request-ID": 'a"b\\c\ndef'})
+    minted = resp.headers["X-Request-ID"]
+    assert len(minted) == 16
+    assert all(c in "0123456789abcdef" for c in minted)
+
+    resp = await app_client.get("/api/v1/healthz", headers={"X-Request-ID": "x" * 65})
+    assert len(resp.headers["X-Request-ID"]) == 16
+
+
 async def test_metrics_endpoint_counts_requests(app_client):
     metrics.reset()
     await app_client.get("/api/v1/healthz")
@@ -39,6 +49,34 @@ async def test_metrics_render_empty_and_reset():
     assert 'job_runs_total{key="k",status="success"} 1' in metrics.render_prometheus()
     metrics.reset()
     assert metrics.render_prometheus() == ""
+
+
+def test_metrics_label_escaping():
+    metrics.reset()
+    metrics.inc("job_runs_total", key='a"b\\c', status="ok\nx")
+    body = metrics.render_prometheus()
+    assert 'key="a\\"b\\\\c"' in body
+    assert 'status="ok\\nx"' in body
+    metrics.reset()
+
+
+def test_retention_settings_reject_negatives():
+    import pydantic
+
+    from src.settings import Settings
+
+    try:
+        Settings(jobs_log_retention_days=-1)
+    except pydantic.ValidationError:
+        pass
+    else:
+        raise AssertionError("negative jobs_log_retention_days accepted")
+    try:
+        Settings(audit_log_retention_days=-1)
+    except pydantic.ValidationError:
+        pass
+    else:
+        raise AssertionError("negative audit_log_retention_days accepted")
 
 
 async def test_retention_cleanup_job_registered_and_runs(app_client, monkeypatch):

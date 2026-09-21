@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import re
 import time
 import uuid
 
@@ -22,6 +23,15 @@ logger = logging.getLogger(__name__)
 REQUEST_ID_HEADER = "X-Request-ID"
 
 _request_id: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+
+_VALID_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _coerce_request_id(incoming: str | None) -> str:
+    """Echo the caller's id only if header/quote/newline-safe; else mint one."""
+    if incoming and _VALID_ID.fullmatch(incoming):
+        return incoming
+    return uuid.uuid4().hex[:16]
 
 
 def get_request_id() -> str:
@@ -47,7 +57,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
 
     async def dispatch(self, request: Request, call_next):
-        request_id = request.headers.get(REQUEST_ID_HEADER) or uuid.uuid4().hex[:16]
+        request_id = _coerce_request_id(request.headers.get(REQUEST_ID_HEADER))
         request.state.request_id = request_id
         token = _request_id.set(request_id)
         started = time.perf_counter()

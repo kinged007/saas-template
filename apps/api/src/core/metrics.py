@@ -33,13 +33,18 @@ def observe_webhook_delivery(*, outcome: str) -> None:
     inc("webhook_deliveries_total", outcome=outcome)
 
 
+def _escape_label(value: str) -> str:
+    """Escape a label value per the Prometheus exposition spec."""
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
 def render_prometheus() -> str:
     """Render all counters in Prometheus text exposition format."""
     with _lock:
         items = sorted(_counters.items())
     by_name: dict[str, list[str]] = {}
     for (name, label_items), value in items:
-        labels = ",".join(f'{k}="{v}"' for k, v in label_items)
+        labels = ",".join(f'{k}="{_escape_label(v)}"' for k, v in label_items)
         sample = f"{name}{{{labels}}} {value:g}" if labels else f"{name} {value:g}"
         by_name.setdefault(name, []).append(sample)
     lines: list[str] = []
