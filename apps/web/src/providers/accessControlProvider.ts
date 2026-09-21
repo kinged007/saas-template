@@ -26,6 +26,7 @@ const PERMISSION_MAP: Record<string, Record<string, string>> = {
   roles: {
     list: "role:read",
     create: "role:manage",
+    edit: "role:manage",
     show: "role:read",
   },
   "api-keys": {

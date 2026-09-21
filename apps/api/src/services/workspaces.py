@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dates import ensure_utc, now_utc
-from src.core.permissions import permissions_for_role
+from src.core.permissions import ALL_PERMISSIONS, permissions_for_role
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
@@ -736,6 +736,32 @@ class WorkspaceService:
             raise WorkspaceError(f"role {name} not found")
         return role
 
+    def _check_permissions_assignable(
+        self, permissions: list[str], assignable: set[str], *, owner: bool = False
+    ) -> None:
+        """Unknown strings and `"*"` fail fast; unheld permissions are Forbidden."""
+        unknown = sorted(set(permissions) - set(ALL_PERMISSIONS) - {"*"})
+        if unknown:
+            raise WorkspaceError(f"unknown permissions: {', '.join(unknown)}")
+        if "*" in permissions:
+            # Reserved for owner — minting it would clone owner minus the name.
+            raise WorkspaceError('"*" is reserved for the owner role')
+        if not owner:
+            denied = sorted(set(permissions) - assignable)
+            if denied:
+                raise WorkspaceForbidden(
+                    f"cannot grant permissions you do not have: {', '.join(denied)}"
+                )
+
+    async def _check_name_free(
+        self, workspace_id: str, name: str, *, exclude_id: str | None = None
+    ) -> None:
+        stmt = select(Role).where(Role.workspace_id == workspace_id, Role.name == name)
+        if exclude_id is not None:
+            stmt = stmt.where(Role.id != exclude_id)
+        if (await self._session.execute(stmt)).scalar_one_or_none() is not None:
+            raise WorkspaceConflict(f"a role named '{name}' already exists")
+
     async def create_custom_role(
         self,
         workspace_id: str,
@@ -746,6 +772,16 @@ class WorkspaceService:
         actor: User | None = None,
         ip_address: str | None = None,
     ) -> Role:
+        assignable: set[str] = set()
+        is_owner = False
+        if actor is not None:
+            membership = await self.get_membership(workspace_id, actor.id)
+            if membership is not None:
+                _, actor_role = membership
+                is_owner = "*" in actor_role.permissions
+                assignable = set(actor_role.permissions)
+        self._check_permissions_assignable(permissions, assignable, owner=is_owner)
+        await self._check_name_free(workspace_id, name)
         role = Role(
             workspace_id=workspace_id,
             name=name,
@@ -763,6 +799,54 @@ class WorkspaceService:
             action="role.created",
             actor_user_id=actor.id if actor else None,
             details={"name": name, "permissions": permissions},
+            ip_address=ip_address,
+        )
+        return role
+
+    async def update_role(
+        self,
+        workspace_id: str,
+        role_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        permissions: list[str] | None = None,
+        actor: User | None = None,
+        ip_address: str | None = None,
+    ) -> Role:
+        role = await self._session.get(Role, role_id)
+        if role is None or role.workspace_id != workspace_id:
+            raise WorkspaceError("role not found")
+        if role.name == "owner":
+            raise WorkspaceForbidden("the owner role cannot be edited")
+        if name is not None and name != role.name:
+            await self._check_name_free(workspace_id, name, exclude_id=role.id)
+            role.name = name
+        if description is not None:
+            role.description = description
+        if permissions is not None:
+            assignable: set[str] = set()
+            is_owner = False
+            if actor is not None:
+                membership = await self.get_membership(workspace_id, actor.id)
+                if membership is not None:
+                    _, actor_role = membership
+                    is_owner = "*" in actor_role.permissions
+                    assignable = set(actor_role.permissions)
+            self._check_permissions_assignable(permissions, assignable, owner=is_owner)
+            role.permissions = permissions
+        # An edited system role opts out of boot-time convergence — otherwise
+        # the next restart would silently revert the change. The name stays.
+        role.system = False
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="role",
+            resource_id=role.id,
+            action="role.updated",
+            actor_user_id=actor.id if actor else None,
+            details={"name": role.name, "permissions": role.permissions},
             ip_address=ip_address,
         )
         return role
