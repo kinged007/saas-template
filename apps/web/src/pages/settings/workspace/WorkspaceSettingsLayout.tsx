@@ -1,5 +1,7 @@
-import { Navigate, Outlet, useLocation } from "react-router";
+import { Link, Navigate, Outlet, useLocation } from "react-router";
 import { useGetIdentity } from "@refinedev/core";
+
+import { Button } from "@/components/ui/button";
 
 import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "@/contexts/WorkspaceContext";
 import { activeWorkspacePermissions } from "@/utils/permissions";
@@ -22,8 +24,30 @@ function isWorkspaceAdmin(identity: Identity | undefined, workspaceId: string | 
 
 export function WorkspaceSettingsLayout() {
   const { workspace } = useWorkspace();
-  const { data: identity, isLoading } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
+  const {
+    data: identity,
+    isLoading,
+    isError,
+    refetch,
+  } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
   const location = useLocation();
+
+  if (isError) {
+    return (
+      <div className="mx-auto max-w-2xl py-12 text-center">
+        <h2 className="text-xl font-semibold">Couldn't load workspace settings</h2>
+        <p className="text-muted-foreground mt-2 text-sm">
+          Your account details failed to load. Check your connection and try again.
+        </p>
+        <div className="mt-4 flex justify-center gap-2">
+          <Button onClick={() => refetch()}>Try again</Button>
+          <Button variant="outline" asChild>
+            <Link to="/">Back to dashboard</Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading || !identity || !workspace) {
     return <p className="text-muted-foreground p-4 text-sm">Loading workspace…</p>;
@@ -39,6 +63,9 @@ export function WorkspaceSettingsLayout() {
         <p className="text-muted-foreground mt-2 text-sm">
           You need to be a workspace owner or admin to access workspace settings.
         </p>
+        <Button variant="outline" asChild className="mt-4">
+          <Link to="/">Back to dashboard</Link>
+        </Button>
       </div>
     );
   }
