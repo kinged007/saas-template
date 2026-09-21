@@ -37,7 +37,7 @@ const post = async (path: string, body: unknown) => {
  * the backend's first workspace (Acme Corp in this deployment). Failures
  * are non-fatal — the context falls back the same way.
  */
-async function seedWorkspace(identity: Identity): Promise<void> {
+export async function seedWorkspace(identity: Identity): Promise<void> {
   identityStore.set(identity);
   const stored = workspaceStore.get(identity.id);
   const next =

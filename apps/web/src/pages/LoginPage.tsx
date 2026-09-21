@@ -1,63 +1,87 @@
-import { useState } from "react";
-import { useLogin } from "@refinedev/core";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { authProvider, seedWorkspace } from "@/providers/authProvider";
 import { API_URL, httpClient } from "@/providers/dataProvider";
 import { identityStore, tokenStore, workspaceStore } from "@/utils/storage";
 import { clearAllCaches, queryClient } from "@/providers/queryClient";
 
 export function LoginPage() {
-  const { mutate: login, isPending } = useLogin();
+  const [pending, setPending] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [challenge, setChallenge] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const codeRef = useRef<HTMLInputElement>(null);
 
-  const storeTokens = (tokens: { access_token: string; refresh_token: string }) => {
+  useEffect(() => {
+    if (challenge) codeRef.current?.focus();
+  }, [challenge]);
+
+  // Same token + identity + workspace seeding as a normal login (see
+  // authProvider): without this the identity query settles with no
+  // workspace selected and the app mounts behind a blank gate.
+  const storeTokens = async (tokens: { access_token: string; refresh_token: string }) => {
     workspaceStore.clear();
     identityStore.set(null);
     clearAllCaches(queryClient);
     tokenStore.setTokens(tokens.access_token, tokens.refresh_token);
+    try {
+      const { data: identity } = await httpClient.get(`${API_URL}/auth/me`);
+      await seedWorkspace(identity);
+    } catch {
+      identityStore.set(null);
+    }
   };
 
-  const submit = (e: React.FormEvent) => {
+  // Call authProvider directly instead of useLogin: refine's useLogin shows
+  // an error toast for every success:false result, which would leak the
+  // challenge token and never reach a per-call onError branch.
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     if (challenge) {
-      httpClient
-        .post(`${API_URL}/auth/2fa/login`, { challenge_token: challenge, code })
-        .then(({ data }) => {
-          storeTokens(data);
-          window.location.assign("/");
-        })
-        .catch(() => {
-          setChallenge(null);
-          setCode("");
-          setError("Verification failed. Sign in again.");
+      setPending(true);
+      try {
+        const { data } = await httpClient.post(`${API_URL}/auth/2fa/login`, {
+          challenge_token: challenge,
+          code,
         });
+        await storeTokens(data);
+        window.location.assign("/");
+      } catch {
+        setChallenge(null);
+        setCode("");
+        setError("Verification failed. Sign in again.");
+      } finally {
+        setPending(false);
+      }
       return;
     }
-    login(
-      { email, password },
-      {
-        onError: (err) => {
-          // 2FA challenge arrives as "2fa_required:<token>" (see authProvider).
-          const msg = (err as Error)?.message ?? "";
-          const prefix = "2fa_required:";
-          if (msg.startsWith(prefix)) {
-            setChallenge(msg.slice(prefix.length));
-            setError(null);
-          } else {
-            setError(msg || "Login failed");
-          }
-        },
-      },
-    );
+    setPending(true);
+    try {
+      const res = await authProvider.login({ email, password });
+      if (res.success) {
+        window.location.assign(res.redirectTo ?? "/");
+        return;
+      }
+      // 2FA challenge arrives as "2fa_required:<token>" (see authProvider).
+      const msg = (res.error as Error)?.message ?? "";
+      const prefix = "2fa_required:";
+      if (msg.startsWith(prefix)) {
+        setChallenge(msg.slice(prefix.length));
+        setError(null);
+      } else {
+        setError(msg || "Login failed");
+      }
+    } finally {
+      setPending(false);
+    }
   };
 
   return (
@@ -77,6 +101,7 @@ export function LoginPage() {
                 <Label htmlFor="code">Two-factor code</Label>
                 <Input
                   id="code"
+                  ref={codeRef}
                   inputMode="numeric"
                   autoComplete="one-time-code"
                   placeholder="123456"
@@ -86,7 +111,7 @@ export function LoginPage() {
                 />
               </div>
               {error && <p className="text-destructive text-sm">{error}</p>}
-              <Button type="submit" disabled={isPending || !code}>
+              <Button type="submit" disabled={pending || !code}>
                 Verify
               </Button>
               <Button type="button" variant="ghost" onClick={() => { setChallenge(null); setCode(""); }}>
@@ -99,6 +124,7 @@ export function LoginPage() {
                 <Label htmlFor="email">Email</Label>
                 <Input
                   id="email"
+                  autoFocus
                   type="email"
                   placeholder="you@company.com"
                   value={email}
@@ -118,8 +144,8 @@ export function LoginPage() {
                 />
               </div>
               {error && <p className="text-destructive text-sm">{error}</p>}
-              <Button type="submit" disabled={isPending}>
-                {isPending ? "Signing in…" : "Sign in"}
+              <Button type="submit" disabled={pending}>
+                {pending ? "Signing in…" : "Sign in"}
               </Button>
               <p className="text-muted-foreground text-center text-sm">
                 <Link to="/forgot-password" className="text-primary underline underline-offset-4">
