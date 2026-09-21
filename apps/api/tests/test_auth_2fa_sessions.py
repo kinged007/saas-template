@@ -55,9 +55,7 @@ async def test_sessions_list_and_revoke(app_client):
     assert len(others) == 1
     resp = await client.delete(f"/api/v1/auth/sessions/{others[0]['id']}", headers=headers)
     assert resp.status_code == 204
-    resp = await client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": other["refresh_token"]}
-    )
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": other["refresh_token"]})
     assert resp.status_code == 401
     # revoked sessions disappear from the list; the current one remains
     resp = await client.get("/api/v1/auth/sessions", headers=headers)
@@ -83,13 +81,12 @@ async def test_revoked_session_access_token_rejected(app_client):
     resp = await client.get("/api/v1/auth/me", headers=h1)
     assert resp.status_code == 401, resp.text
     # And its refresh token no longer rotates.
-    resp = await client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]}
-    )
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
     assert resp.status_code == 401, resp.text
     # The surviving session keeps working.
     resp = await client.get("/api/v1/auth/me", headers=h2)
     assert resp.status_code == 200, resp.text
+
 
 async def test_revoke_all_sessions(app_client):
     client = app_client
@@ -100,7 +97,6 @@ async def test_revoke_all_sessions(app_client):
     listed = resp.json()
     assert len(listed) == 2
     assert sum(s["current"] for s in listed) == 1
-    current_id = next(s["id"] for s in listed if s["current"])
     resp = await client.delete("/api/v1/auth/sessions", headers=headers)
     assert resp.status_code == 204
     # the other session is revoked; the current one keeps working
