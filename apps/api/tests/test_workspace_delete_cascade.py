@@ -17,7 +17,7 @@ from src.models.api_key import ApiKey
 from src.models.audit import AuditLogEntry
 from src.models.conversation import Conversation, ConversationParticipant, Message
 from src.models.core import Invitation, Notification
-from src.models.jobs import JobDefinition, JobLogEntry, JobRun
+from src.models.jobs import JobDefinition, JobLogEntry, JobRun, JobTrigger
 from src.models.secret import StoredSecret
 from src.models.webhook import WebhookDelivery, WebhookSubscription
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
@@ -130,7 +130,15 @@ async def _counts(session, workspace_id: str) -> dict:
         else 0
     )
     out["logs"] = (
-        await session.execute(select(func.count()).select_from(JobLogEntry))
+        await session.execute(
+            select(func.count())
+            .select_from(JobLogEntry)
+            .join(JobRun, JobRun.id == JobLogEntry.run_id)
+            .where(
+                (JobRun.workspace_id == workspace_id)
+                | (JobRun.definition_id.in_(def_ids) if def_ids else JobRun.definition_id.is_(None))
+            )
+        )
     ).scalar_one()
     out["audit"] = await n(AuditLogEntry)
     return out
@@ -337,3 +345,82 @@ async def test_scheduler_skips_deleted_workspace_definitions():
             )
         ).scalar_one()
         assert runs == 0
+
+
+async def test_create_run_refuses_deleted_workspace(app_client):
+    """create_run raises JobError for a definition pointing at a deleted workspace."""
+    from src.jobs.registry import register_builtin_jobs
+    from src.services.auth import AuthService
+    from src.services.jobs import JobError, JobService
+
+    register_builtin_jobs()
+    bus = RecordingBus()
+    async with SessionFactory() as session:
+        owner = await AuthService(session, bus).register(
+            email="refuse-owner@example.com",
+            password="Password123!",
+            first_name="R",
+            last_name="O",
+        )
+        ws = await WorkspaceService(session, bus).create_workspace(
+            name="Refuse WS", slug="refuse-ws", description=None, owner=owner
+        )
+        ws_id = ws.id
+        await JobService(session).sync_definitions(workspace_ids=[ws_id])
+        await WorkspaceService(session, bus).delete_workspace(ws_id, actor=owner)
+        stale = JobDefinition(
+            key="invitations.expire_stale",
+            workspace_id=ws_id,
+            name="stale",
+            cron_schedule="* * * * *",
+            enabled=True,
+        )
+        session.add(stale)
+        await session.flush()
+        try:
+            await JobService(session, bus).create_run(stale, trigger=JobTrigger.MANUAL)
+        except JobError:
+            pass
+        else:
+            raise AssertionError("create_run should refuse a deleted workspace")
+        finally:
+            await session.rollback()
+
+
+async def test_global_definitions_survive_workspace_delete(app_client):
+    """Global (workspace_id NULL) definitions are untouched by a workspace delete."""
+    from src.jobs.registry import register_builtin_jobs
+    from src.services.auth import AuthService
+    from src.services.jobs import JobService
+
+    register_builtin_jobs()
+    bus = RecordingBus()
+    async with SessionFactory() as session:
+        owner = await AuthService(session, bus).register(
+            email="global-owner@example.com",
+            password="Password123!",
+            first_name="G",
+            last_name="O",
+        )
+        ws = await WorkspaceService(session, bus).create_workspace(
+            name="Global WS", slug="global-ws", description=None, owner=owner
+        )
+        ws_id = ws.id
+        await JobService(session).sync_definitions(workspace_ids=[ws_id])
+        before = (
+            await session.execute(
+                select(func.count())
+                .select_from(JobDefinition)
+                .where(JobDefinition.workspace_id.is_(None))
+            )
+        ).scalar_one()
+        assert before >= 1
+        await WorkspaceService(session, bus).delete_workspace(ws_id, actor=owner)
+        after = (
+            await session.execute(
+                select(func.count())
+                .select_from(JobDefinition)
+                .where(JobDefinition.workspace_id.is_(None))
+            )
+        ).scalar_one()
+        assert after == before

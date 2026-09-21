@@ -35,11 +35,13 @@ class WebhookSubscription(Base, TimestampMixin):
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_by_user_id: Mapped[str | None] = mapped_column(StringUUID(), nullable=True)
 
+
 class WebhookDeliveryStatus:
     PENDING = "pending"
     SUCCESS = "success"
     FAILED = "failed"  # terminally failed (exhausted retries) — see exhausted below
     EXHAUSTED = "exhausted"
+
 
 class WebhookDelivery(Base, TimestampMixin):
     """One delivery attempt record: one event × one subscription."""
@@ -66,6 +68,7 @@ class WebhookDelivery(Base, TimestampMixin):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     event_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     correlation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
 
 __all__ = [
     "WebhookDelivery",

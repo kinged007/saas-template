@@ -16,6 +16,7 @@ from src.settings import settings
 
 logger = logging.getLogger(__name__)
 
+
 class WebhookDispatcher:
     def __init__(self, *, tick_seconds: float = 15.0, secret_store=None) -> None:
         self._tick_seconds = max(1.0, tick_seconds)

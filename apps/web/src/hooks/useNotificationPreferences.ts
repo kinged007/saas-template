@@ -71,6 +71,7 @@ export function useNotificationPreferences(extraTypes: string[] = [], enabled = 
           method: "put",
           values: { channels: { [type]: channel } },
           successNotification: false,
+          errorNotification: false,
         },
         { onSuccess: () => prefsQuery.refetch() },
       );
@@ -90,6 +91,7 @@ export function useNotificationPreferences(extraTypes: string[] = [], enabled = 
             message: enabled ? "Daily digest enabled" : "Daily digest disabled",
             type: "success",
           },
+          errorNotification: false,
         },
         { onSuccess: () => prefsQuery.refetch() },
       );

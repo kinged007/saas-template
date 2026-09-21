@@ -21,7 +21,7 @@ from src.db.session import get_db
 from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.api import WorkspaceCreate, WorkspaceUpdate
 from src.services.serializers import workspace_to_dict
-from src.services.workspaces import WorkspaceError, WorkspaceService
+from src.services.workspaces import WorkspaceError, WorkspaceForbidden, WorkspaceService
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +95,8 @@ async def create_workspace(
             owner=user,
             ip_address=request.client.host if request.client else None,
         )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
     return workspace_to_dict(workspace, role="owner")
@@ -123,7 +125,8 @@ async def update_workspace(
     body: WorkspaceUpdate,
     request: Request,
     user=Depends(get_current_user),
-    _=Depends(require_permission(WORKSPACE_UPDATE)),
+    _=Depends(require_existing_workspace),
+    _perm=Depends(require_permission(WORKSPACE_UPDATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -136,6 +139,8 @@ async def update_workspace(
             actor=user,
             ip_address=request.client.host if request.client else None,
         )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     return workspace_to_dict(workspace)
@@ -158,5 +163,7 @@ async def delete_workspace(
             actor=user,
             ip_address=request.client.host if request.client else None,
         )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None

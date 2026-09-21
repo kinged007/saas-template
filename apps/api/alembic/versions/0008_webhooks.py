@@ -24,6 +24,7 @@ _GRANTS = {
     "admin": ["webhook:read", "webhook:manage"],
 }
 
+
 def upgrade() -> None:
     dialect = op.get_bind().dialect.name
     ID = PG_UUID(as_uuid=True) if dialect == "postgresql" else sa.String(36)
@@ -74,9 +75,7 @@ def upgrade() -> None:
     op.create_index(
         "ix_webhook_deliveries_subscription_id", "webhook_deliveries", ["subscription_id"]
     )
-    op.create_index(
-        "ix_webhook_deliveries_workspace_id", "webhook_deliveries", ["workspace_id"]
-    )
+    op.create_index("ix_webhook_deliveries_workspace_id", "webhook_deliveries", ["workspace_id"])
     op.create_index("ix_webhook_deliveries_status", "webhook_deliveries", ["status"])
 
     # Data migration: grant webhook permissions to existing system roles
@@ -101,6 +100,7 @@ def upgrade() -> None:
                 sa.text("UPDATE roles SET permissions = :permissions WHERE id = :id"),
                 {"permissions": json.dumps(updated), "id": row["id"]},
             )
+
 
 def downgrade() -> None:
     op.drop_index("ix_webhook_deliveries_status", table_name="webhook_deliveries")

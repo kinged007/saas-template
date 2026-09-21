@@ -188,9 +188,7 @@ async def test_job_permission_matrix(app_client):
     job = _by_key((await client.get("/api/v1/jobs", headers=owner_headers)).json(), "test.echo")
 
     # viewer has no jobs:view: cannot read...
-    assert (
-        await client.get("/api/v1/jobs", headers=viewer_headers)
-    ).status_code == 403
+    assert (await client.get("/api/v1/jobs", headers=viewer_headers)).status_code == 403
     assert (
         await client.get(f"/api/v1/jobs/{job['id']}", headers=viewer_headers)
     ).status_code == 403
@@ -203,9 +201,7 @@ async def test_job_permission_matrix(app_client):
     assert execute.status_code == 403
 
     # editor also lacks jobs:view by default
-    assert (
-        await client.get("/api/v1/jobs", headers=editor_headers)
-    ).status_code == 403
+    assert (await client.get("/api/v1/jobs", headers=editor_headers)).status_code == 403
     patch = await client.patch(
         f"/api/v1/jobs/{job['id']}", json={"enabled": True}, headers=editor_headers
     )
@@ -236,23 +232,20 @@ async def test_admin_can_view_and_edit_jobs(app_client):
     admin_headers = ws_headers(admin, ws["id"])
 
     membership_role = next(
-        r for r in (await client.get("/api/v1/roles", headers=admin_headers)).json()
+        r
+        for r in (await client.get("/api/v1/roles", headers=admin_headers)).json()
         if r["name"] == "admin"
     )
     assert JOB_VIEW in membership_role["permissions"]
     assert JOB_EDIT in membership_role["permissions"]
 
     job = _by_key((await client.get("/api/v1/jobs", headers=admin_headers)).json(), "test.echo")
-    assert (
-        await client.get(f"/api/v1/jobs/{job['id']}", headers=admin_headers)
-    ).status_code == 200
+    assert (await client.get(f"/api/v1/jobs/{job['id']}", headers=admin_headers)).status_code == 200
     patch = await client.patch(
         f"/api/v1/jobs/{job['id']}", json={"enabled": True}, headers=admin_headers
     )
     assert patch.status_code == 200
-    execute = await client.post(
-        f"/api/v1/jobs/{job['id']}/execute", json={}, headers=admin_headers
-    )
+    execute = await client.post(f"/api/v1/jobs/{job['id']}/execute", json={}, headers=admin_headers)
     assert execute.status_code == 201
 
 
@@ -630,8 +623,8 @@ async def test_scheduled_tick_with_bus_executes_via_worker(app_client):
     from src.core.dates import now_utc
     from src.db.session import SessionFactory
     from src.jobs.scheduler import JobScheduler
-    from src.models.jobs import JobDefinition, JobRun
     from src.main import app as fastapi_app
+    from src.models.jobs import JobDefinition, JobRun
 
     client = app_client
     _, ws, headers, _ = await setup_workspace(client, "sched-bus-owner@example.com")
@@ -651,8 +644,10 @@ async def test_scheduled_tick_with_bus_executes_via_worker(app_client):
     # The run was published via bus; wait for the durable consumer to execute it.
     async with SessionFactory() as session:
         runs = (
-            await session.execute(select(JobRun).where(JobRun.definition_id == job["id"]))
-        ).scalars().all()
+            (await session.execute(select(JobRun).where(JobRun.definition_id == job["id"])))
+            .scalars()
+            .all()
+        )
         assert len(runs) == 1
         run_id = runs[0].id
         assert runs[0].trigger == "scheduled"

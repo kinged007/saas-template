@@ -5,16 +5,18 @@ Revises:
 Create Date: 2026-08-18 00:00:00.000000
 
 """
-from typing import Sequence, Union
+
+from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
+from alembic import op
+
 revision: str = "0001"
-down_revision: Union[str, None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 TS = sa.DateTime(timezone=True)
 NOW = sa.func.now()
@@ -98,7 +100,9 @@ def upgrade() -> None:
         _fk("role_id"),
         _fk("invited_by_user_id"),
         sa.Column("token", sa.String(length=64), nullable=False),
-        sa.Column("status", sa.String(length=20), nullable=False, server_default=sa.text("'pending'")),
+        sa.Column(
+            "status", sa.String(length=20), nullable=False, server_default=sa.text("'pending'")
+        ),
         sa.Column("expires_at", TS, nullable=False),
         sa.Column("accepted_at", TS, nullable=True),
         _ts("created_at"),
@@ -130,7 +134,9 @@ def upgrade() -> None:
         _fk("workspace_id"),
         _fk("user_id"),
         _fk("role_id"),
-        sa.Column("status", sa.String(length=20), nullable=False, server_default=sa.text("'active'")),
+        sa.Column(
+            "status", sa.String(length=20), nullable=False, server_default=sa.text("'active'")
+        ),
         _ts("created_at"),
         _ts("updated_at"),
     )

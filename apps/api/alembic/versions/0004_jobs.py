@@ -118,9 +118,7 @@ def upgrade() -> None:
     superadmin_email = os.environ.get("SUPERADMIN_EMAIL", "").strip().lower()
     if superadmin_email:
         bind.execute(
-            sa.text(
-                "UPDATE users SET is_superuser = true WHERE LOWER(email) = :email"
-            ),
+            sa.text("UPDATE users SET is_superuser = true WHERE LOWER(email) = :email"),
             {"email": superadmin_email},
         )
 

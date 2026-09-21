@@ -1,0 +1,23 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.3
+    hooks:
+      - id: ruff-check
+        name: ruff check (api)
+        files: ^apps/api/.*\.py$
+        entry: uv run --project apps/api ruff check
+        language: system
+      - id: ruff-format
+        name: ruff format (api)
+        files: ^apps/api/.*\.py$
+        entry: uv run --project apps/api ruff format --check
+        language: system
+
+  - repo: local
+    hooks:
+      - id: web-typecheck
+        name: web typecheck (tsc)
+        language: system
+        files: ^apps/web/.*\.(ts|tsx)$
+        pass_filenames: false
+        entry: bash -c 'cd apps/web && npx tsc -p tsconfig.json --noEmit'

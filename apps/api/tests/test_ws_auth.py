@@ -6,8 +6,6 @@ connection pool exhausts after ~15 open sockets and every API request fails
 with `QueuePool limit reached`.
 """
 
-import pytest
-
 
 async def _make_user() -> str:
     from src.db.session import SessionFactory

@@ -11,8 +11,8 @@ from src.api.deps import get_current_workspace_id, require_permission
 from src.core.permissions import AUDIT_READ
 from src.db.session import get_db
 from src.models.audit import AuditLogEntry
-from src.models.workspace import User
 from src.models.user_profile import UserProfile
+from src.models.workspace import User
 from src.services.profile_helpers import format_display_name
 
 logger = logging.getLogger(__name__)
@@ -23,11 +23,15 @@ _AUDIT_SORTABLE = {"created_at", "action", "resource_type"}
 _AUDIT_FILTERABLE = {"action", "resource_type", "actor_user_id"}
 
 
-def _audit_to_dict(entry: AuditLogEntry, actor: User | None = None, profile: UserProfile | None = None) -> dict:
+def _audit_to_dict(
+    entry: AuditLogEntry, actor: User | None = None, profile: UserProfile | None = None
+) -> dict:
     actor_name = None
     if actor is not None:
         if profile is not None and (profile.first_name or profile.last_name):
-            actor_name = format_display_name(profile.first_name, profile.last_name, actor.display_name)
+            actor_name = format_display_name(
+                profile.first_name, profile.last_name, actor.display_name
+            )
         else:
             actor_name = actor.display_name
     return {
@@ -60,7 +64,9 @@ async def list_audit_logs(
     )
     try:
         spec = parse_query(request)
-        stmt = apply_query(stmt, AuditLogEntry, spec, sortable=_AUDIT_SORTABLE, filterable=_AUDIT_FILTERABLE)
+        stmt = apply_query(
+            stmt, AuditLogEntry, spec, sortable=_AUDIT_SORTABLE, filterable=_AUDIT_FILTERABLE
+        )
     except InvalidQuery as exc:
         raise HTTPException(422, str(exc)) from None
 

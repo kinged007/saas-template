@@ -38,6 +38,15 @@ const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
   { value: "all", label: "All" },
 ];
 
+function formatListTime(value?: string | null): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toDateString() === new Date().toDateString()
+    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleDateString();
+}
+
 function truncateEscaped(text: string | undefined | null, max: number): string {
   return truncatePreview(stripMarkdown(text ?? undefined), max);
 }
@@ -505,27 +514,11 @@ export function InboxPage() {
           </div>
         }
         actions={
-          <>
-            {tab === "messages" && (
-              <Button size="sm" onClick={() => setComposeOpen(true)}>
-                Compose
-              </Button>
-            )}
-            {tab === "notifications" && (
-              <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
-                <SelectTrigger className="w-32">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {STATUS_OPTIONS.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>
-                      {o.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </>
+          tab === "messages" ? (
+            <Button size="sm" onClick={() => setComposeOpen(true)}>
+              Compose
+            </Button>
+          ) : undefined
         }
       />
 
@@ -622,15 +615,11 @@ export function InboxPage() {
                         <p className={cn("min-w-0 flex-1 truncate text-sm", c.unread_count > 0 ? "font-semibold" : "font-medium")}>
                           {c.title || "Untitled"}
                         </p>
-                        {c.unread_count > 0 && (
-                          <Badge variant="default" className="h-5 px-1.5 text-xs">
-                            {c.unread_count}
-                          </Badge>
-                        )}
                       </div>
-                      <p className="text-muted-foreground line-clamp-1 pl-4 pr-16 text-xs">{truncateEscaped(c.last_message_preview ?? "", 80)}</p>
-                      <div className="flex items-center gap-2 pl-4 pr-16">
-                        <div className="flex -space-x-1">
+                      <p className="text-muted-foreground line-clamp-2 pl-4 text-xs">{truncateEscaped(c.last_message_preview ?? "", 120)}</p>
+                      <div className="flex items-center gap-2 pl-4">
+                        <span className="text-muted-foreground shrink-0 text-[11px]">{formatListTime(c.last_message_at)}</span>
+                        <div className="flex min-w-0 -space-x-1">
                           {c.participants.slice(0, 3).map((p) => {
                             const name = getParticipantDisplayName(
                               p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null },
@@ -654,8 +643,12 @@ export function InboxPage() {
                             </span>
                           )}
                         </div>
+                        {c.unread_count > 0 && (
+                          <Badge variant="default" className="ml-auto h-5 shrink-0 px-1.5 text-xs">
+                            {c.unread_count}
+                          </Badge>
+                        )}
                       </div>
-                      <p className="text-muted-foreground pl-4 pr-16 text-[11px]">{formatDate(c.last_message_at)}</p>
                     </button>
                     <div
                       className={cn(
@@ -988,9 +981,21 @@ export function InboxPage() {
               leftCollapsed ? "md:hidden" : "md:w-80 md:flex"
             )}
           >
-            <div className="flex items-center justify-between gap-2 border-b p-3">
-              <span className="text-sm font-medium">Notifications</span>
-              <div className="flex items-center gap-1">
+            <div className="flex items-center gap-2 border-b p-3">
+              <span className="shrink-0 text-sm font-medium">Notifications</span>
+              <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
+                <SelectTrigger className="h-9 w-28">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {STATUS_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="ml-auto flex items-center gap-1">
                 <Button
                   variant="ghost"
                   size="icon"
@@ -1024,7 +1029,7 @@ export function InboxPage() {
                   type="button"
                   onClick={() => handleSelectNotif(n)}
                   className={cn(
-                    "flex flex-col gap-1 border-b px-4 py-3 text-left transition-colors",
+                    "flex w-full flex-col gap-1 border-b px-4 py-3 text-left transition-colors",
                     isActive ? "bg-accent" : "hover:bg-accent/50"
                   )}
                 >

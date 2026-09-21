@@ -217,10 +217,13 @@ async def require_existing_workspace(
 ) -> None:
     """404 on missing workspaces before membership checks run.
 
-    Opt-in for single-workspace routes (GET/DELETE /workspaces/{id}): once
-    delete cascades WorkspaceMember rows, the membership check inside
+    Opt-in for single-workspace routes (GET/PATCH/DELETE /workspaces/{id}):
+    once delete cascades WorkspaceMember rows, the membership check inside
     require_permission would 403 on a deleted workspace instead of the
-    contract's 404. The shared require_permission is untouched.
+    contract's 404. The shared require_permission is untouched. Runs after
+    get_current_user, so only authenticated callers can distinguish 404
+    (missing) from 403 (exists, not a member); workspace ids are
+    unguessable UUIDs, so this tradeoff is intentional.
     """
     if await db.get(Workspace, workspace_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")

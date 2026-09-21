@@ -1,9 +1,11 @@
-"""Workspace cascade registry: every workspace-scoped table, in delete order.
+"""Workspace cascade registry: every workspace-scoped table (coverage registry).
 
 Template convention: each new table with a non-nullable `workspace_id`
 column gets a WORKSPACE_CASCADE entry here; `test_cascade_registry_covers_all`
 fails CI otherwise. `delete_workspace` loops this registry instead of
-hand-written deletes. AuditLogEntry is the only exempt workspace-scoped
+hand-written deletes; parent tables (Conversation, JobRun, JobDefinition)
+are deleted last in `delete_workspace`, after their children.
+AuditLogEntry is the only exempt workspace-scoped
 table (append-only compliance trail — nothing ever deletes audit rows).
 """
 

@@ -344,8 +344,8 @@ class JobService:
         catch-up under the `single` policy and are skipped entirely under
         `ignore`; both policies advance `next_run_at` atomically via CAS, so
         exactly one replica claims each occurrence either way. Definitions
-        whose workspace was deleted are skipped (disabled) instead of
-        scheduled, so the tick never resurrects rows in a deleted workspace.
+        whose workspace was deleted are skipped instead of scheduled, so the
+        tick never resurrects rows in a deleted workspace.
         """
         now = now_utc()
         stmt = (
@@ -388,9 +388,17 @@ class JobService:
                 )
                 continue
 
-            run = await self.create_run(
-                definition, trigger=JobTrigger.SCHEDULED, scheduled_at=due_at
-            )
+            try:
+                run = await self.create_run(
+                    definition, trigger=JobTrigger.SCHEDULED, scheduled_at=due_at
+                )
+            except JobError:
+                logger.info(
+                    "job %s: workspace %s deleted mid-tick, skipping",
+                    definition.key,
+                    definition.workspace_id,
+                )
+                continue
             scheduled += 1
             logger.debug("scheduled job %s run %s (due %s)", definition.key, run.id, due_at)
         return scheduled
