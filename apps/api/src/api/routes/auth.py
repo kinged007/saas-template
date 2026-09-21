@@ -49,6 +49,12 @@ def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+async def _maybe_join_single_workspace(db: AsyncSession, container, user) -> None:
+    if not settings.single_workspace:
+        return
+    await WorkspaceService(db, container.bus).join_single_workspace(user)
+
+
 @router.post("/register", response_model=TokenResponse, status_code=201)
 async def register(
     body: RegisterRequest,
@@ -80,6 +86,10 @@ async def register(
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, msg) from None
         raise HTTPException(status.HTTP_409_CONFLICT, msg) from None
     pair = await service.issue_tokens(user)
+    try:
+        await _maybe_join_single_workspace(db, container, user)
+    except Exception:
+        logger.exception("failed to join single workspace for user %s", user.id)
     try:
         await _send_verification(service, user)
     except Exception:
@@ -170,6 +180,7 @@ async def login(
         )
     except AuthError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+    await _maybe_join_single_workspace(db, container, user)
     pair = await service.issue_tokens(user)
     return TokenResponse(**pair.__dict__)
 
@@ -210,11 +221,17 @@ async def me(
     service = WorkspaceService(db)
     data = user_to_dict(user)
     memberships = await service.list_workspaces(user.id)
+    if settings.single_workspace:
+        # Toggling onto an existing deployment: oldest wins, the rest stay hidden.
+        single = await service.get_single_workspace()
+        if single is not None:
+            memberships = [m for m in memberships if m[0].id == single.id]
     data["workspaces"] = [
         workspace_to_dict(w, role=role.name, permissions=role.permissions)
         for w, role, _ in memberships
     ]
     data["permissions"] = sorted({p for _, role, _ in memberships for p in role.permissions})
+    data["single_workspace"] = settings.single_workspace
     # Embed profile (lazy create)
     try:
         profile = await ProfileService(db, container.bus).get_or_create(user.id)

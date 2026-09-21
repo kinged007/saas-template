@@ -20,7 +20,7 @@ from src.db.session import get_db
 from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.api import WorkspaceCreate, WorkspaceUpdate
 from src.services.serializers import workspace_to_dict
-from src.services.workspaces import WorkspaceError, WorkspaceService
+from src.services.workspaces import WorkspaceError, WorkspaceForbidden, WorkspaceService
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +94,8 @@ async def create_workspace(
             owner=user,
             ip_address=request.client.host if request.client else None,
         )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
     return workspace_to_dict(workspace, role="owner")
@@ -155,5 +157,7 @@ async def delete_workspace(
             actor=user,
             ip_address=request.client.host if request.client else None,
         )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None

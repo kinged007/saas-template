@@ -138,11 +138,28 @@ function SidebarNav() {
 
 const CREATE_WORKSPACE_VALUE = "__create_workspace__";
 
+/** Backend SINGLE_WORKSPACE flag from /auth/me — no VITE_ var, no drift. */
+function useSingleWorkspace(): boolean {
+  const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
+  return identity?.single_workspace === true;
+}
+
 function WorkspaceSwitcher() {
   const { workspaces, workspace, setWorkspace } = useWorkspace();
+  const single = useSingleWorkspace();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   if (workspaces.length === 0) return null;
+  if (single) {
+    return (
+      <div className="flex min-w-0 items-center gap-2 overflow-hidden px-2 py-1.5">
+        <Building2 className="h-4 w-4 shrink-0" />
+        <span className="truncate text-sm font-medium group-data-[collapsible=icon]:hidden">
+          {workspace?.name}
+        </span>
+      </div>
+    );
+  }
   return (
     <Select
       open={open}
