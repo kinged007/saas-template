@@ -42,5 +42,5 @@ class StoredSecret(Base, TimestampMixin):
     # versioned Fernet envelope: "v<version>.<token>" (see SecretCipher)
     ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
     key_version: Mapped[int] = mapped_column(Integer, nullable=False)
-    meta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    meta: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

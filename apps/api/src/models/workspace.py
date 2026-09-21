@@ -26,6 +26,13 @@ class User(Base, TimestampMixin):
     email_verified_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+# ponytail: historical drift — merged PRs changed RefreshToken.token_hash
+# 64→255 and User.password_hash 128→255 in models without migrations, and
+# new unique/index flags render as phantom diffs. 0013 converges the
+# constraint/column drift; the VARCHAR widenings are live-compatible
+# (narrow→wide, in-row) and intentionally left unmigrated.
+
+
 class AuthToken(Base, TimestampMixin):
     """Single-use opaque token for password-reset and email-verification flows.
 

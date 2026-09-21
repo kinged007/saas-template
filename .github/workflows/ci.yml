@@ -22,6 +22,14 @@ jobs:
       - run: cd apps/api && uv sync --extra dev
       - run: cd apps/api && uv run pytest -q --tb=short -p no:cacheprovider
 
+  db-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: cd apps/api && uv sync --extra dev
+      - run: make db-check
+
   web-build:
     runs-on: ubuntu-latest
     steps:

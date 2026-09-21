@@ -38,7 +38,18 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        # compare_type would flag every legacy VARCHAR-vs-String spelling
+        # and every StringUUID-vs-VARCHAR reflection as drift, even though
+        # the live schema is correct — real type changes ship as explicit
+        # migrations, reviewed by a human (see docs/MIGRATIONS.md).
+        # compare_server_default stays off for the same reason: restored
+        # JSON/text defaults render as '[]'::json vs text('[]') noise.
+        compare_type=False,
+        compare_server_default=False,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
