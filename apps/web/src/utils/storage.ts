@@ -1,7 +1,10 @@
 const ACCESS_KEY = "tf_access_token";
 const REFRESH_KEY = "tf_refresh_token";
 const IDENTITY_KEY = "tf_identity";
-const WORKSPACE_KEY = "tf_workspace_id";
+// Per-user selection: the last workspace each user had open is restored on
+// their next login. The shared key is the pre-upgrade fallback, adopted once.
+const WORKSPACE_PREFIX = "tf_workspace_id:";
+const LEGACY_WORKSPACE_KEY = "tf_workspace_id";
 
 /**
  * Storage wrapper resilient to blocked/partitioned storage (e.g. sandboxed
@@ -73,7 +76,18 @@ export const tokenStore = {
     storage.remove(ACCESS_KEY);
     storage.remove(REFRESH_KEY);
     storage.remove(IDENTITY_KEY);
-    storage.remove(WORKSPACE_KEY);
+    // Only the legacy shared workspace key is safe to drop blindly: the
+    // per-user entry belongs to whoever logs in next and is restored then.
+    storage.remove(WORKSPACE_PREFIX + "legacy");
+    storage.remove(LEGACY_WORKSPACE_KEY);
+    tokensListeners.forEach((listener) => listener());
+  },
+  /** Logout variant: also drops the signing-out user's workspace selection. */
+  clearForUser: (userId?: string | null) => {
+    storage.remove(ACCESS_KEY);
+    storage.remove(REFRESH_KEY);
+    storage.remove(IDENTITY_KEY);
+    workspaceStore.clear(userId);
     tokensListeners.forEach((listener) => listener());
   },
   /**
@@ -95,8 +109,44 @@ export const identityStore = {
   set: (identity: unknown) => storage.set(IDENTITY_KEY, JSON.stringify(identity)),
 };
 
+/**
+ * The single source of truth for the active workspace id.
+ *
+ * `stored` persists the selection per user. `active` mirrors it in memory
+ * so the header, the context, and permission checks resolve identically
+ * without re-deriving from different stores at different times.
+ */
+let active: string | null = null;
+
+export function getActiveWorkspaceId(): string | null {
+  return active;
+}
+
+export function setActiveWorkspaceId(id: string | null): void {
+  active = id;
+}
+
 export const workspaceStore = {
-  get: () => storage.get(WORKSPACE_KEY),
-  set: (id: string) => storage.set(WORKSPACE_KEY, id),
-  clear: () => storage.remove(WORKSPACE_KEY),
+  get: (userId?: string | null) => {
+    if (userId) {
+      const own = storage.get(WORKSPACE_PREFIX + userId);
+      if (own) return own;
+    }
+    const legacy =
+      storage.get(WORKSPACE_PREFIX + "legacy") ?? storage.get(LEGACY_WORKSPACE_KEY);
+    if (legacy && userId) {
+      // Adopt the pre-upgrade selection for this user, then drop the
+      // shared key so it can never leak across users.
+      storage.set(WORKSPACE_PREFIX + userId, legacy);
+      storage.remove(LEGACY_WORKSPACE_KEY);
+    }
+    return legacy;
+  },
+  set: (id: string, userId?: string | null) =>
+    storage.set(WORKSPACE_PREFIX + (userId ?? "legacy"), id),
+  clear: (userId?: string | null) => {
+    if (userId) storage.remove(WORKSPACE_PREFIX + userId);
+    storage.remove(WORKSPACE_PREFIX + "legacy");
+    storage.remove(LEGACY_WORKSPACE_KEY);
+  },
 };

@@ -108,6 +108,16 @@ export type Identity = {
   profile?: UserProfile;
 };
 
+export type AdminUser = {
+  id: string;
+  email: string;
+  display_name: string;
+  is_active: boolean;
+  is_superuser: boolean;
+  created_at?: string;
+  workspaces?: Array<{ id: string; name: string; slug: string; role: string }>;
+};
+
 export type Role = {
   id: string;
   workspace_id: string;

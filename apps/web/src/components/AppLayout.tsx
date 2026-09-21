@@ -30,7 +30,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useCustom, useGetIdentity, useLogout } from "@refinedev/core";
+import { useGetIdentity, useLogout } from "@refinedev/core";
+import { useWorkspaceCustom } from "../hooks/useWorkspaceQuery";
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import {
@@ -44,6 +45,7 @@ import {
   Mail,
   Plus,
   Settings,
+  ShieldCheck,
   Users,
 } from "lucide-react";
 
@@ -68,10 +70,11 @@ function SidebarNav() {
   const permissions = activeWorkspacePermissions(identity);
   const can = (p: string) => permissions.includes("*") || permissions.includes(p);
   const items = MENU_ITEMS.filter((i) => can(i.permission));
+  const isSuperuser = identity?.is_superuser === true;
   const activeKey = `/${location.pathname.split("/")[1] || ""}`;
   const isActive = (key: string) => (key === "/" ? location.pathname === "/" : activeKey === key);
 
-  const { result: convUnreadResult } = useCustom<{ count: number; unread_conversations: number }>({
+  const { result: convUnreadResult } = useWorkspaceCustom<{ count: number; unread_conversations: number }>({
     url: "conversations/unread-count",
     method: "get",
     queryOptions: {
@@ -94,7 +97,7 @@ function SidebarNav() {
               <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
                 <Link to={item.key}>
                   <span className="relative">
-                    <Icon />
+                    <Icon className="h-4 w-4 shrink-0" />
                     {badgeCount > 0 && (
                       <span className="absolute -right-1.5 -top-1.5 hidden h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-0.5 text-[10px] font-medium leading-none text-destructive-foreground group-data-[collapsible=icon]:flex">
                         {badgeCount > 99 ? "99+" : badgeCount}
@@ -112,6 +115,16 @@ function SidebarNav() {
             </SidebarMenuItem>
           );
         })}
+        {isSuperuser && (
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild isActive={isActive("/admin")} tooltip="Admin">
+              <Link to="/admin">
+                <ShieldCheck className="h-4 w-4 shrink-0" />
+                <span>Admin</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        )}
       </SidebarMenu>
     </SidebarGroup>
   );

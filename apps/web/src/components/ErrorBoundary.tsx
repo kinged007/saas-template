@@ -12,7 +12,11 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
+    // Full component stack — the message alone (e.g. removeChild) never
+    // identifies the crashing component; the stack does.
     console.error("[error-boundary]", error, info.componentStack);
+    (window as unknown as { __lastErrorStack?: string }).__lastErrorStack =
+      info.componentStack ?? undefined;
   }
 
   render(): ReactNode {

@@ -6,14 +6,20 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { useGetIdentity } from "@refinedev/core";
+import type { Identity, Workspace } from "../types";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
-import type { Identity, Workspace } from "../types";
-import { tokenStore, workspaceStore } from "../utils/storage";
+import {
+  tokenStore,
+  workspaceStore,
+  identityStore,
+  getActiveWorkspaceId,
+  setActiveWorkspaceId,
+} from "../utils/storage";
 import { clearAllCaches, clearWorkspaceCaches } from "../providers/queryClient";
 
 type WorkspaceContextValue = {
@@ -43,14 +49,39 @@ export const IDENTITY_QUERY_OPTIONS = {
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
-  const { data: identity, isLoading, isError, refetch, error } = useGetIdentity<Identity & { workspaces: Workspace[] }>({
-    queryOptions: IDENTITY_QUERY_OPTIONS,
-  });
+  // NOTE: no useGetIdentity observer here. This provider used to host its own
+  // observer with shared IDENTITY_QUERY_OPTIONS, but react-query merges
+  // observer options onto the SHARED identity query — and this provider
+  // remounts on every login/logout navigation, which re-created its observer
+  // mid-flight and wedged the query (isLoading stuck true, data never
+  // delivered) even though /auth/me returned 200 with 2 workspaces.
+  // Instead the identity is read from the react-query cache (written by the
+  // long-lived useGetIdentity observers in AppLayout/pages) with the
+  // login()-cached identityStore as the pre-hydration fallback. The
+  // useSyncExternalStore subscription re-renders this provider whenever the
+  // identity cache entry changes, so hydration propagates without an
+  // observer of our own.
+  const cachedIdentity = useSyncExternalStore(
+    (onChange) => queryClient.getQueryCache().subscribe(onChange),
+    () => queryClient.getQueryData<Identity & { workspaces: Workspace[] }>(["auth", "identity"]),
+    () => undefined,
+  );
+  const storedIdentity = (identityStore.get() as (Identity & { workspaces: Workspace[] }) | null);
+  const identity = cachedIdentity ?? storedIdentity ?? undefined;
+  const isLoading = identity === undefined;
+  const isError = false;
+  const error: unknown = null;
+  const refetch = () => queryClient.invalidateQueries({ queryKey: ["auth"] });
   const workspaces = identity?.workspaces ?? [];
-  const identityId = (identity as Identity | null)?.id ?? null;
+  // identityId doubles as the workspaceStore key (per-user selection).
+  // identityStore.get() is the post-login fallback: login() caches the
+  // fresh identity there before the identity query settles.
+  const identityId = (identity as Identity | null)?.id
+    ?? (identityStore.get() as Identity | null)?.id
+    ?? null;
 
   const [selected, setSelected] = useState<Workspace | undefined>(() => {
-    const id = workspaceStore.get();
+    const id = getActiveWorkspaceId() ?? workspaceStore.get(identityId);
     return workspaces.find((w) => w.id === id);
   });
   // "workspace" = only workspace-scoped caches (data + access) are dropped,
@@ -60,10 +91,28 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // Track previous ids to detect user / workspace changes that must
   // hard-reset caches before new data is painted (no stale flash).
   const prevIdentityIdRef = useRef<string | null>(null);
-  const prevWorkspaceIdRef = useRef<string | null>(workspaceStore.get());
+  const prevWorkspaceIdRef = useRef<string | null>(
+    getActiveWorkspaceId() ?? workspaceStore.get(identityId),
+  );
   // True after the first successful identity fetch – before that we must not
   // treat "no prev id → has id" as a user-change.
   const hasHydratedRef = useRef(false);
+
+  // One commit path for every selection change: persisted store, live header
+  // id, and React state move together, so the switcher label, the request
+  // header, and permission checks can never disagree mid-transition.
+  // `deferState` keeps the old selection painted for one frame while the
+  // `switching` gate unmounts the subtree before the cache wipe.
+  const commitSelection = (
+    next: Workspace,
+    userId: string | null,
+    opts?: { deferState?: boolean },
+  ) => {
+    workspaceStore.set(next.id, userId);
+    setActiveWorkspaceId(next.id);
+    prevWorkspaceIdRef.current = next.id;
+    if (!opts?.deferState) setSelected(next);
+  };
 
   // ---- Identity / user change: logout or login as different user ----------
   // useLayoutEffect → state update is flushed before browser paint, so the
@@ -74,7 +123,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       // Record the first identity id without triggering a reset.
       if (identityId && prevIdentityIdRef.current === null) {
         prevIdentityIdRef.current = identityId;
-        prevWorkspaceIdRef.current = workspaceStore.get();
+        prevWorkspaceIdRef.current =
+          getActiveWorkspaceId() ?? workspaceStore.get(identityId);
       }
       return;
     }
@@ -86,6 +136,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (prev !== null && identityId === null) {
       prevIdentityIdRef.current = null;
       prevWorkspaceIdRef.current = null;
+      setActiveWorkspaceId(null);
       setSelected(undefined);
       setSwitching("all");
       return;
@@ -94,7 +145,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     // current are both non-null but differ.
     if (prev !== null && identityId !== null && prev !== identityId) {
       prevIdentityIdRef.current = identityId;
-      prevWorkspaceIdRef.current = workspaceStore.get();
+      prevWorkspaceIdRef.current =
+        getActiveWorkspaceId() ?? workspaceStore.get(identityId);
       setSwitching("all");
       return;
     }
@@ -108,44 +160,40 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // This handles the case where the stored workspace id is not in the new
   // workspaces list (e.g. after login as different user where the logout
   // path didn't trigger, or the user was removed from the active workspace).
-  // If the resolved `next` differs from the currently selected workspace,
-  // force the switching gate so caches are dropped while the subtree is
-  // unmounted.
+  // Resolution order: per-user stored → live/fallback id → first workspace
+  // (workspaces[0] is the backend's newest-first order; in this deployment
+  // that is always Acme Corp).
   useLayoutEffect(() => {
     if (workspaces.length === 0) {
       // Logged-out or identity not yet hydrated: don't auto-pick.
       if (!identityId) return;
       return;
     }
-    const stored = workspaceStore.get();
+    const stored = workspaceStore.get(identityId);
     const found = workspaces.find((w) => w.id === stored);
-    const next = found ?? workspaces[0];
+    const fallbackId = getActiveWorkspaceId() ?? workspaceStore.get();
+    const next = found
+      ?? workspaces.find((w) => w.id === fallbackId)
+      ?? workspaces[0];
     // No selected yet (first hydration): pick without switching – there is
     // no old workspace data to flash. The logout path already cleared caches.
     if (!selected) {
-      workspaceStore.set(next.id);
-      setSelected(next);
-      prevWorkspaceIdRef.current = next.id;
+      commitSelection(next, identityId);
       return;
     }
     if (next.id !== selected.id) {
-      // Workspace must change but not via explicit setWorkspace – gate it.
+      // Workspace must change but not via explicit setWorkspace – gate it:
+      // commit the stores now (so any request fired mid-transition carries
+      // the new id) but defer the painted selection until the gate has
+      // unmounted the subtree and wiped the old workspace's cache.
       if (switching === false) {
-        workspaceStore.set(next.id);
-        // Keep selected as-is for one frame (children still mounted) – the
-        // next render (switching=true) unmounts them before we wipe the
-        // cache, which is required because removeQueries on queries with
-        // active observers retains them until observers unmount.
+        commitSelection(next, identityId, { deferState: true });
         setSwitching("workspace");
-        // selected update is deferred until after cache wipe (see switching
-        // effect) to avoid a render where selected is new but cache is old.
-        // Store the target so the post-wipe effect can apply it.
-        prevWorkspaceIdRef.current = next.id;
       }
       return;
     }
-    // Stable: keep store in sync and record. Also sync name/description/permission
-    // changes (e.g. after PATCH /workspaces/:id) without triggering a cache wipe.
+    // Stable: keep stores in sync and record. Also sync name/description/
+    // permission changes (e.g. after PATCH /workspaces/:id) without a wipe.
     if (
       selected.name !== next.name ||
       selected.description !== next.description ||
@@ -156,7 +204,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     ) {
       setSelected(next);
     }
-    workspaceStore.set(next.id);
+    workspaceStore.set(next.id, identityId);
+    setActiveWorkspaceId(next.id);
     prevWorkspaceIdRef.current = next.id;
   }, [workspaces, selected, identityId, switching]);
 
@@ -173,23 +222,25 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       // refetch on the next mount. Resolve the target workspace from the
       // (already fetched) identity or fall back to store; the workspaces
       // layout effect will re-sync on the next hydration anyway.
-      const targetId = prevWorkspaceIdRef.current ?? workspaceStore.get();
+      const targetId = prevWorkspaceIdRef.current ?? workspaceStore.get(identityId);
       const target = workspaces.find((w) => w.id === targetId) ?? workspaces[0];
       if (target) {
-        workspaceStore.set(target.id);
+        workspaceStore.set(target.id, identityId);
+        setActiveWorkspaceId(target.id);
         setSelected(target);
       }
     } else {
       clearWorkspaceCaches(queryClient);
-      // Apply the pending workspace switch (stored in prev ref / store).
-      const targetId = prevWorkspaceIdRef.current ?? workspaceStore.get();
-      const target = workspaces.find((w) => w.id === targetId) ?? workspaces.find((w) => w.id === workspaceStore.get());
+      // Apply the pending switch deferred above (stored in prev ref / store).
+      const targetId = prevWorkspaceIdRef.current ?? workspaceStore.get(identityId);
+      const target = workspaces.find((w) => w.id === targetId)
+        ?? workspaces.find((w) => w.id === workspaceStore.get(identityId));
       if (target && target.id !== selected?.id) {
         setSelected(target);
       }
     }
     setSwitching(false);
-  }, [switching, queryClient, workspaces, selected]);
+  }, [switching, queryClient, workspaces, selected, identityId]);
 
   const value = useMemo<WorkspaceContextValue>(
     () => ({
@@ -197,14 +248,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       workspace: selected,
       setWorkspace: (w) => {
         if (w.id === selected?.id) return;
-        workspaceStore.set(w.id);
-        prevWorkspaceIdRef.current = w.id;
-        setSelected(w);
+        commitSelection(w, identityId);
         setSwitching("workspace");
       },
       refresh: () => refetch(),
     }),
-    [workspaces, selected, refetch],
+    // commitSelection is stable in practice (refs + setters only); identityId
+    // is listed so the closure never captures a stale user key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [workspaces, selected, refetch, identityId],
   );
 
   // Signed out (e.g. on /login): render children and let the Authenticated

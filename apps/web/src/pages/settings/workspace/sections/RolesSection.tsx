@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useCan, useCreate, useList } from "@refinedev/core";
+import { useCan, useCreate } from "@refinedev/core";
+import { useWorkspaceList } from "../../../../hooks/useWorkspaceQuery";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,7 +21,7 @@ import { ALL_PERMISSIONS } from "@/permissions";
 import type { Role } from "@/types";
 
 export function RolesSection() {
-  const { result } = useList<Role>({ resource: "roles" });
+  const { result } = useWorkspaceList<Role>({ resource: "roles" });
   const { mutate: createRole, mutation } = useCreate();
   const { data: canManage } = useCan({ resource: "roles", action: "create" });
 

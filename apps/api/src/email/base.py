@@ -37,6 +37,9 @@ class EmailMessage:
     def validate(self) -> None:
         if not self.to or not self.subject or not self.text_body:
             raise EmailSendError("email needs a recipient, subject, and text body")
+        for label, value in (("to", self.to), ("subject", self.subject)):
+            if "\n" in value or "\r" in value:
+                raise EmailSendError(f"{label} must not contain newlines")
         for label, addr in (("to", self.to), ("from", self.from_addr)):
             if label == "from" and not addr:
                 continue

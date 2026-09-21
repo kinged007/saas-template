@@ -1,5 +1,5 @@
 import type { Identity } from "../types";
-import { workspaceStore } from "./storage";
+import { getActiveWorkspaceId, identityStore, workspaceStore } from "./storage";
 
 /**
  * Permissions for the currently active workspace.
@@ -12,7 +12,9 @@ import { workspaceStore } from "./storage";
  */
 export function activeWorkspacePermissions(identity?: Identity | null): string[] {
   const workspaces = identity?.workspaces ?? [];
-  const activeId = workspaceStore.get();
+  const userId = identity?.id ?? (identityStore.get() as Identity | null)?.id;
+  const activeId =
+    getActiveWorkspaceId() ?? workspaceStore.get(userId) ?? workspaceStore.get();
   const active = workspaces.find((w) => w.id === activeId) ?? workspaces[0];
   return active?.permissions ?? identity?.permissions ?? [];
 }

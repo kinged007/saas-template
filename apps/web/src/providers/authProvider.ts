@@ -2,7 +2,12 @@ import type { AuthProvider } from "@refinedev/core";
 
 import { activeWorkspacePermissions } from "../utils/permissions";
 import { API_URL, cancelPendingRefresh, httpClient } from "./dataProvider";
-import { identityStore, tokenStore, workspaceStore } from "../utils/storage";
+import {
+  identityStore,
+  tokenStore,
+  workspaceStore,
+  setActiveWorkspaceId,
+} from "../utils/storage";
 import { clearAllCaches, queryClient } from "./queryClient";
 import type { Identity } from "../types";
 
@@ -19,6 +24,25 @@ const post = async (path: string, body: unknown) => {
   return resp.status === 204 ? null : resp.json();
 };
 
+/**
+ * Seed the persisted store + live header id BEFORE refine navigates: the
+ * context auto-select only runs after the identity query settles, but list
+ * queries fire on the same mount. Stored per-user selection wins; otherwise
+ * the backend's first workspace (Acme Corp in this deployment). Failures
+ * are non-fatal — the context falls back the same way.
+ */
+async function seedWorkspace(identity: Identity): Promise<void> {
+  identityStore.set(identity);
+  const stored = workspaceStore.get(identity.id);
+  const next =
+    identity.workspaces.find((w) => w.id === stored) ?? identity.workspaces[0];
+  if (next) {
+    workspaceStore.set(next.id);
+    workspaceStore.set(next.id, identity.id);
+    setActiveWorkspaceId(next.id);
+  }
+}
+
 export const authProvider: AuthProvider = {
   login: async ({ email, password }) => {
     try {
@@ -30,9 +54,16 @@ export const authProvider: AuthProvider = {
       // id and rows (dashboard empty / notifications from the old workspace).
       // Unconditional — a no-op when logout already cleared.
       workspaceStore.clear();
+      setActiveWorkspaceId(null);
       identityStore.set(null);
       clearAllCaches(queryClient);
       tokenStore.setTokens(tokens.access_token, tokens.refresh_token);
+      try {
+        const { data: identity } = await httpClient.get<Identity>(`${API_URL}/auth/me`);
+        await seedWorkspace(identity);
+      } catch {
+        identityStore.set(null);
+      }
       return { success: true, redirectTo: "/" };
     } catch (error) {
       return { success: false, error: error as Error };
@@ -57,11 +88,18 @@ export const authProvider: AuthProvider = {
       if (last_name) body.last_name = last_name;
       if (display_name && !body.display_name) body.display_name = display_name;
       const tokens = await post("/auth/register", body);
-      // Same stale-session reset as login (see above).
+      // Same stale-session reset + workspace seed as login (see above).
       workspaceStore.clear();
+      setActiveWorkspaceId(null);
       identityStore.set(null);
       clearAllCaches(queryClient);
       tokenStore.setTokens(tokens.access_token, tokens.refresh_token);
+      try {
+        const { data: identity } = await httpClient.get<Identity>(`${API_URL}/auth/me`);
+        await seedWorkspace(identity);
+      } catch {
+        identityStore.set(null);
+      }
       return { success: true, redirectTo: "/" };
     } catch (error) {
       return { success: false, error: error as Error };
@@ -74,7 +112,11 @@ export const authProvider: AuthProvider = {
       post("/auth/logout", { refresh_token: refresh }).catch(() => null);
     }
     cancelPendingRefresh();
-    tokenStore.clear();
+    // Read the user id BEFORE clearing: the selection is keyed per user, so
+    // logout drops only the signing-out user's entry.
+    const cached = identityStore.get() as Identity | null;
+    tokenStore.clearForUser(cached?.id);
+    setActiveWorkspaceId(null);
     // Hard-reset before the router navigates to /login: every list/detail
     // query is workspace/user-scoped, so retaining it would flash the
     // previous user's rows when a different user logs in without a reload.
@@ -91,6 +133,7 @@ export const authProvider: AuthProvider = {
   onError: async (error) => {
     if ((error as { statusCode?: number })?.statusCode === 401) {
       tokenStore.clear();
+      setActiveWorkspaceId(null);
       clearAllCaches(queryClient);
       return { logout: true, redirectTo: "/login" };
     }

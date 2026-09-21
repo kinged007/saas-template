@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useList, useUpdate, useUpdateMany, type CrudFilters } from "@refinedev/core";
+import { useUpdate, useUpdateMany, type CrudFilters } from "@refinedev/core";
+import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 import {
   Check,
   ChevronLeft,
@@ -74,7 +75,7 @@ export function NotificationsPage() {
           },
         ];
 
-  const { result, query } = useList<Notification>({
+  const { result, query } = useWorkspaceList<Notification>({
     resource: "notifications",
     pagination: { currentPage: current, pageSize: PAGE_SIZE },
     sorters: [{ field: "created_at", order: "desc" }],

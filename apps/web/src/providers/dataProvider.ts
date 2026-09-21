@@ -2,7 +2,7 @@ import type { DataProvider } from "@refinedev/core";
 import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import dataProviderModule from "@refinedev/simple-rest";
 
-import { tokenStore, workspaceStore } from "../utils/storage";
+import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId } from "../utils/storage";
 import { clearAllCaches, queryClient } from "./queryClient";
 
 // Same-origin API path: the vite dev proxy (and nginx in production) forwards
@@ -38,7 +38,13 @@ httpClient.interceptors.request.use(async (config) => {
     config.headers = config.headers ?? {};
     config.headers.Authorization = `Bearer ${access}`;
   }
-  const workspaceId = workspaceStore.get();
+  // Single source of truth: the in-memory active id, synchronously
+  // committed by login / switch / logout alongside the persisted store.
+  // The store reads are boot fallbacks only (fresh page load before the
+  // context hydrates) — never a re-derivation that can disagree.
+  const cached = identityStore.get() as { id?: string } | null;
+  const workspaceId =
+    getActiveWorkspaceId() ?? workspaceStore.get(cached?.id) ?? workspaceStore.get();
   if (workspaceId) {
     config.headers = config.headers ?? {};
     config.headers["X-Workspace-ID"] = workspaceId;
@@ -126,6 +132,13 @@ httpClient.interceptors.response.use(
 
 const baseDataProvider = dataProviderModule(API_URL, httpClient);
 
+// Refine resource name → backend path when they differ (hyphenated resource
+// names are not valid backend route prefixes).
+const RESOURCE_PATHS: Record<string, string> = {
+  "admin-users": "admin/users",
+};
+const resourcePath = (resource: string) => RESOURCE_PATHS[resource] ?? resource;
+
 /**
  * simple-rest's `custom` uses the url verbatim — it never prepends the API
  * base URL. Resolve relative custom urls against API_URL so useCustom /
@@ -134,6 +147,12 @@ const baseDataProvider = dataProviderModule(API_URL, httpClient);
  */
 export const dataProvider: DataProvider = {
   ...baseDataProvider,
+  getList: ({ resource, ...params }) =>
+    baseDataProvider.getList({ resource: resourcePath(resource), ...params }),
+  getOne: ({ resource, ...params }) =>
+    baseDataProvider.getOne({ resource: resourcePath(resource), ...params }),
+  update: ({ resource, ...params }) =>
+    baseDataProvider.update({ resource: resourcePath(resource), ...params }),
   custom: async ({ url, ...params }) => {
     const resolved =
       !url || /^https?:\/\//.test(url) || url.startsWith("/")

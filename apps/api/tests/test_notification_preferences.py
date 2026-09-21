@@ -68,6 +68,7 @@ async def test_email_channel_sends_and_off_suppresses_row(app_client, monkeypatc
 
     email_user = await register_user(app_client, "pref3@example.com")
     off_user = await register_user(app_client, "pref4@example.com")
+    sent.clear()  # drop registration verification emails
     email_me = await _me(app_client, email_user)
     off_me = await _me(app_client, off_user)
 
@@ -119,6 +120,97 @@ async def test_email_channel_sends_and_off_suppresses_row(app_client, monkeypatc
     assert "unsubscribe?token=" in sent[0].text_body
 
 
+async def test_inapp_channel_persists_row_without_email(app_client, monkeypatch):
+    from sqlalchemy import func, select
+
+    import src.email.factory as factory
+    from src.db.session import SessionFactory
+    from src.models.core import Notification
+    from src.services.notifications import NotificationService
+    from tests.conftest import register_user
+
+    sent: list = []
+
+    async def _send(msg):
+        sent.append(msg)
+        return True
+
+    monkeypatch.setattr(factory, "send_email", _send)
+
+    user = await register_user(app_client, "pref-inapp@example.com")
+    sent.clear()  # drop registration verification emails
+    me = await _me(app_client, user)
+
+    import src.workflows as workflows
+
+    async with SessionFactory() as session:
+        await workflows._create_notification(
+            session,
+            None,
+            user_id=me["id"],
+            workspace_id="0" * 32,
+            type="member_joined",
+            title="A joined",
+            body="a",
+            metadata={},
+        )
+
+    async with SessionFactory() as session:
+        count = (
+            await session.execute(
+                select(func.count())
+                .select_from(Notification)
+                .where(
+                    Notification.user_id == me["id"],
+                    Notification.type == "member_joined",
+                )
+            )
+        ).scalar_one()
+    assert count == 1
+    assert sent == []
+
+
+async def test_digest_skipped_when_disabled(app_client, monkeypatch):
+    import src.email.factory as factory
+    from src.db.session import SessionFactory
+    from src.jobs.builtin import notifications_daily_digest
+    from src.jobs.registry import JobContext
+    from src.models.core import Notification
+    from tests.conftest import register_user
+
+    sent: list = []
+
+    async def _send(msg):
+        sent.append(msg)
+        return True
+
+    monkeypatch.setattr(factory, "send_email", _send)
+
+    user = await register_user(app_client, "pref-nodigest@example.com")
+    sent.clear()  # drop registration verification emails
+    me = await _me(app_client, user)
+
+    async with SessionFactory() as session:
+        session.add(
+            Notification(
+                user_id=me["id"],
+                workspace_id="0" * 32,
+                type="member_joined",
+                title="A joined",
+                body="a",
+                payload={},
+            )
+        )
+        await session.commit()
+
+    await notifications_daily_digest(
+        JobContext(
+            run_id="r" * 32, job_key="notifications.daily_digest", workspace_id=None, params={}
+        )
+    )
+    assert sent == []
+
+
 async def test_digest_sends_unread_summary_when_enabled(app_client, monkeypatch):
     import src.email.factory as factory
     from src.db.session import SessionFactory
@@ -138,6 +230,7 @@ async def test_digest_sends_unread_summary_when_enabled(app_client, monkeypatch)
 
     on_user = await register_user(app_client, "pref5@example.com")
     off_user = await register_user(app_client, "pref6@example.com")
+    sent.clear()  # drop registration verification emails
     on_me = await _me(app_client, on_user)
     off_me = await _me(app_client, off_user)
 

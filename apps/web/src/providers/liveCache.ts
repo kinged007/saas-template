@@ -13,7 +13,7 @@
 import type { Query } from "@tanstack/react-query";
 
 import type { Conversation, Message, Notification } from "../types";
-import { identityStore } from "../utils/storage";
+import { getActiveWorkspaceId, identityStore } from "../utils/storage";
 import { queryClient } from "./queryClient";
 
 // Refine data query keys (verified against @refinedev/core key builders):
@@ -24,6 +24,23 @@ const CUSTOM_ROOT = ["data", "default", "custom"] as const;
 
 function currentUserId(): string | undefined {
   return identityStore.get()?.id;
+}
+
+/**
+ * Frames carry `workspace_id` (server notification payloads always set it).
+ * Frames for a non-active workspace are ignored: the bell, badge, and lists
+ * render the active workspace only. Cross-workspace rows arrive via refetch
+ * after switching, never via live prepend into the wrong list.
+ */
+function isActiveWorkspace(frame: unknown): boolean {
+  const active = getActiveWorkspaceId();
+  // No selection yet (boot): let it through; the scoped queries refetch
+  // with the header once the context hydrates.
+  if (!active) return true;
+  const ws = (frame as { workspace_id?: unknown } | null)?.workspace_id;
+  // Frames without an id (legacy / non-workspace events) stay visible.
+  if (typeof ws !== "string") return true;
+  return ws === active;
 }
 
 // ---------------------------------------------------------------- primitives
@@ -147,6 +164,7 @@ function messageFromFrame(frame: MessageFrame): Message | null {
  * or sending), not silently while the user watches it arrive.
  */
 export function applyMessageCreated(frame: unknown): void {
+  if (!isActiveWorkspace(frame)) return;
   const data = (frame ?? {}) as MessageFrame;
   const message = messageFromFrame(data);
   if (!message) return;
@@ -186,6 +204,7 @@ export function applyMessageCreated(frame: unknown): void {
  * they are surfaced via conversation unread counts instead.
  */
 export function applyNotificationCreated(frame: unknown): void {
+  if (!isActiveWorkspace(frame)) return;
   const data = (frame ?? {}) as Partial<Notification> | null;
   if (!data?.id) return;
   const notification: Notification = {
