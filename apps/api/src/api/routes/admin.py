@@ -8,6 +8,7 @@ workspace to inspect it here.
 from __future__ import annotations
 
 import logging
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import func, or_, select
@@ -190,15 +191,42 @@ async def list_all_audit_logs(
     db: AsyncSession = Depends(get_db),
 ):
     stmt = (
-        select(AuditLogEntry, User, UserProfile)
+        select(AuditLogEntry, User, UserProfile, Workspace)
         .outerjoin(User, User.id == AuditLogEntry.actor_user_id)
         .outerjoin(UserProfile, UserProfile.user_id == User.id)
+        .outerjoin(Workspace, Workspace.id == AuditLogEntry.workspace_id)
     )
     try:
         spec = parse_query(request)
+        q = (request.query_params.get("q") or "").strip()
         stmt = apply_query(
             stmt, AuditLogEntry, spec, sortable=_AUDIT_SORTABLE, filterable=_AUDIT_FILTERABLE
         )
+        if q:
+            # Single cross-field search: substring match on workspace name,
+            # user name/email, or action, plus exact match on any id column
+            # (guarded: non-UUID terms must not reach UUID comparisons).
+            like = f"%{q}%"
+            clauses = [
+                AuditLogEntry.action.ilike(like),
+                Workspace.name.ilike(like),
+                User.display_name.ilike(like),
+                User.email.ilike(like),
+            ]
+            try:
+                uuid.UUID(q)
+            except ValueError:
+                pass
+            else:
+                clauses.extend(
+                    (
+                        AuditLogEntry.id == q,
+                        AuditLogEntry.workspace_id == q,
+                        AuditLogEntry.actor_user_id == q,
+                        AuditLogEntry.resource_id == q,
+                    )
+                )
+            stmt = stmt.where(or_(*clauses))
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
@@ -209,7 +237,7 @@ async def list_all_audit_logs(
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
     out = []
-    for entry, actor, profile in rows.all():
+    for entry, actor, profile, ws in rows.all():
         actor_name = None
         if actor is not None:
             if profile is not None and (profile.first_name or profile.last_name):
@@ -222,8 +250,10 @@ async def list_all_audit_logs(
             {
                 "id": entry.id,
                 "workspace_id": entry.workspace_id,
+                "workspace_name": ws.name if ws is not None else None,
                 "actor_user_id": entry.actor_user_id,
                 "actor_display_name": actor_name,
+                "actor_email": actor.email if actor is not None else None,
                 "resource_type": entry.resource_type,
                 "resource_id": entry.resource_id,
                 "action": entry.action,

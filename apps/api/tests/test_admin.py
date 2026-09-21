@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tests.conftest import auth_headers, create_workspace, login, register_user
+from tests.conftest import auth_headers, create_workspace, login, register_user, ws_headers
 
 
 async def _superuser_client(app_client):
@@ -167,8 +167,10 @@ async def test_admin_audit_cross_workspace(app_client):
     import asyncio
 
     client, tokens = await _superuser_client(app_client)
-    await create_workspace(client, tokens, "Acme")
+    ws = await create_workspace(client, tokens, "Widget Co")
+
     actions: list[str] = []
+    scoped = None
     for _ in range(150):
         resp = await client.get("/api/v1/admin/audit", headers=auth_headers(tokens))
         assert resp.status_code == 200, resp.text
@@ -179,3 +181,36 @@ async def test_admin_audit_cross_workspace(app_client):
     assert "user.register" in actions
     assert "workspace.created" in actions
     assert resp.headers["X-Total-Count"]
+
+    # enriched names for readable rows
+    scoped = await client.get(
+        "/api/v1/admin/audit",
+        params={"workspace_id": ws["id"]},
+        headers=auth_headers(tokens),
+    )
+    assert scoped.status_code == 200, scoped.text
+    assert {e["workspace_id"] for e in scoped.json()} == {ws["id"]}
+    assert scoped.json()[0]["workspace_name"] == "Widget Co"
+
+    # cross-field search: workspace name, user email, action, exact ids
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    for term in ("Widget Co", "root@", "workspace.created", me.json()["id"], ws["id"]):
+        found = await client.get(
+            "/api/v1/admin/audit", params={"q": term}, headers=auth_headers(tokens)
+        )
+        assert found.status_code == 200, (term, found.text)
+        assert int(found.headers["x-total-count"]) >= 1, term
+    empty = await client.get(
+        "/api/v1/admin/audit", params={"q": "zzz-no-such-thing"}, headers=auth_headers(tokens)
+    )
+    assert empty.json() == [] and empty.headers["x-total-count"] == "0"
+
+    # workspace-scoped search: user email, action, actor id (same ?q= contract)
+    wsh = ws_headers(tokens, ws["id"])
+    for term in ("root@", "workspace.created", me.json()["id"]):
+        found = await client.get("/api/v1/audit", params={"q": term}, headers=wsh)
+        assert found.status_code == 200, (term, found.text)
+        assert int(found.headers["x-total-count"]) >= 1, term
+    assert found.json()[0]["actor_email"] == "root@example.com"
+    empty = await client.get("/api/v1/audit", params={"q": "zzz-no-such-thing"}, headers=wsh)
+    assert empty.json() == [] and empty.headers["x-total-count"] == "0"

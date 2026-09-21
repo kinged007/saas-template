@@ -96,6 +96,8 @@ def parse_query(request: Request, *, max_limit: int = 100) -> QuerySpec:
     if not spec.ids and "id" in q:  # simple-rest getMany sends repeated `id=`
         spec.ids = q.getlist("id")
     for key, value in q.multi_items():
+        if key == "q":
+            continue  # cross-field search handled by the caller, not a column filter
         if key.startswith("filter[") and key.endswith("]"):
             field_name = key[len("filter[") : -1]
             if field_name.endswith("]"):

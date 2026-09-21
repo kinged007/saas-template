@@ -18,7 +18,10 @@ import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
 import { ResetPasswordPage } from "./pages/ResetPasswordPage";
 import { VerifyEmailPage } from "./pages/VerifyEmailPage";
 import { DashboardPage } from "./pages/DashboardPage";
-import { AdminPage } from "./pages/AdminPage";
+import { AdminIndex, AdminLayout } from "./pages/admin/sections/AdminLayout";
+import { UsersSection as AdminUsersSection } from "./pages/admin/sections/UsersSection";
+import { WorkspacesSection as AdminWorkspacesSection } from "./pages/admin/sections/WorkspacesSection";
+import { AuditSection as AdminAuditSection } from "./pages/admin/sections/AuditSection";
 import { WorkspaceCreatePage } from "./pages/WorkspaceCreatePage";
 import { MembersPage } from "./pages/MembersPage";
 import { ReceivedInvitationsPage } from "./pages/ReceivedInvitationsPage";
@@ -76,7 +79,9 @@ export function App() {
             meta: { label: "Scheduled Jobs" },
           },
           { name: "audit", list: "/audit", meta: { hide: true } },
-          { name: "admin-users", list: "/admin", meta: { hide: true } },
+          { name: "admin-users", list: "/admin/users", meta: { hide: true } },
+          { name: "admin-workspaces", list: "/admin/workspaces", meta: { hide: true } },
+          { name: "admin-audit", list: "/admin/audit", meta: { hide: true } },
         ]}
       >
         <WorkspaceProvider>
@@ -92,7 +97,12 @@ export function App() {
               }
             >
               <Route index element={<DashboardPage />} />
-              <Route path="admin" element={<AdminPage />} />
+              <Route path="admin" element={<AdminLayout />}>
+                <Route index element={<AdminIndex />} />
+                <Route path="users" element={<AdminUsersSection />} />
+                <Route path="workspaces" element={<AdminWorkspacesSection />} />
+                <Route path="audit" element={<AdminAuditSection />} />
+              </Route>
               <Route path="workspaces/create" element={<WorkspaceCreatePage />} />
               <Route path="members" element={<MembersPage />} />
               <Route path="invitations" element={<ReceivedInvitationsPage />} />

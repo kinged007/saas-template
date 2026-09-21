@@ -69,7 +69,11 @@ function AdminMenuItem() {
   if (identity?.is_superuser !== true) return null;
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton asChild isActive={location.pathname === "/admin"} tooltip="Admin">
+      <SidebarMenuButton
+        asChild
+        isActive={location.pathname.startsWith("/admin")}
+        tooltip="Admin"
+      >
         <Link to="/admin">
           <ShieldCheck className="h-4 w-4 shrink-0" />
           <span>Admin</span>
