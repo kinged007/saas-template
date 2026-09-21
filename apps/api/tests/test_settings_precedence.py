@@ -35,3 +35,9 @@ def test_default_falls_back_to_embedded(monkeypatch):
 def test_empty_use_sqlite_string_is_unset():
     s = Settings.model_validate({"use_sqlite": ""})
     assert s.use_sqlite is False
+
+
+def test_whitespace_use_sqlite_string_is_unset():
+    for v in [" ", "   ", "\t\n"]:
+        s = Settings.model_validate({"use_sqlite": v})
+        assert s.use_sqlite is False

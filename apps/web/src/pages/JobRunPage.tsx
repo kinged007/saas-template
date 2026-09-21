@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { useCustom, useGo } from "@refinedev/core";
+import { useGo } from "@refinedev/core";
+import { useWorkspaceCustom } from "../hooks/useWorkspaceQuery";
 import { useParams } from "react-router";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 
@@ -22,7 +23,7 @@ export function JobRunPage() {
   const {
     result: runResult,
     query: runQuery,
-  } = useCustom<JobRun>({
+  } = useWorkspaceCustom<JobRun>({
     url: `jobs/runs/${runId}`,
     method: "get",
   });
@@ -37,7 +38,7 @@ export function JobRunPage() {
   const {
     result: logsResult,
     query: logsQuery,
-  } = useCustom<JobLogEntry[]>({
+  } = useWorkspaceCustom<JobLogEntry[]>({
     url: `jobs/runs/${runId}/logs`,
     method: "get",
     queryOptions: { enabled: !!run },
@@ -59,7 +60,7 @@ export function JobRunPage() {
     return () => clearInterval(timer);
   }, [isActive, refetchRun, refetchLogs]);
 
-  const { result: jobResult } = useCustom<ScheduledJob>({
+  const { result: jobResult } = useWorkspaceCustom<ScheduledJob>({
     url: `jobs/${jobId}`,
     method: "get",
     queryOptions: { enabled: !!jobId },

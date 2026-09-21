@@ -30,7 +30,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useCustom, useGetIdentity, useLogout } from "@refinedev/core";
+import { useGetIdentity, useLogout } from "@refinedev/core";
+import { useWorkspaceCustom } from "../hooks/useWorkspaceQuery";
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import {
@@ -44,6 +45,7 @@ import {
   Mail,
   Plus,
   Settings,
+  ShieldCheck,
   Users,
 } from "lucide-react";
 
@@ -61,6 +63,22 @@ const MENU_ITEMS = [
   { key: "/members", label: "Members", icon: Users, permission: "member:read" },
 ];
 
+function AdminMenuItem() {
+  const location = useLocation();
+  const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
+  if (identity?.is_superuser !== true) return null;
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild isActive={location.pathname === "/admin"} tooltip="Admin">
+        <Link to="/admin">
+          <ShieldCheck className="h-4 w-4 shrink-0" />
+          <span>Admin</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
 function SidebarNav() {
   const location = useLocation();
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
@@ -71,7 +89,7 @@ function SidebarNav() {
   const activeKey = `/${location.pathname.split("/")[1] || ""}`;
   const isActive = (key: string) => (key === "/" ? location.pathname === "/" : activeKey === key);
 
-  const { result: convUnreadResult } = useCustom<{ count: number; unread_conversations: number }>({
+  const { result: convUnreadResult } = useWorkspaceCustom<{ count: number; unread_conversations: number }>({
     url: "conversations/unread-count",
     method: "get",
     queryOptions: {
@@ -94,7 +112,7 @@ function SidebarNav() {
               <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
                 <Link to={item.key}>
                   <span className="relative">
-                    <Icon />
+                    <Icon className="h-4 w-4 shrink-0" />
                     {badgeCount > 0 && (
                       <span className="absolute -right-1.5 -top-1.5 hidden h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-0.5 text-[10px] font-medium leading-none text-destructive-foreground group-data-[collapsible=icon]:flex">
                         {badgeCount > 99 ? "99+" : badgeCount}
@@ -112,6 +130,7 @@ function SidebarNav() {
             </SidebarMenuItem>
           );
         })}
+        <AdminMenuItem />
       </SidebarMenu>
     </SidebarGroup>
   );
@@ -276,18 +295,25 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         </SidebarHeader>
         <SidebarContent>
           {workspaces.length === 0 ? (
-            <div className="flex flex-col gap-3 p-4">
-              <p className="text-muted-foreground text-sm">
-                You're not a member of any workspace yet.
-              </p>
-              <Button
-                onClick={() => navigate("/workspaces/create")}
-                className="gap-2 justify-start"
-              >
-                <Building2 className="h-4 w-4" />
-                Create workspace
-              </Button>
-            </div>
+            <>
+              <div className="flex flex-col gap-3 p-4">
+                <p className="text-muted-foreground text-sm">
+                  You're not a member of any workspace yet.
+                </p>
+                <Button
+                  onClick={() => navigate("/workspaces/create")}
+                  className="gap-2 justify-start"
+                >
+                  <Building2 className="h-4 w-4" />
+                  Create workspace
+                </Button>
+              </div>
+              <SidebarGroup>
+                <SidebarMenu>
+                  <AdminMenuItem />
+                </SidebarMenu>
+              </SidebarGroup>
+            </>
           ) : (
             <SidebarNav />
           )}

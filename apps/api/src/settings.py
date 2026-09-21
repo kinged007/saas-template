@@ -30,8 +30,9 @@ class Settings(BaseSettings):
 
     @field_validator("use_sqlite", mode="before")
     @classmethod
-    def _empty_string_is_unset(cls, v):
-        return False if v == "" else v
+    def _blank_string_is_unset(cls, v):
+        # ponytail: None would need Optional[bool]; False equals the default, add when it changes.
+        return False if isinstance(v, str) and not v.strip() else v
 
     # Security
     secret_key: str = "dev-secret-change-me"

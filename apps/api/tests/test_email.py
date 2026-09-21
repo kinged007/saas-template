@@ -29,6 +29,58 @@ async def test_console_driver_captures_message():
     assert captured.html_body == "<p>join us</p>"
 
 
+async def test_per_message_from_addr_overrides_default(monkeypatch):
+    import smtplib
+
+    from src.email.smtp import SmtpConfig, SmtpEmailSender
+
+    calls: dict = {}
+
+    class FakeSMTP:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def ehlo(self):
+            pass
+
+        def starttls(self):
+            pass
+
+        def sendmail(self, sender, recipients, raw):
+            calls["sent"] = (sender, recipients, raw)
+
+    monkeypatch.setattr(smtplib, "SMTP", lambda *a, **k: FakeSMTP())
+    sender = SmtpEmailSender(SmtpConfig(from_addr="default@example.com"))
+    await sender.send(_msg(from_addr="override@example.com"))
+    assert calls["sent"][0] == "override@example.com"
+
+
+async def test_console_outbox_skips_invalid_messages():
+    import pytest
+
+    from src.email.base import EmailSendError
+    from src.email.console import ConsoleEmailSender
+
+    sender = ConsoleEmailSender()
+    with pytest.raises(EmailSendError):
+        await sender.send(_msg(to="not-an-email"))
+    assert len(sender.outbox) == 0
+
+
+def test_as_mime_builds_multipart_alternative():
+    msg = _msg()
+    mime = msg.as_mime("noreply@example.com")
+    assert mime.is_multipart()
+    parts = mime.get_payload()
+    assert [p.get_content_type() for p in parts] == ["text/plain", "text/html"]
+    single = _msg(html_body=None).as_mime("noreply@example.com")
+    assert not single.is_multipart()
+    assert single.get_content_type() == "text/plain"
+
+
 async def test_invalid_address_raises_send_error():
     import pytest
 
@@ -38,6 +90,19 @@ async def test_invalid_address_raises_send_error():
     sender = ConsoleEmailSender()
     with pytest.raises(EmailSendError):
         await sender.send(_msg(to="not-an-email"))
+
+
+async def test_newline_in_subject_or_to_raises_send_error():
+    import pytest
+
+    from src.email.base import EmailSendError
+    from src.email.console import ConsoleEmailSender
+
+    sender = ConsoleEmailSender()
+    with pytest.raises(EmailSendError, match="must not contain newlines"):
+        await sender.send(_msg(subject="hi\nBcc: evil"))
+    with pytest.raises(EmailSendError, match="must not contain newlines"):
+        await sender.send(_msg(to="a@example.com\r\nBcc: evil@example.com"))
 
 
 async def test_missing_subject_raises_send_error():
@@ -104,6 +169,29 @@ async def test_smtp_driver_sends_mime_with_tls_and_login(monkeypatch):
     assert "<p>join us</p>" in raw
 
 
+async def test_missing_sender_raises_send_error():
+    import pytest
+
+    from src.email.base import EmailSendError
+    from src.email.smtp import SmtpConfig, SmtpEmailSender
+
+    with pytest.raises(EmailSendError, match="no sender address"):
+        await SmtpEmailSender(SmtpConfig()).send(_msg())
+
+
+def test_factory_smtp_without_from_raises(monkeypatch):
+    import pytest
+
+    from src.email.base import EmailDriver
+    from src.email.factory import build_email_sender
+    from src.settings import settings
+
+    monkeypatch.setattr(settings, "email_driver", EmailDriver.SMTP)
+    monkeypatch.setattr(settings, "email_from", "")
+    with pytest.raises(ValueError, match="EMAIL_FROM is required"):
+        build_email_sender()
+
+
 async def test_smtp_driver_skips_tls_and_login_without_creds(monkeypatch):
     from src.email.smtp import SmtpConfig, SmtpEmailSender
 
@@ -139,6 +227,47 @@ async def test_smtp_driver_skips_tls_and_login_without_creds(monkeypatch):
     assert calls["tls"] is False
     assert calls["login"] is False
     assert calls["sent"] is True
+
+
+async def test_smtp_driver_skips_login_with_half_set_creds(monkeypatch, caplog):
+    import logging
+
+    from src.email.smtp import SmtpConfig, SmtpEmailSender
+
+    calls: dict = {}
+
+    class FakeSMTP:
+        def __init__(self, *args, **kwargs):
+            calls["login"] = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def ehlo(self):
+            pass
+
+        def starttls(self):
+            pass
+
+        def login(self, user, password):
+            calls["login"] = (user, password)
+
+        def sendmail(self, *args):
+            calls["sent"] = True
+
+    import smtplib
+
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    with caplog.at_level(logging.WARNING, logger="src.email.smtp"):
+        await SmtpEmailSender(
+            SmtpConfig(username="user", use_tls=False, from_addr="noreply@example.com")
+        ).send(_msg(html_body=None))
+    assert calls["login"] is False
+    assert calls["sent"] is True
+    assert "incomplete" in caplog.text
 
 
 async def test_smtp_failure_raises_send_error(monkeypatch):
@@ -178,6 +307,7 @@ async def test_factory_builds_each_driver(monkeypatch):
     monkeypatch.setattr(settings, "email_driver", EmailDriver.CONSOLE)
     assert isinstance(build_email_sender(), ConsoleEmailSender)
     monkeypatch.setattr(settings, "email_driver", EmailDriver.SMTP)
+    monkeypatch.setattr(settings, "email_from", "noreply@example.com")
     assert isinstance(build_email_sender(), SmtpEmailSender)
 
 

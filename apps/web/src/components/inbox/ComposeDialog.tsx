@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { useCreate, useGetIdentity, useList } from "@refinedev/core";
+import { useCreate, useGetIdentity } from "@refinedev/core";
+import { useWorkspaceList } from "../../hooks/useWorkspaceQuery";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -54,7 +55,7 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
   const currentUserId = identity?.id ?? null;
 
-  const { result } = useList<Member>({
+  const { result } = useWorkspaceList<Member>({
     resource: "members",
     pagination: { pageSize: 100 },
     queryOptions: { enabled: open && !!workspace?.id },

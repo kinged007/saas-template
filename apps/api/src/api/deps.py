@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -108,6 +108,22 @@ async def get_optional_workspace_id(
     return x_workspace_id
 
 
+def _check_key_quota(api_key: ApiKey) -> None:
+    """Reject keys that exhausted their usage quota (None = unlimited)."""
+    if api_key.usage_quota is not None and api_key.usage_count >= api_key.usage_quota:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "api key quota exceeded")
+
+
+def _quota_headers(api_key: ApiKey) -> dict[str, str]:
+    """Quota/remaining headers for key-authenticated responses (empty = unlimited)."""
+    if api_key.usage_quota is None:
+        return {}
+    return {
+        "X-API-Key-Quota": str(api_key.usage_quota),
+        "X-API-Key-Remaining": str(max(0, api_key.usage_quota - api_key.usage_count)),
+    }
+
+
 def require_key_permission(permission: str):
     """Enforce a permission for API-key requests only.
 
@@ -118,6 +134,7 @@ def require_key_permission(permission: str):
     """
 
     async def checker(
+        response: Response,
         db: Annotated[AsyncSession, Depends(get_db)],
         principal: AuthPrincipal = Depends(resolve_auth_principal),
         workspace_id: str | None = Depends(get_optional_workspace_id),
@@ -132,7 +149,10 @@ def require_key_permission(permission: str):
                 status.HTTP_403_FORBIDDEN, "api key is not scoped to this workspace"
             )
         if "*" in api_key.permissions or permission in api_key.permissions:
+            _check_key_quota(api_key)
             await ApiKeyService(db).touch(api_key)
+            for k, v in _quota_headers(api_key).items():
+                response.headers[k] = v
             return None
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, f"missing permission: {permission}"
@@ -154,6 +174,7 @@ async def resolve_membership(
 
 def require_permission(permission: str):
     async def checker(
+        response: Response,
         db: Annotated[AsyncSession, Depends(get_db)],
         principal: AuthPrincipal = Depends(resolve_auth_principal),
         workspace_id: str = Depends(get_current_workspace_id),
@@ -168,7 +189,10 @@ def require_permission(permission: str):
                     status.HTTP_403_FORBIDDEN, "api key is not scoped to this workspace"
                 )
             if "*" in api_key.permissions or permission in api_key.permissions:
+                _check_key_quota(api_key)
                 await ApiKeyService(db).touch(api_key)
+                for k, v in _quota_headers(api_key).items():
+                    response.headers[k] = v
                 return None
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, f"missing permission: {permission}"

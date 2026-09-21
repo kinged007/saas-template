@@ -1,4 +1,5 @@
-import { useCan, useList } from "@refinedev/core";
+import { useCan } from "@refinedev/core";
+import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 import { KeyRound } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +20,7 @@ import { EmptyRow, formatDate } from "../components/ui";
 import type { ApiKey } from "../types";
 
 export function ApiKeysPage() {
-  const { result } = useList<ApiKey>({ resource: "api-keys" });
+  const { result } = useWorkspaceList<ApiKey>({ resource: "api-keys" });
   const { data: canManage } = useCan({ resource: "api-keys", action: "delete" });
 
   const rows = result?.data ?? [];
@@ -33,6 +34,7 @@ export function ApiKeysPage() {
             <TableRow>
               <TableHead>Name</TableHead>
               <TableHead>Permissions</TableHead>
+              <TableHead>Usage</TableHead>
               <TableHead>Last used</TableHead>
               <TableHead>Created</TableHead>
               <TableHead className="text-right">Actions</TableHead>
@@ -64,6 +66,10 @@ export function ApiKeysPage() {
                   </div>
                 </TableCell>
                 <TableCell className="text-muted-foreground">
+                  {key.usage_count ?? 0}
+                  {key.usage_quota != null ? ` / ${key.usage_quota}` : ""}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
                   {formatDate(key.last_used_at)}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
@@ -86,7 +92,7 @@ export function ApiKeysPage() {
               </TableRow>
             ))}
             {rows.length === 0 && (
-              <EmptyRow colSpan={5}>No API keys yet.</EmptyRow>
+              <EmptyRow colSpan={6}>No API keys yet.</EmptyRow>
             )}
           </TableBody>
         </Table>

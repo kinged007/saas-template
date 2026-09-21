@@ -75,6 +75,7 @@ class ApiKeyService:
         actor: User,
         ip_address: str | None = None,
         minting_key: ApiKey | None = None,
+        usage_quota: int | None = None,
     ) -> tuple[ApiKey, str]:
         """Create a key whose permissions are capped by the actor's own.
 
@@ -96,6 +97,9 @@ class ApiKeyService:
             denied = sorted(requested - allowed)
             raise ApiKeyForbidden(f"cannot grant permissions you do not have: {', '.join(denied)}")
 
+        if usage_quota is not None and usage_quota < 0:
+            raise ApiKeyError("usage quota cannot be negative")
+
         raw = self.generate()
         key = ApiKey(
             workspace_id=workspace_id,
@@ -104,6 +108,7 @@ class ApiKeyService:
             key_hash=self._hash(raw),
             permissions=sorted(requested),
             created_by_user_id=actor.id,
+            usage_quota=usage_quota,
         )
         self._session.add(key)
         await self._session.commit()
@@ -137,9 +142,7 @@ class ApiKeyService:
         )
         return key, raw
 
-    async def list_api_keys(
-        self, workspace_id: str, created_by_user_id: str
-    ) -> list[ApiKey]:
+    async def list_api_keys(self, workspace_id: str, created_by_user_id: str) -> list[ApiKey]:
         """Keys owned by one user in one workspace — never anyone else's."""
         stmt = (
             select(ApiKey)
@@ -203,6 +206,55 @@ class ApiKeyService:
         return key
 
     async def touch(self, key: ApiKey) -> None:
-        """Record the last successful use of a key."""
+        # ponytail: lifetime counter, never reset (usage_quota is a lifetime
+        # cap); add a window start column + rollover here when true monthly
+        # quotas are needed.
+        """Record a successful use: bump the usage counter + last_used_at."""
+        key.usage_count += 1
         key.last_used_at = now_utc()
         await self._session.commit()
+
+    async def set_quota(
+        self,
+        workspace_id: str,
+        api_key_id: str,
+        usage_quota: int | None,
+        *,
+        actor: User | None = None,
+        ip_address: str | None = None,
+    ) -> ApiKey:
+        """Set (or clear with None) a key's quota. Personal scope: checked by route."""
+        key = await self._session.get(ApiKey, api_key_id)
+        if key is None or key.workspace_id != workspace_id:
+            raise ApiKeyNotFound("api key not found")
+        if usage_quota is not None and usage_quota < 0:
+            raise ApiKeyError("usage quota cannot be negative")
+        key.usage_quota = usage_quota
+        await self._session.commit()
+        await publish_event(
+            self._bus,
+            Subjects.APIKEY_UPDATED,
+            {
+                "apikey_id": key.id,
+                "workspace_id": workspace_id,
+                "name": key.name,
+                "key_prefix": key.key_prefix,
+                "usage_quota": usage_quota,
+                "updated_by_user_id": actor.id if actor else None,
+            },
+        )
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="apikey",
+            resource_id=key.id,
+            action="apikey.updated",
+            actor_user_id=actor.id if actor else None,
+            details={
+                "name": key.name,
+                "key_prefix": key.key_prefix,
+                "usage_quota": usage_quota,
+            },
+            ip_address=ip_address,
+        )
+        return key

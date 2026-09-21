@@ -44,6 +44,7 @@ import type { ApiKeyCreated } from "../types";
 const apiKeySchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
   permissions: z.array(z.string()),
+  usage_quota: z.number().int().min(0).nullable().optional(),
 });
 
 type ApiKeyFormData = z.infer<typeof apiKeySchema>;
@@ -65,7 +66,7 @@ export function ApiKeyCreatePage() {
     ...form
   } = useForm<BaseRecord, HttpError, ApiKeyFormData>({
     resolver: zodResolver(apiKeySchema),
-    defaultValues: { name: "", permissions: [] },
+    defaultValues: { name: "", permissions: [], usage_quota: null },
     refineCoreProps: {
       resource: "api-keys",
       action: "create",
@@ -165,6 +166,30 @@ export function ApiKeyCreatePage() {
                     )}
                   </div>
                 </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="usage_quota"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Usage quota (optional)</FormLabel>
+                <FormControl>
+                  <Input
+                    type="number"
+                    min={0}
+                    placeholder="Unlimited"
+                    value={field.value ?? ""}
+                    onChange={(e) =>
+                      field.onChange(e.target.value === "" ? null : Number(e.target.value))
+                    }
+                  />
+                </FormControl>
+                <FormDescription>
+                  Max authenticated uses before the key is rejected. Leave empty for unlimited.
+                </FormDescription>
                 <FormMessage />
               </FormItem>
             )}

@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useList } from "@refinedev/core";
+import {  } from "@refinedev/core";
+import { useWorkspaceList } from "../../../../hooks/useWorkspaceQuery";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +13,7 @@ export function AuditLogSection() {
   const [page, setPage] = useState(1);
   const pageSize = 20;
 
-  const { result, query } = useList<AuditLogEntry>({
+  const { result, query } = useWorkspaceList<AuditLogEntry>({
     resource: "audit",
     pagination: { currentPage: page, pageSize },
     sorters: [{ field: "created_at", order: "desc" }],

@@ -42,5 +42,6 @@ register_webhook_event("member.role_changed", Subjects.WORKSPACE_MEMBER_ROLE_CHA
 register_webhook_event("member.removed", Subjects.WORKSPACE_MEMBER_REMOVED)
 register_webhook_event("apikey.created", Subjects.APIKEY_CREATED)
 register_webhook_event("apikey.revoked", Subjects.APIKEY_REVOKED)
+register_webhook_event("apikey.updated", Subjects.APIKEY_UPDATED)
 register_webhook_event("audit.entry.created", Subjects.AUDIT_ENTRY_CREATED)
 register_webhook_event("conversation.message.created", Subjects.CONVERSATION_MESSAGE_CREATED)

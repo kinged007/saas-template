@@ -283,6 +283,21 @@ def build_workflows(
             payload.get("created_by_user_id"),
         )
 
+    async def on_apikey_updated(payload: dict, metadata) -> None:
+        """Placeholder for key lifecycle consumers (security monitoring,
+        audit dashboards, notifications to admins).
+
+        TODO(events): implement consumption of apikeys.updated.
+        """
+        logger.info(
+            "apikey.updated: %s (%s) in workspace %s quota=%s by %s",
+            payload.get("apikey_id"),
+            payload.get("name"),
+            payload.get("workspace_id"),
+            payload.get("usage_quota"),
+            payload.get("updated_by_user_id"),
+        )
+
     async def on_apikey_revoked(payload: dict, metadata) -> None:
         """Placeholder for key lifecycle consumers (security monitoring,
         audit dashboards, notifications to admins).
@@ -480,6 +495,7 @@ def build_workflows(
     registry.register(Subjects.AUDIT_ENTRY_CREATED, _hooked(on_audit_entry))
     registry.register(Subjects.APIKEY_CREATED, _hooked(on_apikey_created))
     registry.register(Subjects.APIKEY_REVOKED, _hooked(on_apikey_revoked))
+    registry.register(Subjects.APIKEY_UPDATED, _hooked(on_apikey_updated))
     registry.register(Subjects.JOBS_EXECUTE, on_job_execute)
     registry.register(Subjects.NOTIFICATIONS_CREATED, on_notification_created, fanout=True)
     registry.register(Subjects.CONVERSATION_MESSAGE_CREATED, _hooked(on_conversation_message))

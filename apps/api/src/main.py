@@ -3,10 +3,13 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 from src.api.routes import (
+    admin,
     api_keys,
     audit,
     auth,
@@ -90,13 +93,29 @@ app = FastAPI(
 )
 
 app.add_middleware(RequestIdMiddleware)
+API_VERSION = "v1"
+API_VERSION_HEADER = "X-API-Version"
+
+
+class ApiVersionMiddleware(BaseHTTPMiddleware):
+    """Stamp every /api/* response with the API version (see docs/API_VERSIONING.md)."""
+
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers[API_VERSION_HEADER] = API_VERSION
+        return response
+
+
+app.add_middleware(ApiVersionMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Total-Count", "X-Request-ID"],
+    expose_headers=["X-Total-Count", "X-API-Version", "X-API-Key-Quota", "X-API-Key-Remaining", "X-Request-ID"],
 )
 
 app.state.container = Container()
@@ -104,11 +123,17 @@ app.state.container = Container()
 
 @app.get("/")
 async def root() -> dict:
-    return {"service": "saas-template-api", "docs": "/docs", "health": "/healthz"}
+    return {
+        "service": "saas-template-api",
+        "api_version": API_VERSION,
+        "docs": "/docs",
+        "health": "/healthz",
+    }
 
 
 API = "/api/v1"
 app.include_router(meta.router, prefix=API)
+app.include_router(admin.router, prefix=API)
 app.include_router(auth.router, prefix=API)
 app.include_router(workspaces.router, prefix=API)
 app.include_router(members.router, prefix=API)

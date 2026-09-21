@@ -108,6 +108,16 @@ export type Identity = {
   profile?: UserProfile;
 };
 
+export type AdminUser = {
+  id: string;
+  email: string;
+  display_name: string;
+  is_active: boolean;
+  is_superuser: boolean;
+  created_at?: string;
+  workspaces?: Array<{ id: string; name: string; slug: string; role: string }>;
+};
+
 export type Role = {
   id: string;
   workspace_id: string;
@@ -221,6 +231,9 @@ export type ApiKey = {
   permissions: string[];
   created_by_user_id?: string;
   last_used_at?: string;
+  /** Lifetime authenticated uses; null usage_quota = unlimited. */
+  usage_count?: number;
+  usage_quota?: number | null;
   revoked_at?: string;
   created_at?: string;
 };
