@@ -266,6 +266,17 @@ class AuthService:
         )
         return pair
 
+    async def get_user_by_refresh_token(self, refresh_token: str) -> User | None:
+        """Return the owner of a refresh token (revoked or not), or None."""
+        stmt = select(RefreshToken).where(
+            RefreshToken.token_hash == OpaqueToken.hash(refresh_token)
+        )
+        result = await self._session.execute(stmt)
+        row = result.scalar_one_or_none()
+        if row is None:
+            return None
+        return await self._session.get(User, row.user_id)
+
     async def revoke_refresh(self, refresh_token: str, *, ip_address: str | None = None) -> None:
         stmt = select(RefreshToken).where(
             RefreshToken.token_hash == OpaqueToken.hash(refresh_token)

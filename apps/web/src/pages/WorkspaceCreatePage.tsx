@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useCreate, useGetIdentity } from "@refinedev/core";
-import { useNavigate } from "react-router";
+import { Navigate, useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -9,17 +9,23 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
 import { PageHeader } from "../components/refine-ui/layout/page-header";
-import { useWorkspace } from "../contexts/WorkspaceContext";
-import type { Workspace } from "../types";
+import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceContext";
+import type { Identity, Workspace } from "../types";
 
 export function WorkspaceCreatePage() {
   const navigate = useNavigate();
   const { mutate, mutation } = useCreate();
   const { refetch } = useGetIdentity();
+  const { data: identity } = useGetIdentity<Identity>({
+    queryOptions: IDENTITY_QUERY_OPTIONS,
+  });
   const { setWorkspace } = useWorkspace();
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
+  if (identity?.single_workspace === true) {
+    return <Navigate to="/" replace />;
+  }
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();

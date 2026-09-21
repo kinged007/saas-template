@@ -5,6 +5,7 @@ import uuid
 from datetime import timedelta
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dates import ensure_utc, now_utc
@@ -32,9 +33,71 @@ class WorkspaceConflict(WorkspaceError):
 class WorkspaceService:
     DEFAULT_ROLES = ["owner", "admin", "editor", "viewer"]
 
+    # Auto-join role for single-workspace mode (SINGLE_WORKSPACE). Viewer:
+    # edit access requires explicit designation.
+    SINGLE_WORKSPACE_ROLE = "viewer"
+
     def __init__(self, session: AsyncSession, bus: EventBus | None = None) -> None:
         self._session = session
         self._bus = bus
+
+    # ------------------------------------------------------- single workspace
+
+    @staticmethod
+    def single_workspace_enabled() -> bool:
+        from src.settings import settings
+
+        return settings.single_workspace
+
+    async def get_single_workspace(self) -> Workspace | None:
+        """Oldest workspace wins (covers "workspace[0]" when rows pre-exist)."""
+        result = await self._session.execute(
+            select(Workspace).order_by(Workspace.created_at.asc()).limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def join_single_workspace(self, user: User) -> Workspace:
+        """Ensure the shared workspace exists, then add the user idempotently.
+
+        First arrival creates it (owned by them, normally the superadmin);
+        everyone else joins as viewer. Existing members keep their role."""
+        workspace = await self.get_single_workspace()
+        if workspace is None:
+            try:
+                return await self.create_workspace(
+                    name="Workspace",
+                    slug=None,
+                    description=None,
+                    owner=user,
+                    allow_single_workspace_bootstrap=True,
+                )
+            except (WorkspaceError, IntegrityError):
+                # Lost the first-login race: the winner's row is now oldest.
+                # IntegrityError covers the concurrent case where two
+                # bootstraps both pass the slug check and the loser hits the
+                # UNIQUE constraint on workspace.slug.
+                await self._session.rollback()
+                workspace = await self.get_single_workspace()
+                if workspace is None:
+                    raise
+        existing = await self._session.execute(
+            select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == workspace.id,
+                WorkspaceMember.user_id == user.id,
+            )
+        )
+        if existing.scalar_one_or_none() is None:
+            role = await self._single_workspace_role(workspace.id)
+            self._session.add(
+                WorkspaceMember(
+                    workspace_id=workspace.id,
+                    user_id=user.id,
+                    role_id=role.id,
+                    status="active",
+                )
+            )
+            await self._session.commit()
+        return workspace
 
     # ------------------------------------------------------------- workspaces
 
@@ -46,7 +109,12 @@ class WorkspaceService:
         description: str | None,
         owner: User,
         ip_address: str | None = None,
+        allow_single_workspace_bootstrap: bool = False,
     ) -> Workspace:
+        if self.single_workspace_enabled() and not allow_single_workspace_bootstrap:
+            existing = await self.get_single_workspace()
+            if existing is not None:
+                raise WorkspaceForbidden("single-workspace mode: only one workspace is allowed")
         slug = slug or _slugify(name)
         exists = await self._session.execute(select(Workspace).where(Workspace.slug == slug))
         if exists.scalar_one_or_none():
@@ -142,6 +210,8 @@ class WorkspaceService:
         workspace = await self._session.get(Workspace, workspace_id)
         if workspace is None:
             raise WorkspaceError("workspace not found")
+        if self.single_workspace_enabled():
+            raise WorkspaceForbidden("single-workspace mode: workspaces cannot be deleted")
         name = workspace.name
 
         # --- Cascade delete workspace-scoped data.
@@ -637,6 +707,26 @@ class WorkspaceService:
         stmt = select(Role).where(Role.workspace_id == workspace_id).order_by(Role.created_at.asc())
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+    async def _single_workspace_role(self, workspace_id: str) -> Role:
+        """Auto-join role: viewer, else the lowest non-owner system role.
+
+        Falls back when the viewer role was renamed/removed so a missing
+        role does not brick every later login in single-workspace mode."""
+        stmt = select(Role).where(Role.workspace_id == workspace_id)
+        result = await self._session.execute(stmt)
+        roles = list(result.scalars().all())
+        for role in roles:
+            if role.name == self.SINGLE_WORKSPACE_ROLE:
+                return role
+        for fallback in ("editor", "admin"):
+            for role in roles:
+                if role.name == fallback:
+                    return role
+        non_owner = [r for r in roles if r.name != "owner"]
+        if non_owner:
+            return non_owner[0]
+        raise WorkspaceError(f"role {self.SINGLE_WORKSPACE_ROLE} not found")
 
     async def _role_by_name(self, workspace_id: str, name: str) -> Role:
         stmt = select(Role).where(Role.workspace_id == workspace_id, Role.name == name)

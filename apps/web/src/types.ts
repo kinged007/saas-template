@@ -103,6 +103,8 @@ export type Identity = {
   avatar_url?: string;
   workspaces: Workspace[];
   permissions: string[];
+  /** Backend SINGLE_WORKSPACE flag: one shared workspace, no switching/deletes. */
+  single_workspace?: boolean;
   /** Bootstrap superuser (SUPERADMIN_EMAIL): manages global scheduled jobs. */
   is_superuser?: boolean;
   profile?: UserProfile;
