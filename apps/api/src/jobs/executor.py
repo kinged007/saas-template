@@ -233,12 +233,19 @@ async def _finish(
     duration_ms = None
     if started_at is not None:
         duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+    job_key: str | None = None
     async with SessionFactory() as session:
         run = await session.get(JobRun, run_id)
         if run is None:
             return
+        definition = await session.get(JobDefinition, run.definition_id)
+        job_key = definition.key if definition is not None else None
         run.status = status.value
         run.finished_at = finished_at
         run.duration_ms = duration_ms
         run.error = error[:8000] if error else None
         await session.commit()
+    if job_key is not None:
+        from src.core.metrics import observe_job_run
+
+        observe_job_run(key=job_key, status=status.value)

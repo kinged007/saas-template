@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from src.core.dates import ensure_utc, now_utc
 from src.jobs.registry import JobContext, JobSpec, job_registry
@@ -194,6 +194,75 @@ async def notifications_daily_digest(ctx: JobContext) -> None:
                 sent += 1
     logger.info("digest completed — %d email(s) sent", sent)
     print(f"digest completed — {sent} email(s) sent")
+
+
+@job_registry.register(
+    JobSpec(
+        key="system.retention_cleanup",
+        name="Retention cleanup",
+        description=(
+            "Deletes aged operational rows: job runs+logs past the log cutoff, "
+            "acknowledged notifications past the notification cutoff, and audit "
+            "entries past the audit cutoff (audit is kept forever by default)."
+        ),
+        scope="global",
+        schedule="0 4 * * *",
+        params_schema={},
+        default_enabled=True,
+        missed_policy="single",
+        timeout_seconds=600,
+    )
+)
+async def retention_cleanup(ctx: JobContext) -> None:
+    from datetime import timedelta
+
+    from src.models.audit import AuditLogEntry
+    from src.models.core import Notification
+    from src.models.jobs import JobLogEntry, JobRun
+    from src.settings import settings
+
+    now = now_utc()
+    async with ctx.session() as session:
+        runs_removed = 0
+        run_cutoff = now - timedelta(days=settings.jobs_log_retention_days)
+        if settings.jobs_log_retention_days > 0:
+            stale = (
+                (await session.execute(select(JobRun.id).where(JobRun.created_at < run_cutoff)))
+                .scalars()
+                .all()
+            )
+            if stale:
+                await session.execute(delete(JobLogEntry).where(JobLogEntry.run_id.in_(stale)))
+                await session.execute(delete(JobRun).where(JobRun.id.in_(stale)))
+                runs_removed = len(stale)
+        notifs_removed = 0
+        if settings.notifications_retention_days > 0:
+            notif_cutoff = now - timedelta(days=settings.notifications_retention_days)
+            result = await session.execute(
+                delete(Notification).where(
+                    Notification.acknowledged_at.is_not(None),
+                    Notification.created_at < notif_cutoff,
+                )
+            )
+            notifs_removed = result.rowcount or 0
+        audit_removed = 0
+        if settings.audit_log_retention_days > 0:
+            audit_cutoff = now - timedelta(days=settings.audit_log_retention_days)
+            result = await session.execute(
+                delete(AuditLogEntry).where(AuditLogEntry.created_at < audit_cutoff)
+            )
+            audit_removed = result.rowcount or 0
+        await session.commit()
+    logger.info(
+        "retention cleanup — %d run(s), %d notification(s), %d audit entr(ies) removed",
+        runs_removed,
+        notifs_removed,
+        audit_removed,
+    )
+    print(
+        f"retention cleanup — {runs_removed} run(s), "
+        f"{notifs_removed} notification(s), {audit_removed} audit entr(ies) removed"
+    )
 
 
 @job_registry.register(

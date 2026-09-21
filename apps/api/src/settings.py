@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.email.base import EmailDriver  # noqa: E402  (base has no settings import)
@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     jobs_scheduler_tick_seconds: float = 10.0
     jobs_default_timeout_seconds: int = 600
     jobs_run_retention: int = 1000  # per definition; pruned by scheduler housekeeping
+
+    # Retention cleanup (days; enforced by the system.retention_cleanup job).
+    # audit_log_retention_days=0 keeps audit entries forever (compliance trail).
+    jobs_log_retention_days: int = Field(default=90, ge=0)
+    notifications_retention_days: int = Field(default=90, ge=0)
+    audit_log_retention_days: int = Field(default=0, ge=0)
 
     @property
     def database_url_sqlite(self) -> bool:
