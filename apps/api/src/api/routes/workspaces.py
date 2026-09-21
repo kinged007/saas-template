@@ -11,6 +11,7 @@ from src.api.deps import (
     get_container,
     get_current_user,
     get_optional_workspace_id,
+    require_existing_workspace,
     require_key_permission,
     require_permission,
     resolve_auth_principal,
@@ -103,7 +104,8 @@ async def create_workspace(
 async def get_workspace(
     workspace_id: str,
     user=Depends(get_current_user),
-    _=Depends(require_permission(WORKSPACE_READ)),
+    _=Depends(require_existing_workspace),
+    _perm=Depends(require_permission(WORKSPACE_READ)),
     db: AsyncSession = Depends(get_db),
 ):
     service = WorkspaceService(db)
@@ -144,7 +146,8 @@ async def delete_workspace(
     workspace_id: str,
     request: Request,
     user=Depends(get_current_user),
-    _=Depends(require_permission(WORKSPACE_DELETE)),
+    _=Depends(require_existing_workspace),
+    _perm=Depends(require_permission(WORKSPACE_DELETE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):

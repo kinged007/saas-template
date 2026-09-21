@@ -349,11 +349,14 @@ async def _execute_now(
     container,
 ) -> dict:
     definition = await _get_definition_or_404(definition_id, workspace_id, db)
-    run = await JobService(db, container.bus).create_run(
-        definition,
-        trigger=JobTrigger.MANUAL,
-        actor_user_id=actor_user_id,
-    )
+    try:
+        run = await JobService(db, container.bus).create_run(
+            definition,
+            trigger=JobTrigger.MANUAL,
+            actor_user_id=actor_user_id,
+        )
+    except JobError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     await publish_audit(
         container.bus,
         workspace_id=definition.workspace_id,
