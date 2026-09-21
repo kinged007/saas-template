@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { Check, Copy } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { useCustom, useCustomMutation } from "@refinedev/core";
 import { toast } from "sonner";
 
@@ -47,8 +49,10 @@ export function SecuritySection() {
   const enabled = (status.result?.data as { enabled?: boolean } | undefined)?.enabled ?? false;
 
   const [setupUri, setSetupUri] = useState<string | null>(null);
+  const [setupSecret, setSetupSecret] = useState<string | null>(null);
   const [setupToken, setSetupToken] = useState<string | null>(null);
   const [setupCode, setSetupCode] = useState("");
+  const [copied, setCopied] = useState(false);
   const [backupCodes, setBackupCodes] = useState<string[] | null>(null);
   const [password, setPassword] = useState("");
   const [disableOpen, setDisableOpen] = useState(false);
@@ -81,11 +85,12 @@ export function SecuritySection() {
   const startSetup = async () => {
     try {
       const r = (await call("auth/2fa/setup", "post")) as unknown as {
-        data: { setup_token: string; otpauth_uri: string };
+        data: { setup_token: string; otpauth_uri: string; secret: string };
       };
       const data = r.data;
       setSetupToken(data.setup_token);
       setSetupUri(data.otpauth_uri);
+      setSetupSecret(data.secret);
       setSetupCode("");
       setBackupCodes(null);
     } catch (e) {
@@ -101,6 +106,7 @@ export function SecuritySection() {
       };
       setBackupCodes(r.data.backup_codes ?? []);
       setSetupUri(null);
+      setSetupSecret(null);
       setSetupToken(null);
       toast.success("Two-factor enabled");
       refresh();
@@ -140,15 +146,34 @@ export function SecuritySection() {
           )}
           {!enabled && setupUri && (
             <div className="flex flex-col gap-3">
-              <p className="text-sm">Scan this URI in your authenticator app, then enter the 6-digit code:</p>
-              <code className="bg-muted block rounded p-2 font-mono text-xs break-all">{setupUri}</code>
+              <p className="text-sm">Scan this code in your authenticator app, then enter the 6-digit code:</p>
+              <QRCodeSVG value={setupUri} size={192} className="rounded border bg-white p-2" />
+              <div className="flex flex-col gap-1">
+                <p className="text-sm text-muted-foreground">Can&apos;t scan? Enter this key manually:</p>
+                <div className="flex items-center gap-2">
+                  <code className="bg-muted block flex-1 rounded p-2 font-mono text-xs break-all">{setupSecret}</code>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    aria-label="Copy setup key"
+                    onClick={async () => {
+                      if (!setupSecret) return;
+                      await navigator.clipboard.writeText(setupSecret);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 1500);
+                    }}
+                  >
+                    {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="totp-code">Code</Label>
                 <Input id="totp-code" inputMode="numeric" maxLength={8} value={setupCode} onChange={(e) => setSetupCode(e.target.value)} placeholder="123456" />
               </div>
               <div className="flex gap-2">
                 <Button onClick={confirmSetup} disabled={!setupCode || mutation.isPending}>Enable</Button>
-                <Button variant="outline" onClick={() => { setSetupUri(null); setSetupToken(null); }}>Cancel</Button>
+                <Button variant="outline" onClick={() => { setSetupUri(null); setSetupSecret(null); setSetupToken(null); }}>Cancel</Button>
               </div>
             </div>
           )}

@@ -68,6 +68,7 @@ class TwoFactorService:
         return {
             "setup_token": token,
             "otpauth_uri": otpauth_uri(secret_b32=b32, email=user.email, issuer=issuer),
+            "secret": b32,
         }
 
     async def confirm_setup(self, user: User, *, setup_token: str, code: str) -> list[str]:
