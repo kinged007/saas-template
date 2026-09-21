@@ -42,6 +42,8 @@ class ResetPasswordRequest(BaseModel):
 
 class VerifyEmailRequest(BaseModel):
     token: str = Field(min_length=1)
+
+
 class TwoFactorChallenge(BaseModel):
     challenge_token: str
 
