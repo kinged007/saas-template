@@ -31,27 +31,47 @@ WEBHOOK_MANAGE = "webhook:manage"
 
 AUDIT_READ = "audit:read"
 
-ALL_PERMISSIONS = [
-    WORKSPACE_READ,
-    WORKSPACE_UPDATE,
-    WORKSPACE_DELETE,
-    MEMBER_READ,
-    MEMBER_INVITE,
-    MEMBER_MANAGE,
-    ROLE_READ,
-    ROLE_MANAGE,
-    APIKEY_READ,
-    APIKEY_MANAGE,
-    NOTIFICATION_READ,
-    NOTIFICATION_ACK,
-    MESSAGE_READ,
-    MESSAGE_SEND,
-    JOB_VIEW,
-    JOB_EDIT,
-    WEBHOOK_READ,
-    WEBHOOK_MANAGE,
-    AUDIT_READ,
-]
+PERMISSION_DEFINITIONS: dict[str, dict[str, str]] = {
+    WORKSPACE_READ: {"resource": "workspace", "action": "read"},
+    WORKSPACE_UPDATE: {"resource": "workspace", "action": "update"},
+    WORKSPACE_DELETE: {"resource": "workspace", "action": "delete"},
+    MEMBER_READ: {"resource": "member", "action": "read"},
+    MEMBER_INVITE: {"resource": "member", "action": "invite"},
+    MEMBER_MANAGE: {"resource": "member", "action": "manage"},
+    ROLE_READ: {"resource": "role", "action": "read"},
+    ROLE_MANAGE: {"resource": "role", "action": "manage"},
+    APIKEY_READ: {"resource": "apikey", "action": "read"},
+    APIKEY_MANAGE: {"resource": "apikey", "action": "manage"},
+    NOTIFICATION_READ: {"resource": "notification", "action": "read"},
+    NOTIFICATION_ACK: {"resource": "notification", "action": "acknowledge"},
+    MESSAGE_READ: {"resource": "message", "action": "read"},
+    MESSAGE_SEND: {"resource": "message", "action": "send"},
+    JOB_VIEW: {"resource": "jobs", "action": "view"},
+    JOB_EDIT: {"resource": "jobs", "action": "edit"},
+    WEBHOOK_READ: {"resource": "webhook", "action": "read"},
+    WEBHOOK_MANAGE: {"resource": "webhook", "action": "manage"},
+    AUDIT_READ: {"resource": "audit", "action": "read"},
+}
+
+ALL_PERMISSIONS = list(PERMISSION_DEFINITIONS)
+
+
+def register_permission(permission: str, *, resource: str, action: str) -> str:
+    """Register a permission a new service needs, e.g. `register_permission(
+    "billing:read", resource="billing", action="read")` at import time.
+
+    The single catalog endpoint serves the result, so the roles UI picks the
+    new permission up without a frontend change. Re-registering the same
+    value is a no-op (idempotent at import); conflicting resource/action
+    for an existing value raises."""
+    existing = PERMISSION_DEFINITIONS.get(permission)
+    if existing is not None:
+        if existing != {"resource": resource, "action": action}:
+            raise ValueError(f"permission {permission} already registered")
+        return permission
+    PERMISSION_DEFINITIONS[permission] = {"resource": resource, "action": action}
+    ALL_PERMISSIONS.append(permission)
+    return permission
 
 
 def permissions_for_role(role_name: str) -> list[str]:

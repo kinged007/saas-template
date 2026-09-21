@@ -80,6 +80,12 @@ class RoleCreate(BaseModel):
     permissions: list[str] = Field(default_factory=list)
 
 
+class RoleUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=50)
+    description: str | None = Field(default=None, max_length=300)
+    permissions: list[str] | None = None
+
+
 class ApiKeyCreate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     permissions: list[str] = Field(default_factory=list)

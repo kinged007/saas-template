@@ -361,7 +361,7 @@ async def test_custom_role_create_emits_audit(bus, owner):
             workspace.id,
             name="billing",
             description="billing admin",
-            permissions=["billing:read"],
+            permissions=["audit:read"],
             actor=owner,
             ip_address="10.0.0.1",
         )

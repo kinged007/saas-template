@@ -13,11 +13,16 @@ from src.api.deps import (
     get_current_workspace_id,
     require_permission,
 )
-from src.core.permissions import ALL_PERMISSIONS, ROLE_MANAGE, ROLE_READ
+from src.core.permissions import PERMISSION_DEFINITIONS, ROLE_MANAGE, ROLE_READ
 from src.db.session import get_db
 from src.models.workspace import Role
-from src.schemas.api import RoleCreate
-from src.services.workspaces import WorkspaceService
+from src.schemas.api import RoleCreate, RoleUpdate
+from src.services.workspaces import (
+    WorkspaceConflict,
+    WorkspaceError,
+    WorkspaceForbidden,
+    WorkspaceService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +67,28 @@ async def list_roles(
 
 
 @router.get("/permission-catalog")
-async def permission_catalog() -> dict:
-    return {"permissions": ALL_PERMISSIONS}
+async def permission_catalog(
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    _=Depends(require_permission(ROLE_READ)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Full registry plus the permissions this caller may assign to a role.
+
+    `permissions` is the catalog intersected with the caller's own role
+    (`"*"` implies the full catalog) — same capping semantics as
+    `GET /api-keys/effective-permissions`. The single source for the roles
+    matrix and the New/Edit role dialogs."""
+    membership = await WorkspaceService(db).get_membership(workspace_id, user.id)
+    if membership is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
+    _, role = membership
+    assignable = (
+        sorted(PERMISSION_DEFINITIONS)
+        if "*" in role.permissions
+        else sorted(set(role.permissions) & set(PERMISSION_DEFINITIONS))
+    )
+    return {"catalog": sorted(PERMISSION_DEFINITIONS), "permissions": assignable}
 
 
 @router.post("", status_code=201)
@@ -76,14 +101,56 @@ async def create_role(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    role = await WorkspaceService(db, container.bus).create_custom_role(
-        workspace_id,
-        name=body.name,
-        description=body.description,
-        permissions=body.permissions,
-        actor=user,
-        ip_address=request.client.host if request.client else None,
-    )
+    try:
+        role = await WorkspaceService(db, container.bus).create_custom_role(
+            workspace_id,
+            name=body.name,
+            description=body.description,
+            permissions=body.permissions,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    except WorkspaceConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    except WorkspaceError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    return _role_dict(role)
+
+
+@router.patch("/{role_id}")
+async def update_role(
+    role_id: str,
+    body: RoleUpdate,
+    request: Request,
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    _=Depends(require_permission(ROLE_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    try:
+        role = await WorkspaceService(db, container.bus).update_role(
+            workspace_id,
+            role_id,
+            name=body.name,
+            description=body.description,
+            permissions=body.permissions,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    except WorkspaceConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    except WorkspaceError as exc:
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if str(exc) == "role not found"
+            else status.HTTP_422_UNPROCESSABLE_ENTITY
+        )
+        raise HTTPException(code, str(exc)) from None
     return _role_dict(role)
 
 
