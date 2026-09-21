@@ -102,6 +102,68 @@ async def test_search_restricted_to_participant_conversations(app_client):
     assert leaked == []
 
 
+async def test_search_hides_jobs_without_jobs_view(app_client):
+    """Viewer/editor roles lack jobs:view, so search must omit job definitions."""
+    client, h, ws, conv = await _setup(app_client)
+    roles = (await client.get("/api/v1/roles", headers=h)).json()
+    viewer = next(r for r in roles if r["name"] == "viewer")
+    viewer_tokens = await register_user(client, "jobs-viewer@example.com")
+    from tests.conftest import auth_headers as _ah_jobs
+
+    invite = (
+        await client.post(
+            "/api/v1/invitations",
+            json={"email": "jobs-viewer@example.com", "role_id": viewer["id"]},
+            headers=h,
+        )
+    ).json()
+    await client.post(
+        "/api/v1/invitations/accept",
+        params={"token": invite["token"]},
+        headers=_ah_jobs(viewer_tokens),
+    )
+    from tests.conftest import ws_headers as _wh_jobs
+
+    h_viewer = _wh_jobs(viewer_tokens, ws["id"])
+    resp = await client.get("/api/v1/workspaces/search", params={"q": "echo"}, headers=h_viewer)
+    assert resp.status_code == 200, resp.text
+    assert [r for r in resp.json()["results"] if r["type"] == "job"] == []
+    owner_resp = await client.get(
+        "/api/v1/workspaces/search", params={"q": "expire stale invitations"}, headers=h
+    )
+    assert owner_resp.status_code == 200, owner_resp.text
+    assert any(r["type"] == "job" for r in owner_resp.json()["results"])
+
+
+async def test_search_escapes_like_wildcards(app_client):
+    # "%_%" matches every row as wildcards; literally it appears nowhere.
+    client, h, ws, conv = await _setup(app_client)
+    resp = await client.get("/api/v1/workspaces/search", params={"q": "%"}, headers=h)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["results"] == []
+    resp = await client.get("/api/v1/workspaces/search", params={"q": "%_%"}, headers=h)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["results"] == []
+
+
+async def test_export_strips_superuser_and_rejects_bad_format(app_client):
+    client, h, ws, conv = await _setup(app_client)
+    resp = await client.get("/api/v1/workspaces/export", headers=h)
+    assert resp.status_code == 200, resp.text
+    bundle = json.loads(resp.text)
+    assert not any("is_superuser" in m for m in bundle["members"])
+    assert bundle.get("truncated") is False
+    bad = await client.get("/api/v1/workspaces/export", params={"format": "xml"}, headers=h)
+    assert bad.status_code == 422
+    csv_resp = await client.get(
+        "/api/v1/workspaces/export",
+        params={"format": "csv", "resource": "jobs"},
+        headers=h,
+    )
+    assert csv_resp.status_code == 200, csv_resp.text
+    assert csv_resp.text.splitlines()[0] == "key,name,enabled,cron_schedule,next_run_at"
+
+
 async def test_search_rejects_blank_and_non_member(app_client):
     client, h, ws, conv = await _setup(app_client)
     assert (

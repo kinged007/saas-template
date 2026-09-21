@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json as _json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -20,6 +21,8 @@ from src.core.permissions import AUDIT_READ, WORKSPACE_DELETE, WORKSPACE_READ, W
 from src.db.session import get_db
 from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.api import WorkspaceCreate, WorkspaceUpdate
+from src.services.conversations import ConversationForbidden
+from src.services.search_export import CSV_RESOURCES, SearchExportService
 from src.services.serializers import workspace_to_dict
 from src.services.workspaces import WorkspaceError, WorkspaceService
 
@@ -39,16 +42,12 @@ async def search_workspace(
 ):
     if not q or not q.strip() or len(q.strip()) > 200:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "q must be 1-200 characters")
-    from src.services.search_export import SearchExportService
-
     try:
         return await SearchExportService(db, container.bus).search(
             workspace_id=workspace_id, user_id=user.id, q=q.strip()
         )
-    except Exception as exc:
-        if type(exc).__name__ == "ConversationForbidden":
-            raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
-        raise
+    except ConversationForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
 
 
 @router.get("/export")
@@ -61,17 +60,16 @@ async def export_workspace(
     format: str = "json",
     resource: str = "members",
 ):
-    import json as _json
-
-    from src.services.search_export import CSV_RESOURCES, SearchExportService
-
+    if format not in ("json", "csv"):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"unknown format: {format} (choose from csv, json)",
+        )
     service = SearchExportService(db, container.bus)
     try:
         bundle = await service.export_json(workspace_id=workspace_id, user_id=user.id)
-    except Exception as exc:
-        if type(exc).__name__ == "ConversationForbidden":
-            raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
-        raise
+    except ConversationForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     if format == "csv":
         if resource not in CSV_RESOURCES:
             raise HTTPException(

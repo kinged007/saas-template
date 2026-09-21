@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.permissions import JOB_VIEW
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
 from src.models.api_key import ApiKey
@@ -35,6 +36,17 @@ from src.services.serializers import (
 
 # (resource label, per-query row cap)
 _SEARCH_LIMIT = 5
+
+# Export row caps: the bundle is one in-memory JSON string, so messages and
+# notifications (the unbounded sections) are capped. ponytail: stream the
+# response or paginate per conversation when workspaces outgrow these caps.
+_EXPORT_MESSAGES_CAP = 5000
+_EXPORT_NOTIFICATIONS_CAP = 5000
+
+
+def _escape_like(q: str) -> str:
+    return q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
 
 # resource -> tabular CSV columns for ?format=csv&resource=<name>
 CSV_RESOURCES: dict[str, list[str]] = {
@@ -82,7 +94,8 @@ class SearchExportService:
 
     async def search(self, *, workspace_id: str, user_id: str, q: str) -> dict:
         await _ensure_membership(self._session, workspace_id, user_id)
-        like = f"%{q.strip()}%"
+        like = f"%{_escape_like(q.strip())}%"
+        can_view_jobs = await self._can(workspace_id, user_id, JOB_VIEW)
         results: list[dict] = []
 
         conv_rows = (
@@ -98,8 +111,8 @@ class SearchExportService:
                     .where(
                         Conversation.workspace_id == workspace_id,
                         or_(
-                            Conversation.title.ilike(like),
-                            Conversation.last_message_preview.ilike(like),
+                            Conversation.title.ilike(like, escape="\\"),
+                            Conversation.last_message_preview.ilike(like, escape="\\"),
                         ),
                     )
                     .limit(_SEARCH_LIMIT)
@@ -128,7 +141,10 @@ class SearchExportService:
                     & (ConversationParticipant.participant_type == "user")
                     & (ConversationParticipant.participant_id == user_id),
                 )
-                .where(Conversation.workspace_id == workspace_id, Message.body.ilike(like))
+                .where(
+                    Conversation.workspace_id == workspace_id,
+                    Message.body.ilike(like, escape="\\"),
+                )
                 .order_by(Message.created_at.desc())
                 .limit(_SEARCH_LIMIT)
             )
@@ -154,10 +170,10 @@ class SearchExportService:
                     WorkspaceMember.workspace_id == workspace_id,
                     WorkspaceMember.status == "active",
                     or_(
-                        User.email.ilike(like),
-                        User.display_name.ilike(like),
-                        UserProfile.first_name.ilike(like),
-                        UserProfile.last_name.ilike(like),
+                        User.email.ilike(like, escape="\\"),
+                        User.display_name.ilike(like, escape="\\"),
+                        UserProfile.first_name.ilike(like, escape="\\"),
+                        UserProfile.last_name.ilike(like, escape="\\"),
                     ),
                 )
                 .limit(_SEARCH_LIMIT)
@@ -173,24 +189,26 @@ class SearchExportService:
             entry["snippet"] = f"{u.email} · {role_name}"
             results.append(entry)
 
-        job_rows = (
-            (
-                await self._session.execute(
-                    select(JobDefinition)
-                    .where(
-                        JobDefinition.workspace_id == workspace_id,
-                        or_(
-                            JobDefinition.name.ilike(like),
-                            JobDefinition.key.ilike(like),
-                            JobDefinition.description.ilike(like),
-                        ),
+        job_rows: list = []
+        if can_view_jobs:
+            job_rows = (
+                (
+                    await self._session.execute(
+                        select(JobDefinition)
+                        .where(
+                            JobDefinition.workspace_id == workspace_id,
+                            or_(
+                                JobDefinition.name.ilike(like, escape="\\"),
+                                JobDefinition.key.ilike(like, escape="\\"),
+                                JobDefinition.description.ilike(like, escape="\\"),
+                            ),
+                        )
+                        .limit(_SEARCH_LIMIT)
                     )
-                    .limit(_SEARCH_LIMIT)
                 )
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
         for j in job_rows:
             results.append(
                 {
@@ -208,7 +226,10 @@ class SearchExportService:
                     .where(
                         Notification.workspace_id == workspace_id,
                         Notification.user_id == user_id,
-                        or_(Notification.title.ilike(like), Notification.body.ilike(like)),
+                        or_(
+                            Notification.title.ilike(like, escape="\\"),
+                            Notification.body.ilike(like, escape="\\"),
+                        ),
                     )
                     .limit(_SEARCH_LIMIT)
                 )
@@ -228,7 +249,23 @@ class SearchExportService:
 
         return {"query": q, "results": results}
 
+    async def _can(self, workspace_id: str, user_id: str, permission: str) -> bool:
+        from src.services.workspaces import WorkspaceService
+
+        membership = await WorkspaceService(self._session).get_membership(workspace_id, user_id)
+        if membership is None:
+            return False
+        _, role = membership
+        return "*" in (role.permissions or []) or permission in (role.permissions or [])
+
     async def export_json(self, *, workspace_id: str, user_id: str) -> dict:
+        """Full-workspace dump for data portability.
+
+        Broader than search by design: includes all conversations/messages
+        and all users' notifications regardless of the exporter's own
+        participation. Caller must hold audit:read (owner/admin-only). Do not
+        lower the route permission without revisiting this semantic.
+        """
         workspace = await self._session.get(Workspace, workspace_id)
         if workspace is None:
             from fastapi import HTTPException
@@ -248,6 +285,7 @@ class SearchExportService:
         members = []
         for m, u, r, p in member_rows:
             entry = user_to_dict(u)
+            entry.pop("is_superuser", None)
             entry.update(
                 {
                     "membership_id": m.id,
@@ -299,6 +337,7 @@ class SearchExportService:
         )
         conv_ids = [c.id for c in convs]
         messages: list[Message] = []
+        truncated = False
         if conv_ids:
             messages = (
                 (
@@ -306,20 +345,29 @@ class SearchExportService:
                         select(Message)
                         .where(Message.conversation_id.in_(conv_ids))
                         .order_by(Message.created_at.asc())
+                        .limit(_EXPORT_MESSAGES_CAP + 1)
                     )
                 )
                 .scalars()
                 .all()
             )
+            if len(messages) > _EXPORT_MESSAGES_CAP:
+                messages = messages[:_EXPORT_MESSAGES_CAP]
+                truncated = True
         notifs = (
             (
                 await self._session.execute(
-                    select(Notification).where(Notification.workspace_id == workspace_id)
+                    select(Notification)
+                    .where(Notification.workspace_id == workspace_id)
+                    .limit(_EXPORT_NOTIFICATIONS_CAP + 1)
                 )
             )
             .scalars()
             .all()
         )
+        if len(notifs) > _EXPORT_NOTIFICATIONS_CAP:
+            notifs = notifs[:_EXPORT_NOTIFICATIONS_CAP]
+            truncated = True
         subs = (
             (
                 await self._session.execute(
@@ -335,6 +383,7 @@ class SearchExportService:
         exported_at = datetime.now(UTC).isoformat()
         bundle = {
             "exported_at": exported_at,
+            "truncated": truncated,
             "workspace": workspace_to_dict(workspace),
             "members": members,
             "roles": [
@@ -419,7 +468,11 @@ class SearchExportService:
         return bundle
 
     def export_csv(self, bundle: dict, resource: str) -> str:
-        columns = CSV_RESOURCES[resource]
+        columns = CSV_RESOURCES.get(resource)
+        if columns is None:
+            raise ValueError(
+                f"unknown resource: {resource} (choose from {', '.join(sorted(CSV_RESOURCES))})"
+            )
         rows = bundle.get(resource, [])
         if resource == "members":
             flat = [

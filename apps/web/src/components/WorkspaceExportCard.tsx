@@ -30,7 +30,7 @@ function downloadBlob(blob: Blob, filename: string) {
 
 export function WorkspaceExportCard() {
   const { workspace } = useWorkspace();
-  const { data: canExport } = useCan({ resource: "audit", action: "list" });
+  const { data: canExport, isLoading } = useCan({ resource: "audit", action: "list" });
   const [resource, setResource] = useState<string>("members");
   const [busy, setBusy] = useState<"json" | "csv" | null>(null);
 
@@ -54,7 +54,7 @@ export function WorkspaceExportCard() {
     }
   };
 
-  if (!workspace) return null;
+  if (!workspace || isLoading) return null;
   if (canExport && !canExport.can) return null;
 
   return (
