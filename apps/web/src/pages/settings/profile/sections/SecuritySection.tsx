@@ -164,6 +164,7 @@ export function SecuritySection() {
             </div>
           )}
         </CardContent>
+      </Card>
       <Card>
         <CardHeader>
           <CardTitle>Active sessions</CardTitle>
@@ -207,8 +208,6 @@ export function SecuritySection() {
             </div>
           )}
         </CardContent>
-      </Card>
-
       </Card>
 
       <Dialog open={disableOpen} onOpenChange={setDisableOpen}>
