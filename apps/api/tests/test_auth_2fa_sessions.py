@@ -43,16 +43,25 @@ async def test_sessions_list_and_revoke(app_client):
     assert sessions[0]["user_agent"] == "rotated-session-agent"
     assert sessions[0]["revoked_at"] is None
 
-    # revoke the session -> refresh stops working
+    # the only session is current -> revoking it is refused
+    assert sessions[0]["current"] is True
     resp = await client.delete(f"/api/v1/auth/sessions/{sessions[0]['id']}", headers=headers)
+    assert resp.status_code == 400
+
+    # a second session can be revoked -> its refresh stops working
+    other = await login(client, "sess@example.com")
+    resp = await client.get("/api/v1/auth/sessions", headers=headers)
+    others = [s for s in resp.json() if not s["current"]]
+    assert len(others) == 1
+    resp = await client.delete(f"/api/v1/auth/sessions/{others[0]['id']}", headers=headers)
     assert resp.status_code == 204
     resp = await client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": refreshed.json()["refresh_token"]}
+        "/api/v1/auth/refresh", json={"refresh_token": other["refresh_token"]}
     )
     assert resp.status_code == 401
-    # revoked sessions disappear from the list
+    # revoked sessions disappear from the list; the current one remains
     resp = await client.get("/api/v1/auth/sessions", headers=headers)
-    assert resp.json() == []
+    assert [s["id"] for s in resp.json()] == [sessions[0]["id"]]
 
 
 async def test_revoke_all_sessions(app_client):
@@ -61,12 +70,23 @@ async def test_revoke_all_sessions(app_client):
     t2 = await login(client, "all@example.com")
     headers = auth_headers(t2)
     resp = await client.get("/api/v1/auth/sessions", headers=headers)
-    assert len(resp.json()) == 2
+    listed = resp.json()
+    assert len(listed) == 2
+    assert sum(s["current"] for s in listed) == 1
+    current_id = next(s["id"] for s in listed if s["current"])
     resp = await client.delete("/api/v1/auth/sessions", headers=headers)
     assert resp.status_code == 204
-    for t in (t1, t2):
-        resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t["refresh_token"]})
-        assert resp.status_code == 401
+    # the other session is revoked; the current one keeps working
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
+    assert resp.status_code == 401
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]})
+    assert resp.status_code == 200, resp.text
+    # refresh rotates: the current session id moves to the new row
+    rotated = resp.json()
+    resp = await client.get("/api/v1/auth/sessions", headers=auth_headers(rotated))
+    remaining = resp.json()
+    assert len(remaining) == 1
+    assert remaining[0]["current"] is True
 
 
 async def test_totp_enrol_login_disable(app_client):

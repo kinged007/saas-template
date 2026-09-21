@@ -5,7 +5,12 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_container, get_current_user
+from src.api.deps import (
+    AuthPrincipal,
+    get_container,
+    get_current_user,
+    resolve_auth_principal,
+)
 from src.core.dates import ensure_utc, now_utc
 from src.core.security.ratelimit import get_auth_limiter
 from src.core.security.tokens import OpaqueToken
@@ -229,7 +234,7 @@ async def refresh(
     return TokenResponse(**pair.__dict__)
 
 
-def _session_to_dict(row) -> dict:
+def _session_to_dict(row, *, current: bool) -> dict:
     return {
         "id": row.id,
         "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -237,19 +242,22 @@ def _session_to_dict(row) -> dict:
         "revoked_at": row.revoked_at.isoformat() if row.revoked_at else None,
         "ip_address": row.ip_address,
         "user_agent": row.user_agent,
+        "current": current,
     }
 
 
 @router.get("/sessions", response_model=list[SessionRead])
 async def list_sessions(
-    user=Depends(get_current_user),
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    rows = await TwoFactorService(db, container.cipher, container.bus).list_sessions(user.id)
+    rows = await TwoFactorService(db, container.cipher, container.bus).list_sessions(
+        principal.user.id
+    )
     now = now_utc()
     return [
-        _session_to_dict(r)
+        _session_to_dict(r, current=(r.id == principal.session_id))
         for r in rows
         if r.revoked_at is None and ensure_utc(r.expires_at) >= now
     ]
@@ -258,36 +266,44 @@ async def list_sessions(
 @router.delete("/sessions/{session_id}", status_code=204)
 async def revoke_session(
     session_id: str,
-    user=Depends(get_current_user),
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> None:
-    rows = await TwoFactorService(db, container.cipher, container.bus).list_sessions(user.id)
+    if session_id == principal.session_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "cannot revoke the current session")
+    rows = await TwoFactorService(db, container.cipher, container.bus).list_sessions(
+        principal.user.id
+    )
     row = next((r for r in rows if r.id == session_id), None)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "session not found")
     if row.revoked_at is None:
         row.revoked_at = now_utc()
         await db.commit()
-        logger.info("session revoked user=%s session=%s", user.id, session_id)
+        logger.info("session revoked user=%s session=%s", principal.user.id, session_id)
 
 
 @router.delete("/sessions", status_code=204)
 async def revoke_all_sessions(
-    user=Depends(get_current_user),
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> None:
-    rows = await TwoFactorService(db, container.cipher, container.bus).list_sessions(user.id)
+    rows = await TwoFactorService(db, container.cipher, container.bus).list_sessions(
+        principal.user.id
+    )
     now = now_utc()
     changed = False
     for r in rows:
+        if r.id == principal.session_id:
+            continue
         if r.revoked_at is None and ensure_utc(r.expires_at) >= now:
             r.revoked_at = now
             changed = True
     if changed:
         await db.commit()
-        logger.info("all sessions revoked user=%s", user.id)
+        logger.info("other sessions revoked user=%s", principal.user.id)
 
 
 @router.get("/2fa/status")

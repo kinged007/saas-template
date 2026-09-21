@@ -36,6 +36,7 @@ class AuthPrincipal:
 
     user: User
     api_key: ApiKey | None = None
+    session_id: str | None = None
 
 
 async def resolve_auth_principal(
@@ -62,7 +63,7 @@ async def resolve_auth_principal(
         user = await AuthService(db).get_user(user_id)
         if user is None or not user.is_active:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "user not found or disabled")
-        return AuthPrincipal(user=user)
+        return AuthPrincipal(user=user, session_id=payload.get("sid"))
     # Not a JWT — try an opaque API key.
     api_key = await ApiKeyService(db).authenticate(credentials.credentials)
     if api_key is None:

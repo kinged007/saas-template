@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useCustom, useCustomMutation } from "@refinedev/core";
 import { toast } from "sonner";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -32,6 +33,7 @@ export type AuthSession = {
   revoked_at?: string | null;
   ip_address?: string | null;
   user_agent?: string | null;
+  current?: boolean;
 };
 
 export function SecuritySection() {
@@ -69,7 +71,7 @@ export function SecuritySection() {
   const revokeAll = async () => {
     try {
       await call("auth/sessions", "delete");
-      toast.success("All sessions revoked — sign in again to continue");
+      toast.success("All other sessions revoked");
       refresh();
     } catch (e) {
       toast.error((e as Error)?.message ?? "Revoke failed");
@@ -184,15 +186,22 @@ export function SecuritySection() {
               <TableBody>
                 {list.map((s) => (
                   <TableRow key={s.id}>
-                    <TableCell className="text-muted-foreground whitespace-nowrap">{formatDate(s.created_at)}</TableCell>
+                    <TableCell className="text-muted-foreground whitespace-nowrap">
+                      <span className="flex items-center gap-2">
+                        {formatDate(s.created_at)}
+                        {s.current && <Badge variant="secondary">Current</Badge>}
+                      </span>
+                    </TableCell>
                     <TableCell className="font-mono text-xs">{s.ip_address ?? "—"}</TableCell>
                     <TableCell className="text-muted-foreground max-w-xs truncate text-xs" title={s.user_agent ?? ""}>
                       {s.user_agent ?? "—"}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button variant="outline" size="sm" onClick={() => revokeOne(s.id)}>
-                        Revoke
-                      </Button>
+                      {!s.current && (
+                        <Button variant="outline" size="sm" onClick={() => revokeOne(s.id)}>
+                          Revoke
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -200,10 +209,10 @@ export function SecuritySection() {
               </TableBody>
             </Table>
           </div>
-          {list.length > 1 && (
+          {list.some((s) => !s.current) && (
             <div className="flex justify-end pt-4">
               <Button variant="destructive" size="sm" onClick={revokeAll} disabled={mutation.isPending}>
-                Revoke all sessions
+                Revoke other sessions
               </Button>
             </div>
           )}

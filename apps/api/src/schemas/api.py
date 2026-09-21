@@ -67,6 +67,7 @@ class SessionRead(BaseModel):
     revoked_at: datetime | None = None
     ip_address: str | None = None
     user_agent: str | None = None
+    current: bool = False
 
 
 class WorkspaceCreate(BaseModel):

@@ -224,18 +224,17 @@ class AuthService:
         self, user: User, *, ip_address: str | None = None, user_agent: str | None = None
     ) -> TokenPair:
         refresh = OpaqueToken.generate()
-        self._session.add(
-            RefreshToken(
-                user_id=user.id,
-                token_hash=OpaqueToken.hash(refresh),
-                expires_at=now_utc() + timedelta(days=settings.refresh_token_expire_days),
-                ip_address=ip_address,
-                user_agent=user_agent,
-            )
+        row = RefreshToken(
+            user_id=user.id,
+            token_hash=OpaqueToken.hash(refresh),
+            expires_at=now_utc() + timedelta(days=settings.refresh_token_expire_days),
+            ip_address=ip_address,
+            user_agent=user_agent,
         )
+        self._session.add(row)
         await self._session.commit()
         return TokenPair(
-            access_token=create_access_token(user.id),
+            access_token=create_access_token(user.id, session_id=row.id),
             refresh_token=refresh,
         )
 
