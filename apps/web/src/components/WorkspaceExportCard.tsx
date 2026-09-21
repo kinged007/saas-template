@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { useCan } from "@refinedev/core";
+
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -28,6 +30,7 @@ function downloadBlob(blob: Blob, filename: string) {
 
 export function WorkspaceExportCard() {
   const { workspace } = useWorkspace();
+  const { data: canExport } = useCan({ resource: "audit", action: "list" });
   const [resource, setResource] = useState<string>("members");
   const [busy, setBusy] = useState<"json" | "csv" | null>(null);
 
@@ -52,6 +55,7 @@ export function WorkspaceExportCard() {
   };
 
   if (!workspace) return null;
+  if (canExport && !canExport.can) return null;
 
   return (
     <Card>

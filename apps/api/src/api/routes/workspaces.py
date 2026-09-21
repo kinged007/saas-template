@@ -16,7 +16,7 @@ from src.api.deps import (
     require_permission,
     resolve_auth_principal,
 )
-from src.core.permissions import WORKSPACE_DELETE, WORKSPACE_READ, WORKSPACE_UPDATE
+from src.core.permissions import AUDIT_READ, WORKSPACE_DELETE, WORKSPACE_READ, WORKSPACE_UPDATE
 from src.db.session import get_db
 from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.api import WorkspaceCreate, WorkspaceUpdate
@@ -55,7 +55,7 @@ async def search_workspace(
 async def export_workspace(
     user=Depends(get_current_user),
     workspace_id: str = Depends(get_current_workspace_id),
-    _=Depends(require_permission(WORKSPACE_READ)),
+    _=Depends(require_permission(AUDIT_READ)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
     format: str = "json",
@@ -79,12 +79,11 @@ async def export_workspace(
                 f"unknown resource: {resource} (choose from {', '.join(sorted(CSV_RESOURCES))})",
             )
         body = service.export_csv(bundle, resource)
+        filename = f"workspace-{workspace_id}-{resource}.csv"
         return Response(
             content=body,
             media_type="text/csv",
-            headers={
-                "Content-Disposition": f'attachment; filename="workspace-{workspace_id}-{resource}.csv"'
-            },
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     body = _json.dumps(bundle)
     return Response(

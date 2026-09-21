@@ -155,3 +155,37 @@ async def test_export_json_and_csv(app_client):
         headers=h,
     )
     assert bad.status_code == 422
+
+
+async def test_export_requires_audit_read(app_client):
+    """Viewers (workspace:read only) can search but cannot export the full dump."""
+    client, h, ws, conv = await _setup(app_client)
+    roles = (await client.get("/api/v1/roles", headers=h)).json()
+    viewer = next(r for r in roles if r["name"] == "viewer")
+    viewer_tokens = await register_user(client, "export-viewer@example.com")
+    from tests.conftest import auth_headers as _ah3
+
+    invite = (
+        await client.post(
+            "/api/v1/invitations",
+            json={"email": "export-viewer@example.com", "role_id": viewer["id"]},
+            headers=h,
+        )
+    ).json()
+    await client.post(
+        "/api/v1/invitations/accept",
+        params={"token": invite["token"]},
+        headers=_ah3(viewer_tokens),
+    )
+    from tests.conftest import ws_headers as _wh
+
+    h_viewer = _wh(viewer_tokens, ws["id"])
+    # Search still works for viewers.
+    search = await client.get("/api/v1/workspaces/search", params={"q": "zebra"}, headers=h_viewer)
+    assert search.status_code == 200, search.text
+    # Export is gated on audit:read (owner/admin), not workspace:read.
+    export = await client.get("/api/v1/workspaces/export", headers=h_viewer)
+    assert export.status_code == 403, export.text
+    # Owner keeps export access.
+    owner_export = await client.get("/api/v1/workspaces/export", headers=h)
+    assert owner_export.status_code == 200, owner_export.text
