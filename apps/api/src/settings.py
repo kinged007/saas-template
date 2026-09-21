@@ -70,13 +70,6 @@ class Settings(BaseSettings):
     # superuser (global jobs, etc.). Empty disables the bootstrap.
     superadmin_email: str = ""
 
-    # Single-workspace mode. When true, the first login/register creates the
-    # one shared workspace (owned by whoever arrives first, normally the
-    # superadmin) and every later login/register auto-joins it as viewer.
-    # Creating a second workspace and deleting the workspace are rejected;
-    # the sidebar switcher and the delete danger-zone are hidden.
-    single_workspace: bool = False
-
     # Scheduled jobs
     jobs_scheduler_tick_seconds: float = 10.0
     jobs_default_timeout_seconds: int = 600
