@@ -17,7 +17,10 @@ import { RegisterPage } from "./pages/RegisterPage";
 import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
 import { ResetPasswordPage } from "./pages/ResetPasswordPage";
 import { VerifyEmailPage } from "./pages/VerifyEmailPage";
-import { AdminPage } from "./pages/AdminPage";
+import { AdminIndex, AdminLayout } from "./pages/admin/sections/AdminLayout";
+import { UsersSection as AdminUsersSection } from "./pages/admin/sections/UsersSection";
+import { WorkspacesSection as AdminWorkspacesSection } from "./pages/admin/sections/WorkspacesSection";
+import { AuditSection as AdminAuditSection } from "./pages/admin/sections/AuditSection";
 import { DashboardPage } from "./pages/DashboardPage";
 import { WorkspaceCreatePage } from "./pages/WorkspaceCreatePage";
 import { MembersPage } from "./pages/MembersPage";
@@ -95,7 +98,12 @@ export function App() {
               <Route path="webhooks/create" element={<WebhookCreatePage />} />
               <Route path="webhooks" element={<WebhooksPage />} />
               <Route path="inbox" element={<InboxPage />} />
-              <Route path="admin" element={<AdminPage />} />
+              <Route path="admin" element={<AdminLayout />}>
+                <Route index element={<AdminIndex />} />
+                <Route path="users" element={<AdminUsersSection />} />
+                <Route path="workspaces" element={<AdminWorkspacesSection />} />
+                <Route path="audit" element={<AdminAuditSection />} />
+              </Route>
               {/* Jobs detail stays top-level; list moved into workspace settings */}
               <Route path="jobs/:id" element={<JobDetailPage />} />
               <Route path="jobs/:id/runs/:runId" element={<JobRunPage />} />

@@ -126,6 +126,40 @@ httpClient.interceptors.response.use(
 
 const baseDataProvider = dataProviderModule(API_URL, httpClient);
 
+// `admin-users` / `admin-workspaces` are virtual resources: the list views
+// read from the superuser-only GET /admin/* endpoints, which speak the same
+// offset/limit + X-Total-Count dialect as every other list endpoint.
+// They are not real REST resources (detail/toggle use `custom`), so only
+// getList is overridden.
+function adminList(path: string): DataProvider["getList"] {
+  return async ({ pagination, filters, sorters }) => {
+    const { currentPage = 1, pageSize = 10 } = pagination ?? {};
+    const params = new URLSearchParams({
+      offset: String((currentPage - 1) * pageSize),
+      limit: String(pageSize),
+    });
+    for (const f of filters ?? []) {
+      if (!("field" in f)) continue;
+      // `q` is the cross-field search term (backend `?q=`), not a column.
+      params.append(f.field === "q" ? "q" : `${f.field}_like`, String(f.value));
+    }
+    for (const s of sorters ?? []) {
+      if (!s.field) continue;
+      params.append("sort[]", s.field);
+      params.append("order[]", s.order);
+    }
+    const { data, headers } = await httpClient.get(`${API_URL}${path}?${params}`);
+    const total = Number(headers["x-total-count"]);
+    return { data, total: Number.isFinite(total) ? total : data.length };
+  };
+}
+
+const adminLists = {
+  "admin-users": adminList("/admin/users"),
+  "admin-workspaces": adminList("/admin/workspaces"),
+  "admin-audit": adminList("/admin/audit"),
+} as const;
+
 /**
  * simple-rest's `custom` uses the url verbatim — it never prepends the API
  * base URL. Resolve relative custom urls against API_URL so useCustom /
@@ -134,6 +168,11 @@ const baseDataProvider = dataProviderModule(API_URL, httpClient);
  */
 export const dataProvider: DataProvider = {
   ...baseDataProvider,
+  getList: async (params) => {
+    const admin = (adminLists as Record<string, DataProvider["getList"]>)[params.resource];
+    if (admin) return admin(params);
+    return baseDataProvider.getList(params);
+  },
   custom: async ({ url, ...params }) => {
     const resolved =
       !url || /^https?:\/\//.test(url) || url.startsWith("/")

@@ -106,6 +106,33 @@ async def test_workspace_list_and_cross_workspace_audit(app_client):
     )
     assert scoped.status_code == 200, scoped.text
     assert {e["workspace_id"] for e in scoped.json()} == {ws["id"]}
+    # enriched names for readable rows
+    assert scoped.json()[0]["workspace_name"] == "Widget Co"
+
+    # cross-field search: workspace name, user email, action, exact ids
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(owner))
+    for term in ("Widget Co", "wowner@", "workspace.created", me.json()["id"], ws["id"]):
+        found = await client.get(
+            "/api/v1/admin/audit", params={"q": term}, headers=auth_headers(admin)
+        )
+        assert found.status_code == 200, (term, found.text)
+        assert int(found.headers["x-total-count"]) >= 1, term
+    empty = await client.get(
+        "/api/v1/admin/audit", params={"q": "zzz-no-such-thing"}, headers=auth_headers(admin)
+    )
+    assert empty.json() == [] and empty.headers["x-total-count"] == "0"
+
+    # workspace-scoped search: user email, action, actor id (same ?q= contract)
+    wsh = ws_headers(owner, ws["id"])
+    for term in ("wowner@", "workspace.created", me.json()["id"]):
+        found = await client.get("/api/v1/audit", params={"q": term}, headers=wsh)
+        assert found.status_code == 200, (term, found.text)
+        assert int(found.headers["x-total-count"]) >= 1, term
+    assert found.json()[0]["actor_email"] == "wowner@example.com"
+    empty = await client.get(
+        "/api/v1/audit", params={"q": "zzz-no-such-thing"}, headers=wsh
+    )
+    assert empty.json() == [] and empty.headers["x-total-count"] == "0"
 
 
 async def test_invites_flag_gates_creation(app_client):
