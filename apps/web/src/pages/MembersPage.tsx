@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useCan, useCreate, useGetIdentity, useUpdate } from "@refinedev/core";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 
 import { Button } from "@/components/ui/button";
@@ -32,17 +33,27 @@ import { getMemberDisplayName } from "../types";
 
 const MANAGER_ROLES = ["owner", "admin"];
 
+const PAGE_SIZE = 10;
+
 export function MembersPage() {
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
+  const [membersPage, setMembersPage] = useState(1);
+  const [invitesPage, setInvitesPage] = useState(1);
   const { workspace } = useWorkspace();
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
-  const { result: membersResult } = useWorkspaceList<Member>({ resource: "members" });
+  const { result: membersResult } = useWorkspaceList<Member>({
+    resource: "members",
+    pagination: { currentPage: membersPage, pageSize: PAGE_SIZE },
+    sorters: [{ field: "created_at", order: "desc" }],
+  });
   const { result: rolesResult } = useWorkspaceList<Role>({ resource: "roles" });
   const { data: canManage } = useCan({ resource: "members", action: "edit" });
   const { data: canDelete } = useCan({ resource: "members", action: "delete" });
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
   const { result: invitationsResult } = useWorkspaceList<Invitation>({
     resource: "invitations",
+    pagination: { currentPage: invitesPage, pageSize: PAGE_SIZE },
+    sorters: [{ field: "created_at", order: "desc" }],
     queryOptions: { enabled: !!canInvite?.can },
   });
   const { mutate: changeRole } = useUpdate();
@@ -51,8 +62,12 @@ export function MembersPage() {
   const [inviteRoleId, setInviteRoleId] = useState("");
 
   const rows = membersResult?.data ?? [];
+  const membersTotal = membersResult?.total ?? 0;
+  const membersTotalPages = Math.max(1, Math.ceil(membersTotal / PAGE_SIZE));
   const roleOptions = rolesResult?.data ?? [];
   const invitations = invitationsResult?.data ?? [];
+  const invitesTotal = invitationsResult?.total ?? 0;
+  const invitesTotalPages = Math.max(1, Math.ceil(invitesTotal / PAGE_SIZE));
   const assignableRoles = roleOptions.filter((r) => r.name !== "owner");
 
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
@@ -161,6 +176,34 @@ export function MembersPage() {
           </TableBody>
         </Table>
       </div>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-muted-foreground text-sm">
+          Showing {membersTotal === 0 ? 0 : (membersPage - 1) * PAGE_SIZE + 1}–{Math.min(membersPage * PAGE_SIZE, membersTotal)} of {membersTotal}
+        </p>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={membersPage <= 1}
+            onClick={() => setMembersPage((c) => Math.max(1, c - 1))}
+          >
+            <ChevronLeft className="h-4 w-4" />
+            Previous
+          </Button>
+          <span className="text-muted-foreground px-2 text-sm">
+            Page {membersPage} of {membersTotalPages}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={membersPage >= membersTotalPages}
+            onClick={() => setMembersPage((c) => Math.min(membersTotalPages, c + 1))}
+          >
+            Next
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
 
       {canInvite?.can && (
         <section className="flex flex-col gap-4">
@@ -239,6 +282,34 @@ export function MembersPage() {
                 {invitations.length === 0 && <EmptyRow colSpan={6}>No invitations yet.</EmptyRow>}
               </TableBody>
             </Table>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-muted-foreground text-sm">
+              Showing {invitesTotal === 0 ? 0 : (invitesPage - 1) * PAGE_SIZE + 1}–{Math.min(invitesPage * PAGE_SIZE, invitesTotal)} of {invitesTotal}
+            </p>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={invitesPage <= 1}
+                onClick={() => setInvitesPage((c) => Math.max(1, c - 1))}
+              >
+                <ChevronLeft className="h-4 w-4" />
+                Previous
+              </Button>
+              <span className="text-muted-foreground px-2 text-sm">
+                Page {invitesPage} of {invitesTotalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={invitesPage >= invitesTotalPages}
+                onClick={() => setInvitesPage((c) => Math.min(invitesTotalPages, c + 1))}
+              >
+                Next
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </section>
       )}

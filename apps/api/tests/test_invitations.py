@@ -368,3 +368,30 @@ async def test_notification_unacknowledge_and_filter(app_client):
     assert resp.status_code == 200
     assert len(resp.json()) == 1
     assert resp.json()[0]["acknowledged"] is True
+
+
+async def test_list_invitations_pagination(app_client):
+    client = app_client
+    owner = await register_user(client, "inv_page_owner@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+    roles = await client.get("/api/v1/roles", headers=owner_headers)
+    viewer = next(r for r in roles.json() if r["name"] == "viewer")
+    for i in range(3):
+        resp = await client.post(
+            "/api/v1/invitations",
+            json={"email": f"inv_page_{i}@example.com", "role_id": viewer["id"]},
+            headers=owner_headers,
+        )
+        assert resp.status_code == 201, resp.text
+
+    resp = await client.get("/api/v1/invitations?limit=2&offset=0", headers=owner_headers)
+    assert resp.status_code == 200
+    assert resp.headers["X-Total-Count"] == "3"
+    assert len(resp.json()) == 2
+
+    resp = await client.get("/api/v1/invitations?limit=2&offset=2", headers=owner_headers)
+    assert resp.status_code == 200
+    assert resp.headers["X-Total-Count"] == "3"
+    assert len(resp.json()) == 1
+    assert resp.json()[0]["email"] == "inv_page_2@example.com"
