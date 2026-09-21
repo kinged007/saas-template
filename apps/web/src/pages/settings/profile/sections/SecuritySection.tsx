@@ -170,7 +170,7 @@ export function SecuritySection() {
           <CardTitle>Active sessions</CardTitle>
           <CardDescription>Devices signed in to your account. Revoking stops that session refreshing.</CardDescription>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent>
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
@@ -201,7 +201,7 @@ export function SecuritySection() {
             </Table>
           </div>
           {list.length > 1 && (
-            <div className="flex justify-end p-4">
+            <div className="flex justify-end pt-4">
               <Button variant="destructive" size="sm" onClick={revokeAll} disabled={mutation.isPending}>
                 Revoke all sessions
               </Button>
