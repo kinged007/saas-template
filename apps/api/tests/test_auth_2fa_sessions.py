@@ -64,6 +64,33 @@ async def test_sessions_list_and_revoke(app_client):
     assert [s["id"] for s in resp.json()] == [sessions[0]["id"]]
 
 
+async def test_revoked_session_access_token_rejected(app_client):
+    client = app_client
+    t1 = await register_user(client, "revoked-at@example.com")
+    t2 = await login(client, "revoked-at@example.com")
+    h1, h2 = auth_headers(t1), auth_headers(t2)
+
+    resp = await client.get("/api/v1/auth/me", headers=h1)
+    assert resp.status_code == 200, resp.text
+
+    # Revoke t1's session from t2's session (mirrors DELETE /sessions/{id}).
+    resp = await client.get("/api/v1/auth/sessions", headers=h2)
+    other = next(s for s in resp.json() if not s["current"])
+    resp = await client.delete(f"/api/v1/auth/sessions/{other['id']}", headers=h2)
+    assert resp.status_code == 204, resp.text
+
+    # The revoked session's access token is rejected on the next request.
+    resp = await client.get("/api/v1/auth/me", headers=h1)
+    assert resp.status_code == 401, resp.text
+    # And its refresh token no longer rotates.
+    resp = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]}
+    )
+    assert resp.status_code == 401, resp.text
+    # The surviving session keeps working.
+    resp = await client.get("/api/v1/auth/me", headers=h2)
+    assert resp.status_code == 200, resp.text
+
 async def test_revoke_all_sessions(app_client):
     client = app_client
     t1 = await register_user(client, "all@example.com")
