@@ -32,6 +32,7 @@ import { JobRunPage } from "./pages/JobRunPage";
 import { ProfileSettingsLayout } from "./pages/settings/profile/ProfileSettingsLayout";
 import { GeneralSection as ProfileGeneralSection } from "./pages/settings/profile/sections/GeneralSection";
 import { NotificationsSection as ProfileNotificationsSection } from "./pages/settings/profile/sections/NotificationsSection";
+import { NotFoundPage } from "./pages/NotFoundPage";
 import { WorkspaceSettingsLayout } from "./pages/settings/workspace/WorkspaceSettingsLayout";
 import { GeneralSection } from "./pages/settings/workspace/sections/GeneralSection";
 import { RolesSection } from "./pages/settings/workspace/sections/RolesSection";
@@ -106,6 +107,7 @@ export function App() {
                 <Route index element={<Navigate to="general" replace />} />
                 <Route path="general" element={<ProfileGeneralSection />} />
                 <Route path="notifications" element={<ProfileNotificationsSection />} />
+                <Route path="*" element={<Navigate to="/settings/profile/general" replace />} />
               </Route>
               <Route path="settings/workspace" element={<WorkspaceSettingsLayout />}>
                 <Route index element={<Navigate to="general" replace />} />
@@ -114,10 +116,12 @@ export function App() {
                 <Route path="jobs" element={<JobsSection />} />
                 <Route path="users" element={<UsersSection />} />
                 <Route path="audit" element={<AuditLogSection />} />
+                <Route path="*" element={<Navigate to="/settings/workspace/general" replace />} />
               </Route>
               {/* Legacy redirects — keep old URLs working */}
               <Route path="roles" element={<Navigate to="/settings/workspace/roles" replace />} />
               <Route path="jobs" element={<Navigate to="/settings/workspace/jobs" replace />} />
+              <Route path="*" element={<NotFoundPage />} />
             </Route>
             <Route
               path="/login"
@@ -127,10 +131,18 @@ export function App() {
                 </Authenticated>
               }
             />
-            <Route path="/register" element={<RegisterPage />} />
+            <Route
+              path="/register"
+              element={
+                <Authenticated key="register" fallback={<RegisterPage />}>
+                  <Navigate to="/" replace />
+                </Authenticated>
+              }
+            />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route path="/verify-email" element={<VerifyEmailPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
           <Toaster />
         </WorkspaceProvider>
