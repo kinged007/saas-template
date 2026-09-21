@@ -13,6 +13,7 @@ from src.api.deps import (
     get_current_user,
     get_current_workspace_id,
     get_optional_workspace_id,
+    require_existing_workspace,
     require_key_permission,
     require_permission,
     resolve_auth_principal,
@@ -172,7 +173,8 @@ async def create_workspace(
 async def get_workspace(
     workspace_id: str,
     user=Depends(get_current_user),
-    _=Depends(require_permission(WORKSPACE_READ)),
+    _=Depends(require_existing_workspace),
+    _perm=Depends(require_permission(WORKSPACE_READ)),
     db: AsyncSession = Depends(get_db),
 ):
     service = WorkspaceService(db)
@@ -190,7 +192,8 @@ async def update_workspace(
     body: WorkspaceUpdate,
     request: Request,
     user=Depends(get_current_user),
-    _=Depends(require_permission(WORKSPACE_UPDATE)),
+    _=Depends(require_existing_workspace),
+    _perm=Depends(require_permission(WORKSPACE_UPDATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -203,6 +206,8 @@ async def update_workspace(
             actor=user,
             ip_address=request.client.host if request.client else None,
         )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     return workspace_to_dict(workspace)
@@ -213,7 +218,8 @@ async def delete_workspace(
     workspace_id: str,
     request: Request,
     user=Depends(get_current_user),
-    _=Depends(require_permission(WORKSPACE_DELETE)),
+    _=Depends(require_existing_workspace),
+    _perm=Depends(require_permission(WORKSPACE_DELETE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):

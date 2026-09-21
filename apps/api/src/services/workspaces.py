@@ -214,83 +214,80 @@ class WorkspaceService:
             raise WorkspaceForbidden("single-workspace mode: workspaces cannot be deleted")
         name = workspace.name
 
-        # --- Cascade delete workspace-scoped data.
+        # --- Cascade delete workspace-scoped data (see src/db/cascade.py).
         # Users themselves are global and are NOT deleted — only memberships and
-        # workspace-scoped resources. Order matters for FK-like cleanup even though
-        # the schema uses plain StringUUID columns without DB-level cascades.
-        # Keep audit_log_entries (immutable compliance trail) — they remain with
-        # workspace_id referencing the deleted workspace.
+        # workspace-scoped resources. AuditLogEntry rows are the one exemption:
+        # append-only compliance trail, nothing ever deletes them.
+        # Conversation/JobDefinition are in the registry for coverage, but
+        # deleted last here (parents after children).
+        from src.db.cascade import (
+            CONVERSATION_CHILDREN,
+            JOB_RUN_CHILDREN,
+            WORKSPACE_CASCADE,
+        )
+        from src.models.conversation import Conversation
+        from src.models.jobs import JobDefinition, JobRun
 
-        # Lazy imports to avoid circular deps and keep the module import cheap.
-        from src.models.api_key import ApiKey
-        from src.models.conversation import Conversation, ConversationParticipant, Message
-        from src.models.core import Notification
-        from src.models.jobs import JobDefinition, JobLogEntry, JobRun
-        from src.models.secret import StoredSecret
-
-        # API keys, invitations, secrets, notifications are simple workspace_id filters.
-        await self._session.execute(delete(ApiKey).where(ApiKey.workspace_id == workspace_id))
-        await self._session.execute(
-            delete(Invitation).where(Invitation.workspace_id == workspace_id)
-        )
-        await self._session.execute(
-            delete(StoredSecret).where(StoredSecret.workspace_id == workspace_id)
-        )
-        await self._session.execute(
-            delete(Notification).where(Notification.workspace_id == workspace_id)
-        )
-        # NOTE: WorkspaceMember + Role rows are intentionally kept — deleting them
-        # makes the follow-up GET on a deleted workspace fail the membership scope
-        # check (get_membership joins Role) with 403 instead of the contract's 404.
-        # Stale rows are inert: listings and role lookups inner-join Workspace.id
-        # (or the membership/role join above) so they never surface.
-
-        # Jobs: workspace-scoped definitions + runs + logs.
-        # Collect definition ids first so we can remove runs/logs that reference them
-        # even if their workspace_id is NULL (defensive).
-        def_ids_result = await self._session.execute(
-            select(JobDefinition.id).where(JobDefinition.workspace_id == workspace_id)
-        )
-        definition_ids = [row[0] for row in def_ids_result.all()]
-        if definition_ids:
-            # Logs for runs of those definitions
-            run_ids_result = await self._session.execute(
-                select(JobRun.id).where(JobRun.definition_id.in_(definition_ids))
-            )
-            run_ids = [row[0] for row in run_ids_result.all()]
-            if run_ids:
+        for model in WORKSPACE_CASCADE:
+            if model in (Conversation, JobRun, JobDefinition):
+                continue  # parents: deleted after their children below
+            await self._session.execute(delete(model).where(model.workspace_id == workspace_id))
+        # Children linked indirectly (no workspace_id of their own): collect
+        # parent ids first, then delete grandchildren → children → parents so
+        # plain StringUUID columns (no DB-level cascades) leave no orphans.
+        conv_ids = [
+            row[0]
+            for row in (
                 await self._session.execute(
-                    delete(JobLogEntry).where(JobLogEntry.run_id.in_(run_ids))
+                    select(Conversation.id).where(Conversation.workspace_id == workspace_id)
                 )
-            await self._session.execute(
-                delete(JobRun).where(JobRun.definition_id.in_(definition_ids))
-            )
-            await self._session.execute(delete(JobRun).where(JobRun.workspace_id == workspace_id))
-            await self._session.execute(
-                delete(JobDefinition).where(JobDefinition.workspace_id == workspace_id)
-            )
-        else:
-            # No workspace definitions — still clean stray runs that were
-            # denormalized with workspace_id
-            await self._session.execute(delete(JobRun).where(JobRun.workspace_id == workspace_id))
-
-        # Conversations + participants + messages (workspace-scoped)
-        conv_ids_result = await self._session.execute(
-            select(Conversation.id).where(Conversation.workspace_id == workspace_id)
-        )
-        conv_ids = [row[0] for row in conv_ids_result.all()]
+            ).all()
+        ]
         if conv_ids:
-            await self._session.execute(
-                delete(Message).where(Message.conversation_id.in_(conv_ids))
-            )
-            await self._session.execute(
-                delete(ConversationParticipant).where(
-                    ConversationParticipant.conversation_id.in_(conv_ids)
+            for child in CONVERSATION_CHILDREN:
+                for chunk in _chunks(conv_ids):
+                    await self._session.execute(
+                        delete(child).where(child.conversation_id.in_(chunk))
+                    )
+        definition_ids = [
+            row[0]
+            for row in (
+                await self._session.execute(
+                    select(JobDefinition.id).where(JobDefinition.workspace_id == workspace_id)
                 )
-            )
-            await self._session.execute(
-                delete(Conversation).where(Conversation.workspace_id == workspace_id)
-            )
+            ).all()
+        ]
+        run_ids = [
+            row[0]
+            for row in (
+                await self._session.execute(
+                    select(JobRun.id).where(JobRun.workspace_id == workspace_id)
+                )
+            ).all()
+        ]
+        if definition_ids:
+            run_ids += [
+                row[0]
+                for row in (
+                    await self._session.execute(
+                        select(JobRun.id).where(JobRun.definition_id.in_(definition_ids))
+                    )
+                ).all()
+            ]
+            for chunk in _chunks(definition_ids):
+                await self._session.execute(delete(JobRun).where(JobRun.definition_id.in_(chunk)))
+        if run_ids:
+            run_ids = list(dict.fromkeys(run_ids))
+            for child in JOB_RUN_CHILDREN:
+                for chunk in _chunks(run_ids):
+                    await self._session.execute(delete(child).where(child.run_id.in_(chunk)))
+        await self._session.execute(delete(JobRun).where(JobRun.workspace_id == workspace_id))
+        await self._session.execute(
+            delete(JobDefinition).where(JobDefinition.workspace_id == workspace_id)
+        )
+        await self._session.execute(
+            delete(Conversation).where(Conversation.workspace_id == workspace_id)
+        )
 
         # Finally delete the workspace row itself
         await self._session.delete(workspace)
@@ -771,3 +768,8 @@ class WorkspaceService:
 def _slugify(name: str) -> str:
     slug = "".join(c if c.isalnum() else "-" for c in name.lower()).strip("-")
     return slug or f"ws-{uuid.uuid4().hex[:8]}"
+
+
+def _chunks(ids: list[str], size: int = 500) -> list[list[str]]:
+    """Split id lists so IN (...) stays under the SQLite 999-variable limit."""
+    return [ids[i : i + size] for i in range(0, len(ids), size)]
