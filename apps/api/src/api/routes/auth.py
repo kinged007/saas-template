@@ -180,7 +180,11 @@ async def login(
         )
     except AuthError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
-    await _maybe_join_single_workspace(db, container, user)
+    try:
+        await _maybe_join_single_workspace(db, container, user)
+    except Exception:
+        await db.rollback()
+        logger.exception("failed to join single workspace for user %s", user.id)
     pair = await service.issue_tokens(user)
     return TokenResponse(**pair.__dict__)
 
@@ -197,6 +201,14 @@ async def refresh(
         pair = await service.rotate_refresh(body.refresh_token, ip_address=_client_ip(request))
     except AuthError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+    if settings.single_workspace:
+        try:
+            user = await service.get_user_by_refresh_token(body.refresh_token)
+            if user is not None:
+                await _maybe_join_single_workspace(db, container, user)
+        except Exception:
+            await db.rollback()
+            logger.exception("failed to join single workspace on refresh")
     return TokenResponse(**pair.__dict__)
 
 
@@ -223,6 +235,7 @@ async def me(
     memberships = await service.list_workspaces(user.id)
     if settings.single_workspace:
         # Toggling onto an existing deployment: oldest wins, rest stay hidden.
+        # (GET /workspaces still lists all memberships; /me is the UI surface.)
         single = await service.get_single_workspace()
         if single is not None:
             memberships = [m for m in memberships if m[0].id == single.id]

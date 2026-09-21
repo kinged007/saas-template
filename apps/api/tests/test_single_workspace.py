@@ -79,6 +79,76 @@ async def test_flag_off_keeps_current_behavior(app_client):
     assert ws["id"]
 
 
+async def test_refresh_joins_single_workspace(app_client, single_workspace_on, monkeypatch):
+    # Registered before the flag was enabled: refresh heals the membership.
+    monkeypatch.setattr(settings, "single_workspace", False)
+    tokens = await register_user(app_client, "early@example.com")
+    monkeypatch.setattr(settings, "single_workspace", True)
+    first = await register_user(app_client, "first@example.com")
+    me1 = await app_client.get("/api/v1/auth/me", headers=auth_headers(first))
+    ws_id = me1.json()["workspaces"][0]["id"]
+
+    resp = await app_client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert resp.status_code == 200, resp.text
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(resp.json()))
+    assert [w["id"] for w in me.json()["workspaces"]] == [ws_id]
+
+
+async def test_join_survives_missing_viewer_role(app_client, single_workspace_on):
+    from sqlalchemy import delete
+
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    first = await register_user(app_client, "first@example.com")
+    me1 = await app_client.get("/api/v1/auth/me", headers=auth_headers(first))
+    ws_id = me1.json()["workspaces"][0]["id"]
+    async with SessionFactory() as session:
+        await session.execute(delete(Role).where(Role.workspace_id == ws_id, Role.name == "viewer"))
+        await session.commit()
+    # No 500: login succeeds and the newcomer still joins (fallback role).
+    tokens = await register_user(app_client, "second@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert [w["id"] for w in me.json()["workspaces"]] == [ws_id]
+
+
+async def test_join_failure_does_not_break_login(app_client, single_workspace_on, monkeypatch):
+    import src.api.routes.auth as auth_routes
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(auth_routes.WorkspaceService, "join_single_workspace", boom)
+    resp = await app_client.post(
+        "/api/v1/auth/login",
+        json={"email": "ghost@example.com", "password": "Password123!"},
+    )
+    # Unknown user still 401; the point is no 500 from the join path —
+    # covered below with a real user.
+    assert resp.status_code == 401
+    monkeypatch.setattr(settings, "single_workspace", False)
+    await register_user(app_client, "real@example.com")
+    monkeypatch.setattr(settings, "single_workspace", True)
+    resp = await app_client.post(
+        "/api/v1/auth/login",
+        json={"email": "real@example.com", "password": "Password123!"},
+    )
+    assert resp.status_code == 200, resp.text
+
+
+async def test_delete_nonexistent_returns_404_in_single_mode(app_client, single_workspace_on):
+    tokens = await register_user(app_client, "first@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    ws_id = me.json()["workspaces"][0]["id"]
+    resp = await app_client.delete(
+        "/api/v1/workspaces/00000000-0000-0000-0000-000000000000",
+        headers={**auth_headers(tokens), "X-Workspace-ID": ws_id},
+    )
+    assert resp.status_code == 404
+
+
 async def test_oldest_workspace_wins(app_client, single_workspace_on, monkeypatch):
     # Pre-existing workspaces: auto-join picks the oldest, extras stay hidden.
     monkeypatch.setattr(settings, "single_workspace", False)

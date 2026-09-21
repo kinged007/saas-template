@@ -5,6 +5,7 @@ import uuid
 from datetime import timedelta
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dates import ensure_utc, now_utc
@@ -70,8 +71,11 @@ class WorkspaceService:
                     owner=user,
                     allow_single_workspace_bootstrap=True,
                 )
-            except WorkspaceError:
+            except (WorkspaceError, IntegrityError):
                 # Lost the first-login race: the winner's row is now oldest.
+                # IntegrityError covers the concurrent case where two
+                # bootstraps both pass the slug check and the loser hits the
+                # UNIQUE constraint on workspace.slug.
                 await self._session.rollback()
                 workspace = await self.get_single_workspace()
                 if workspace is None:
@@ -83,7 +87,7 @@ class WorkspaceService:
             )
         )
         if existing.scalar_one_or_none() is None:
-            role = await self._role_by_name(workspace.id, self.SINGLE_WORKSPACE_ROLE)
+            role = await self._single_workspace_role(workspace.id)
             self._session.add(
                 WorkspaceMember(
                     workspace_id=workspace.id,
@@ -110,9 +114,7 @@ class WorkspaceService:
         if self.single_workspace_enabled() and not allow_single_workspace_bootstrap:
             existing = await self.get_single_workspace()
             if existing is not None:
-                raise WorkspaceForbidden(
-                    "single-workspace mode: only one workspace is allowed"
-                )
+                raise WorkspaceForbidden("single-workspace mode: only one workspace is allowed")
         slug = slug or _slugify(name)
         exists = await self._session.execute(select(Workspace).where(Workspace.slug == slug))
         if exists.scalar_one_or_none():
@@ -205,11 +207,11 @@ class WorkspaceService:
         actor: User | None = None,
         ip_address: str | None = None,
     ) -> None:
-        if self.single_workspace_enabled():
-            raise WorkspaceForbidden("single-workspace mode: workspaces cannot be deleted")
         workspace = await self._session.get(Workspace, workspace_id)
         if workspace is None:
             raise WorkspaceError("workspace not found")
+        if self.single_workspace_enabled():
+            raise WorkspaceForbidden("single-workspace mode: workspaces cannot be deleted")
         name = workspace.name
 
         # --- Cascade delete workspace-scoped data.
@@ -228,9 +230,15 @@ class WorkspaceService:
 
         # API keys, invitations, secrets, notifications are simple workspace_id filters.
         await self._session.execute(delete(ApiKey).where(ApiKey.workspace_id == workspace_id))
-        await self._session.execute(delete(Invitation).where(Invitation.workspace_id == workspace_id))
-        await self._session.execute(delete(StoredSecret).where(StoredSecret.workspace_id == workspace_id))
-        await self._session.execute(delete(Notification).where(Notification.workspace_id == workspace_id))
+        await self._session.execute(
+            delete(Invitation).where(Invitation.workspace_id == workspace_id)
+        )
+        await self._session.execute(
+            delete(StoredSecret).where(StoredSecret.workspace_id == workspace_id)
+        )
+        await self._session.execute(
+            delete(Notification).where(Notification.workspace_id == workspace_id)
+        )
         # NOTE: WorkspaceMember + Role rows are intentionally kept — deleting them
         # makes the follow-up GET on a deleted workspace fail the membership scope
         # check (get_membership joins Role) with 403 instead of the contract's 404.
@@ -251,10 +259,16 @@ class WorkspaceService:
             )
             run_ids = [row[0] for row in run_ids_result.all()]
             if run_ids:
-                await self._session.execute(delete(JobLogEntry).where(JobLogEntry.run_id.in_(run_ids)))
-            await self._session.execute(delete(JobRun).where(JobRun.definition_id.in_(definition_ids)))
+                await self._session.execute(
+                    delete(JobLogEntry).where(JobLogEntry.run_id.in_(run_ids))
+                )
+            await self._session.execute(
+                delete(JobRun).where(JobRun.definition_id.in_(definition_ids))
+            )
             await self._session.execute(delete(JobRun).where(JobRun.workspace_id == workspace_id))
-            await self._session.execute(delete(JobDefinition).where(JobDefinition.workspace_id == workspace_id))
+            await self._session.execute(
+                delete(JobDefinition).where(JobDefinition.workspace_id == workspace_id)
+            )
         else:
             # No workspace definitions — still clean stray runs that were denormalized with workspace_id
             await self._session.execute(delete(JobRun).where(JobRun.workspace_id == workspace_id))
@@ -265,11 +279,17 @@ class WorkspaceService:
         )
         conv_ids = [row[0] for row in conv_ids_result.all()]
         if conv_ids:
-            await self._session.execute(delete(Message).where(Message.conversation_id.in_(conv_ids)))
             await self._session.execute(
-                delete(ConversationParticipant).where(ConversationParticipant.conversation_id.in_(conv_ids))
+                delete(Message).where(Message.conversation_id.in_(conv_ids))
             )
-            await self._session.execute(delete(Conversation).where(Conversation.workspace_id == workspace_id))
+            await self._session.execute(
+                delete(ConversationParticipant).where(
+                    ConversationParticipant.conversation_id.in_(conv_ids)
+                )
+            )
+            await self._session.execute(
+                delete(Conversation).where(Conversation.workspace_id == workspace_id)
+            )
 
         # Finally delete the workspace row itself
         await self._session.delete(workspace)
@@ -686,6 +706,26 @@ class WorkspaceService:
         stmt = select(Role).where(Role.workspace_id == workspace_id).order_by(Role.created_at.asc())
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+    async def _single_workspace_role(self, workspace_id: str) -> Role:
+        """Auto-join role: viewer, else the lowest non-owner system role.
+
+        Falls back when the viewer role was renamed/removed so a missing
+        role does not brick every later login in single-workspace mode."""
+        stmt = select(Role).where(Role.workspace_id == workspace_id)
+        result = await self._session.execute(stmt)
+        roles = list(result.scalars().all())
+        for role in roles:
+            if role.name == self.SINGLE_WORKSPACE_ROLE:
+                return role
+        for fallback in ("editor", "admin"):
+            for role in roles:
+                if role.name == fallback:
+                    return role
+        non_owner = [r for r in roles if r.name != "owner"]
+        if non_owner:
+            return non_owner[0]
+        raise WorkspaceError(f"role {self.SINGLE_WORKSPACE_ROLE} not found")
 
     async def _role_by_name(self, workspace_id: str, name: str) -> Role:
         stmt = select(Role).where(Role.workspace_id == workspace_id, Role.name == name)
