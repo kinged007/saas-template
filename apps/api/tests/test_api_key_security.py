@@ -400,6 +400,11 @@ async def test_delete_operations_require_matching_key_permission(app_client):
     del_key = await _create_key(
         client, ws_headers(owner, del_ws["id"]), "ws-delete", ["workspace:delete"]
     )
+    # Live workspace with a cross-workspace key: 403 (exists, not permitted).
+    resp = await client.delete(
+        f"/api/v1/workspaces/{del_ws['id']}", headers=_key_headers(read_key["key"], del_ws["id"])
+    )
+    assert resp.status_code == 403
     resp = await client.delete(
         f"/api/v1/workspaces/{del_ws['id']}", headers=_key_headers(del_key["key"], del_ws["id"])
     )
@@ -410,10 +415,12 @@ async def test_delete_operations_require_matching_key_permission(app_client):
     )
     assert resp.status_code == 404
 
+    # Deleted workspace: require_existing_workspace 404s before the key-scope
+    # check (consistent with session auth); 403 applies to live workspaces only.
     resp = await client.delete(
         f"/api/v1/workspaces/{del_ws['id']}", headers=_key_headers(read_key["key"], del_ws["id"])
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 404
 
 
 # ------------------------------------------------------- ownership scoping
