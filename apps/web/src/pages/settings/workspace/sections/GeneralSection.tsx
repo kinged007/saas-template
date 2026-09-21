@@ -33,6 +33,7 @@ import {
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { IDENTITY_QUERY_OPTIONS } from "@/contexts/WorkspaceContext";
 import type { Identity } from "@/types";
+import { WorkspaceExportCard } from "@/components/WorkspaceExportCard";
 import { workspaceStore } from "@/utils/storage";
 
 const schema = z.object({
@@ -169,6 +170,8 @@ export function GeneralSection() {
           )}
         </CardContent>
       </Card>
+
+      <WorkspaceExportCard />
 
       {!singleWorkspace && (
         <>

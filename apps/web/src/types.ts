@@ -338,6 +338,19 @@ export type WebhookDeliveryStatus =
   | "failed"
   | "exhausted";
 
+export type WorkspaceSearchResult = {
+  type: "conversation" | "message" | "member" | "job" | "notification";
+  id: string;
+  title?: string | null;
+  snippet?: string | null;
+  conversation_id?: string;
+};
+
+export type WorkspaceSearchResponse = {
+  query: string;
+  results: WorkspaceSearchResult[];
+};
+
 export type WebhookDelivery = {
   id: string;
   subscription_id: string;
