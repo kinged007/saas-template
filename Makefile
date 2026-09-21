@@ -23,6 +23,8 @@ help:
 	@echo "  make api-seed     seed default demo users + workspaces"
 	@echo "  make api          run backend (uvicorn, :8000)"
 	@echo "  make api-test     run backend tests (sqlite in-memory)"
+	@echo "  make api-lint     ruff check + format check (same as pre-commit hook)"
+	@echo "  make hooks-install install pre-commit hooks (uv tool install pre-commit first)"
 	@echo "  make web-install  install frontend deps"
 	@echo "  make web          run frontend (vite, :5173)"
 	@echo "  make web-build    type-check + build frontend"
