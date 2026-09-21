@@ -87,9 +87,7 @@ async def test_permission_catalog_filtered_to_assignable(app_client):
     assert set(owner_catalog["permissions"]) == set(perms.ALL_PERMISSIONS)
 
     viewer_catalog = (
-        await client.get(
-            "/api/v1/roles/permission-catalog", headers=ws_headers(viewer, ws["id"])
-        )
+        await client.get("/api/v1/roles/permission-catalog", headers=ws_headers(viewer, ws["id"]))
     ).json()
     assert set(viewer_catalog["catalog"]) == set(perms.ALL_PERMISSIONS)
     assert set(viewer_catalog["permissions"]) < set(perms.ALL_PERMISSIONS)
@@ -265,9 +263,7 @@ async def test_update_role_duplicate_name_conflicts(app_client):
     ws = await create_workspace(client, owner)
     headers = ws_headers(owner, ws["id"])
     created = (
-        await client.post(
-            "/api/v1/roles", json={"name": "ops", "permissions": []}, headers=headers
-        )
+        await client.post("/api/v1/roles", json={"name": "ops", "permissions": []}, headers=headers)
     ).json()
     resp = await client.patch(
         f"/api/v1/roles/{created['id']}", json={"name": "editor"}, headers=headers
