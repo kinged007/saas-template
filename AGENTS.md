@@ -16,6 +16,14 @@
 
 **Required env vars:** DATABASE_URL
 
+## Migrations
+
+Models are the source of truth; migrations are generated, reviewed, committed.
+After changing any model: `make db-new m="..."`, review the diff (watch for
+accidental drops, wrong nullability, missing server_default), commit the file.
+`make db-check` (also in CI) fails on multiple heads or models≠migrations.
+Full workflow: `docs/MIGRATIONS.md`.
+
 ---
 
 ## Agent Instructions
