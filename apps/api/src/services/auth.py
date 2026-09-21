@@ -220,27 +220,43 @@ class AuthService:
         )
         return user
 
-    async def issue_tokens(self, user: User) -> TokenPair:
+    async def issue_tokens(
+        self, user: User, *, ip_address: str | None = None, user_agent: str | None = None
+    ) -> TokenPair:
         refresh = OpaqueToken.generate()
-        self._session.add(
-            RefreshToken(
-                user_id=user.id,
-                token_hash=OpaqueToken.hash(refresh),
-                expires_at=now_utc() + timedelta(days=settings.refresh_token_expire_days),
-            )
+        row = RefreshToken(
+            user_id=user.id,
+            token_hash=OpaqueToken.hash(refresh),
+            expires_at=now_utc() + timedelta(days=settings.refresh_token_expire_days),
+            ip_address=ip_address,
+            user_agent=user_agent,
         )
+        self._session.add(row)
         await self._session.commit()
         return TokenPair(
-            access_token=create_access_token(user.id),
+            access_token=create_access_token(user.id, session_id=row.id),
             refresh_token=refresh,
         )
 
+    async def is_session_active(self, session_id: str, user_id: str) -> bool:
+        """True when the session row exists, belongs to the user, and is live."""
+        row = await self._session.get(RefreshToken, session_id)
+        if row is None or row.user_id != user_id or row.revoked_at is not None:
+            return False
+        return ensure_utc(row.expires_at) >= now_utc()
+
     async def rotate_refresh(
-        self, refresh_token: str, *, ip_address: str | None = None
+        self,
+        refresh_token: str,
+        *,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
     ) -> TokenPair:
         """Rotate a refresh token: revoke the presented one, issue a new pair."""
-        stmt = select(RefreshToken).where(
-            RefreshToken.token_hash == OpaqueToken.hash(refresh_token)
+        stmt = (
+            select(RefreshToken)
+            .where(RefreshToken.token_hash == OpaqueToken.hash(refresh_token))
+            .with_for_update()
         )
         result = await self._session.execute(stmt)
         row = result.scalar_one_or_none()
@@ -253,7 +269,7 @@ class AuthService:
             raise AuthError("account is disabled")
         row.revoked_at = now_utc()
         await self._session.commit()
-        pair = await self.issue_tokens(user)
+        pair = await self.issue_tokens(user, ip_address=ip_address, user_agent=user_agent)
         await publish_audit(
             self._bus,
             workspace_id=None,
@@ -265,6 +281,15 @@ class AuthService:
             ip_address=ip_address,
         )
         return pair
+
+    async def list_sessions(self, user_id: str) -> list[RefreshToken]:
+        stmt = (
+            select(RefreshToken)
+            .where(RefreshToken.user_id == user_id)
+            .order_by(RefreshToken.created_at.desc())
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
 
     async def get_user_by_refresh_token(self, refresh_token: str) -> User | None:
         """Return the owner of a refresh token (revoked or not), or None."""
