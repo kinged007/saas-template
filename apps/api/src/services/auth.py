@@ -238,6 +238,13 @@ class AuthService:
             refresh_token=refresh,
         )
 
+    async def is_session_active(self, session_id: str, user_id: str) -> bool:
+        """True when the session row exists, belongs to the user, and is live."""
+        row = await self._session.get(RefreshToken, session_id)
+        if row is None or row.user_id != user_id or row.revoked_at is not None:
+            return False
+        return ensure_utc(row.expires_at) >= now_utc()
+
     async def rotate_refresh(
         self,
         refresh_token: str,
@@ -274,13 +281,6 @@ class AuthService:
             ip_address=ip_address,
         )
         return pair
-
-    async def is_session_active(self, session_id: str, user_id: str) -> bool:
-        """True when the session row exists, belongs to the user, and is live."""
-        row = await self._session.get(RefreshToken, session_id)
-        if row is None or row.user_id != user_id or row.revoked_at is not None:
-            return False
-        return ensure_utc(row.expires_at) >= now_utc()
 
     async def revoke_refresh(self, refresh_token: str, *, ip_address: str | None = None) -> None:
         stmt = select(RefreshToken).where(
