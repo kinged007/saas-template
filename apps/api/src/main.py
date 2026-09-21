@@ -115,7 +115,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Total-Count", "X-API-Version", "X-API-Key-Quota", "X-API-Key-Remaining", "X-Request-ID"],
+    expose_headers=[
+        "X-Total-Count",
+        "X-API-Version",
+        "X-API-Key-Quota",
+        "X-API-Key-Remaining",
+        "X-Request-ID",
+    ],
 )
 
 app.state.container = Container()
