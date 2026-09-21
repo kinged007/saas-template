@@ -16,16 +16,14 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
-from unittest.mock import AsyncMock
 
 from sqlalchemy import select
 
-from src.core.dates import ensure_utc, now_utc
+from src.core.dates import now_utc
 from src.db.session import SessionFactory
 from src.jobs.registry import JobSpec, job_registry
 from src.models.jobs import JobDefinition, JobLogEntry, JobRun, JobRunStatus
 from src.services.jobs import JobService
-from tests.conftest import create_workspace, register_user, ws_headers
 from tests.test_jobs import _by_key, setup_workspace
 
 # ---------------------------------------------------------------------------
@@ -35,6 +33,7 @@ from tests.test_jobs import _by_key, setup_workspace
 
 battle_counts: dict[str, int] = {}
 battle_lock = asyncio.Lock()
+
 
 # Use a dedicated in-memory counter keyed by run_id to detect double execution
 # without relying on external state. The handler deliberately holds the event
@@ -104,8 +103,10 @@ async def _make_due_job(client, headers, key="test.battle_money") -> str:
 async def _count_runs(definition_id: str) -> int:
     async with SessionFactory() as session:
         rows = (
-            await session.execute(select(JobRun).where(JobRun.definition_id == definition_id))
-        ).scalars().all()
+            (await session.execute(select(JobRun).where(JobRun.definition_id == definition_id)))
+            .scalars()
+            .all()
+        )
         return len(rows)
 
 
@@ -144,18 +145,23 @@ async def test_battle_concurrent_schedulers_single_due_job_creates_exactly_one_r
     battle_counts.clear()
     scheduled_counts = await _concurrent_schedule_due(concurrency=50)
 
-    assert sum(scheduled_counts) == 1, f"expected 1 scheduled, got {scheduled_counts} sum={sum(scheduled_counts)}"
+    assert sum(scheduled_counts) == 1, (
+        f"expected 1 scheduled, got {scheduled_counts} sum={sum(scheduled_counts)}"
+    )
     assert await _count_runs(definition_id) == 1
 
     # The run must be pending (not yet executed — scheduler only enqueues)
     async with SessionFactory() as session:
         run = (
-            await session.execute(select(JobRun).where(JobRun.definition_id == definition_id))
-        ).scalars().first()
+            (await session.execute(select(JobRun).where(JobRun.definition_id == definition_id)))
+            .scalars()
+            .first()
+        )
         assert run is not None
         assert run.status == JobRunStatus.PENDING.value
 
-    # And next_run_at must have advanced exactly once — second tick must not reschedule same occurrence
+    # And next_run_at must have advanced exactly once — second tick must
+    # not reschedule same occurrence
     async with SessionFactory() as session:
         scheduled_again = await JobService(session).schedule_due()
     assert scheduled_again == 0
@@ -165,7 +171,8 @@ async def test_battle_concurrent_schedulers_single_due_job_creates_exactly_one_r
 async def test_battle_concurrent_schedulers_ten_due_jobs_with_fifty_workers(app_client):
     """10 due jobs, 50 workers → exactly 10 runs, one per job."""
     client = app_client
-    # Need multiple workspaces to get multiple definitions of same key? Instead create 10 distinct due jobs
+    # Need multiple workspaces to get multiple definitions of same key?
+    # Instead create 10 distinct due jobs
     # by using the same workspace but we only have test.battle_money/fast per workspace.
     # So create 5 workspaces × 2 battle keys = 10 definitions.
     from src.db.session import SessionFactory
@@ -176,7 +183,7 @@ async def test_battle_concurrent_schedulers_ten_due_jobs_with_fifty_workers(app_
         workspaces.append((ws, headers))
 
     # Make all 10 definitions due
-    for ws, headers in workspaces:
+    for _ws, headers in workspaces:
         for key in ("test.battle_money", "test.battle_fast"):
             jobs = (await client.get("/api/v1/jobs", headers=headers)).json()
             job = _by_key(jobs, key)
@@ -190,7 +197,7 @@ async def test_battle_concurrent_schedulers_ten_due_jobs_with_fifty_workers(app_
     assert sum(scheduled_counts) == 10, f"expected 10, got sum={sum(scheduled_counts)}"
 
     # Verify each definition has exactly 1 run
-    for ws, headers in workspaces:
+    for _ws, headers in workspaces:
         for key in ("test.battle_money", "test.battle_fast"):
             jobs = (await client.get("/api/v1/jobs", headers=headers)).json()
             job = _by_key(jobs, key)
@@ -224,14 +231,17 @@ async def test_battle_concurrent_executors_single_pending_run_executes_once(app_
 
     async with SessionFactory() as session:
         run = (
-            await session.execute(select(JobRun).where(JobRun.definition_id == definition_id))
-        ).scalars().first()
+            (await session.execute(select(JobRun).where(JobRun.definition_id == definition_id)))
+            .scalars()
+            .first()
+        )
         assert run is not None
         run_id = run.id
 
     battle_counts.clear()
     # Give NATS/inprocess bus time to deliver the scheduled run, then cancel its auto-execution
-    # by waiting a bit and then racing our own executors. The pending run is still pending at this point
+    # by waiting a bit and then racing our own executors. The pending run
+    # is still pending at this point
     # if we are fast enough; but to be deterministic, we ensure status is still pending
     # (the background executor hasn't claimed it yet — scheduler loop is disabled in tests).
     # In test env, the scheduler loop is disabled, but the jobs.execute consumer still runs.
@@ -264,15 +274,19 @@ async def test_battle_concurrent_executors_single_pending_run_executes_once(app_
     await _concurrent_execute(run_id, concurrency=50)
 
     # Handler must have run exactly once despite 50 concurrent claim attempts
-    assert battle_counts.get(run_id, 0) == 1, f"handler executed {battle_counts.get(run_id, 0)} times, expected 1"
+    assert battle_counts.get(run_id, 0) == 1, (
+        f"handler executed {battle_counts.get(run_id, 0)} times, expected 1"
+    )
 
     async with SessionFactory() as session:
         run = await session.get(JobRun, run_id)
         assert run.status == JobRunStatus.SUCCESS.value
         # Exactly one set of logs for this run_id
         logs = (
-            await session.execute(select(JobLogEntry).where(JobLogEntry.run_id == run_id))
-        ).scalars().all()
+            (await session.execute(select(JobLogEntry).where(JobLogEntry.run_id == run_id)))
+            .scalars()
+            .all()
+        )
         # At least the print line, not duplicated 50x
         money_logs = [log for log in logs if "BATTLE" in log.message]
         assert len(money_logs) == 1, f"expected 1 money log, got {len(money_logs)}: {money_logs}"
@@ -304,7 +318,8 @@ async def test_battle_concurrent_executors_redelivery_via_bus(app_client):
 
     battle_counts.clear()
 
-    # Simulate 20 NATS redeliveries (or 20 workers receiving same workqueue message due to ack_wait timeout)
+    # Simulate 20 NATS redeliveries (or 20 workers receiving same
+    # workqueue message due to ack_wait timeout)
     await _concurrent_execute(run_id, concurrency=20)
 
     assert battle_counts.get(run_id, 0) == 1
@@ -391,7 +406,8 @@ async def test_battle_money_job_not_double_charged_concurrent_execute(app_client
 async def test_battle_concurrent_http_execute_now_does_not_duplicate_scheduled_occurrence(
     app_client,
 ):
-    """Concurrent POST /execute (manual) each creates its own run — but concurrent schedule_due must not."""
+    """Concurrent POST /execute (manual) each creates its own run —
+    but concurrent schedule_due must not."""
     client = app_client
     _, ws, headers, _ = await setup_workspace(client, "battle-http@example.com")
     definition_id = await _make_due_job(client, headers, "test.battle_fast")
@@ -404,7 +420,10 @@ async def test_battle_concurrent_http_execute_now_does_not_duplicate_scheduled_o
     # Concurrent manual triggers are intentional duplicates — each should create a run
     # (manual runs are not deduplicated, they are user-intentional)
     manual_results = await asyncio.gather(
-        *[client.post(f"/api/v1/jobs/{definition_id}/execute", json={}, headers=headers) for _ in range(5)]
+        *[
+            client.post(f"/api/v1/jobs/{definition_id}/execute", json={}, headers=headers)
+            for _ in range(5)
+        ]
     )
     assert all(r.status_code == 201 for r in manual_results)
     assert await _count_runs(definition_id) == 6  # 1 scheduled + 5 manual
@@ -445,7 +464,9 @@ async def test_battle_inprocess_bus_delivers_jobs_execute_to_single_consumer(app
     battle_counts.clear()
     bus = app.state.container.bus
     # Publish same run_id 10 times rapidly (simulates NATS redelivery / duplicate publish)
-    await asyncio.gather(*[bus.publish(Subjects.JOBS_EXECUTE, {"run_id": run_id}) for _ in range(10)])
+    await asyncio.gather(
+        *[bus.publish(Subjects.JOBS_EXECUTE, {"run_id": run_id}) for _ in range(10)]
+    )
 
     # Wait for consumer to process (inprocess bus is async queue)
     for _ in range(30):
@@ -453,7 +474,7 @@ async def test_battle_inprocess_bus_delivers_jobs_execute_to_single_consumer(app
             break
         await asyncio.sleep(0.1)
 
-    assert battle_counts.get(run_id, 0) == 1, f"bus delivered {battle_counts.get(run_id,0)} times"
+    assert battle_counts.get(run_id, 0) == 1, f"bus delivered {battle_counts.get(run_id, 0)} times"
 
     # Even after waiting, no second execution
     await asyncio.sleep(0.3)
@@ -483,8 +504,10 @@ async def test_battle_scheduler_and_executor_no_lost_runs_under_load(app_client)
     # Now race executors on that one pending run
     async with SessionFactory() as session:
         run = (
-            await session.execute(select(JobRun).where(JobRun.definition_id == definition_id))
-        ).scalars().first()
+            (await session.execute(select(JobRun).where(JobRun.definition_id == definition_id)))
+            .scalars()
+            .first()
+        )
         run_id = run.id
 
     battle_counts.clear()

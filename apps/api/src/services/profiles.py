@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException
@@ -12,12 +12,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.security.password import PasswordHasher
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
+from src.models.api_key import ApiKey
 from src.models.audit import AuditLogEntry
 from src.models.core import Invitation, Notification
-from src.models.api_key import ApiKey
 from src.models.user_profile import UserProfile
-from src.models.workspace import RefreshToken, User, Workspace, WorkspaceMember, Role
-from src.services.profile_helpers import format_display_name, merge_custom_data, validate_custom_data
+from src.models.workspace import RefreshToken, Role, User, Workspace, WorkspaceMember
+from src.services.profile_helpers import (
+    format_display_name,
+    merge_custom_data,
+)
 from src.services.serializers import profile_to_dict
 
 logger = logging.getLogger(__name__)
@@ -119,8 +122,12 @@ class ProfileService:
                 setattr(profile, field, new_val)
 
         # Sync display_name from profile first/last (derived as "First L.")
-        if user is not None and ("first_name" in changed_fields or "last_name" in changed_fields or not user.display_name):
-            new_display = format_display_name(profile.first_name, profile.last_name, user.display_name)
+        if user is not None and (
+            "first_name" in changed_fields or "last_name" in changed_fields or not user.display_name
+        ):
+            new_display = format_display_name(
+                profile.first_name, profile.last_name, user.display_name
+            )
             if new_display and new_display != user.display_name:
                 changed_fields.append("display_name")
                 user.display_name = new_display
@@ -128,8 +135,10 @@ class ProfileService:
         # Handle custom_data
         if has_custom:
             # Merge or replace
-            # need to handle case where custom_patch is None (explicit null?) But schema defines custom_data as dict or None
-            # If client sends {"custom_data": null} should we treat as replace with {}? Probably not allowed; schema ensures dict if present
+            # need to handle case where custom_patch is None (explicit null?)
+            # But schema defines custom_data as dict or None
+            # If client sends {"custom_data": null} should we treat as replace
+            # with {}? Probably not allowed; schema ensures dict if present
             # For PATCH null-delete case, patch contains dict with null values for deletion
             existing_data = profile.custom_data or {}
             # is_put semantics: if is_put and custom_patch is dict -> replace, else leave
@@ -150,6 +159,7 @@ class ProfileService:
                 profile.custom_data = merged
                 # Flag as modified for JSON column
                 from sqlalchemy.orm.attributes import flag_modified
+
                 flag_modified(profile, "custom_data")
             else:
                 # Even if no change, ensure we still keep existing if PUT without custom_data?
@@ -157,7 +167,8 @@ class ProfileService:
                 pass
 
         # If no changed fields, still need to commit possible avatar changes? Already tracked
-        # Publish audit if any change or even if none? Spec says every PUT/PATCH publishes audit with changed_fields
+        # Publish audit if any change or even if none? Spec says every
+        # PUT/PATCH publishes audit with changed_fields
         # We'll publish even if empty, but log.
         await self._session.flush()
         await self._session.commit()
@@ -201,7 +212,8 @@ class ProfileService:
             pass
         else:
             if viewer.id == target_user_id:
-                # Self is allowed via own profile endpoint, but for public endpoint self also allowed
+                # Self is allowed via own profile endpoint, but for public
+                # endpoint self also allowed
                 pass
             else:
                 # Check co-membership: share at least one active workspace
@@ -254,16 +266,18 @@ class ProfileService:
                 }
             )
         # Counts
-        audit_count_stmt = select(func.count()).select_from(AuditLogEntry).where(
-            AuditLogEntry.actor_user_id == user_id
+        audit_count_stmt = (
+            select(func.count())
+            .select_from(AuditLogEntry)
+            .where(AuditLogEntry.actor_user_id == user_id)
         )
         audit_count = (await self._session.execute(audit_count_stmt)).scalar_one()
-        notif_count_stmt = select(func.count()).select_from(Notification).where(
-            Notification.user_id == user_id
+        notif_count_stmt = (
+            select(func.count()).select_from(Notification).where(Notification.user_id == user_id)
         )
         notif_count = (await self._session.execute(notif_count_stmt)).scalar_one()
 
-        from src.services.serializers import profile_to_dict, user_to_dict
+        from src.services.serializers import user_to_dict
 
         exported_at = datetime.now(UTC).isoformat()
         bundle = {
@@ -321,13 +335,16 @@ class ProfileService:
         except Exception:
             logger.exception("failed to publish delete audit for %s", user_id)
 
-        # Also publish user.deleted event? Spec says publish user.deleted, but event is audit.entry.created with action user.deleted
+        # Also publish user.deleted event? Spec says publish user.deleted,
+        # but event is audit.entry.created with action user.deleted
         # We already did.
 
         # Delete related rows
         # DRY: use delete statements
         await self._session.execute(delete(RefreshToken).where(RefreshToken.user_id == user_id))
-        await self._session.execute(delete(WorkspaceMember).where(WorkspaceMember.user_id == user_id))
+        await self._session.execute(
+            delete(WorkspaceMember).where(WorkspaceMember.user_id == user_id)
+        )
         await self._session.execute(delete(Notification).where(Notification.user_id == user_id))
         await self._session.execute(delete(ApiKey).where(ApiKey.created_by_user_id == user_id))
         # Invitations where email matches user email (case-insensitive? email is stored lower)
@@ -342,9 +359,10 @@ class ProfileService:
         # stored secrets? per workspace, not user, skip
         # Delete profile explicitly (FK cascade would handle, but explicit for sqlite)
         await self._session.execute(delete(UserProfile).where(UserProfile.user_id == user_id))
-        # For conversations, handle participant cleanup: set user_id null? But we can delete participations
+        # For conversations, handle participant cleanup: set user_id null?
+        # But we can delete participations
         # Not required for MVP; leave.
-        from src.models.conversation import ConversationParticipant, Message
+        from src.models.conversation import ConversationParticipant
 
         # Remove conversation participants for this user
         try:
@@ -366,7 +384,9 @@ class ProfileService:
         await self._session.commit()
         logger.info("user deleted user_id=%s", user_id)
 
-    async def delete_account_superuser(self, target_user_id: str, actor: User, ip_address: str | None = None) -> None:
+    async def delete_account_superuser(
+        self, target_user_id: str, actor: User, ip_address: str | None = None
+    ) -> None:
         if not actor.is_superuser:
             raise HTTPException(status_code=403, detail="superuser access required")
         target = await self._session.get(User, target_user_id)
@@ -387,19 +407,35 @@ class ProfileService:
         except Exception:
             logger.exception("failed to publish superuser delete audit for %s", target_user_id)
         # Delete related rows same as above
-        await self._session.execute(delete(RefreshToken).where(RefreshToken.user_id == target_user_id))
-        await self._session.execute(delete(WorkspaceMember).where(WorkspaceMember.user_id == target_user_id))
-        await self._session.execute(delete(Notification).where(Notification.user_id == target_user_id))
-        await self._session.execute(delete(ApiKey).where(ApiKey.created_by_user_id == target_user_id))
+        await self._session.execute(
+            delete(RefreshToken).where(RefreshToken.user_id == target_user_id)
+        )
+        await self._session.execute(
+            delete(WorkspaceMember).where(WorkspaceMember.user_id == target_user_id)
+        )
+        await self._session.execute(
+            delete(Notification).where(Notification.user_id == target_user_id)
+        )
+        await self._session.execute(
+            delete(ApiKey).where(ApiKey.created_by_user_id == target_user_id)
+        )
         if target.email:
-            await self._session.execute(delete(Invitation).where(Invitation.email == target.email.lower()))
-            await self._session.execute(delete(Invitation).where(Invitation.invited_by_user_id == target_user_id))
-        await self._session.execute(delete(UserProfile).where(UserProfile.user_id == target_user_id))
+            await self._session.execute(
+                delete(Invitation).where(Invitation.email == target.email.lower())
+            )
+            await self._session.execute(
+                delete(Invitation).where(Invitation.invited_by_user_id == target_user_id)
+            )
+        await self._session.execute(
+            delete(UserProfile).where(UserProfile.user_id == target_user_id)
+        )
         from src.models.conversation import ConversationParticipant
 
         try:
             await self._session.execute(
-                delete(ConversationParticipant).where(ConversationParticipant.user_id == target_user_id)
+                delete(ConversationParticipant).where(
+                    ConversationParticipant.user_id == target_user_id
+                )
             )
             await self._session.execute(
                 delete(ConversationParticipant).where(

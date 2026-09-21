@@ -140,9 +140,7 @@ async def test_admin_user_update_rejects_non_bool(app_client):
         )
         assert resp.status_code == 422, (bad, resp.text)
 
-    detail = await client.get(
-        f"/api/v1/admin/users/{target['id']}", headers=auth_headers(tokens)
-    )
+    detail = await client.get(f"/api/v1/admin/users/{target['id']}", headers=auth_headers(tokens))
     assert detail.status_code == 200, detail.text
     assert detail.json()["is_active"] is True
 

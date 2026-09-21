@@ -3,7 +3,7 @@ SHELL := /bin/bash
 
 SUDO := $(shell [ "$$(id -u)" -eq 0 ] 2>/dev/null && echo "" || echo sudo)
 
-.PHONY: help setup dev api api-install api-migrate api-seed api-test api-lint web web-install web-build infra-up infra-down nats-up nats-down nats-status nats-logs
+.PHONY: help setup dev api api-install api-migrate api-seed api-test api-lint web web-install web-build web-typecheck hooks-install infra-up infra-down nats-up nats-down nats-status nats-logs
 
 # USE_SQLITE=1 (env or `make <target> USE_SQLITE=1`): use the per-checkout
 # sqlite dev DB (apps/api/dev.db) instead of embedded postgres. Exported so it
@@ -121,6 +121,12 @@ web:
 
 web-build:
 	cd apps/web && npm run build
+
+web-typecheck:
+	cd apps/web && npx tsc -p tsconfig.json --noEmit
+
+hooks-install:
+	pre-commit install --config .pre-commit-config.yaml
 
 infra-up:
 	./scripts/nats.sh start

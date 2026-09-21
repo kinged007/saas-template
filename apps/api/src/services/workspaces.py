@@ -160,9 +160,15 @@ class WorkspaceService:
 
         # API keys, invitations, secrets, notifications are simple workspace_id filters.
         await self._session.execute(delete(ApiKey).where(ApiKey.workspace_id == workspace_id))
-        await self._session.execute(delete(Invitation).where(Invitation.workspace_id == workspace_id))
-        await self._session.execute(delete(StoredSecret).where(StoredSecret.workspace_id == workspace_id))
-        await self._session.execute(delete(Notification).where(Notification.workspace_id == workspace_id))
+        await self._session.execute(
+            delete(Invitation).where(Invitation.workspace_id == workspace_id)
+        )
+        await self._session.execute(
+            delete(StoredSecret).where(StoredSecret.workspace_id == workspace_id)
+        )
+        await self._session.execute(
+            delete(Notification).where(Notification.workspace_id == workspace_id)
+        )
         # NOTE: WorkspaceMember + Role rows are intentionally kept — deleting them
         # makes the follow-up GET on a deleted workspace fail the membership scope
         # check (get_membership joins Role) with 403 instead of the contract's 404.
@@ -183,12 +189,19 @@ class WorkspaceService:
             )
             run_ids = [row[0] for row in run_ids_result.all()]
             if run_ids:
-                await self._session.execute(delete(JobLogEntry).where(JobLogEntry.run_id.in_(run_ids)))
-            await self._session.execute(delete(JobRun).where(JobRun.definition_id.in_(definition_ids)))
+                await self._session.execute(
+                    delete(JobLogEntry).where(JobLogEntry.run_id.in_(run_ids))
+                )
+            await self._session.execute(
+                delete(JobRun).where(JobRun.definition_id.in_(definition_ids))
+            )
             await self._session.execute(delete(JobRun).where(JobRun.workspace_id == workspace_id))
-            await self._session.execute(delete(JobDefinition).where(JobDefinition.workspace_id == workspace_id))
+            await self._session.execute(
+                delete(JobDefinition).where(JobDefinition.workspace_id == workspace_id)
+            )
         else:
-            # No workspace definitions — still clean stray runs that were denormalized with workspace_id
+            # No workspace definitions — still clean stray runs that were
+            # denormalized with workspace_id
             await self._session.execute(delete(JobRun).where(JobRun.workspace_id == workspace_id))
 
         # Conversations + participants + messages (workspace-scoped)
@@ -197,11 +210,17 @@ class WorkspaceService:
         )
         conv_ids = [row[0] for row in conv_ids_result.all()]
         if conv_ids:
-            await self._session.execute(delete(Message).where(Message.conversation_id.in_(conv_ids)))
             await self._session.execute(
-                delete(ConversationParticipant).where(ConversationParticipant.conversation_id.in_(conv_ids))
+                delete(Message).where(Message.conversation_id.in_(conv_ids))
             )
-            await self._session.execute(delete(Conversation).where(Conversation.workspace_id == workspace_id))
+            await self._session.execute(
+                delete(ConversationParticipant).where(
+                    ConversationParticipant.conversation_id.in_(conv_ids)
+                )
+            )
+            await self._session.execute(
+                delete(Conversation).where(Conversation.workspace_id == workspace_id)
+            )
 
         # Finally delete the workspace row itself
         await self._session.delete(workspace)

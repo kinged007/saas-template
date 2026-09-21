@@ -43,12 +43,14 @@ _SUB_FILTERABLE = {"active", "url"}
 _DELIVERY_SORTABLE = {"created_at", "status", "attempt_count"}
 _DELIVERY_FILTERABLE = {"status", "event_type", "subscription_id"}
 
+
 @router.get("/events")
 async def list_webhook_events(
     _=Depends(require_permission(WEBHOOK_READ)),
 ):
     """Public event names subscribers can filter on."""
     return {"events": webhook_event_names()}
+
 
 @router.get("/subscriptions")
 async def list_subscriptions(
@@ -60,9 +62,7 @@ async def list_subscriptions(
 ):
     from src.models.webhook import WebhookSubscription
 
-    stmt = select(WebhookSubscription).where(
-        WebhookSubscription.workspace_id == workspace_id
-    )
+    stmt = select(WebhookSubscription).where(WebhookSubscription.workspace_id == workspace_id)
     try:
         spec = parse_query(request)
         stmt = apply_query(
@@ -76,6 +76,7 @@ async def list_subscriptions(
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
     return [subscription_to_dict(s) for s in rows.scalars().all()]
+
 
 @router.post("/subscriptions", status_code=201)
 async def create_subscription(
@@ -108,6 +109,7 @@ async def create_subscription(
         ip_address=request.client.host if request.client else None,
     )
     return {**subscription_to_dict(sub), "secret": secret}
+
 
 @router.patch("/subscriptions/{subscription_id}")
 async def update_subscription(
@@ -144,6 +146,7 @@ async def update_subscription(
     )
     return subscription_to_dict(sub)
 
+
 @router.delete("/subscriptions/{subscription_id}", status_code=204)
 async def delete_subscription(
     subscription_id: str,
@@ -170,6 +173,7 @@ async def delete_subscription(
         details={},
         ip_address=request.client.host if request.client else None,
     )
+
 
 @router.post("/subscriptions/{subscription_id}/rotate-secret", status_code=201)
 async def rotate_secret(
@@ -198,6 +202,7 @@ async def rotate_secret(
         ip_address=request.client.host if request.client else None,
     )
     return {"secret": secret}
+
 
 @router.get("/deliveries")
 async def list_deliveries(
@@ -232,6 +237,7 @@ async def list_deliveries(
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
     return [delivery_to_dict(d) for d in rows.scalars().all()]
+
 
 @router.get("/subscriptions/{subscription_id}/deliveries")
 async def list_subscription_deliveries(
@@ -269,6 +275,7 @@ async def list_subscription_deliveries(
     response.headers["X-Total-Count"] = str(total)
     return [delivery_to_dict(d) for d in rows.scalars().all()]
 
+
 @router.get("/deliveries/{delivery_id}")
 async def get_delivery(
     delivery_id: str,
@@ -284,6 +291,7 @@ async def get_delivery(
     except WebhookError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     return delivery_to_dict(delivery)
+
 
 @router.post("/deliveries/{delivery_id}/redeliver")
 async def redeliver(

@@ -15,8 +15,19 @@ from src.api.deps import (
 )
 from src.core.permissions import MESSAGE_READ, MESSAGE_SEND
 from src.db.session import get_db
-from src.schemas.api import ConversationArchive, ConversationCreate, ConversationRead, ConversationUpdate, MessageCreate
-from src.services.conversations import ConversationError, ConversationForbidden, ConversationNotFound, ConversationService
+from src.schemas.api import (
+    ConversationArchive,
+    ConversationCreate,
+    ConversationRead,
+    ConversationUpdate,
+    MessageCreate,
+)
+from src.services.conversations import (
+    ConversationError,
+    ConversationForbidden,
+    ConversationNotFound,
+    ConversationService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +46,8 @@ async def unread_count(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    # principal check already done via require_key_permission for API keys; session users always pass
+    # principal check already done via require_key_permission for API keys;
+    # session users always pass
     service = ConversationService(db, container.bus)
     try:
         data = await service.get_unread_counts(workspace_id=workspace_id, user_id=user.id)
@@ -65,11 +77,12 @@ async def list_conversations(
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
 
-    # archived filter: support ?archived=true|false, default false; also support filter syntax archived=true
+    # archived filter: support ?archived=true|false, default false;
+    # also support filter syntax archived=true
     q_params = request.query_params
     archived_raw = q_params.get("archived")
     # Also check spec.filters for archived (simple-rest style)
-    for fname, op, value in spec.filters:
+    for fname, _op, value in spec.filters:
         if fname == "archived":
             archived_raw = value
     if archived_raw is None:
@@ -88,7 +101,7 @@ async def list_conversations(
 
     q = q_params.get("q")
     if q is None:
-        for fname, op, value in spec.filters:
+        for fname, _op, value in spec.filters:
             if fname == "q":
                 q = value
 
@@ -141,7 +154,8 @@ async def create_conversation(
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     except ConversationError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
-    # Return conversation with first_message embedded for client convenience; dataProvider will read top-level id.
+    # Return conversation with first_message embedded for client convenience;
+    # dataProvider will read top-level id.
     conv["first_message"] = msg
     return conv
 

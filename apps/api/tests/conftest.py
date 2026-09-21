@@ -77,16 +77,28 @@ async def app_client(app):
         yield client
 
 
-async def register_user(client: AsyncClient, email: str = "user@example.com", first_name: str = "Test", last_name: str = "User") -> dict:
+async def register_user(
+    client: AsyncClient,
+    email: str = "user@example.com",
+    first_name: str = "Test",
+    last_name: str = "User",
+) -> dict:
     resp = await client.post(
         "/api/v1/auth/register",
-        json={"email": email, "password": "Password123!", "first_name": first_name, "last_name": last_name},
+        json={
+            "email": email,
+            "password": "Password123!",
+            "first_name": first_name,
+            "last_name": last_name,
+        },
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
 
 
-async def register_user_with_names(client: AsyncClient, email: str, first_name: str, last_name: str) -> dict:
+async def register_user_with_names(
+    client: AsyncClient, email: str, first_name: str, last_name: str
+) -> dict:
     return await register_user(client, email=email, first_name=first_name, last_name=last_name)
 
 

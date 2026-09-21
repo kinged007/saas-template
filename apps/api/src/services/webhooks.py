@@ -50,26 +50,32 @@ MAX_ERROR_LENGTH = 2000
 
 SECRET_KIND = "webhook_signing_secret"
 
+
 def secret_key_for(subscription_id: str) -> str:
     return f"webhooks:{subscription_id}:signing_secret"
 
+
 def generate_secret() -> str:
     return secrets.token_urlsafe(32)
+
 
 def sign_payload(secret: str, timestamp: str, raw_body: bytes) -> str:
     """`sha256=<hex>` HMAC over `timestamp + "." + raw_body`."""
     mac = hmac.new(secret.encode(), timestamp.encode() + b"." + raw_body, hashlib.sha256)
     return f"sha256={mac.hexdigest()}"
 
+
 def verify_signature(secret: str, timestamp: str, raw_body: bytes, signature: str) -> bool:
     expected = sign_payload(secret, timestamp, raw_body)
     return hmac.compare_digest(expected, signature)
+
 
 def next_retry_delay(attempt: int) -> int | None:
     """Backoff seconds after `attempt` (1-based), or None when exhausted."""
     if attempt >= MAX_ATTEMPTS:
         return None
     return BACKOFF_SECONDS[min(attempt - 1, len(BACKOFF_SECONDS) - 1)]
+
 
 def validate_url(url: str, *, allow_private: bool = False) -> str:
     """SSRF guard: https-only in prod, no loopback/private targets by default."""
@@ -99,6 +105,7 @@ def validate_url(url: str, *, allow_private: bool = False) -> str:
             raise WebhookError("url targets a private or loopback address")
     return url
 
+
 def validate_events(events: list[str]) -> list[str]:
     known = set(webhook_event_names())
     unknown = [e for e in events if e not in known]
@@ -106,8 +113,10 @@ def validate_events(events: list[str]) -> list[str]:
         raise WebhookError(f"unknown event types: {', '.join(unknown)}")
     return sorted(set(events))
 
+
 class WebhookError(Exception):
     pass
+
 
 def subscription_to_dict(s: WebhookSubscription) -> dict:
     return {
@@ -120,6 +129,7 @@ def subscription_to_dict(s: WebhookSubscription) -> dict:
         "created_at": s.created_at.isoformat() if s.created_at else None,
         "updated_at": s.updated_at.isoformat() if s.updated_at else None,
     }
+
 
 def delivery_to_dict(d: WebhookDelivery) -> dict:
     return {
@@ -140,6 +150,7 @@ def delivery_to_dict(d: WebhookDelivery) -> dict:
         "created_at": d.created_at.isoformat() if d.created_at else None,
         "updated_at": d.updated_at.isoformat() if d.updated_at else None,
     }
+
 
 class WebhookService:
     """Route-facing CRUD on the request-scoped session."""
@@ -235,9 +246,7 @@ class WebhookService:
             )
         return secret
 
-    async def list_deliveries(
-        self, workspace_id: str, *, subscription_id: str | None = None
-    ):
+    async def list_deliveries(self, workspace_id: str, *, subscription_id: str | None = None):
         stmt = select(WebhookDelivery).where(WebhookDelivery.workspace_id == workspace_id)
         if subscription_id is not None:
             await self._get_or_404(workspace_id, subscription_id)
@@ -260,11 +269,13 @@ class WebhookService:
         await self._session.refresh(delivery)
         return delivery
 
+
 # ------------------------------------------------------------ fan-out + retry
 # Background paths own short-lived sessions (same discipline as workflows and
 # the job scheduler): fan-out inserts one pending row per matching
 # subscription, then dispatch claims due rows with a CAS update so exactly one
 # replica delivers each attempt.
+
 
 def build_envelope(
     *,
@@ -281,6 +292,7 @@ def build_envelope(
         "workspace_id": workspace_id,
         "data": data,
     }
+
 
 async def fan_out_event(
     session: AsyncSession,
@@ -304,13 +316,17 @@ async def fan_out_event(
     if not workspace_id:
         return 0
     rows = (
-        await session.execute(
-            select(WebhookSubscription).where(
-                WebhookSubscription.workspace_id == workspace_id,
-                WebhookSubscription.active.is_(True),
+        (
+            await session.execute(
+                select(WebhookSubscription).where(
+                    WebhookSubscription.workspace_id == workspace_id,
+                    WebhookSubscription.active.is_(True),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     count = 0
     for sub in rows:
         if sub.events and event_type not in (sub.events or []):
@@ -339,6 +355,7 @@ async def fan_out_event(
         await session.commit()
     return count
 
+
 async def _fetch_secret(
     secret_store: SecretStore | None, workspace_id: str, sub_id: str
 ) -> str | None:
@@ -346,6 +363,7 @@ async def _fetch_secret(
         return None
     record = await secret_store.get(workspace_id=workspace_id, key=secret_key_for(sub_id))
     return record.value if record else None
+
 
 async def deliver_once(
     delivery: WebhookDelivery,
@@ -382,6 +400,7 @@ async def deliver_once(
     body = (response.text or "")[:MAX_ERROR_LENGTH]
     return False, response.status_code, f"unexpected status {response.status_code}: {body}"
 
+
 async def dispatch_due(
     session: AsyncSession,
     secret_store: SecretStore | None = None,
@@ -408,11 +427,7 @@ async def dispatch_due(
         .limit(limit)
     )
     rows = (await session.execute(stmt)).scalars().all()
-    due = [
-        d
-        for d in rows
-        if d.next_retry_at is None or ensure_utc(d.next_retry_at) <= now
-    ]
+    due = [d for d in rows if d.next_retry_at is None or ensure_utc(d.next_retry_at) <= now]
     attempted = 0
     for delivery in due:
         claimed_at = delivery.next_retry_at
@@ -460,6 +475,8 @@ async def dispatch_due(
         attempted += 1
         logger.info(
             "webhook delivery %s attempt %d -> %s",
-            delivery.id, delivery.attempt_count, delivery.status,
+            delivery.id,
+            delivery.attempt_count,
+            delivery.status,
         )
     return attempted

@@ -126,7 +126,6 @@ async def test_inapp_channel_persists_row_without_email(app_client, monkeypatch)
     import src.email.factory as factory
     from src.db.session import SessionFactory
     from src.models.core import Notification
-    from src.services.notifications import NotificationService
     from tests.conftest import register_user
 
     sent: list = []
