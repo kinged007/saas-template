@@ -50,22 +50,33 @@ async def _actions_contain(action: str) -> bool:
 async def test_register_persists_audit_row(app_client):
     await app_client.post(
         "/api/v1/auth/register",
-        json={"email": "audit@example.com", "password": "Password123!", "first_name": "Audit", "last_name": "User"},
+        json={
+            "email": "audit@example.com",
+            "password": "Password123!",
+            "first_name": "Audit",
+            "last_name": "User",
+        },
     )
-    assert await _wait_for(lambda: _actions_equal(["user.register"]))
+    assert await _wait_for(
+        lambda: _actions_equal(["user.register", "user.email_verification_sent"])
+    )
     rows = await _audit_rows()
-    assert len(rows) == 1
-    row = rows[0]
+    assert len(rows) == 2
+    row = next(r for r in rows if r.action == "user.register")
     assert row.workspace_id is None  # user-scoped action
     assert row.resource_type == "user"
-    assert row.action == "user.register"
     assert row.details["email"] == "audit@example.com"
 
 
 async def test_login_refresh_logout_persist_audit_rows(app_client):
     await app_client.post(
         "/api/v1/auth/register",
-        json={"email": "audit2@example.com", "password": "Password123!", "first_name": "Audit", "last_name": "User"},
+        json={
+            "email": "audit2@example.com",
+            "password": "Password123!",
+            "first_name": "Audit",
+            "last_name": "User",
+        },
     )
     assert await _wait_for(lambda: _actions_contain("user.register"))
 
@@ -89,7 +100,13 @@ async def test_login_refresh_logout_persist_audit_rows(app_client):
     assert await _wait_for(lambda: _actions_contain("user.logout"))
 
     actions = await _audit_actions()
-    assert actions == ["user.register", "user.login", "user.token_refresh", "user.logout"]
+    assert actions == [
+        "user.register",
+        "user.email_verification_sent",
+        "user.login",
+        "user.token_refresh",
+        "user.logout",
+    ]
     for row in await _audit_rows():
         assert row.workspace_id is None
         assert row.resource_type == "user"
@@ -143,9 +160,16 @@ async def test_api_key_create_persists_audit(app_client):
 async def test_audit_rows_carry_ip_address(app_client):
     await app_client.post(
         "/api/v1/auth/register",
-        json={"email": "audit5@example.com", "password": "Password123!", "first_name": "Audit", "last_name": "User"},
+        json={
+            "email": "audit5@example.com",
+            "password": "Password123!",
+            "first_name": "Audit",
+            "last_name": "User",
+        },
     )
-    assert await _wait_for(lambda: _actions_equal(["user.register"]))
+    assert await _wait_for(
+        lambda: _actions_equal(["user.register", "user.email_verification_sent"])
+    )
     rows = await _audit_rows()
     assert rows[0].ip_address is not None  # client IP recorded
     assert rows[0].ip_address != ""
