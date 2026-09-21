@@ -44,6 +44,16 @@ class VerifyEmailRequest(BaseModel):
     token: str = Field(min_length=1)
 
 
+class SessionRead(BaseModel):
+    id: str
+    created_at: datetime | None = None
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+    ip_address: str | None = None
+    user_agent: str | None = None
+    current: bool = False
+
+
 class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     slug: str | None = Field(default=None, max_length=100)

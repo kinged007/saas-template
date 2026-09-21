@@ -36,6 +36,7 @@ class AuthPrincipal:
 
     user: User
     api_key: ApiKey | None = None
+    session_id: str | None = None
 
 
 async def resolve_auth_principal(
@@ -62,7 +63,12 @@ async def resolve_auth_principal(
         user = await AuthService(db).get_user(user_id)
         if user is None or not user.is_active:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "user not found or disabled")
-        return AuthPrincipal(user=user)
+        session_id = payload.get("sid")
+        if session_id is not None and not await AuthService(db).is_session_active(
+            session_id, user_id
+        ):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "session revoked")
+        return AuthPrincipal(user=user, session_id=session_id)
     # Not a JWT — try an opaque API key.
     api_key = await ApiKeyService(db).authenticate(credentials.credentials)
     if api_key is None:
@@ -244,7 +250,11 @@ async def authenticate_websocket_token(db: AsyncSession, token: str | None) -> U
         payload = decode_access_token(token)
     except Exception:
         return None
-    user = await AuthService(db).get_user(payload.get("sub", ""))
+    user_id = payload.get("sub", "")
+    user = await AuthService(db).get_user(user_id)
     if user is None or not user.is_active:
+        return None
+    session_id = payload.get("sid")
+    if session_id is not None and not await AuthService(db).is_session_active(session_id, user_id):
         return None
     return user

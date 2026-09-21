@@ -5,7 +5,13 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_container, get_current_user
+from src.api.deps import (
+    AuthPrincipal,
+    get_container,
+    get_current_user,
+    resolve_auth_principal,
+)
+from src.core.dates import ensure_utc, now_utc
 from src.db.session import get_db
 from src.email import factory as email_factory
 from src.email import templates
@@ -15,6 +21,7 @@ from src.schemas.api import (
     RefreshRequest,
     RegisterRequest,
     ResetPasswordRequest,
+    SessionRead,
     TokenResponse,
     VerifyEmailRequest,
 )
@@ -47,6 +54,11 @@ async def _send_verification(service: AuthService, user) -> None:
 
 def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
+
+
+def _user_agent(request: Request) -> str | None:
+    ua = request.headers.get("user-agent")
+    return ua[:500] if ua else None
 
 
 async def _maybe_join_single_workspace(db: AsyncSession, container, user) -> None:
@@ -85,7 +97,9 @@ async def register(
         if "first_name and last_name" in msg:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, msg) from None
         raise HTTPException(status.HTTP_409_CONFLICT, msg) from None
-    pair = await service.issue_tokens(user)
+    pair = await service.issue_tokens(
+        user, ip_address=_client_ip(request), user_agent=_user_agent(request)
+    )
     try:
         await _maybe_join_single_workspace(db, container, user)
     except Exception:
@@ -185,7 +199,9 @@ async def login(
     except Exception:
         await db.rollback()
         logger.exception("failed to join single workspace for user %s", user.id)
-    pair = await service.issue_tokens(user)
+    pair = await service.issue_tokens(
+        user, ip_address=_client_ip(request), user_agent=_user_agent(request)
+    )
     return TokenResponse(**pair.__dict__)
 
 
@@ -198,18 +214,72 @@ async def refresh(
 ) -> TokenResponse:
     service = AuthService(db, container.bus)
     try:
-        pair = await service.rotate_refresh(body.refresh_token, ip_address=_client_ip(request))
+        pair = await service.rotate_refresh(
+            body.refresh_token,
+            ip_address=_client_ip(request),
+            user_agent=_user_agent(request),
+        )
     except AuthError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
     if settings.single_workspace:
         try:
-            user = await service.get_user_by_refresh_token(body.refresh_token)
+            # pair.refresh_token is the NEW token; its owner is the rotated user.
+            user = await service.get_user_by_refresh_token(pair.refresh_token)
             if user is not None:
                 await _maybe_join_single_workspace(db, container, user)
         except Exception:
             await db.rollback()
             logger.exception("failed to join single workspace on refresh")
     return TokenResponse(**pair.__dict__)
+
+
+def _session_to_dict(row, *, current: bool) -> dict:
+    return {
+        "id": row.id,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+        "revoked_at": row.revoked_at.isoformat() if row.revoked_at else None,
+        "ip_address": row.ip_address,
+        "user_agent": row.user_agent,
+        "current": current,
+    }
+
+
+@router.get("/sessions", response_model=list[SessionRead])
+async def list_sessions(
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    _ = container
+    rows = await AuthService(db).list_sessions(principal.user.id)
+    now = now_utc()
+    return [
+        _session_to_dict(r, current=(r.id == principal.session_id))
+        for r in rows
+        if r.revoked_at is None and ensure_utc(r.expires_at) >= now
+    ]
+
+
+@router.delete("/sessions", status_code=204)
+async def revoke_all_sessions(
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+) -> None:
+    _ = container
+    rows = await AuthService(db).list_sessions(principal.user.id)
+    now = now_utc()
+    changed = False
+    for r in rows:
+        if r.id == principal.session_id:
+            continue
+        if r.revoked_at is None and ensure_utc(r.expires_at) >= now:
+            r.revoked_at = now
+            changed = True
+    if changed:
+        await db.commit()
+        logger.info("other sessions revoked user=%s", principal.user.id)
 
 
 @router.post("/logout", status_code=204)
@@ -222,6 +292,26 @@ async def logout(
     await AuthService(db, container.bus).revoke_refresh(
         body.refresh_token, ip_address=_client_ip(request)
     )
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+async def revoke_session(
+    session_id: str,
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+) -> None:
+    _ = container
+    if session_id == principal.session_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "cannot revoke the current session")
+    rows = await AuthService(db).list_sessions(principal.user.id)
+    row = next((r for r in rows if r.id == session_id), None)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "session not found")
+    if row.revoked_at is None:
+        row.revoked_at = now_utc()
+        await db.commit()
+        logger.info("session revoked user=%s session=%s", principal.user.id, session_id)
 
 
 @router.get("/me")
