@@ -36,7 +36,9 @@ def upgrade() -> None:
         ID = PG_UUID(as_uuid=True) if dialect == "postgresql" else sa.String(36)
 
         def _ts(name: str, nullable: bool = False) -> sa.Column:
-            return sa.Column(name, TS, nullable=nullable, server_default=NOW if not nullable else None)
+            return sa.Column(
+                name, TS, nullable=nullable, server_default=NOW if not nullable else None
+            )
 
         def _id(name: str = "id") -> sa.Column:
             return sa.Column(name, ID, primary_key=True)
@@ -65,7 +67,9 @@ def upgrade() -> None:
             "conversation_participants",
             _id(),
             _fk("conversation_id"),
-            sa.Column("participant_type", sa.String(length=10), nullable=False, server_default="user"),
+            sa.Column(
+                "participant_type", sa.String(length=10), nullable=False, server_default="user"
+            ),
             _fk("participant_id"),
             _fk("user_id", nullable=True),
             _fk("agent_id", nullable=True),
@@ -121,7 +125,9 @@ def upgrade() -> None:
         op.create_index("ix_messages_sender_id", "messages", ["sender_id"])
         op.create_index("ix_messages_sender_user_id", "messages", ["sender_user_id"])
         op.create_index("ix_messages_created_at", "messages", ["created_at"])
-        op.create_index("ix_messages_conversation_id_created_at", "messages", ["conversation_id", "created_at"])
+        op.create_index(
+            "ix_messages_conversation_id_created_at", "messages", ["conversation_id", "created_at"]
+        )
 
     # Data migration: grant message permissions to existing system roles.
     # Mirrors 0002/0004 pattern; keeps existing workspaces in sync without

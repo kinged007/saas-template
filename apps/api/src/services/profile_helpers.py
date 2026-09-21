@@ -11,8 +11,13 @@ MAX_CUSTOM_DATA_KEYS = 50
 MAX_CUSTOM_DATA_BYTES = 16 * 1024  # 16 KiB
 
 
-def format_display_name(first_name: str | None, last_name: str | None, fallback: str | None = None) -> str:
-    """Format as 'First L.' — first name + initial of last name. Deprecated display_name fallback."""
+def format_display_name(
+    first_name: str | None, last_name: str | None, fallback: str | None = None
+) -> str:
+    """Format as 'First L.' — first name + initial of last name.
+
+    Deprecated display_name fallback.
+    """
     fn = (first_name or "").strip()
     ln = (last_name or "").strip()
     if fn and ln:
@@ -35,14 +40,14 @@ def validate_custom_data(data: dict) -> None:
     try:
         serialized = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=f"custom_data not JSON serializable: {exc}") from None
+        raise HTTPException(
+            status_code=422, detail=f"custom_data not JSON serializable: {exc}"
+        ) from None
     if len(serialized.encode("utf-8")) > MAX_CUSTOM_DATA_BYTES:
         raise HTTPException(status_code=422, detail="custom_data exceeds limits")
 
 
-def merge_custom_data(
-    existing: dict | None, patch: dict | None, is_put: bool
-) -> dict:
+def merge_custom_data(existing: dict | None, patch: dict | None, is_put: bool) -> dict:
     """
     Apply RFC 7396 Merge Patch semantics for custom_data.
 

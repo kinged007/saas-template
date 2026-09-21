@@ -1,9 +1,10 @@
 import asyncio
 import json
+
 import pytest
 from httpx import AsyncClient
 
-from tests.conftest import auth_headers, create_workspace, login, register_user, ws_headers
+from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
 
 
 async def _get_profile(client: AsyncClient, tokens: dict) -> dict:
@@ -14,9 +15,10 @@ async def _get_profile(client: AsyncClient, tokens: dict) -> dict:
 
 async def _wait_for_audit(client_headers, action: str, deadline_seconds: float = 2.0):
     """Poll audit_log_entries via direct DB query? Use workflow persistence delay."""
+    from sqlalchemy import select
+
     from src.db.session import SessionFactory
     from src.models.audit import AuditLogEntry
-    from sqlalchemy import select
 
     deadline = asyncio.get_running_loop().time() + deadline_seconds
     while True:
@@ -61,9 +63,10 @@ async def test_get_or_create_concurrent(app_client):
     me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
     user_id = me.json()["id"]
     # Delete profile row to simulate legacy missing profile
+    from sqlalchemy import delete
+
     from src.db.session import SessionFactory
     from src.models.user_profile import UserProfile
-    from sqlalchemy import delete
 
     async with SessionFactory() as session:
         await session.execute(delete(UserProfile).where(UserProfile.user_id == user_id))
@@ -93,11 +96,15 @@ async def test_patch_merge_patch_add_and_retain(app_client):
     client = app_client
     tokens = await register_user(client, "merge1@example.com")
     # First patch
-    resp = await client.patch("/api/v1/me/profile", json={"custom_data": {"a": 1}}, headers=auth_headers(tokens))
+    resp = await client.patch(
+        "/api/v1/me/profile", json={"custom_data": {"a": 1}}, headers=auth_headers(tokens)
+    )
     assert resp.status_code == 200, resp.text
     assert resp.json()["custom_data"] == {"a": 1}
     # Second patch should retain a and add b
-    resp = await client.patch("/api/v1/me/profile", json={"custom_data": {"b": 2}}, headers=auth_headers(tokens))
+    resp = await client.patch(
+        "/api/v1/me/profile", json={"custom_data": {"b": 2}}, headers=auth_headers(tokens)
+    )
     assert resp.status_code == 200, resp.text
     assert resp.json()["custom_data"] == {"a": 1, "b": 2}
     # Fetch should reflect merged
@@ -108,13 +115,21 @@ async def test_patch_merge_patch_add_and_retain(app_client):
 async def test_patch_null_delete(app_client):
     client = app_client
     tokens = await register_user(client, "merge2@example.com")
-    await client.patch("/api/v1/me/profile", json={"custom_data": {"a": 1, "b": 2}}, headers=auth_headers(tokens))
+    await client.patch(
+        "/api/v1/me/profile", json={"custom_data": {"a": 1, "b": 2}}, headers=auth_headers(tokens)
+    )
     # Delete a
-    resp = await client.patch("/api/v1/me/profile", json={"custom_data": {"a": None}}, headers=auth_headers(tokens))
+    resp = await client.patch(
+        "/api/v1/me/profile", json={"custom_data": {"a": None}}, headers=auth_headers(tokens)
+    )
     assert resp.status_code == 200, resp.text
     assert resp.json()["custom_data"] == {"b": 2}
     # Deleting absent key is no-op (should not error, retain b)
-    resp = await client.patch("/api/v1/me/profile", json={"custom_data": {"nonexistent": None}}, headers=auth_headers(tokens))
+    resp = await client.patch(
+        "/api/v1/me/profile",
+        json={"custom_data": {"nonexistent": None}},
+        headers=auth_headers(tokens),
+    )
     assert resp.status_code == 200
     assert resp.json()["custom_data"] == {"b": 2}
 
@@ -122,8 +137,14 @@ async def test_patch_null_delete(app_client):
 async def test_put_replace(app_client):
     client = app_client
     tokens = await register_user(client, "put1@example.com")
-    await client.patch("/api/v1/me/profile", json={"custom_data": {"keep": 1, "old": 2}}, headers=auth_headers(tokens))
-    resp = await client.put("/api/v1/me/profile", json={"custom_data": {"only": 1}}, headers=auth_headers(tokens))
+    await client.patch(
+        "/api/v1/me/profile",
+        json={"custom_data": {"keep": 1, "old": 2}},
+        headers=auth_headers(tokens),
+    )
+    resp = await client.put(
+        "/api/v1/me/profile", json={"custom_data": {"only": 1}}, headers=auth_headers(tokens)
+    )
     assert resp.status_code == 200, resp.text
     assert resp.json()["custom_data"] == {"only": 1}
     profile = await _get_profile(client, tokens)
@@ -133,9 +154,13 @@ async def test_put_replace(app_client):
 async def test_put_without_custom_data_leaves_unchanged(app_client):
     client = app_client
     tokens = await register_user(client, "put2@example.com")
-    await client.patch("/api/v1/me/profile", json={"custom_data": {"keep": 1}}, headers=auth_headers(tokens))
+    await client.patch(
+        "/api/v1/me/profile", json={"custom_data": {"keep": 1}}, headers=auth_headers(tokens)
+    )
     # PUT with first_name but without custom_data should leave bag unchanged
-    resp = await client.put("/api/v1/me/profile", json={"first_name": "Ada"}, headers=auth_headers(tokens))
+    resp = await client.put(
+        "/api/v1/me/profile", json={"first_name": "Ada"}, headers=auth_headers(tokens)
+    )
     assert resp.status_code == 200
     assert resp.json()["custom_data"] == {"keep": 1}
     assert resp.json()["first_name"] == "Ada"
@@ -147,7 +172,9 @@ async def test_put_without_custom_data_leaves_unchanged(app_client):
 async def test_unknown_top_level_422(app_client):
     client = app_client
     tokens = await register_user(client, "unknown1@example.com")
-    resp = await client.patch("/api/v1/me/profile", json={"unknown_field": 1}, headers=auth_headers(tokens))
+    resp = await client.patch(
+        "/api/v1/me/profile", json={"unknown_field": 1}, headers=auth_headers(tokens)
+    )
     assert resp.status_code == 422
     # detail should be present
     assert "detail" in resp.json()
@@ -157,7 +184,9 @@ async def test_bounds_reject_51_keys(app_client):
     client = app_client
     tokens = await register_user(client, "bounds1@example.com")
     big = {f"k{i}": i for i in range(51)}
-    resp = await client.patch("/api/v1/me/profile", json={"custom_data": big}, headers=auth_headers(tokens))
+    resp = await client.patch(
+        "/api/v1/me/profile", json={"custom_data": big}, headers=auth_headers(tokens)
+    )
     assert resp.status_code == 422
     assert "custom_data exceeds limits" in resp.text
 
@@ -167,7 +196,9 @@ async def test_bounds_reject_17kib(app_client):
     tokens = await register_user(client, "bounds2@example.com")
     # Create a single large value >16KiB
     large_str = "x" * (17 * 1024)
-    resp = await client.patch("/api/v1/me/profile", json={"custom_data": {"big": large_str}}, headers=auth_headers(tokens))
+    resp = await client.patch(
+        "/api/v1/me/profile", json={"custom_data": {"big": large_str}}, headers=auth_headers(tokens)
+    )
     assert resp.status_code == 422
     assert "custom_data exceeds limits" in resp.text
 
@@ -176,7 +207,9 @@ async def test_bio_too_long_422(app_client):
     client = app_client
     tokens = await register_user(client, "bio1@example.com")
     long_bio = "b" * 1001
-    resp = await client.patch("/api/v1/me/profile", json={"bio": long_bio}, headers=auth_headers(tokens))
+    resp = await client.patch(
+        "/api/v1/me/profile", json={"bio": long_bio}, headers=auth_headers(tokens)
+    )
     assert resp.status_code == 422
 
 
@@ -187,7 +220,9 @@ async def test_profile_update_publishes_audit(app_client):
     client = app_client
     tokens = await register_user(client, "audit1@example.com")
     # Patch with first_name to a new value (initial is "Test" from registration)
-    await client.patch("/api/v1/me/profile", json={"first_name": "NewFirst"}, headers=auth_headers(tokens))
+    await client.patch(
+        "/api/v1/me/profile", json={"first_name": "NewFirst"}, headers=auth_headers(tokens)
+    )
     # Wait for audit workflow
     rows = await _wait_for_audit(auth_headers(tokens), "profile.updated")
     assert len(rows) >= 1
@@ -197,7 +232,11 @@ async def test_profile_update_publishes_audit(app_client):
     assert "first_name" in entry.details["changed_fields"]
 
     # Patch custom_data - wait for second audit
-    await client.patch("/api/v1/me/profile", json={"custom_data": {"twitter_handle": "@x"}}, headers=auth_headers(tokens))
+    await client.patch(
+        "/api/v1/me/profile",
+        json={"custom_data": {"twitter_handle": "@x"}},
+        headers=auth_headers(tokens),
+    )
 
     async def wait_for_twitter():
         deadline = asyncio.get_running_loop().time() + 3.0
@@ -214,8 +253,7 @@ async def test_profile_update_publishes_audit(app_client):
     rows = await wait_for_twitter()
     # Should have custom_data.twitter_handle
     assert any(
-        "custom_data.twitter_handle" in (r.details.get("changed_fields") or [])
-        for r in rows
+        "custom_data.twitter_handle" in (r.details.get("changed_fields") or []) for r in rows
     )
     # Ensure no raw value in details
     for r in rows:
@@ -240,7 +278,11 @@ async def test_cross_user_allowed_redacted(app_client):
         headers=ws_headers(owner, ws["id"]),
     )
     invite = invite.json()
-    await client.post("/api/v1/invitations/accept", params={"token": invite["token"]}, headers=auth_headers(member_tokens))
+    await client.post(
+        "/api/v1/invitations/accept",
+        params={"token": invite["token"]},
+        headers=auth_headers(member_tokens),
+    )
     # Owner sets private data
     await client.patch(
         "/api/v1/me/profile",
@@ -261,7 +303,9 @@ async def test_cross_user_allowed_redacted(app_client):
     owner_id = owner_me.json()["id"]
 
     # Member reads owner's profile -> should be 200 redacted
-    resp = await client.get(f"/api/v1/users/{owner_id}/profile", headers=auth_headers(member_tokens))
+    resp = await client.get(
+        f"/api/v1/users/{owner_id}/profile", headers=auth_headers(member_tokens)
+    )
     assert resp.status_code == 200, resp.text
     proj = resp.json()
     # phone_number and date_of_birth redacted (null)
@@ -286,7 +330,9 @@ async def test_cross_user_denied_404(app_client):
     resp = await client.get(f"/api/v1/users/{b_id}/profile", headers=auth_headers(a))
     assert resp.status_code == 404
     # Should be indistinguishable from missing user (also 404)
-    resp2 = await client.get(f"/api/v1/users/00000000-0000-0000-0000-000000000000/profile", headers=auth_headers(a))
+    resp2 = await client.get(
+        "/api/v1/users/00000000-0000-0000-0000-000000000000/profile", headers=auth_headers(a)
+    )
     assert resp2.status_code == 404
 
 
@@ -309,7 +355,11 @@ async def test_export_excludes_secrets(app_client):
     client = app_client
     tokens = await register_user(client, "export1@example.com")
     # Set profile data
-    await client.patch("/api/v1/me/profile", json={"first_name": "Export", "custom_data": {"keep": "yes"}}, headers=auth_headers(tokens))
+    await client.patch(
+        "/api/v1/me/profile",
+        json={"first_name": "Export", "custom_data": {"keep": "yes"}},
+        headers=auth_headers(tokens),
+    )
     ws = await create_workspace(client, tokens)
     resp = await client.get("/api/v1/me/export", headers=auth_headers(tokens))
     assert resp.status_code == 200, resp.text
@@ -331,33 +381,42 @@ async def test_export_excludes_secrets(app_client):
 async def test_export_superuser_variant_gated(app_client):
     client = app_client
     regular = await register_user(client, "export2@example.com")
-    super_tokens = await register_user(client, "root2@example.com")  # not super? need root@example.com
+    await register_user(client, "root2@example.com")  # not super; need root@example.com
     # Actually super is root@example.com only if SUPERADMIN_EMAIL is root@example.com
     # Use root@example.com for super
-    # Let's ensure we have superuser: register with root@example.com already used? We used super earlier
+    # Let's ensure we have superuser: register with root@example.com
+    # already used? We used super earlier
     # We'll create super via DB directly if needed
     # Instead test regular cannot export other user
     other_me = await client.get("/api/v1/auth/me", headers=auth_headers(regular))
     other_id = other_me.json()["id"]
     # Regular trying to export other -> 403
     resp = await client.get(f"/api/v1/users/{other_id}/export", headers=auth_headers(regular))
-    # If other is self, self export is allowed via /me/export, but /users/{id}/export should be gated
-    # For self, regular trying to export self via superuser route should be 403 (since not superuser)
+    # If other is self, self export is allowed via /me/export, but
+    # /users/{id}/export should be gated
+    # For self, regular trying to export self via superuser route should
+    # be 403 (since not superuser)
     assert resp.status_code == 403
 
     # Superuser can export other
     # Use root@example.com if not already taken; create if needed via SessionFactory
+    from sqlalchemy import select
+
+    from src.core.security.tokens import create_access_token
     from src.db.session import SessionFactory
     from src.models.workspace import User
-    from sqlalchemy import select
-    from src.core.security.tokens import create_access_token
 
     async with SessionFactory() as session:
         result = await session.execute(select(User).where(User.email == "root@example.com"))
         root_user = result.scalar_one_or_none()
         if root_user is None:
             # create superuser manually
-            root_user = User(email="root@example.com", password_hash="dummy", display_name="Root", is_superuser=True)
+            root_user = User(
+                email="root@example.com",
+                password_hash="dummy",
+                display_name="Root",
+                is_superuser=True,
+            )
             session.add(root_user)
             await session.commit()
         root_id = root_user.id
@@ -379,21 +438,33 @@ async def test_export_superuser_variant_gated(app_client):
 async def test_delete_wrong_confirm_422(app_client):
     client = app_client
     tokens = await register_user(client, "del1@example.com")
-    resp = await client.request("DELETE", "/api/v1/me", json={"confirm": "WRONG", "password": "Password123!"}, headers=auth_headers(tokens))
+    resp = await client.request(
+        "DELETE",
+        "/api/v1/me",
+        json={"confirm": "WRONG", "password": "Password123!"},
+        headers=auth_headers(tokens),
+    )
     assert resp.status_code == 422
 
 
 async def test_delete_wrong_password_403(app_client):
     client = app_client
     tokens = await register_user(client, "del2@example.com")
-    resp = await client.request("DELETE", "/api/v1/me", json={"confirm": "DELETE", "password": "WrongPass123!"}, headers=auth_headers(tokens))
+    resp = await client.request(
+        "DELETE",
+        "/api/v1/me",
+        json={"confirm": "DELETE", "password": "WrongPass123!"},
+        headers=auth_headers(tokens),
+    )
     assert resp.status_code == 403
 
 
 async def test_delete_missing_password_when_hash_exists_422(app_client):
     client = app_client
     tokens = await register_user(client, "del3@example.com")
-    resp = await client.request("DELETE", "/api/v1/me", json={"confirm": "DELETE"}, headers=auth_headers(tokens))
+    resp = await client.request(
+        "DELETE", "/api/v1/me", json={"confirm": "DELETE"}, headers=auth_headers(tokens)
+    )
     assert resp.status_code == 422
 
 
@@ -402,11 +473,18 @@ async def test_delete_with_correct_password_cascade_and_401(app_client):
     tokens = await register_user(client, "del4@example.com")
     me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
     user_id = me.json()["id"]
-    ws = await create_workspace(client, tokens)
+    await create_workspace(client, tokens)
     # Create profile data
-    await client.patch("/api/v1/me/profile", json={"first_name": "ToDelete"}, headers=auth_headers(tokens))
+    await client.patch(
+        "/api/v1/me/profile", json={"first_name": "ToDelete"}, headers=auth_headers(tokens)
+    )
 
-    resp = await client.request("DELETE", "/api/v1/me", json={"confirm": "DELETE", "password": "Password123!"}, headers=auth_headers(tokens))
+    resp = await client.request(
+        "DELETE",
+        "/api/v1/me",
+        json={"confirm": "DELETE", "password": "Password123!"},
+        headers=auth_headers(tokens),
+    )
     assert resp.status_code == 204, resp.text
 
     # Subsequent GET /auth/me with old token is 401
@@ -414,17 +492,20 @@ async def test_delete_with_correct_password_cascade_and_401(app_client):
     assert resp.status_code == 401
 
     # Profile/tokens rows gone
+    from sqlalchemy import select
+
     from src.db.session import SessionFactory
     from src.models.user_profile import UserProfile
-    from src.models.workspace import RefreshToken, WorkspaceMember, User
-    from sqlalchemy import select
+    from src.models.workspace import RefreshToken, User, WorkspaceMember
 
     async with SessionFactory() as session:
         assert await session.get(User, user_id) is None
         assert await session.get(UserProfile, user_id) is None
         result = await session.execute(select(RefreshToken).where(RefreshToken.user_id == user_id))
         assert result.scalar_one_or_none() is None
-        result = await session.execute(select(WorkspaceMember).where(WorkspaceMember.user_id == user_id))
+        result = await session.execute(
+            select(WorkspaceMember).where(WorkspaceMember.user_id == user_id)
+        )
         assert result.scalar_one_or_none() is None
         # Verify ApiKey and Notification cascade (verification-gap fix)
         from src.models.api_key import ApiKey as _ApiKey
@@ -437,9 +518,9 @@ async def test_delete_with_correct_password_cascade_and_401(app_client):
 
 
 async def test_delete_oauth_without_password(app_client):
+    from src.core.security.tokens import create_access_token
     from src.db.session import SessionFactory
     from src.models.workspace import User
-    from src.core.security.tokens import create_access_token
 
     # Create oauth user without password_hash via DB
     async with SessionFactory() as session:
@@ -452,7 +533,9 @@ async def test_delete_oauth_without_password(app_client):
 
     headers = {"Authorization": f"Bearer {token}"}
     # Same confirm check
-    resp = await app_client.request("DELETE", "/api/v1/me", json={"confirm": "DELETE"}, headers=headers)
+    resp = await app_client.request(
+        "DELETE", "/api/v1/me", json={"confirm": "DELETE"}, headers=headers
+    )
     assert resp.status_code == 204, resp.text
     # Verify gone
     async with SessionFactory() as session:
@@ -470,16 +553,19 @@ async def test_delete_superuser_variant(app_client):
     victim_id = victim_me.json()["id"]
 
     # Create superuser token
+    from sqlalchemy import select
+
+    from src.core.security.tokens import create_access_token
     from src.db.session import SessionFactory
     from src.models.workspace import User
-    from src.core.security.tokens import create_access_token
-    from sqlalchemy import select
 
     async with SessionFactory() as session:
         result = await session.execute(select(User).where(User.email == "root@example.com"))
         root = result.scalar_one_or_none()
         if root is None:
-            root = User(email="root@example.com", password_hash="x", display_name="Root", is_superuser=True)
+            root = User(
+                email="root@example.com", password_hash="x", display_name="Root", is_superuser=True
+            )
             session.add(root)
             await session.commit()
             await session.refresh(root)
@@ -495,7 +581,8 @@ async def test_delete_superuser_variant(app_client):
     # Verify non-super cannot delete
     other = await register_user(client, "otherdel@example.com")
     resp = await client.request("DELETE", f"/api/v1/users/{victim_id}", headers=auth_headers(other))
-    # victim already deleted, but other is not super, should be 403 before 404? Actually our route checks superuser first, so 403
+    # victim already deleted, but other is not super, should be 403 before
+    # 404? Actually our route checks superuser first, so 403
     assert resp.status_code in (403, 404)
 
 
@@ -527,7 +614,6 @@ def test_merge_custom_data_unit():
 
 def test_merge_bounds():
     from src.services.profile_helpers import merge_custom_data
-    import pytest
 
     # 51 keys should raise 422
     big = {f"k{i}": i for i in range(51)}
@@ -564,7 +650,11 @@ def test_public_projection_redaction():
 async def test_profile_update_avatar_url(app_client):
     client = app_client
     tokens = await register_user(client, "avatar@example.com")
-    resp = await client.patch("/api/v1/me/profile", json={"avatar_url": "https://example.com/avatar.jpg"}, headers=auth_headers(tokens))
+    resp = await client.patch(
+        "/api/v1/me/profile",
+        json={"avatar_url": "https://example.com/avatar.jpg"},
+        headers=auth_headers(tokens),
+    )
     assert resp.status_code == 200, resp.text
     # Check via auth/me that avatar_url updated
     me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
@@ -594,11 +684,17 @@ async def test_delete_cascade_clears_api_keys_and_notifications(app_client):
         await session.commit()
         notif_id = n.id
     # Delete account
-    resp = await client.request("DELETE", "/api/v1/me", json={"confirm": "DELETE", "password": "Password123!"}, headers=auth_headers(tokens))
+    resp = await client.request(
+        "DELETE",
+        "/api/v1/me",
+        json={"confirm": "DELETE", "password": "Password123!"},
+        headers=auth_headers(tokens),
+    )
     assert resp.status_code == 204, resp.text
     # Verify ApiKey and Notification gone
-    from src.models.api_key import ApiKey
     from sqlalchemy import select
+
+    from src.models.api_key import ApiKey
 
     async with SessionFactory() as session:
         assert await session.get(Notification, notif_id) is None

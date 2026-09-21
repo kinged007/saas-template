@@ -51,6 +51,8 @@ class InProcessEventBus(EventBus):
         self._handlers: dict[str, SubscriberHandler] = {}
         self._queues: dict[str, asyncio.Queue[EventEnvelope]] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        self._in_flight = 0
+        self._in_flight_lock = asyncio.Lock()
         self._started = False
         self._stopped = False
 
@@ -114,8 +116,17 @@ class InProcessEventBus(EventBus):
     async def stop(self) -> None:
         self._started = False
         self._stopped = True
+        # Let an in-flight handler finish its write before cancelling: a
+        # cancel landing mid-transaction leaves sqlite locked for teardown.
+        for _ in range(250):
+            async with self._in_flight_lock:
+                if self._in_flight == 0:
+                    break
+            await asyncio.sleep(0.02)
         tasks = list(self._tasks.values())
         self._tasks.clear()
+        async with self._in_flight_lock:
+            self._in_flight = 0
         for task in tasks:
             task.cancel()
         for task in tasks:
@@ -130,9 +141,13 @@ class InProcessEventBus(EventBus):
         logger.debug("subscriber %s consuming", subject)
         while True:
             envelope = await queue.get()
+            async with self._in_flight_lock:
+                self._in_flight += 1
             try:
                 await handler(envelope.payload, envelope.metadata)
             except Exception:
                 logger.exception("subscriber %s failed for %s", subject, envelope.metadata.subject)
             finally:
+                async with self._in_flight_lock:
+                    self._in_flight -= 1
                 queue.task_done()

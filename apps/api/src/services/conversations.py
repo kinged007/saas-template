@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from typing import Literal
 
 from sqlalchemy import and_, func, or_, select
@@ -131,7 +130,9 @@ class ConversationService:
     ) -> dict[str, list[tuple[ConversationParticipant, User | None, UserProfile | None]]]:
         """Participants (with user details) for many conversations, in three
         queries total instead of two per conversation."""
-        grouped: dict[str, list[tuple[ConversationParticipant, User | None, UserProfile | None]]] = {}
+        grouped: dict[
+            str, list[tuple[ConversationParticipant, User | None, UserProfile | None]]
+        ] = {}
         if not conversation_ids:
             return grouped
         result = await self._session.execute(
@@ -146,7 +147,9 @@ class ConversationService:
         if user_ids:
             urows = await self._session.execute(select(User).where(User.id.in_(user_ids)))
             users = {u.id: u for u in urows.scalars().all()}
-            prows = await self._session.execute(select(UserProfile).where(UserProfile.user_id.in_(user_ids)))
+            prows = await self._session.execute(
+                select(UserProfile).where(UserProfile.user_id.in_(user_ids))
+            )
             profiles = {p.user_id: p for p in prows.scalars().all()}
         for p in participants:
             if p.participant_type == "user":
@@ -167,7 +170,9 @@ class ConversationService:
         if user_ids:
             urows = await self._session.execute(select(User).where(User.id.in_(user_ids)))
             users = {u.id: u for u in urows.scalars().all()}
-            prows = await self._session.execute(select(UserProfile).where(UserProfile.user_id.in_(user_ids)))
+            prows = await self._session.execute(
+                select(UserProfile).where(UserProfile.user_id.in_(user_ids))
+            )
             profiles = {p.user_id: p for p in prows.scalars().all()}
         result: list[tuple[ConversationParticipant, User | None, UserProfile | None]] = []
         for p in participants:
@@ -233,7 +238,8 @@ class ConversationService:
     def _conversation_to_dict(
         self,
         conv: Conversation,
-        participants: list[tuple[ConversationParticipant, User | None, UserProfile | None]] | list[tuple[ConversationParticipant, User | None]],
+        participants: list[tuple[ConversationParticipant, User | None, UserProfile | None]]
+        | list[tuple[ConversationParticipant, User | None]],
         unread_count: int,
         is_archived: bool,
         message_count: int | None = None,
@@ -370,7 +376,9 @@ class ConversationService:
             found = {row[0] for row in result.all()}
             missing = set(others) - found
             if missing:
-                raise ConversationError("one or more participants are not members of this workspace")
+                raise ConversationError(
+                    "one or more participants are not members of this workspace"
+                )
 
         # Resolve title
         clean_title = title.strip() if title and title.strip() else None
@@ -385,7 +393,7 @@ class ConversationService:
             if names:
                 # Limit to 3 names
                 if len(names) > 3:
-                    clean_title = f"Chat with {', '.join(names[:3])} +{len(names)-3}"
+                    clean_title = f"Chat with {', '.join(names[:3])} +{len(names) - 3}"
                 else:
                     clean_title = f"Chat with {', '.join(names)}"
             else:
@@ -453,11 +461,18 @@ class ConversationService:
         await self._session.refresh(msg)
 
         unread_for_creator = 0
-        part_for_creator = next((p for p, *_ in participants if p.participant_id == creator.id), None)  # type: ignore
+        part_for_creator = next(
+            (p for p, *_ in participants if p.participant_id == creator.id), None
+        )  # type: ignore
         is_arch = bool(part_for_creator.archived_at) if part_for_creator else False
-        conv_dict = self._conversation_to_dict(conv, participants, unread_for_creator, is_arch, message_count=1)
+        conv_dict = self._conversation_to_dict(
+            conv, participants, unread_for_creator, is_arch, message_count=1
+        )
         msg_dict = self._message_to_dict(
-            msg, sender_name=creator.display_name, sender_avatar=creator.avatar_url, sender_email=creator.email
+            msg,
+            sender_name=creator.display_name,
+            sender_avatar=creator.avatar_url,
+            sender_email=creator.email,
         )
 
         workspace_name = await self._workspace_name(workspace_id)
@@ -576,9 +591,13 @@ class ConversationService:
         order = sort_order or "desc"
         if sort_by in ("created_at", "title", "last_message_at") or sort_by is None:
             if order == "desc":
-                base_stmt = base_stmt.order_by(col.desc().nulls_last(), Conversation.created_at.desc())
+                base_stmt = base_stmt.order_by(
+                    col.desc().nulls_last(), Conversation.created_at.desc()
+                )
             else:
-                base_stmt = base_stmt.order_by(col.asc().nulls_first(), Conversation.created_at.asc())
+                base_stmt = base_stmt.order_by(
+                    col.asc().nulls_first(), Conversation.created_at.asc()
+                )
         else:
             # Invalid sort, default
             base_stmt = base_stmt.order_by(Conversation.last_message_at.desc().nulls_last())
@@ -608,7 +627,9 @@ class ConversationService:
             )
         return results, total
 
-    async def get_conversation(self, *, workspace_id: str, conversation_id: str, user_id: str) -> dict:
+    async def get_conversation(
+        self, *, workspace_id: str, conversation_id: str, user_id: str
+    ) -> dict:
         await self._ensure_membership(workspace_id, user_id)
         conv = await self._get_conversation(conversation_id)
         if conv is None or conv.workspace_id != workspace_id:
@@ -650,7 +671,8 @@ class ConversationService:
             if part is None:
                 raise ConversationForbidden("you are not a participant of this conversation")
         else:
-            # agent: allow if agent is participant OR system caller (no check for v1 except workspace match)
+            # agent: allow if agent is participant OR system caller
+            # (no check for v1 except workspace match)
             # For future, check agent participant row exists if provided
             if actor_agent_id:
                 result = await self._session.execute(
@@ -662,7 +684,11 @@ class ConversationService:
                 )
                 # If agent not participant, allow system rename but log
                 if result.scalar_one_or_none() is None:
-                    logger.info("agent %s renaming conversation %s without being participant", actor_agent_id, conversation_id)
+                    logger.info(
+                        "agent %s renaming conversation %s without being participant",
+                        actor_agent_id,
+                        conversation_id,
+                    )
         conv.title = clean
         await self._session.commit()
         await self._session.refresh(conv)
@@ -680,7 +706,9 @@ class ConversationService:
         # Publish event for live title update (transient)
         await publish_event(
             self._bus,
-            Subjects.CONVERSATION_RENAMED if hasattr(Subjects, "CONVERSATION_RENAMED") else Subjects.CONVERSATIONS + ".renamed",
+            Subjects.CONVERSATION_RENAMED
+            if hasattr(Subjects, "CONVERSATION_RENAMED")
+            else Subjects.CONVERSATIONS + ".renamed",
             {
                 "workspace_id": workspace_id,
                 "conversation_id": conversation_id,
@@ -695,7 +723,9 @@ class ConversationService:
         if actor_type == "user" and actor_user_id:
             part = await self._get_participant(conversation_id, actor_user_id)
             participants = await self._participants_with_users(conversation_id)
-            unread = (await self._unread_counts(actor_user_id, [conversation_id])).get(conversation_id, 0)
+            unread = (await self._unread_counts(actor_user_id, [conversation_id])).get(
+                conversation_id, 0
+            )
             is_arch = bool(part.archived_at) if part else False
             mcount = (await self._message_counts([conversation_id])).get(conversation_id, 0)
             return self._conversation_to_dict(conv, participants, unread, is_arch, mcount)
@@ -747,8 +777,16 @@ class ConversationService:
                 user_id=user_id, workspace_id=workspace_id, conversation_id=conversation_id
             )
         except Exception:
-            logger.warning("failed to acknowledge notifications for conversation %s", conversation_id, exc_info=True)
-        return {"success": True, "last_read_at": part.last_read_at.isoformat(), "last_read_message_id": part.last_read_message_id}
+            logger.warning(
+                "failed to acknowledge notifications for conversation %s",
+                conversation_id,
+                exc_info=True,
+            )
+        return {
+            "success": True,
+            "last_read_at": part.last_read_at.isoformat(),
+            "last_read_message_id": part.last_read_message_id,
+        }
 
     async def mark_unread(
         self,
@@ -786,7 +824,11 @@ class ConversationService:
             part.last_read_at = prev.created_at
             part.last_read_message_id = prev.id
         await self._session.commit()
-        return {"success": True, "last_read_at": part.last_read_at.isoformat() if part.last_read_at else None, "last_read_message_id": part.last_read_message_id}
+        return {
+            "success": True,
+            "last_read_at": part.last_read_at.isoformat() if part.last_read_at else None,
+            "last_read_message_id": part.last_read_message_id,
+        }
 
     async def set_archived(
         self,
@@ -808,7 +850,10 @@ class ConversationService:
         else:
             part.archived_at = None
         await self._session.commit()
-        return {"archived": archived, "archived_at": part.archived_at.isoformat() if part.archived_at else None}
+        return {
+            "archived": archived,
+            "archived_at": part.archived_at.isoformat() if part.archived_at else None,
+        }
 
     # ---------------------------------------------------------------- messages
 
@@ -916,7 +961,12 @@ class ConversationService:
         )
         participant_ids = [r[0] for r in result.all()]
 
-        msg_dict = self._message_to_dict(msg, sender_name=sender.display_name, sender_avatar=sender.avatar_url, sender_email=sender.email)
+        msg_dict = self._message_to_dict(
+            msg,
+            sender_name=sender.display_name,
+            sender_avatar=sender.avatar_url,
+            sender_email=sender.email,
+        )
 
         # Durable event for notification pointers + transient fan-out for the
         # realtime thread push (every replica forwards to its local sessions).

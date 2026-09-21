@@ -34,14 +34,18 @@ def upgrade() -> None:
         ID = PG_UUID(as_uuid=True) if dialect == "postgresql" else sa.String(36)
 
         def _ts(name: str, nullable: bool = False) -> sa.Column:
-            return sa.Column(name, TS, nullable=nullable, server_default=NOW if not nullable else None)
+            return sa.Column(
+                name, TS, nullable=nullable, server_default=NOW if not nullable else None
+            )
 
         def _id(name: str = "id") -> sa.Column:
             return sa.Column(name, ID, primary_key=True)
 
         op.create_table(
             "user_profiles",
-            sa.Column("user_id", ID, sa.ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+            sa.Column(
+                "user_id", ID, sa.ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+            ),
             sa.Column("first_name", sa.String(length=100), nullable=True),
             sa.Column("last_name", sa.String(length=100), nullable=True),
             sa.Column("bio", sa.String(length=1000), nullable=True),
@@ -61,7 +65,10 @@ def upgrade() -> None:
     dialect = conn.dialect.name
     if dialect == "postgresql":
         conn.execute(
-            sa.text("INSERT INTO user_profiles (user_id) SELECT id FROM users ON CONFLICT (user_id) DO NOTHING")
+            sa.text(
+                "INSERT INTO user_profiles (user_id) SELECT id FROM users "
+                "ON CONFLICT (user_id) DO NOTHING"
+            )
         )
     else:
         conn.execute(sa.text("INSERT OR IGNORE INTO user_profiles (user_id) SELECT id FROM users"))

@@ -50,9 +50,7 @@ class NotificationPreference(Base, TimestampMixin):
         String(10), default="in-app", nullable=False
     )  # in-app|email|off
     digest_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    unsubscribe_token: Mapped[str | None] = mapped_column(
-        String(64), unique=True, index=True, nullable=True
-    )
+    unsubscribe_token: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
 
     def ensure_token(self) -> str:
         if not self.unsubscribe_token:
