@@ -109,8 +109,6 @@ export function App() {
                 <Route path="notifications" element={<ProfileNotificationsSection />} />
                 <Route path="security" element={<SecuritySection />} />
               </Route>
-              {/* Legacy redirect — settings/security moved into the profile settings tabs */}
-              <Route path="settings/security" element={<Navigate to="/settings/profile/security" replace />} />
               <Route path="settings/workspace" element={<WorkspaceSettingsLayout />}>
                 <Route index element={<Navigate to="general" replace />} />
                 <Route path="general" element={<GeneralSection />} />
