@@ -222,7 +222,7 @@ async def me(
     data = user_to_dict(user)
     memberships = await service.list_workspaces(user.id)
     if settings.single_workspace:
-        # Toggling onto an existing deployment: oldest wins, the rest stay hidden.
+        # Toggling onto an existing deployment: oldest wins, rest stay hidden.
         single = await service.get_single_workspace()
         if single is not None:
             memberships = [m for m in memberships if m[0].id == single.id]

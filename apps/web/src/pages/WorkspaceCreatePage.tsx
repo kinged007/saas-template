@@ -16,14 +16,16 @@ export function WorkspaceCreatePage() {
   const navigate = useNavigate();
   const { mutate, mutation } = useCreate();
   const { refetch } = useGetIdentity();
-  const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
-  if (identity?.single_workspace === true) {
-    return <Navigate to="/" replace />;
-  }
+  const { data: identity } = useGetIdentity<Identity>({
+    queryOptions: IDENTITY_QUERY_OPTIONS,
+  });
   const { setWorkspace } = useWorkspace();
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
+  if (identity?.single_workspace === true) {
+    return <Navigate to="/" replace />;
+  }
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();

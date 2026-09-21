@@ -110,7 +110,9 @@ class WorkspaceService:
         if self.single_workspace_enabled() and not allow_single_workspace_bootstrap:
             existing = await self.get_single_workspace()
             if existing is not None:
-                raise WorkspaceForbidden("single-workspace mode: only one workspace is allowed")
+                raise WorkspaceForbidden(
+                    "single-workspace mode: only one workspace is allowed"
+                )
         slug = slug or _slugify(name)
         exists = await self._session.execute(select(Workspace).where(Workspace.slug == slug))
         if exists.scalar_one_or_none():

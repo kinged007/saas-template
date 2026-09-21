@@ -140,7 +140,9 @@ const CREATE_WORKSPACE_VALUE = "__create_workspace__";
 
 /** Backend SINGLE_WORKSPACE flag from /auth/me — no VITE_ var, no drift. */
 function useSingleWorkspace(): boolean {
-  const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
+  const { data: identity } = useGetIdentity<Identity>({
+    queryOptions: IDENTITY_QUERY_OPTIONS,
+  });
   return identity?.single_workspace === true;
 }
 
