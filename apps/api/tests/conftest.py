@@ -9,6 +9,8 @@ os.environ["ENVIRONMENT"] = "test"
 os.environ["CORS_ORIGINS"] = "http://localhost:5173"
 os.environ["SUPERADMIN_EMAIL"] = "root@example.com"
 
+import warnings  # noqa: E402
+
 import pytest  # noqa: E402
 from asgi_lifespan import LifespanManager  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
@@ -45,9 +47,13 @@ async def _drop_all_with_retry(tries: int = 24, delay: float = 0.25) -> None:
                 async with drop_engine.begin() as conn:
                     await conn.run_sync(Base.metadata.drop_all)
                 return
-            except Exception:
+            except Exception as exc:
                 if attempt == tries - 1:
                     raise
+                # ponytail: warn (not log — no logger configured in tests) so the next
+                # flake shows it was lock contention and how many retries it took.
+                msg = f"db drop attempt {attempt + 1}/{tries} failed, retrying: {exc}"
+                warnings.warn(msg, stacklevel=2)
                 await asyncio.sleep(delay)
     finally:
         await drop_engine.dispose()
