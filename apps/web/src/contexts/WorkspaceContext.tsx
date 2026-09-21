@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useLayoutEffect,
@@ -21,6 +22,7 @@ import {
   setActiveWorkspaceId,
 } from "../utils/storage";
 import { clearAllCaches, clearWorkspaceCaches } from "../providers/queryClient";
+import { API_URL, httpClient } from "../providers/dataProvider";
 
 type WorkspaceContextValue = {
   workspaces: Workspace[];
@@ -69,9 +71,44 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const storedIdentity = (identityStore.get() as (Identity & { workspaces: Workspace[] }) | null);
   const identity = cachedIdentity ?? storedIdentity ?? undefined;
   const isLoading = identity === undefined;
-  const isError = false;
-  const error: unknown = null;
-  const refetch = () => queryClient.invalidateQueries({ queryKey: ["auth"] });
+  const [identityError, setIdentityError] = useState<unknown>(null);
+  const fetchingRef = useRef(false);
+
+  // Self-healing identity fetch. Tokens valid + no cached/stored identity
+  // (e.g. a login that stored tokens but never seeded identity) would
+  // otherwise gate on `return null` forever: this provider's children —
+  // the only useGetIdentity observers — stay unmounted, so nobody ever
+  // fills the cache. A direct fetch (not another observer) avoids the
+  // observer-remount wedging described below.
+  const fetchIdentity = useCallback(async () => {
+    if (fetchingRef.current) return;
+    fetchingRef.current = true;
+    setIdentityError(null);
+    try {
+      const { data } = await httpClient.get<Identity & { workspaces: Workspace[] }>(
+        `${API_URL}/auth/me`,
+      );
+      identityStore.set(data);
+      queryClient.setQueryData(["auth", "identity"], data);
+    } catch (e) {
+      // 401s are handled by the httpClient interceptor (refresh, else clear
+      // tokens + redirect to /login) — only surface non-auth failures here.
+      if (tokenStore.getAccess()) setIdentityError(e);
+    } finally {
+      fetchingRef.current = false;
+    }
+  }, [queryClient]);
+
+  useEffect(() => {
+    if (tokenStore.getAccess() && identity === undefined) {
+      void fetchIdentity();
+    }
+  }, [identity, fetchIdentity]);
+
+  const refetch = () => {
+    queryClient.invalidateQueries({ queryKey: ["auth"] });
+    void fetchIdentity();
+  };
   const workspaces = identity?.workspaces ?? [];
   // identityId doubles as the workspaceStore key (per-user selection).
   // identityStore.get() is the post-login fallback: login() caches the
@@ -273,21 +310,23 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // isFetching would remount fresh useGetIdentity observers (staleTime 0),
   // which refetch, which re-triggers the gate: an endless flash loop.
   if (isLoading || !identity) {
-    if (isLoading || !isError) {
-      return null;
-    }
-    // Identity failed after retries: show a recovery screen instead of
+    // Identity fetch failed after retries: show a recovery screen instead of
     // silently mounting pages with no workspace (which 400s every
     // workspace-scoped call and empties the sidebar).
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6">
-        <p className="text-muted-foreground max-w-md text-center text-sm">
-          Couldn't load your account
-          {error ? `: ${String((error as { message?: string }).message ?? error)}` : ""}
-        </p>
-        <Button onClick={() => refetch()}>Try again</Button>
-      </div>
-    );
+    if (identityError) {
+      return (
+        <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6">
+          <p className="text-muted-foreground max-w-md text-center text-sm">
+            Couldn't load your account
+            {identityError
+              ? `: ${String((identityError as { message?: string }).message ?? identityError)}`
+              : ""}
+          </p>
+          <Button onClick={() => refetch()}>Try again</Button>
+        </div>
+      );
+    }
+    return null;
   }
 
   // Transition gate: old data already unmounted, caches reset pending,
