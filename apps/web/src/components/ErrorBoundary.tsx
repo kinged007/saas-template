@@ -55,6 +55,10 @@ export class ErrorBoundary extends Component<Props, State> {
             >
               Try again
             </button>
+            {/* plain anchor: the boundary renders outside the router */}
+            <a href="/" style={{ marginLeft: 8, padding: "6px 16px" }}>
+              Go to dashboard
+            </a>
           </div>
         </div>
       );

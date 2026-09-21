@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.security.tokens import decode_access_token
 from src.db.session import get_db
 from src.models.api_key import ApiKey
-from src.models.workspace import User
+from src.models.workspace import User, Workspace
 from src.services.api_keys import ApiKeyService
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
@@ -215,6 +215,24 @@ def require_permission(permission: str):
         ) from None
 
     return checker
+
+
+async def require_existing_workspace(
+    workspace_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    """404 on missing workspaces before membership checks run.
+
+    Opt-in for single-workspace routes (GET/PATCH/DELETE /workspaces/{id}):
+    once delete cascades WorkspaceMember rows, the membership check inside
+    require_permission would 403 on a deleted workspace instead of the
+    contract's 404. The shared require_permission is untouched. Runs after
+    get_current_user, so only authenticated callers can distinguish 404
+    (missing) from 403 (exists, not a member); workspace ids are
+    unguessable UUIDs, so this tradeoff is intentional.
+    """
+    if await db.get(Workspace, workspace_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
 
 
 async def authenticate_websocket_token(db: AsyncSession, token: str | None) -> User | None:

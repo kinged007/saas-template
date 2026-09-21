@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, Request, Response, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user, get_container
+from src.api.deps import get_container, get_current_user
 from src.db.session import get_db
 from src.models.workspace import User
 from src.schemas.api import DeleteMeRequest, ProfileUpdate
@@ -103,9 +103,7 @@ async def export_my_data(
 
     body = json.dumps(bundle)
     safe_ts = bundle["exported_at"].replace(":", "-").replace('"', "")
-    headers = {
-        "Content-Disposition": f'attachment; filename="export-{user.id}-{safe_ts}.json"'
-    }
+    headers = {"Content-Disposition": f'attachment; filename="export-{user.id}-{safe_ts}.json"'}
     return Response(content=body, media_type="application/json", headers=headers)
 
 
@@ -124,9 +122,7 @@ async def export_user_data(
 
     body = json.dumps(bundle)
     safe_ts = bundle["exported_at"].replace(":", "-").replace('"', "")
-    headers = {
-        "Content-Disposition": f'attachment; filename="export-{user_id}-{safe_ts}.json"'
-    }
+    headers = {"Content-Disposition": f'attachment; filename="export-{user_id}-{safe_ts}.json"'}
     return Response(content=body, media_type="application/json", headers=headers)
 
 
@@ -140,7 +136,11 @@ async def delete_me(
 ):
     service = ProfileService(db, container.bus)
     await service.delete_account(
-        user.id, confirm=body.confirm, password=body.password, ip_address=_client_ip(request), actor_user_id=user.id
+        user.id,
+        confirm=body.confirm,
+        password=body.password,
+        ip_address=_client_ip(request),
+        actor_user_id=user.id,
     )
     return None
 

@@ -322,7 +322,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
               ? `: ${String((identityError as { message?: string }).message ?? identityError)}`
               : ""}
           </p>
-          <Button onClick={() => refetch()}>Try again</Button>
+          <div className="flex gap-2">
+            <Button onClick={() => refetch()}>Try again</Button>
+            <Button variant="outline" asChild>
+              {/* plain anchor: this tree may render outside the router */}
+              <a href="/">Back to dashboard</a>
+            </Button>
+          </div>
         </div>
       );
     }

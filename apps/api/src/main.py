@@ -26,6 +26,7 @@ from src.api.routes import (
     ws,
 )
 from src.container import Container
+from src.core.request_id import RequestIdMiddleware
 from src.db.session import SessionFactory
 from src.events.factory import WorkflowRegistry
 from src.jobs.capture import install_run_capture, uninstall_run_capture
@@ -91,6 +92,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(RequestIdMiddleware)
 API_VERSION = "v1"
 API_VERSION_HEADER = "X-API-Version"
 
@@ -113,7 +115,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Total-Count", "X-API-Version", "X-API-Key-Quota", "X-API-Key-Remaining"],
+    expose_headers=[
+        "X-Total-Count",
+        "X-API-Version",
+        "X-API-Key-Quota",
+        "X-API-Key-Remaining",
+        "X-Request-ID",
+    ],
 )
 
 app.state.container = Container()

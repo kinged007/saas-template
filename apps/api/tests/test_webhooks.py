@@ -255,9 +255,7 @@ async def test_api_permission_isolation(app_client):
     assert resp.status_code == 422
 
     # Events catalog lists registry names.
-    resp = await app_client.get(
-        "/api/v1/webhooks/events", headers=ws_headers(tokens, wid)
-    )
+    resp = await app_client.get("/api/v1/webhooks/events", headers=ws_headers(tokens, wid))
     assert resp.status_code == 200
     assert "member.joined" in resp.json()["events"]
 

@@ -35,7 +35,9 @@ _MEMBER_FILTERABLE = {"status", "role_id"}
 _MEMBER_SORTABLE = {"created_at", "status"}
 
 
-def _member_dict(member: WorkspaceMember, user: User, role: Role, profile: UserProfile | None = None) -> dict:
+def _member_dict(
+    member: WorkspaceMember, user: User, role: Role, profile: UserProfile | None = None
+) -> dict:
     data = user_to_dict(user)
     # Prefer profile-derived display name (First L.) if profile available
     if profile is not None and (profile.first_name or profile.last_name):

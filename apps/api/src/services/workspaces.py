@@ -5,10 +5,11 @@ import uuid
 from datetime import timedelta
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dates import ensure_utc, now_utc
-from src.core.permissions import permissions_for_role
+from src.core.permissions import ALL_PERMISSIONS, permissions_for_role
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
@@ -32,9 +33,71 @@ class WorkspaceConflict(WorkspaceError):
 class WorkspaceService:
     DEFAULT_ROLES = ["owner", "admin", "editor", "viewer"]
 
+    # Auto-join role for single-workspace mode (SINGLE_WORKSPACE). Viewer:
+    # edit access requires explicit designation.
+    SINGLE_WORKSPACE_ROLE = "viewer"
+
     def __init__(self, session: AsyncSession, bus: EventBus | None = None) -> None:
         self._session = session
         self._bus = bus
+
+    # ------------------------------------------------------- single workspace
+
+    @staticmethod
+    def single_workspace_enabled() -> bool:
+        from src.settings import settings
+
+        return settings.single_workspace
+
+    async def get_single_workspace(self) -> Workspace | None:
+        """Oldest workspace wins (covers "workspace[0]" when rows pre-exist)."""
+        result = await self._session.execute(
+            select(Workspace).order_by(Workspace.created_at.asc()).limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def join_single_workspace(self, user: User) -> Workspace:
+        """Ensure the shared workspace exists, then add the user idempotently.
+
+        First arrival creates it (owned by them, normally the superadmin);
+        everyone else joins as viewer. Existing members keep their role."""
+        workspace = await self.get_single_workspace()
+        if workspace is None:
+            try:
+                return await self.create_workspace(
+                    name="Workspace",
+                    slug=None,
+                    description=None,
+                    owner=user,
+                    allow_single_workspace_bootstrap=True,
+                )
+            except (WorkspaceError, IntegrityError):
+                # Lost the first-login race: the winner's row is now oldest.
+                # IntegrityError covers the concurrent case where two
+                # bootstraps both pass the slug check and the loser hits the
+                # UNIQUE constraint on workspace.slug.
+                await self._session.rollback()
+                workspace = await self.get_single_workspace()
+                if workspace is None:
+                    raise
+        existing = await self._session.execute(
+            select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == workspace.id,
+                WorkspaceMember.user_id == user.id,
+            )
+        )
+        if existing.scalar_one_or_none() is None:
+            role = await self._single_workspace_role(workspace.id)
+            self._session.add(
+                WorkspaceMember(
+                    workspace_id=workspace.id,
+                    user_id=user.id,
+                    role_id=role.id,
+                    status="active",
+                )
+            )
+            await self._session.commit()
+        return workspace
 
     # ------------------------------------------------------------- workspaces
 
@@ -46,7 +109,12 @@ class WorkspaceService:
         description: str | None,
         owner: User,
         ip_address: str | None = None,
+        allow_single_workspace_bootstrap: bool = False,
     ) -> Workspace:
+        if self.single_workspace_enabled() and not allow_single_workspace_bootstrap:
+            existing = await self.get_single_workspace()
+            if existing is not None:
+                raise WorkspaceForbidden("single-workspace mode: only one workspace is allowed")
         slug = slug or _slugify(name)
         exists = await self._session.execute(select(Workspace).where(Workspace.slug == slug))
         if exists.scalar_one_or_none():
@@ -142,66 +210,84 @@ class WorkspaceService:
         workspace = await self._session.get(Workspace, workspace_id)
         if workspace is None:
             raise WorkspaceError("workspace not found")
+        if self.single_workspace_enabled():
+            raise WorkspaceForbidden("single-workspace mode: workspaces cannot be deleted")
         name = workspace.name
 
-        # --- Cascade delete workspace-scoped data.
+        # --- Cascade delete workspace-scoped data (see src/db/cascade.py).
         # Users themselves are global and are NOT deleted — only memberships and
-        # workspace-scoped resources. Order matters for FK-like cleanup even though
-        # the schema uses plain StringUUID columns without DB-level cascades.
-        # Keep audit_log_entries (immutable compliance trail) — they remain with
-        # workspace_id referencing the deleted workspace.
-
-        # Lazy imports to avoid circular deps and keep the module import cheap.
-        from src.models.api_key import ApiKey
-        from src.models.conversation import Conversation, ConversationParticipant, Message
-        from src.models.core import Notification
-        from src.models.jobs import JobDefinition, JobLogEntry, JobRun
-        from src.models.secret import StoredSecret
-
-        # API keys, invitations, secrets, notifications are simple workspace_id filters.
-        await self._session.execute(delete(ApiKey).where(ApiKey.workspace_id == workspace_id))
-        await self._session.execute(delete(Invitation).where(Invitation.workspace_id == workspace_id))
-        await self._session.execute(delete(StoredSecret).where(StoredSecret.workspace_id == workspace_id))
-        await self._session.execute(delete(Notification).where(Notification.workspace_id == workspace_id))
-        # NOTE: WorkspaceMember + Role rows are intentionally kept — deleting them
-        # makes the follow-up GET on a deleted workspace fail the membership scope
-        # check (get_membership joins Role) with 403 instead of the contract's 404.
-        # Stale rows are inert: listings and role lookups inner-join Workspace.id
-        # (or the membership/role join above) so they never surface.
-
-        # Jobs: workspace-scoped definitions + runs + logs.
-        # Collect definition ids first so we can remove runs/logs that reference them
-        # even if their workspace_id is NULL (defensive).
-        def_ids_result = await self._session.execute(
-            select(JobDefinition.id).where(JobDefinition.workspace_id == workspace_id)
+        # workspace-scoped resources. AuditLogEntry rows are the one exemption:
+        # append-only compliance trail, nothing ever deletes them.
+        # Conversation/JobDefinition are in the registry for coverage, but
+        # deleted last here (parents after children).
+        from src.db.cascade import (
+            CONVERSATION_CHILDREN,
+            JOB_RUN_CHILDREN,
+            WORKSPACE_CASCADE,
         )
-        definition_ids = [row[0] for row in def_ids_result.all()]
-        if definition_ids:
-            # Logs for runs of those definitions
-            run_ids_result = await self._session.execute(
-                select(JobRun.id).where(JobRun.definition_id.in_(definition_ids))
-            )
-            run_ids = [row[0] for row in run_ids_result.all()]
-            if run_ids:
-                await self._session.execute(delete(JobLogEntry).where(JobLogEntry.run_id.in_(run_ids)))
-            await self._session.execute(delete(JobRun).where(JobRun.definition_id.in_(definition_ids)))
-            await self._session.execute(delete(JobRun).where(JobRun.workspace_id == workspace_id))
-            await self._session.execute(delete(JobDefinition).where(JobDefinition.workspace_id == workspace_id))
-        else:
-            # No workspace definitions — still clean stray runs that were denormalized with workspace_id
-            await self._session.execute(delete(JobRun).where(JobRun.workspace_id == workspace_id))
+        from src.models.conversation import Conversation
+        from src.models.jobs import JobDefinition, JobRun
 
-        # Conversations + participants + messages (workspace-scoped)
-        conv_ids_result = await self._session.execute(
-            select(Conversation.id).where(Conversation.workspace_id == workspace_id)
-        )
-        conv_ids = [row[0] for row in conv_ids_result.all()]
+        for model in WORKSPACE_CASCADE:
+            if model in (Conversation, JobRun, JobDefinition):
+                continue  # parents: deleted after their children below
+            await self._session.execute(delete(model).where(model.workspace_id == workspace_id))
+        # Children linked indirectly (no workspace_id of their own): collect
+        # parent ids first, then delete grandchildren → children → parents so
+        # plain StringUUID columns (no DB-level cascades) leave no orphans.
+        conv_ids = [
+            row[0]
+            for row in (
+                await self._session.execute(
+                    select(Conversation.id).where(Conversation.workspace_id == workspace_id)
+                )
+            ).all()
+        ]
         if conv_ids:
-            await self._session.execute(delete(Message).where(Message.conversation_id.in_(conv_ids)))
-            await self._session.execute(
-                delete(ConversationParticipant).where(ConversationParticipant.conversation_id.in_(conv_ids))
-            )
-            await self._session.execute(delete(Conversation).where(Conversation.workspace_id == workspace_id))
+            for child in CONVERSATION_CHILDREN:
+                for chunk in _chunks(conv_ids):
+                    await self._session.execute(
+                        delete(child).where(child.conversation_id.in_(chunk))
+                    )
+        definition_ids = [
+            row[0]
+            for row in (
+                await self._session.execute(
+                    select(JobDefinition.id).where(JobDefinition.workspace_id == workspace_id)
+                )
+            ).all()
+        ]
+        run_ids = [
+            row[0]
+            for row in (
+                await self._session.execute(
+                    select(JobRun.id).where(JobRun.workspace_id == workspace_id)
+                )
+            ).all()
+        ]
+        if definition_ids:
+            run_ids += [
+                row[0]
+                for row in (
+                    await self._session.execute(
+                        select(JobRun.id).where(JobRun.definition_id.in_(definition_ids))
+                    )
+                ).all()
+            ]
+            for chunk in _chunks(definition_ids):
+                await self._session.execute(delete(JobRun).where(JobRun.definition_id.in_(chunk)))
+        if run_ids:
+            run_ids = list(dict.fromkeys(run_ids))
+            for child in JOB_RUN_CHILDREN:
+                for chunk in _chunks(run_ids):
+                    await self._session.execute(delete(child).where(child.run_id.in_(chunk)))
+        await self._session.execute(delete(JobRun).where(JobRun.workspace_id == workspace_id))
+        await self._session.execute(
+            delete(JobDefinition).where(JobDefinition.workspace_id == workspace_id)
+        )
+        await self._session.execute(
+            delete(Conversation).where(Conversation.workspace_id == workspace_id)
+        )
 
         # Finally delete the workspace row itself
         await self._session.delete(workspace)
@@ -619,6 +705,26 @@ class WorkspaceService:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def _single_workspace_role(self, workspace_id: str) -> Role:
+        """Auto-join role: viewer, else the lowest non-owner system role.
+
+        Falls back when the viewer role was renamed/removed so a missing
+        role does not brick every later login in single-workspace mode."""
+        stmt = select(Role).where(Role.workspace_id == workspace_id)
+        result = await self._session.execute(stmt)
+        roles = list(result.scalars().all())
+        for role in roles:
+            if role.name == self.SINGLE_WORKSPACE_ROLE:
+                return role
+        for fallback in ("editor", "admin"):
+            for role in roles:
+                if role.name == fallback:
+                    return role
+        non_owner = [r for r in roles if r.name != "owner"]
+        if non_owner:
+            return non_owner[0]
+        raise WorkspaceError(f"role {self.SINGLE_WORKSPACE_ROLE} not found")
+
     async def _role_by_name(self, workspace_id: str, name: str) -> Role:
         stmt = select(Role).where(Role.workspace_id == workspace_id, Role.name == name)
         result = await self._session.execute(stmt)
@@ -626,6 +732,32 @@ class WorkspaceService:
         if role is None:
             raise WorkspaceError(f"role {name} not found")
         return role
+
+    def _check_permissions_assignable(
+        self, permissions: list[str], assignable: set[str], *, owner: bool = False
+    ) -> None:
+        """Unknown strings and `"*"` fail fast; unheld permissions are Forbidden."""
+        unknown = sorted(set(permissions) - set(ALL_PERMISSIONS) - {"*"})
+        if unknown:
+            raise WorkspaceError(f"unknown permissions: {', '.join(unknown)}")
+        if "*" in permissions:
+            # Reserved for owner — minting it would clone owner minus the name.
+            raise WorkspaceError('"*" is reserved for the owner role')
+        if not owner:
+            denied = sorted(set(permissions) - assignable)
+            if denied:
+                raise WorkspaceForbidden(
+                    f"cannot grant permissions you do not have: {', '.join(denied)}"
+                )
+
+    async def _check_name_free(
+        self, workspace_id: str, name: str, *, exclude_id: str | None = None
+    ) -> None:
+        stmt = select(Role).where(Role.workspace_id == workspace_id, Role.name == name)
+        if exclude_id is not None:
+            stmt = stmt.where(Role.id != exclude_id)
+        if (await self._session.execute(stmt)).scalar_one_or_none() is not None:
+            raise WorkspaceConflict(f"a role named '{name}' already exists")
 
     async def create_custom_role(
         self,
@@ -637,6 +769,16 @@ class WorkspaceService:
         actor: User | None = None,
         ip_address: str | None = None,
     ) -> Role:
+        assignable: set[str] = set()
+        is_owner = False
+        if actor is not None:
+            membership = await self.get_membership(workspace_id, actor.id)
+            if membership is not None:
+                _, actor_role = membership
+                is_owner = "*" in actor_role.permissions
+                assignable = set(actor_role.permissions)
+        self._check_permissions_assignable(permissions, assignable, owner=is_owner)
+        await self._check_name_free(workspace_id, name)
         role = Role(
             workspace_id=workspace_id,
             name=name,
@@ -658,7 +800,60 @@ class WorkspaceService:
         )
         return role
 
+    async def update_role(
+        self,
+        workspace_id: str,
+        role_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        permissions: list[str] | None = None,
+        actor: User | None = None,
+        ip_address: str | None = None,
+    ) -> Role:
+        role = await self._session.get(Role, role_id)
+        if role is None or role.workspace_id != workspace_id:
+            raise WorkspaceError("role not found")
+        if role.name == "owner":
+            raise WorkspaceForbidden("the owner role cannot be edited")
+        if name is not None and name != role.name:
+            await self._check_name_free(workspace_id, name, exclude_id=role.id)
+            role.name = name
+        if description is not None:
+            role.description = description
+        if permissions is not None:
+            assignable: set[str] = set()
+            is_owner = False
+            if actor is not None:
+                membership = await self.get_membership(workspace_id, actor.id)
+                if membership is not None:
+                    _, actor_role = membership
+                    is_owner = "*" in actor_role.permissions
+                    assignable = set(actor_role.permissions)
+            self._check_permissions_assignable(permissions, assignable, owner=is_owner)
+            role.permissions = permissions
+        # An edited system role opts out of boot-time convergence — otherwise
+        # the next restart would silently revert the change. The name stays.
+        role.system = False
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="role",
+            resource_id=role.id,
+            action="role.updated",
+            actor_user_id=actor.id if actor else None,
+            details={"name": role.name, "permissions": role.permissions},
+            ip_address=ip_address,
+        )
+        return role
+
 
 def _slugify(name: str) -> str:
     slug = "".join(c if c.isalnum() else "-" for c in name.lower()).strip("-")
     return slug or f"ws-{uuid.uuid4().hex[:8]}"
+
+
+def _chunks(ids: list[str], size: int = 500) -> list[list[str]]:
+    """Split id lists so IN (...) stays under the SQLite 999-variable limit."""
+    return [ids[i : i + size] for i in range(0, len(ids), size)]

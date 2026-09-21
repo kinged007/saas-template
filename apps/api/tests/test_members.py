@@ -129,3 +129,22 @@ async def test_non_manager_cannot_change_role(app_client):
         headers=ws_headers(viewer, ws["id"]),
     )
     assert resp.status_code == 403
+
+
+async def test_list_members_pagination(app_client):
+    client = app_client
+    owner = await register_user(client, "page_owner@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+    await _add_member(client, owner, ws, "page_a@example.com", "viewer")
+    await _add_member(client, owner, ws, "page_b@example.com", "viewer")
+
+    resp = await client.get("/api/v1/members?limit=2&offset=0", headers=owner_headers)
+    assert resp.status_code == 200
+    assert resp.headers["X-Total-Count"] == "3"
+    assert len(resp.json()) == 2
+
+    resp = await client.get("/api/v1/members?limit=2&offset=2", headers=owner_headers)
+    assert resp.status_code == 200
+    assert resp.headers["X-Total-Count"] == "3"
+    assert len(resp.json()) == 1

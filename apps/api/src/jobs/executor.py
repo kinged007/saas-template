@@ -28,6 +28,7 @@ from src.jobs.capture import (
 )
 from src.jobs.registry import JobContext, job_registry, register_builtin_jobs
 from src.models.jobs import JobDefinition, JobLogEntry, JobRun, JobRunStatus
+from src.models.workspace import Workspace
 from src.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -129,7 +130,12 @@ class _LogPersister:
 
 
 async def execute_run(run_id: str) -> None:
-    """Claim and execute one job run. Safe to call for an unknown/claimed run."""
+    """Claim and execute one job run. Safe to call for an unknown/claimed run.
+
+    Workspace runs whose workspace (or definition) no longer exists fail fast
+    instead of executing — a run queued just before a workspace delete must
+    not produce new rows for the deleted workspace.
+    """
     register_builtin_jobs()
 
     # Atomic claim: exactly one worker transitions pending → running, even
@@ -145,7 +151,18 @@ async def execute_run(run_id: str) -> None:
             await session.commit()
             return
         run = await session.get(JobRun, run_id)
-        if run is not None:
+        # Only stamp last_run_at when the workspace (if any) still exists —
+        # the claim above already flipped the run to running, and the
+        # workspace-gone check below fails it right away.
+        definition = (
+            await session.get(JobDefinition, run.definition_id) if run is not None else None
+        )
+        workspace_gone = (
+            definition is not None
+            and definition.workspace_id is not None
+            and await session.get(Workspace, definition.workspace_id) is None
+        )
+        if run is not None and not workspace_gone:
             # "Last run" reflects the most recent actual execution start —
             # manual and scheduled runs alike.
             await session.execute(
@@ -157,7 +174,18 @@ async def execute_run(run_id: str) -> None:
 
     assert run is not None
     async with SessionFactory() as session:
+        # Re-read: the first session already committed the claim above and
+        # may be holding stale state.
         definition = await session.get(JobDefinition, run.definition_id)
+        workspace_gone = (
+            definition is not None
+            and definition.workspace_id is not None
+            and await session.get(Workspace, definition.workspace_id) is None
+        )
+
+    if workspace_gone:
+        await _finish(run_id, JobRunStatus.FAILED, "workspace no longer exists")
+        return
 
     if definition is None:
         await _finish(run_id, JobRunStatus.FAILED, "job definition no longer exists")
@@ -233,12 +261,19 @@ async def _finish(
     duration_ms = None
     if started_at is not None:
         duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+    job_key: str | None = None
     async with SessionFactory() as session:
         run = await session.get(JobRun, run_id)
         if run is None:
             return
+        definition = await session.get(JobDefinition, run.definition_id)
+        job_key = definition.key if definition is not None else None
         run.status = status.value
         run.finished_at = finished_at
         run.duration_ms = duration_ms
         run.error = error[:8000] if error else None
         await session.commit()
+    if job_key is not None:
+        from src.core.metrics import observe_job_run
+
+        observe_job_run(key=job_key, status=status.value)

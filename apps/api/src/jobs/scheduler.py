@@ -22,9 +22,7 @@ HOUSEKEEPING_INTERVAL_SECONDS = 3600.0
 
 
 class JobScheduler:
-    def __init__(
-        self, *, tick_seconds: float | None = None, bus: EventBus | None = None
-    ) -> None:
+    def __init__(self, *, tick_seconds: float | None = None, bus: EventBus | None = None) -> None:
         self._tick_seconds = (
             tick_seconds
             if tick_seconds is not None

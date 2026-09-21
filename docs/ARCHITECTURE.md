@@ -63,7 +63,8 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 - **Notification** — persisted per user/workspace, acknowledged via
   `PATCH /notifications/{id}`; pushed in realtime over WebSockets.
 - **AuditLogEntry** — immutable audit trail for every user/system action
-  (actor, IP, action, details), never updated or deleted.
+  (actor, IP, action, details), never updated; deleted only when the operator
+  explicitly opts into `AUDIT_LOG_RETENTION_DAYS` (see docs/OPERATIONS.md).
 - **StoredSecret** — Fernet-encrypted values at rest (versioned key),
   namespaced per workspace, behind a `SecretStore` interface.
 

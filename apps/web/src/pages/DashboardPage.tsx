@@ -4,6 +4,7 @@ import { CheckCircle2, Circle, PlusCircle } from "lucide-react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
+import { WorkspaceSearch } from "@/components/WorkspaceSearch";
 import { useWorkspace } from "../contexts/WorkspaceContext";
 import type { ApiKey, Invitation } from "../types";
 
@@ -106,6 +107,7 @@ export function DashboardPage() {
           </CardContent>
         </Card>
       )}
+      <WorkspaceSearch />
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Card>

@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.email.base import EmailDriver  # noqa: E402  (base has no settings import)
@@ -73,11 +73,23 @@ class Settings(BaseSettings):
     # Auth brute-force protection: failures allowed per (IP, account) per window.
     auth_rate_limit_max_attempts: int = 10
     auth_rate_limit_window_seconds: int = 300
+    # Single-workspace mode. When true, the first login/register creates the
+    # one shared workspace (owned by whoever arrives first, normally the
+    # superadmin) and every later login/register auto-joins it as viewer.
+    # Creating a second workspace and deleting the workspace are rejected;
+    # the sidebar switcher and the delete danger-zone are hidden.
+    single_workspace: bool = False
 
     # Scheduled jobs
     jobs_scheduler_tick_seconds: float = 10.0
     jobs_default_timeout_seconds: int = 600
     jobs_run_retention: int = 1000  # per definition; pruned by scheduler housekeeping
+
+    # Retention cleanup (days; enforced by the system.retention_cleanup job).
+    # audit_log_retention_days=0 keeps audit entries forever (compliance trail).
+    jobs_log_retention_days: int = Field(default=90, ge=0)
+    notifications_retention_days: int = Field(default=90, ge=0)
+    audit_log_retention_days: int = Field(default=0, ge=0)
 
     @property
     def database_url_sqlite(self) -> bool:

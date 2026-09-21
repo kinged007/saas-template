@@ -343,11 +343,20 @@ class JobService:
         fired around the due time, e.g. the deployment was down) fire ONCE as
         catch-up under the `single` policy and are skipped entirely under
         `ignore`; both policies advance `next_run_at` atomically via CAS, so
-        exactly one replica claims each occurrence either way.
+        exactly one replica claims each occurrence either way. Definitions
+        whose workspace was deleted are skipped instead of scheduled, so the
+        tick never resurrects rows in a deleted workspace.
         """
         now = now_utc()
-        stmt = select(JobDefinition).where(
-            JobDefinition.enabled.is_(True), JobDefinition.next_run_at.is_not(None)
+        stmt = (
+            select(JobDefinition)
+            .outerjoin(Workspace, Workspace.id == JobDefinition.workspace_id)
+            .where(
+                JobDefinition.enabled.is_(True),
+                JobDefinition.next_run_at.is_not(None),
+                # Global rows (workspace_id NULL) pass; workspace rows need a live parent.
+                (JobDefinition.workspace_id.is_(None)) | (Workspace.id.is_not(None)),
+            )
         )
         due = [
             d
@@ -379,9 +388,17 @@ class JobService:
                 )
                 continue
 
-            run = await self.create_run(
-                definition, trigger=JobTrigger.SCHEDULED, scheduled_at=due_at
-            )
+            try:
+                run = await self.create_run(
+                    definition, trigger=JobTrigger.SCHEDULED, scheduled_at=due_at
+                )
+            except JobError:
+                logger.info(
+                    "job %s: workspace %s deleted mid-tick, skipping",
+                    definition.key,
+                    definition.workspace_id,
+                )
+                continue
             scheduled += 1
             logger.debug("scheduled job %s run %s (due %s)", definition.key, run.id, due_at)
         return scheduled
@@ -394,7 +411,16 @@ class JobService:
         scheduled_at: Any = None,
         actor_user_id: str | None = None,
     ) -> JobRun:
-        """Insert a pending run (snapshotting current params) and enqueue it."""
+        """Insert a pending run (snapshotting current params) and enqueue it.
+
+        Refuses workspace definitions whose workspace no longer exists, so a
+        held definition object (or a mid-delete request) cannot insert rows
+        into a deleted workspace.
+        """
+        if definition.workspace_id is not None:
+            workspace = await self._session.get(Workspace, definition.workspace_id)
+            if workspace is None:
+                raise JobError("workspace not found")
         correlation_id = str(uuid.uuid4())
         run = JobRun(
             definition_id=definition.id,

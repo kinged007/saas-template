@@ -27,10 +27,8 @@ async def _authenticate(websocket: WebSocket):
     """
     await websocket.accept()
     try:
-        raw = await asyncio.wait_for(
-            websocket.receive_text(), timeout=AUTH_TIMEOUT_SECONDS
-        )
-    except (asyncio.TimeoutError, WebSocketDisconnect):
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=AUTH_TIMEOUT_SECONDS)
+    except (TimeoutError, WebSocketDisconnect):
         await websocket.close(code=CLOSE_POLICY_VIOLATION, reason="auth timeout")
         return None
     try:

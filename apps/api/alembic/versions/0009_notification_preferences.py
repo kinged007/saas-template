@@ -32,7 +32,7 @@ def upgrade() -> None:
         sa.Column("type", sa.String(length=50), nullable=False),
         sa.Column("channel", sa.String(length=10), nullable=False, server_default="in-app"),
         sa.Column("digest_enabled", sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column("unsubscribe_token", sa.String(length=64), nullable=True, unique=True),
+        sa.Column("unsubscribe_token", sa.String(length=64), nullable=True),
         sa.Column("created_at", TS, nullable=False, server_default=NOW),
         sa.Column("updated_at", TS, nullable=False, server_default=NOW),
         sa.UniqueConstraint("user_id", "type", name="uq_notification_preferences_user_id_type"),
