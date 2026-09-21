@@ -25,7 +25,7 @@ export EMBEDDED_DB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/saas-dbcheck-XXXXXX")"
 trap 'rm -rf "$EMBEDDED_DB_DIR"' EXIT
 
 echo "==> check 1/2: single migration head"
-HEADS="$(uv run alembic heads 2>/dev/null | grep -c "(head)" || true)"
+HEADS="$(uv run alembic heads 2>/dev/null | grep -cE '^[0-9a-f]{4,} \(head\)' || true)"
 if [ "$HEADS" -ne 1 ]; then
   echo "FAIL: expected 1 head, found $HEADS — repoint the newer migration's down_revision"
   uv run alembic heads 2>/dev/null

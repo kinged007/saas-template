@@ -26,11 +26,15 @@ class User(Base, TimestampMixin):
     email_verified_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-# ponytail: historical drift — merged PRs changed RefreshToken.token_hash
-# 64→255 and User.password_hash 128→255 in models without migrations, and
-# new unique/index flags render as phantom diffs. 0013 converges the
-# constraint/column drift; the VARCHAR widenings are live-compatible
-# (narrow→wide, in-row) and intentionally left unmigrated.
+# ponytail: historical drift — merged PRs changed model-only widths
+# (RefreshToken.token_hash 64→255, User.password_hash 128→255,
+# StoredSecret.secret_key 400→500 to match the migrated schema) without
+# migrations, and new unique/index flags render as phantom diffs. 0013
+# converges the constraint/column drift; the VARCHAR widenings are
+# live-compatible (narrow→wide, in-row) and intentionally left unmigrated.
+# Type changes ship only via explicit migration + human review (env.py
+# keeps compare_type off), so a future narrowing needs its own migration
+# with a data check first.
 
 
 class AuthToken(Base, TimestampMixin):

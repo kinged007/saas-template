@@ -11,6 +11,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
       - run: cd apps/api && uv sync --extra dev
       - run: cd apps/api && uv run ruff check . && uv run ruff format --check .
 
@@ -19,6 +21,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
       - run: cd apps/api && uv sync --extra dev
       - run: cd apps/api && uv run pytest -q --tb=short -p no:cacheprovider
 
@@ -27,6 +31,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
       - run: cd apps/api && uv sync --extra dev
       - run: make db-check
 
