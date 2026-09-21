@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from src.core import metrics
 from src.core.request_id import get_request_id
+from tests.conftest import create_workspace, register_user, ws_headers
 
 
 async def test_request_id_echoed_and_minted(app_client):
@@ -40,6 +41,32 @@ async def test_metrics_endpoint_counts_requests(app_client):
     body = resp.text
     assert "# TYPE http_requests_total counter" in body
     assert 'http_requests_total{method="GET",path="/api/v1/healthz",status="200"} 2' in body
+
+
+async def test_metrics_path_label_uses_route_template(app_client):
+    """Issue #73: parametrized paths must not leak raw ids into labels."""
+    metrics.reset()
+    tokens = await register_user(app_client, "metrics-tpl@example.com")
+    ws = await create_workspace(app_client, tokens)
+    wid = ws["id"]
+    resp = await app_client.get(f"/api/v1/workspaces/{wid}", headers=ws_headers(tokens, wid))
+    assert resp.status_code == 200, resp.text
+    resp = await app_client.get("/api/v1/metrics")
+    body = resp.text
+    assert (
+        'http_requests_total{method="GET",path="/api/v1/workspaces/{workspace_id}",status="200"} 1'
+        in body
+    )
+    assert wid not in body
+
+
+async def test_metrics_unmatched_route_keeps_raw_path(app_client):
+    """Issue #73: unmatched (404) paths have no template — raw path is kept."""
+    metrics.reset()
+    resp = await app_client.get("/api/v1/no-such-route-xyz")
+    assert resp.status_code == 404
+    body = (await app_client.get("/api/v1/metrics")).text
+    assert 'path="/api/v1/no-such-route-xyz"' in body
 
 
 async def test_metrics_render_empty_and_reset():
