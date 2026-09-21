@@ -19,9 +19,7 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.add_column("refresh_tokens", sa.Column("ip_address", sa.String(length=64), nullable=True))
-    op.add_column(
-        "refresh_tokens", sa.Column("user_agent", sa.String(length=500), nullable=True)
-    )
+    op.add_column("refresh_tokens", sa.Column("user_agent", sa.String(length=500), nullable=True))
 
 
 def downgrade() -> None:
