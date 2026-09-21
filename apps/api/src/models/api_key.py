@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import JSON, DateTime, String
+from sqlalchemy import JSON, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.base import Base, StringUUID, TimestampMixin
@@ -24,3 +24,5 @@ class ApiKey(Base, TimestampMixin):
     created_by_user_id: Mapped[str] = mapped_column(StringUUID(), index=True, nullable=False)
     last_used_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    usage_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    usage_quota: Mapped[int | None] = mapped_column(Integer, nullable=True)

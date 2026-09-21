@@ -34,6 +34,7 @@ export function ApiKeysPage() {
             <TableRow>
               <TableHead>Name</TableHead>
               <TableHead>Permissions</TableHead>
+              <TableHead>Usage</TableHead>
               <TableHead>Last used</TableHead>
               <TableHead>Created</TableHead>
               <TableHead className="text-right">Actions</TableHead>
@@ -65,6 +66,10 @@ export function ApiKeysPage() {
                   </div>
                 </TableCell>
                 <TableCell className="text-muted-foreground">
+                  {key.usage_count ?? 0}
+                  {key.usage_quota != null ? ` / ${key.usage_quota}` : ""}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
                   {formatDate(key.last_used_at)}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
@@ -87,7 +92,7 @@ export function ApiKeysPage() {
               </TableRow>
             ))}
             {rows.length === 0 && (
-              <EmptyRow colSpan={5}>No API keys yet.</EmptyRow>
+              <EmptyRow colSpan={6}>No API keys yet.</EmptyRow>
             )}
           </TableBody>
         </Table>
