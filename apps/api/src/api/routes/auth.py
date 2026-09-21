@@ -12,6 +12,8 @@ from src.api.deps import (
     resolve_auth_principal,
 )
 from src.core.dates import ensure_utc, now_utc
+from src.core.security.ratelimit import get_auth_limiter
+from src.core.security.tokens import OpaqueToken
 from src.db.session import get_db
 from src.email import factory as email_factory
 from src.email import templates
@@ -23,11 +25,15 @@ from src.schemas.api import (
     ResetPasswordRequest,
     SessionRead,
     TokenResponse,
+    TwoFactorDisable,
+    TwoFactorLogin,
+    TwoFactorSetupConfirm,
     VerifyEmailRequest,
 )
 from src.services.auth import AuthError, AuthService
 from src.services.profiles import ProfileService
 from src.services.serializers import profile_to_dict, user_to_dict, workspace_to_dict
+from src.services.two_factor import TwoFactorError, TwoFactorService
 from src.services.workspaces import WorkspaceService
 from src.settings import settings
 
@@ -59,6 +65,11 @@ def _client_ip(request: Request) -> str | None:
 def _user_agent(request: Request) -> str | None:
     ua = request.headers.get("user-agent")
     return ua[:500] if ua else None
+
+
+def _limit_key(request: Request, email: str | None = None) -> str:
+    ip = _client_ip(request) or "unknown"
+    return f"{ip}:{(email or '').lower()}"
 
 
 async def _maybe_join_single_workspace(db: AsyncSession, container, user) -> None:
@@ -187,18 +198,28 @@ async def login(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> TokenResponse:
+    key = _limit_key(request, body.email)
+    get_auth_limiter().check(key)
     service = AuthService(db, container.bus)
     try:
         user = await service.login_password(
             body.email, body.password, ip_address=_client_ip(request)
         )
     except AuthError as exc:
+        get_auth_limiter().fail(key)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+    get_auth_limiter().reset(key)
     try:
         await _maybe_join_single_workspace(db, container, user)
     except Exception:
         await db.rollback()
         logger.exception("failed to join single workspace for user %s", user.id)
+    if user.totp_enabled:
+        challenge = TwoFactorService(db, container.cipher, container.bus).issue_challenge(user.id)
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            {"code": "2fa_required", "challenge_token": challenge},
+        )
     pair = await service.issue_tokens(
         user, ip_address=_client_ip(request), user_agent=_user_agent(request)
     )
@@ -212,6 +233,8 @@ async def refresh(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> TokenResponse:
+    key = _limit_key(request, OpaqueToken.hash(body.refresh_token))
+    get_auth_limiter().check(key)
     service = AuthService(db, container.bus)
     try:
         pair = await service.rotate_refresh(
@@ -220,7 +243,9 @@ async def refresh(
             user_agent=_user_agent(request),
         )
     except AuthError as exc:
+        get_auth_limiter().fail(key)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+    get_auth_limiter().reset(key)
     if settings.single_workspace:
         try:
             # pair.refresh_token is the NEW token; its owner is the rotated user.
@@ -243,6 +268,120 @@ def _session_to_dict(row, *, current: bool) -> dict:
         "user_agent": row.user_agent,
         "current": current,
     }
+
+
+@router.get("/2fa/status")
+async def totp_status(
+    user=Depends(get_current_user),
+):
+    return {"enabled": bool(user.totp_enabled)}
+
+
+@router.post("/2fa/setup")
+async def totp_setup(
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    try:
+        return await TwoFactorService(db, container.cipher, container.bus).start_setup(user)
+    except TwoFactorError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+
+
+@router.post("/2fa/enable")
+async def totp_enable(
+    body: TwoFactorSetupConfirm,
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    try:
+        codes = await TwoFactorService(db, container.cipher, container.bus).confirm_setup(
+            user, setup_token=body.setup_token, code=body.code
+        )
+    except TwoFactorError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+    return {"backup_codes": codes}
+
+
+@router.post("/2fa/disable", status_code=204)
+async def totp_disable(
+    body: TwoFactorDisable,
+    request: Request,
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+) -> None:
+    key = _limit_key(request, user.email)
+    get_auth_limiter().check(key)
+    try:
+        await AuthService(db, container.bus).login_password(
+            user.email, body.password, ip_address=_client_ip(request)
+        )
+    except AuthError as exc:
+        get_auth_limiter().fail(key)
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+    get_auth_limiter().reset(key)
+    await TwoFactorService(db, container.cipher, container.bus).disable(user)
+
+
+@router.post("/2fa/backup-codes")
+async def totp_backup_codes(
+    body: TwoFactorDisable,
+    request: Request,
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    key = _limit_key(request, user.email)
+    get_auth_limiter().check(key)
+    try:
+        await AuthService(db, container.bus).login_password(
+            user.email, body.password, ip_address=_client_ip(request)
+        )
+    except AuthError as exc:
+        get_auth_limiter().fail(key)
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+    get_auth_limiter().reset(key)
+    try:
+        codes = await TwoFactorService(db, container.cipher, container.bus).regenerate_backup_codes(
+            user
+        )
+    except TwoFactorError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+    return {"backup_codes": codes}
+
+
+@router.post("/2fa/login", response_model=TokenResponse)
+async def totp_login(
+    body: TwoFactorLogin,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+) -> TokenResponse:
+    svc = TwoFactorService(db, container.cipher, container.bus)
+    try:
+        user_id = svc.consume_challenge(body.challenge_token)
+    except TwoFactorError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+    key = _limit_key(request, user_id)
+    get_auth_limiter().check(key)
+    user = await AuthService(db, container.bus).get_user(user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "account is disabled")
+    try:
+        ok = await svc.verify_login_code(user, code=body.code)
+    except TwoFactorError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+    if not ok:
+        get_auth_limiter().fail(key)
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid code")
+    get_auth_limiter().reset(key)
+    pair = await AuthService(db, container.bus).issue_tokens(
+        user, ip_address=_client_ip(request), user_agent=_user_agent(request)
+    )
+    return TokenResponse(**pair.__dict__)
 
 
 @router.get("/sessions", response_model=list[SessionRead])

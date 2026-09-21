@@ -1,8 +1,9 @@
-import { User, Bell } from "lucide-react";
+import { User, Bell, ShieldCheck } from "lucide-react";
 
 import { createSettingsRegistry } from "../types";
 import { GeneralSection } from "./sections/GeneralSection";
 import { NotificationsSection } from "./sections/NotificationsSection";
+import { SecuritySection } from "./sections/SecuritySection";
 
 /**
  * Profile settings registry — the single extension seam for user profile pages.
@@ -36,6 +37,13 @@ export const profileSettings = createSettingsRegistry([
     icon: Bell,
     component: NotificationsSection,
     order: 20,
+  },
+  {
+    key: "security",
+    label: "Security",
+    icon: ShieldCheck,
+    component: SecuritySection,
+    order: 30,
   },
 ]);
 

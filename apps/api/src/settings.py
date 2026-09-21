@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     # superuser (global jobs, etc.). Empty disables the bootstrap.
     superadmin_email: str = ""
 
+    # Auth brute-force protection: failures allowed per (IP, account) per window.
+    auth_rate_limit_max_attempts: int = 10
+    auth_rate_limit_window_seconds: int = 300
     # Single-workspace mode. When true, the first login/register creates the
     # one shared workspace (owned by whoever arrives first, normally the
     # superadmin) and every later login/register auto-joins it as viewer.

@@ -24,6 +24,7 @@ class User(Base, TimestampMixin):
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_login_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
     email_verified_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 # ponytail: historical drift — merged PRs changed model-only widths

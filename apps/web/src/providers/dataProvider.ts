@@ -92,6 +92,12 @@ async function tryRefresh(): Promise<boolean> {
 // direct callers) show *why* a request failed instead of just the status code.
 function enrichErrorMessage(error: AxiosError): AxiosError {
   const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail;
+  // 2FA challenge responses carry an object detail ({code: "2fa_required",
+  // challenge_token}) — leave the message alone so the login page can branch
+  // on the structured payload instead of showing "[object Object]".
+  if (typeof detail === "object" && detail !== null && !Array.isArray(detail)) {
+    return error;
+  }
   if (typeof detail === "string" && detail) {
     error.message = detail;
   } else if (Array.isArray(detail) && detail.length > 0) {
@@ -106,12 +112,31 @@ function enrichErrorMessage(error: AxiosError): AxiosError {
   return error;
 }
 
+function forceLogout() {
+  // Revoked/expired session: drop everything synchronously so no further
+  // request can go out with the dead tokens, then bounce to /login. The
+  // queryClient listener notifies the live socket via onTokensChanged.
+  const hadSession = Boolean(tokenStore.getAccess() ?? tokenStore.getRefresh());
+  tokenStore.clear();
+  clearAllCaches(queryClient);
+  if (hadSession && window.location.pathname !== "/login") {
+    window.location.assign("/login");
+  }
+}
+
 httpClient.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
     enrichErrorMessage(error);
     const original = error.config as RetriableRequest | undefined;
+    const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail;
     if (error.response?.status === 401 && original && !original._retried) {
+      // The session row is gone — no refresh token can resurrect it.
+      // Skip the doomed refresh round-trip and log out immediately.
+      if (detail === "session revoked") {
+        forceLogout();
+        return Promise.reject(error);
+      }
       original._retried = true;
       if (await tryRefresh()) {
         const access = tokenStore.getAccess();
@@ -120,11 +145,7 @@ httpClient.interceptors.response.use(
       }
     }
     if (error.response?.status === 401) {
-      tokenStore.clear();
-      clearAllCaches(queryClient);
-      if (window.location.pathname !== "/login") {
-        window.location.assign("/login");
-      }
+      forceLogout();
     }
     return Promise.reject(error);
   },

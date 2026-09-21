@@ -44,6 +44,24 @@ class VerifyEmailRequest(BaseModel):
     token: str = Field(min_length=1)
 
 
+class TwoFactorChallenge(BaseModel):
+    challenge_token: str
+
+
+class TwoFactorSetupConfirm(BaseModel):
+    setup_token: str
+    code: str = Field(min_length=6, max_length=8)
+
+
+class TwoFactorLogin(BaseModel):
+    challenge_token: str
+    code: str = Field(min_length=6, max_length=10)
+
+
+class TwoFactorDisable(BaseModel):
+    password: str = Field(min_length=8)
+
+
 class SessionRead(BaseModel):
     id: str
     created_at: datetime | None = None

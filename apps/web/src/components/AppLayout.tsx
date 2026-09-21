@@ -259,7 +259,7 @@ function UserMenu() {
           <CircleUser className="h-4 w-4" />
           {displayName}
         </DropdownMenuLabel>
-        <DropdownMenuItem onClick={() => navigate("/settings/profile")}>
+        <DropdownMenuItem onClick={() => navigate("/settings/profile/security")}>
           <Settings />
           Profile Settings
         </DropdownMenuItem>
