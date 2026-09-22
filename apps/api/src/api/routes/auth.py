@@ -78,6 +78,24 @@ async def _maybe_join_single_workspace(db: AsyncSession, container, user) -> Non
     await WorkspaceService(db, container.bus).join_single_workspace(user)
 
 
+@router.get("/config")
+async def auth_config() -> dict:
+    """Public auth capabilities for the login UI (no secrets)."""
+    return {
+        "registration_enabled": settings.auth_allow_registration,
+        "password_enabled": settings.auth_password_enabled,
+        "oauth_enabled": bool(settings.oauth_provider_list),
+        "providers": [
+            {
+                "id": p.get("id"),
+                "display_name": p.get("display_name") or p.get("id"),
+            }
+            for p in settings.oauth_provider_list
+            if p.get("id")
+        ],
+    }
+
+
 @router.post("/register", response_model=TokenResponse, status_code=201)
 async def register(
     body: RegisterRequest,
@@ -93,6 +111,8 @@ async def register(
             "first_name and last_name are required (or display_name deprecated)",
         )
     # If only one of first/last provided without the other, still allow but derive
+    if not settings.auth_allow_registration:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "registration is disabled")
     try:
         user = await service.register(
             email=body.email,
@@ -104,6 +124,8 @@ async def register(
         )
     except AuthError as exc:
         msg = str(exc)
+        if msg == "registration is disabled":
+            raise HTTPException(status.HTTP_403_FORBIDDEN, msg) from None
         # Map missing names to 422, else 409
         if "first_name and last_name" in msg:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, msg) from None
@@ -200,6 +222,8 @@ async def login(
 ) -> TokenResponse:
     key = _limit_key(request, body.email)
     get_auth_limiter().check(key)
+    if not settings.auth_password_enabled:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "password login is disabled")
     service = AuthService(db, container.bus)
     try:
         user = await service.login_password(
@@ -207,7 +231,10 @@ async def login(
         )
     except AuthError as exc:
         get_auth_limiter().fail(key)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+        msg = str(exc)
+        if msg in ("password login is disabled",):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, msg) from None
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, msg) from None
     get_auth_limiter().reset(key)
     try:
         await _maybe_join_single_workspace(db, container, user)

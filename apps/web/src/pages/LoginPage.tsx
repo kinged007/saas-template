@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SsoButtons, fetchAuthConfig, type AuthConfig } from "@/components/AuthConfig";
 import { authProvider, seedWorkspace } from "@/providers/authProvider";
 import { API_URL, httpClient } from "@/providers/dataProvider";
 import { identityStore, tokenStore, workspaceStore } from "@/utils/storage";
@@ -17,7 +18,17 @@ export function LoginPage() {
   const [code, setCode] = useState("");
   const [challenge, setChallenge] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [config, setConfig] = useState<AuthConfig | null>(null);
   const codeRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    fetchAuthConfig().then(setConfig);
+    const params = new URLSearchParams(window.location.search);
+    const challengeParam = params.get("challenge");
+    if (challengeParam) setChallenge(challengeParam);
+    const err = params.get("error");
+    if (err) setError(err === "registration is disabled" ? "Registration is disabled." : "Sign-in failed.");
+  }, []);
 
   useEffect(() => {
     if (challenge) codeRef.current?.focus();
@@ -84,6 +95,10 @@ export function LoginPage() {
     }
   };
 
+  const passwordEnabled = config?.password_enabled ?? true;
+  const ssoProviders = config?.providers ?? [];
+  const registrationEnabled = config?.registration_enabled ?? true;
+
   return (
     <div className="bg-background flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
@@ -92,6 +107,13 @@ export function LoginPage() {
           <CardDescription>Sign in to your account</CardDescription>
         </CardHeader>
         <CardContent>
+          {ssoProviders.length > 0 && !challenge && (
+            <div className="mb-4">
+              <SsoButtons providers={ssoProviders} disabled={pending} />
+            </div>
+          )}
+          {(!passwordEnabled && ssoProviders.length > 0 && !challenge) ? null : (
+          <>
           {challenge ? (
             <form onSubmit={submit} className="flex flex-col gap-4">
               <p className="text-muted-foreground text-sm">
@@ -154,7 +176,10 @@ export function LoginPage() {
               </p>
             </form>
           )}
+          </>
+          )}
         </CardContent>
+        {registrationEnabled && (
         <CardFooter className="justify-center">
           <p className="text-muted-foreground text-sm">
             No account?{" "}
@@ -163,6 +188,7 @@ export function LoginPage() {
             </Link>
           </p>
         </CardFooter>
+        )}
       </Card>
     </div>
   );
