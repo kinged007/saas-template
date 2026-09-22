@@ -34,6 +34,10 @@ class WorkspaceConflict(WorkspaceError):
     pass
 
 
+class WorkspaceNotFound(WorkspaceError):
+    pass
+
+
 class WorkspaceService:
     DEFAULT_ROLES = ["owner", "admin", "editor", "viewer"]
 
@@ -864,15 +868,18 @@ class WorkspaceService:
     ) -> Role:
         role = await self._session.get(Role, role_id)
         if role is None or role.workspace_id != workspace_id:
-            raise WorkspaceError("role not found")
+            raise WorkspaceNotFound("role not found")
         if role.name == "owner":
             raise WorkspaceForbidden("the owner role cannot be edited")
+        changed = False
         if name is not None and name != role.name:
             await self._check_name_free(workspace_id, name, exclude_id=role.id)
             role.name = name
-        if description is not None:
+            changed = True
+        if description is not None and description != role.description:
             role.description = description
-        if permissions is not None:
+            changed = True
+        if permissions is not None and sorted(permissions) != sorted(role.permissions or []):
             assignable: set[str] = set()
             is_owner = False
             if actor is not None:
@@ -883,6 +890,9 @@ class WorkspaceService:
                     assignable = set(actor_role.permissions)
             self._check_permissions_assignable(permissions, assignable, owner=is_owner)
             role.permissions = permissions
+            changed = True
+        if not changed:
+            return role
         # An edited system role opts out of boot-time convergence — otherwise
         # the next restart would silently revert the change. The name stays.
         role.system = False
