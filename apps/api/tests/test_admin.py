@@ -88,7 +88,8 @@ async def test_admin_workspace_list_and_flags_gate_invites(app_client):
 
     resp = await client.get("/api/v1/admin/workspaces", headers=auth_headers(tokens))
     assert resp.status_code == 200, resp.text
-    assert any(w["id"] == ws["id"] for w in resp.json())
+    row = next(w for w in resp.json() if w["id"] == ws["id"])
+    assert row["member_count"] == 1
 
     flags = await client.patch(
         f"/api/v1/admin/workspaces/{ws['id']}/flags",
