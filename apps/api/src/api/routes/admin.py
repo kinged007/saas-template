@@ -151,8 +151,17 @@ async def list_all_workspaces(
     total = count.scalar_one()
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
+    workspaces = rows.scalars().all()
+    counts = {}
+    if workspaces:
+        count_rows = await db.execute(
+            select(WorkspaceMember.workspace_id, func.count())
+            .where(WorkspaceMember.workspace_id.in_([w.id for w in workspaces]))
+            .group_by(WorkspaceMember.workspace_id)
+        )
+        counts = dict(count_rows.all())
     response.headers["X-Total-Count"] = str(total)
-    return [_workspace_dict(w) for w in rows.scalars().all()]
+    return [{**_workspace_dict(w), "member_count": counts.get(w.id, 0)} for w in workspaces]
 
 
 @router.patch("/workspaces/{workspace_id}/flags")
