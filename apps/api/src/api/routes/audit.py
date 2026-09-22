@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, apply_query, parse_query
@@ -39,6 +40,7 @@ def _audit_to_dict(
         "workspace_id": entry.workspace_id,
         "actor_user_id": entry.actor_user_id,
         "actor_display_name": actor_name,
+        "actor_email": actor.email if actor is not None else None,
         "resource_type": entry.resource_type,
         "resource_id": entry.resource_id,
         "action": entry.action,
@@ -67,6 +69,30 @@ async def list_audit_logs(
         stmt = apply_query(
             stmt, AuditLogEntry, spec, sortable=_AUDIT_SORTABLE, filterable=_AUDIT_FILTERABLE
         )
+        q = (request.query_params.get("q") or "").strip()
+        if q:
+            # Cross-field search scoped to this workspace: substring match on
+            # user name/email or action, plus exact match on id columns
+            # (guarded: non-UUID terms must not reach UUID comparisons).
+            like = f"%{q}%"
+            clauses = [
+                AuditLogEntry.action.ilike(like),
+                User.display_name.ilike(like),
+                User.email.ilike(like),
+            ]
+            try:
+                uuid.UUID(q)
+            except ValueError:
+                pass
+            else:
+                clauses.extend(
+                    (
+                        AuditLogEntry.id == q,
+                        AuditLogEntry.actor_user_id == q,
+                        AuditLogEntry.resource_id == q,
+                    )
+                )
+            stmt = stmt.where(or_(*clauses))
     except InvalidQuery as exc:
         raise HTTPException(422, str(exc)) from None
 
