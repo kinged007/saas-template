@@ -14,7 +14,7 @@ from src.models.conversation import Conversation, ConversationParticipant, Messa
 from src.models.user_profile import UserProfile
 from src.models.workspace import User, Workspace, WorkspaceMember
 from src.services.notifications import NotificationService
-from src.services.profile_helpers import format_display_name
+from src.services.profile_helpers import escape_like, format_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -554,21 +554,21 @@ class ConversationService:
 
         # Search handling
         if q:
-            q_ilike = f"%{q.strip()}%"
+            q_ilike = f"%{escape_like(q.strip())}%"
             # Find conversation ids where participant display name matches
             sub_participant_match = (
                 select(ConversationParticipant.conversation_id)
                 .join(User, User.id == ConversationParticipant.user_id)
                 .where(
                     ConversationParticipant.participant_type == "user",
-                    User.display_name.ilike(q_ilike),
+                    User.display_name.ilike(q_ilike, escape="\\"),
                 )
             )
             # Title / preview matches
             base_stmt = base_stmt.where(
                 or_(
-                    Conversation.title.ilike(q_ilike),
-                    Conversation.last_message_preview.ilike(q_ilike),
+                    Conversation.title.ilike(q_ilike, escape="\\"),
+                    Conversation.last_message_preview.ilike(q_ilike, escape="\\"),
                     Conversation.id.in_(sub_participant_match),
                 )
             )

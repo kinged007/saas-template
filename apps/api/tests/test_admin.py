@@ -36,6 +36,10 @@ async def test_admin_user_lookup_and_disable(app_client):
     users = resp.json()
     assert any(u["email"] == "plain@example.com" for u in users)
     assert resp.headers["X-Total-Count"]
+    # LIKE wildcards match literally: "%" appears in no email.
+    wild = await client.get("/api/v1/admin/users?search=%", headers=auth_headers(tokens))
+    assert wild.status_code == 200, wild.text
+    assert wild.json() == []
     target = next(u for u in users if u["email"] == "plain@example.com")
 
     detail = await client.get(f"/api/v1/admin/users/{target['id']}", headers=auth_headers(tokens))
