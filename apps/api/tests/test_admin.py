@@ -179,3 +179,30 @@ async def test_admin_audit_cross_workspace(app_client):
     assert "user.register" in actions
     assert "workspace.created" in actions
     assert resp.headers["X-Total-Count"]
+
+
+async def test_admin_user_lookup_malformed_id_404(app_client):
+    client, tokens = await _superuser_client(app_client)
+    for method, kwargs in [
+        ("get", {}),
+        ("patch", {"json": {"is_active": False}}),
+    ]:
+        resp = await client.request(
+            method,
+            "/api/v1/admin/users/not-a-uuid",
+            headers=auth_headers(tokens),
+            **kwargs,
+        )
+        assert resp.status_code == 404, (method, resp.text)
+
+
+async def test_admin_self_reenable_200(app_client):
+    client, tokens = await _superuser_client(app_client)
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    resp = await client.patch(
+        f"/api/v1/admin/users/{me.json()['id']}",
+        json={"is_active": True},
+        headers=auth_headers(tokens),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["is_active"] is True

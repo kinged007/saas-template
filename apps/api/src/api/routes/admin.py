@@ -8,6 +8,7 @@ workspace to inspect it here.
 from __future__ import annotations
 
 import logging
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import func, or_, select
@@ -34,6 +35,14 @@ _WORKSPACE_SORTABLE = {"created_at", "name", "slug"}
 _WORKSPACE_FILTERABLE = {"name", "slug"}
 _AUDIT_SORTABLE = {"created_at", "action", "resource_type"}
 _AUDIT_FILTERABLE = {"action", "resource_type", "actor_user_id", "workspace_id"}
+
+
+def _user_id_or_404(user_id: str) -> str:
+    try:
+        uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found") from None
+    return user_id
 
 
 def _admin_user_dict(u: User) -> dict:
@@ -72,6 +81,8 @@ async def list_users(
         stmt = stmt.where(or_(User.email.ilike(like), User.display_name.ilike(like)))
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(User.created_at.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
@@ -84,7 +95,7 @@ async def get_user(
     _=Depends(require_superuser),
     db: AsyncSession = Depends(get_db),
 ):
-    user = await db.get(User, user_id)
+    user = await db.get(User, _user_id_or_404(user_id))
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     stmt = (
@@ -110,7 +121,7 @@ async def update_user(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    user = await db.get(User, user_id)
+    user = await db.get(User, _user_id_or_404(user_id))
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     if user.id == admin.id and body.is_active is False:
@@ -148,6 +159,8 @@ async def list_all_workspaces(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(Workspace.created_at.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
