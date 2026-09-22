@@ -69,8 +69,10 @@ async def test_permission_registry_covers_route_guards():
 
 
 async def test_permission_catalog_requires_auth(app_client):
-    resp = await app_client.get("/api/v1/roles/permission-catalog")
-    assert resp.status_code in (400, 401, 403)
+    resp = await app_client.get(
+        "/api/v1/roles/permission-catalog", headers={"X-Workspace-ID": "ws-does-not-exist"}
+    )
+    assert resp.status_code in (401, 403)
 
 
 async def test_permission_catalog_filtered_to_assignable(app_client):
@@ -255,6 +257,23 @@ async def test_update_system_role_converts_to_custom(app_client):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["system"] is False
+
+
+async def test_update_role_noop_keeps_system_flag(app_client):
+    client = app_client
+    owner = await register_user(client, "up-noop@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    editor_id = await _role_id(client, headers, "editor")
+    editor = (await client.get(f"/api/v1/roles/{editor_id}", headers=headers)).json()
+    assert editor["system"] is True
+    resp = await client.patch(
+        f"/api/v1/roles/{editor_id}",
+        json={"description": editor["description"], "permissions": editor["permissions"]},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["system"] is True
 
 
 async def test_update_role_duplicate_name_conflicts(app_client):
