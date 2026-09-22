@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useUpdate, useUpdateMany, type CrudFilters } from "@refinedev/core";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 import {
@@ -87,6 +87,10 @@ export function NotificationsPage() {
   const items = result?.data ?? [];
   const total = result?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  useEffect(() => {
+    if (current > totalPages) setCurrent(totalPages);
+  }, [current, totalPages]);
 
   const setStatus = (value: StatusFilter) => {
     setStatusFilter(value);
@@ -297,9 +301,10 @@ export function NotificationsPage() {
         </Table>
       </div>
 
+      {total > PAGE_SIZE && (
       <div className="flex items-center justify-between gap-2">
         <p className="text-muted-foreground text-sm">
-          Showing {total === 0 ? 0 : (current - 1) * PAGE_SIZE + 1}–{Math.min(current * PAGE_SIZE, total)} of {total}
+          Showing {(current - 1) * PAGE_SIZE + 1}–{Math.min(current * PAGE_SIZE, total)} of {total}
         </p>
         <div className="flex items-center gap-1">
           <Button
@@ -325,6 +330,7 @@ export function NotificationsPage() {
           </Button>
         </div>
       </div>
+      )}
 
       <Dialog open={viewing !== null} onOpenChange={(open) => !open && setViewing(null)}>
         <DialogContent className="max-w-lg">

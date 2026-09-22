@@ -27,6 +27,7 @@ from src.models.user_profile import UserProfile
 from src.models.webhook import WebhookSubscription
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.services.jobs import _mask_params
+from src.services.profile_helpers import escape_like
 from src.services.serializers import (
     notification_to_dict,
     public_projection,
@@ -42,10 +43,6 @@ _SEARCH_LIMIT = 5
 # response or paginate per conversation when workspaces outgrow these caps.
 _EXPORT_MESSAGES_CAP = 5000
 _EXPORT_NOTIFICATIONS_CAP = 5000
-
-
-def _escape_like(q: str) -> str:
-    return q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 # resource -> tabular CSV columns for ?format=csv&resource=<name>
@@ -94,7 +91,7 @@ class SearchExportService:
 
     async def search(self, *, workspace_id: str, user_id: str, q: str) -> dict:
         await _ensure_membership(self._session, workspace_id, user_id)
-        like = f"%{_escape_like(q.strip())}%"
+        like = f"%{escape_like(q.strip())}%"
         can_view_jobs = await self._can(workspace_id, user_id, JOB_VIEW)
         results: list[dict] = []
 

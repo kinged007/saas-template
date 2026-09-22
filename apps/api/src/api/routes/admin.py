@@ -21,7 +21,7 @@ from src.models.audit import AuditLogEntry
 from src.models.user_profile import UserProfile
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.schemas.api import AdminUserUpdate, AdminWorkspaceFlags
-from src.services.profile_helpers import format_display_name
+from src.services.profile_helpers import escape_like, format_display_name
 from src.services.serializers import user_to_dict, workspace_to_dict
 
 logger = logging.getLogger(__name__)
@@ -68,8 +68,13 @@ async def list_users(
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     for term in searches:
-        like = f"%{term}%"
-        stmt = stmt.where(or_(User.email.ilike(like), User.display_name.ilike(like)))
+        like = f"%{escape_like(term)}%"
+        stmt = stmt.where(
+            or_(
+                User.email.ilike(like, escape="\\"),
+                User.display_name.ilike(like, escape="\\"),
+            )
+        )
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
     stmt = stmt.offset(spec.offset).limit(spec.limit)
