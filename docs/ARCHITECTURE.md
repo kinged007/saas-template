@@ -70,7 +70,7 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 
 ## 4. Multi-tenancy & RBAC
 
-- JWT access token (15 min) carries `sub` (user id) only.
+- JWT access token (15 min) carries `sub` (user id) + `sid` (session id, bound to the refresh-token row; see §5).
 - Every workspace-scoped request sends `X-Workspace-ID: <uuid>`.
 - Dependency `require_permission("member:read")` resolves the user's
   membership + role → permission set for that workspace and rejects with 403
@@ -90,6 +90,12 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 |---|---|
 | Password | `POST /auth/login` → access + refresh; `POST /auth/refresh` (rotating, hashed opaque token in DB); `POST /auth/logout` revokes |
 | API keys | `Authorization: Bearer <key>`; permissions resolved per workspace |
+
+Session binding: every authenticated request costs one extra PK lookup
+(`is_session_active`) to enforce immediate revocation; if that ever hurts,
+use a short negative-cache on `(sid -> revoked)` with TTL, not a redesign.
+Pre-deploy access tokens without `sid` are grandfathered (valid until
+expiry, ≤15 min residual window).
 | Identity | `GET /auth/me` → current user + workspaces + permissions + embedded `profile` (auto-created, same shape as `GET /me/profile`) |
 
 ## 6. Events & pub/sub
@@ -155,7 +161,7 @@ Transient subject (core NATS, realtime fan-out, no persistence):
 
 Every user/automatic action publishes an audit event (`audit.entry.created`):
 `user.register/login/token_refresh/logout`, `workspace.created/updated/deleted`,
-`member.role_changed/removed`, `invitation.created/accepted/declined/revoked`,
+`member.role_changed/removed`, `invitation.created/accepted/declined/revoked`, `user.session_revoked/sessions_revoked`,
 `role.created`, `apikey.created/revoked`, `notification.acknowledged/
 unacknowledged`, `job.run_*`. The audit workflow persists them (committed) to
 `audit_log_entries`.
