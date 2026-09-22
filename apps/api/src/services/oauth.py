@@ -74,14 +74,6 @@ def get_provider(provider_id: str) -> ProviderConfig:
     raise OAuthError(f"unknown oauth provider '{provider_id}'")
 
 
-def list_providers() -> list[dict[str, str]]:
-    return [
-        {"id": p.get("id"), "display_name": p.get("display_name") or p.get("id")}
-        for p in settings.oauth_provider_list
-        if p.get("id")
-    ]
-
-
 async def _discovery(provider: ProviderConfig, cache: TtlCache) -> dict[str, Any]:
     """OIDC discovery document, cached; explicit URLs skip discovery entirely."""
     if provider.discovery_url is None and provider.issuer is None:
@@ -218,7 +210,9 @@ def normalize_identity(
 ) -> dict[str, Any]:
     """subject + email + names from id_token claims merged over userinfo.
 
-    GitHub (no OIDC) arrives claims-less: sub falls back to userinfo id/login.
+    Claims win on key collision: the signed id_token is authoritative over
+    the bearer-token userinfo response. GitHub (no OIDC) arrives
+    claims-less: sub falls back to userinfo id/login.
     """
     merged = {**(userinfo or {}), **(claims or {})}
     subject = str(merged.get("sub") or merged.get("id") or merged.get("login") or "")

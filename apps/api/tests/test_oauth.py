@@ -214,3 +214,29 @@ async def test_password_login_blocked_when_disabled(app_client, monkeypatch):
         assert resp.json()["detail"] == "password login is disabled"
     finally:
         monkeypatch.setattr(settings, "auth_password_enabled", True)
+
+
+async def test_password_reset_blocked_when_password_disabled(app_client, monkeypatch):
+    await register_user(app_client, "nopw@example.com")
+    monkeypatch.setattr(settings, "auth_password_enabled", False)
+    try:
+        resp = await app_client.post(
+            "/api/v1/auth/forgot-password", json={"email": "nopw@example.com"}
+        )
+        assert resp.status_code == 202  # shape kept, no token minted
+        resp = await app_client.post(
+            "/api/v1/auth/reset-password",
+            json={"token": "bogus", "new_password": "NewPassword123!"},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "password login is disabled"
+    finally:
+        monkeypatch.setattr(settings, "auth_password_enabled", True)
+
+
+async def test_oauth_error_redirect_allowlisted(app_client, oauth_on):
+    resp = await app_client.get(
+        "/api/v1/auth/oauth/testidp/callback?code=x&state=bogus", follow_redirects=False
+    )
+    assert resp.status_code == 302
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=")

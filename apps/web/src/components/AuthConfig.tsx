@@ -22,7 +22,7 @@ export async function fetchAuthConfig(): Promise<AuthConfig> {
     const { data } = await httpClient.get<AuthConfig>(`${API_URL}/auth/config`);
     cached = data;
   } catch {
-    cached = { registration_enabled: true, password_enabled: true, oauth_enabled: false, providers: [] };
+    cached = { registration_enabled: false, password_enabled: false, oauth_enabled: false, providers: [] };
   }
   return cached;
 }

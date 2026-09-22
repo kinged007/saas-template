@@ -23,6 +23,7 @@ from src.api.routes.auth import (
     _maybe_join_single_workspace,
     _user_agent,
 )
+from src.core.security.ratelimit import get_auth_limiter
 from src.db.session import get_db
 from src.services.auth import AuthError, AuthService
 from src.services.oauth import (
@@ -57,17 +58,29 @@ def _frontend_callback(code: str) -> str:
     return f"{settings.frontend_url.rstrip('/')}/oauth/callback?code={code}"
 
 
+ALLOWED_OAUTH_ERRORS = frozenset(
+    {
+        "missing code or state",
+        "invalid or expired state",
+        "sign-in failed",
+        "registration is disabled",
+    }
+)
+
+
 def _error_redirect(detail: str) -> RedirectResponse:
     from src.settings import settings
 
     base = settings.frontend_url.rstrip("/")
-    return RedirectResponse(f"{base}/login?error={detail}", status_code=302)
+    safe = detail if detail in ALLOWED_OAUTH_ERRORS else "sign-in failed"
+    return RedirectResponse(f"{base}/login?error={safe}", status_code=302)
 
 
 @router.get("/{provider_id}/authorize")
 async def oauth_authorize(provider_id: str, request: Request):
     from src.services.oauth import _discovery
 
+    get_auth_limiter().check(f"oauth:{_client_ip(request) or 'unknown'}:{provider_id}")
     container = get_container(request)
     try:
         provider = get_provider(provider_id)
@@ -89,6 +102,7 @@ async def oauth_callback(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
+    get_auth_limiter().check(f"oauth:{_client_ip(request) or 'unknown'}:{provider_id}")
     container = get_container(request)
     code = request.query_params.get("code")
     state = request.query_params.get("state")
@@ -160,7 +174,12 @@ async def oauth_callback(
 
 
 @router.post("/token")
-async def oauth_token(body: OAuthTokenRequest, request: Request):
+async def oauth_token(
+    body: OAuthTokenRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    get_auth_limiter().check(f"oauth:{_client_ip(request) or 'unknown'}:token")
     container = get_container(request)
     entry = container.cache.get(CODE_TTL_HINT + body.code)
     if entry is None:
@@ -172,9 +191,9 @@ async def oauth_token(body: OAuthTokenRequest, request: Request):
         from src.services.two_factor import TwoFactorService
 
         challenge = TwoFactorService(
-            None,
+            db,
             container.cipher,
-            container.bus,  # type: ignore[arg-type]
+            container.bus,
         ).issue_challenge(entry["user_id"])
         return {"challenge_token": challenge, "two_factor_required": True}
     return {

@@ -152,6 +152,8 @@ async def forgot_password(
     container=Depends(get_container),
 ) -> dict:
     # Always 202 — never reveal whether the email is registered.
+    if not settings.auth_password_enabled:
+        return {"detail": "if an account exists for this email, a reset link was sent"}
     raw = await AuthService(db, container.bus).request_password_reset(
         str(body.email), ip_address=_client_ip(request)
     )
@@ -175,11 +177,16 @@ async def reset_password(
     container=Depends(get_container),
 ) -> dict:
     try:
+        if not settings.auth_password_enabled:
+            raise AuthError("password login is disabled")
         await AuthService(db, container.bus).reset_password(
             body.token, body.new_password, ip_address=_client_ip(request)
         )
     except AuthError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+        msg = str(exc)
+        if msg == "password login is disabled":
+            raise HTTPException(status.HTTP_403_FORBIDDEN, msg) from None
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, msg) from None
     return {"detail": "password updated"}
 
 
