@@ -15,6 +15,7 @@ from src.models.jobs import (
     JobLogEntry,
     JobRun,
 )
+from src.models.oauth import OAuthAccount
 from src.models.secret import StoredSecret
 from src.models.two_factor import UserTotpCredential
 from src.models.user_profile import UserProfile
@@ -41,6 +42,7 @@ __all__ = [
     "Message",
     "Notification",
     "NotificationPreference",
+    "OAuthAccount",
     "RefreshToken",
     "Role",
     "StoredSecret",

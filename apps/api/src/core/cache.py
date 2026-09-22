@@ -33,6 +33,10 @@ class TtlCache:
                 return None
             return copy.deepcopy(value)
 
+    def delete(self, key: str) -> None:
+        with self._lock:
+            self._store.pop(key, None)
+
     def set(self, key: str, value: Any) -> None:
         with self._lock:
             self._store[key] = (time.monotonic() + self._ttl, value)

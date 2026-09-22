@@ -70,6 +70,17 @@ class Settings(BaseSettings):
     # superuser (global jobs, etc.). Empty disables the bootstrap.
     superadmin_email: str = ""
 
+    # Auth methods: registration kill-switch and password kill-switch (SSO-only mode).
+    auth_allow_registration: bool = True
+    auth_password_enabled: bool = True
+    # Generic OIDC/OAuth2 providers as a JSON list. Each entry:
+    # {id, display_name?, discovery_url?, issuer?, authorize_url?, token_url?,
+    #  userinfo_url?, jwks_uri?, client_id, client_secret, scopes?}.
+    # discovery_url (or issuer + /.well-known/openid-configuration) covers
+    # Google/Microsoft Entra/Okta/GitLab; explicit endpoint URLs cover
+    # non-OIDC providers like GitHub. Secrets come from env, never committed.
+    oauth_providers: str = ""
+
     # Auth brute-force protection: failures allowed per (IP, account) per window.
     auth_rate_limit_max_attempts: int = 10
     auth_rate_limit_window_seconds: int = 300
@@ -113,6 +124,20 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def oauth_provider_list(self) -> list[dict]:
+        """Parsed OAUTH_PROVIDERS JSON (empty list when unset or invalid)."""
+        import json as _json
+
+        raw = (self.oauth_providers or "").strip()
+        if not raw:
+            return []
+        try:
+            parsed = _json.loads(raw)
+        except ValueError:
+            return []
+        return parsed if isinstance(parsed, list) else []
 
 
 settings = Settings()

@@ -19,6 +19,7 @@ from src.api.routes import (
     members,
     meta,
     notifications,
+    oauth,
     profiles,
     roles,
     webhooks,
@@ -141,6 +142,7 @@ API = "/api/v1"
 app.include_router(meta.router, prefix=API)
 app.include_router(admin.router, prefix=API)
 app.include_router(auth.router, prefix=API)
+app.include_router(oauth.router, prefix=API)
 app.include_router(workspaces.router, prefix=API)
 app.include_router(members.router, prefix=API)
 app.include_router(invitations.router, prefix=API)
