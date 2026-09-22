@@ -25,6 +25,30 @@ async def test_revoked_session_access_token_rejected(app_client):
     assert resp.status_code == 200, resp.text
 
 
+async def test_session_routes_reject_api_key_callers(app_client):
+    from tests.conftest import create_workspace
+
+    client = app_client
+    tokens = await register_user(client, "sesskey@example.com")
+    workspace = await create_workspace(client, tokens)
+    resp = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "k", "permissions": ["*"]},
+        headers={**auth_headers(tokens), "X-Workspace-ID": workspace["id"]},
+    )
+    assert resp.status_code == 201, resp.text
+    key_headers = {
+        "Authorization": f"Bearer {resp.json()['key']}",
+        "X-Workspace-ID": workspace["id"],
+    }
+    resp = await client.get("/api/v1/auth/sessions", headers=key_headers)
+    assert resp.status_code == 403, resp.text
+    resp = await client.delete("/api/v1/auth/sessions", headers=key_headers)
+    assert resp.status_code == 403, resp.text
+    resp = await client.delete("/api/v1/auth/sessions/anything", headers=key_headers)
+    assert resp.status_code == 403, resp.text
+
+
 async def test_revoke_all_sessions(app_client):
     client = app_client
     t1 = await register_user(client, "all@example.com")

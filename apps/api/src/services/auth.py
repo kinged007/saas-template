@@ -282,6 +282,64 @@ class AuthService:
         )
         return pair
 
+    async def revoke_session(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        current_session_id: str | None,
+        ip_address: str | None = None,
+    ) -> None:
+        """Revoke one session; raises AuthError when it is current or unknown."""
+        if session_id == current_session_id:
+            raise AuthError("cannot revoke the current session")
+        rows = await self.list_sessions(user_id)
+        row = next((r for r in rows if r.id == session_id), None)
+        if row is None:
+            raise AuthError("session not found")
+        if row.revoked_at is None:
+            row.revoked_at = now_utc()
+            await self._session.commit()
+            logger.info("session revoked user=%s session=%s", user_id, session_id)
+            await publish_audit(
+                self._bus,
+                workspace_id=None,
+                resource_type="user",
+                resource_id=user_id,
+                action="user.session_revoked",
+                actor_user_id=user_id,
+                details={"session_id": session_id},
+                ip_address=ip_address,
+            )
+
+    async def revoke_other_sessions(
+        self, user_id: str, *, current_session_id: str | None, ip_address: str | None = None
+    ) -> int:
+        """Revoke every live session except the current one; returns the count."""
+        rows = await self.list_sessions(user_id)
+        now = now_utc()
+        count = 0
+        for r in rows:
+            if r.id == current_session_id:
+                continue
+            if r.revoked_at is None and ensure_utc(r.expires_at) >= now:
+                r.revoked_at = now
+                count += 1
+        if count:
+            await self._session.commit()
+            logger.info("other sessions revoked user=%s count=%d", user_id, count)
+            await publish_audit(
+                self._bus,
+                workspace_id=None,
+                resource_type="user",
+                resource_id=user_id,
+                action="user.sessions_revoked",
+                actor_user_id=user_id,
+                details={"revoked_count": count},
+                ip_address=ip_address,
+            )
+        return count
+
     async def list_sessions(self, user_id: str) -> list[RefreshToken]:
         stmt = (
             select(RefreshToken)
