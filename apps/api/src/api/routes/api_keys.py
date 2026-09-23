@@ -3,9 +3,10 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.crud import InvalidQuery, parse_query
+from src.api.crud import InvalidQuery, apply_query, parse_query
 from src.api.deps import (
     get_container,
     get_current_user,
@@ -53,18 +54,20 @@ async def list_api_keys(
     _=Depends(require_permission(APIKEY_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    # Personal scope is owned by the service — the route only handles HTTP.
+    # API keys are personal credentials: each caller sees exactly their own
+    # keys, never another member's — regardless of role or "*" permission.
+    # The route parses the HTTP query; the service owns the owner predicate.
+    stmt = select(ApiKey).order_by(ApiKey.created_at.desc())
     try:
         spec = parse_query(request)
-        keys, total = await ApiKeyService(db).list_for_user(
-            workspace_id,
-            user.id,
-            spec=spec,
-            sortable=_APIKEY_SORTABLE,
-            filterable=_APIKEY_FILTERABLE,
+        stmt = apply_query(
+            stmt, ApiKey, spec, sortable=_APIKEY_SORTABLE, filterable=_APIKEY_FILTERABLE
         )
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    total = await ApiKeyService(db).count_for_user(workspace_id, user.id, stmt=stmt)
+    stmt = stmt.offset(spec.offset).limit(spec.limit)
+    keys = await ApiKeyService(db).list_for_user(workspace_id, user.id, stmt=stmt)
     response.headers["X-Total-Count"] = str(total)
     return [_key_dict(k) for k in keys]
 

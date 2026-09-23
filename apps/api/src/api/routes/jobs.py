@@ -20,7 +20,6 @@ from src.api.crud import InvalidQuery, apply_query, parse_query
 from src.api.deps import (
     AuthPrincipal,
     get_container,
-    get_current_user,
     get_current_workspace_id,
     require_permission,
     require_superuser,
@@ -164,13 +163,13 @@ async def list_global_job_runs(
 @router.get("/runs/{run_id}")
 async def get_job_run(
     run_id: str,
-    user=Depends(get_current_user),
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
 ):
     run = await JobService(db).get_run(run_id)
     if run is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
-    await _require_run_access(db, user, run)
+    await _require_run_access(db, principal, run)
     schema = {}
     definition = await JobService(db).get_definition(run.definition_id)
     if definition is not None:
@@ -181,24 +180,35 @@ async def get_job_run(
 @router.get("/runs/{run_id}/logs")
 async def get_job_run_logs(
     run_id: str,
-    user=Depends(get_current_user),
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
 ):
     service = JobService(db)
     run = await service.get_run(run_id)
     if run is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
-    await _require_run_access(db, user, run)
+    await _require_run_access(db, principal, run)
     return [job_log_to_dict(e) for e in await service.list_run_logs(run_id)]
 
 
-async def _require_run_access(db: AsyncSession, user, run: JobRun) -> None:
-    """Global runs are superuser-only; workspace runs need jobs:view there."""
+async def _require_run_access(db: AsyncSession, principal: AuthPrincipal, run: JobRun) -> None:
+    """Global runs are superuser-only; workspace runs need jobs:view there.
+
+    Takes the full principal (not just the user) so API keys resolve
+    through their own permission list — never the creator's session power."""
     if run.workspace_id is None:
-        if not user.is_superuser:
+        # Deployment-wide, like require_superuser: keys never qualify.
+        if principal.api_key is not None or not principal.user.is_superuser:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "superuser access required")
         return
-    membership = await WorkspaceService(db).get_membership(run.workspace_id, user.id)
+    if principal.api_key is not None:
+        api_key = principal.api_key
+        if api_key.workspace_id != run.workspace_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "job run not found")
+        if "*" in api_key.permissions or JOB_VIEW in api_key.permissions:
+            return
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"missing permission: {JOB_VIEW}") from None
+    membership = await WorkspaceService(db).get_membership(run.workspace_id, principal.user.id)
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership

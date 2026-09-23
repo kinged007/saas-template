@@ -716,6 +716,7 @@ async def test_effective_permissions_requires_apikey_read(app_client):
 
 # --------------------------------------------- deployment-wide power
 
+
 async def test_superuser_key_cannot_reach_superuser_routes(app_client):
     """Keys never inherit deployment-wide power, even from a superuser.
 
@@ -728,15 +729,30 @@ async def test_superuser_key_cannot_reach_superuser_routes(app_client):
     ws = await create_workspace(client, root)
     key = await _create_key(client, ws_headers(root, ws["id"]), "root-key", ["*"])
     key_headers = _key_headers(key["key"], ws["id"])
+    target = await register_user(client, "target93@example.com")
+    target_id = (await client.get("/api/v1/auth/me", headers=auth_headers(target))).json()["id"]
     for method, url in [
         ("get", "/api/v1/admin/users"),
         ("get", "/api/v1/admin/workspaces"),
         ("get", "/api/v1/jobs/global"),
+        ("get", f"/api/v1/users/{target_id}/export"),
     ]:
         resp = await client.request(method, url, headers=key_headers)
         assert resp.status_code == 403, (method, url, resp.text)
+    # Keys also lose the creator's per-user superuser bypasses: a wildcard
+    # key cannot read another user's profile or delete another account,
+    # and a global job run is unreachable even for the minting key.
+    other = await register_user(client, "other93@example.com")
+    other_id = (await client.get("/api/v1/auth/me", headers=auth_headers(other))).json()["id"]
+    resp = await client.get(f"/api/v1/users/{other_id}/profile", headers=key_headers)
+    assert resp.status_code == 404, resp.text
+    resp = await client.request(
+        "delete", f"/api/v1/users/{other_id}", json={"confirm": True}, headers=key_headers
+    )
+    assert resp.status_code == 403, resp.text
     session = await client.get("/api/v1/admin/users", headers=auth_headers(root))
     assert session.status_code == 200, session.text
+
 
 # ------------------------------------------------------------------- seed
 

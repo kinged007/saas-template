@@ -5,8 +5,8 @@ import secrets
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import Select
 
-from src.api.crud import QuerySpec, apply_query
 from src.core.dates import now_utc
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
@@ -148,39 +148,38 @@ class ApiKeyService:
         workspace_id: str,
         created_by_user_id: str,
         *,
-        spec: QuerySpec | None = None,
-        sortable: set[str] | None = None,
-        filterable: set[str] | None = None,
-    ) -> tuple[list[ApiKey], int]:
+        stmt: Select | None = None,
+    ) -> list[ApiKey]:
         """Keys owned by one user in one workspace — never anyone else's.
 
-        The personal-scope predicate lives here (not in the route) so all
-        key reads share one owner. Returns (keys, total) for the query spec."""
-        stmt = select(ApiKey).where(
+        Accepts a caller-built statement (already filtered/sorted/paginated)
+        so the route keeps owning HTTP query parsing while the personal-scope
+        predicate lives here. Applies the owner predicate on top."""
+        base = stmt if stmt is not None else select(ApiKey)
+        scoped = base.where(
             ApiKey.workspace_id == workspace_id,
             ApiKey.created_by_user_id == created_by_user_id,
         )
-        if spec is not None:
-            stmt = apply_query(
-                stmt, ApiKey, spec,
-                sortable=sortable or set(),
-                filterable=filterable or set(),
-            )
-        count = await self._session.execute(
-            select(func.count()).select_from(stmt.order_by(None).subquery())
-        )
-        total = count.scalar_one()
-        if spec is not None:
-            stmt = stmt.offset(spec.offset).limit(spec.limit)
-        else:
-            stmt = stmt.order_by(ApiKey.created_at.desc())
-        result = await self._session.execute(stmt)
-        return list(result.scalars().all()), total
+        result = await self._session.execute(scoped)
+        return list(result.scalars().all())
 
-    async def list_api_keys(self, workspace_id: str, created_by_user_id: str) -> list[ApiKey]:
-        """Keys owned by one user in one workspace — never anyone else's."""
-        keys, _ = await self.list_for_user(workspace_id, created_by_user_id)
-        return keys
+    async def count_for_user(
+        self,
+        workspace_id: str,
+        created_by_user_id: str,
+        *,
+        stmt: Select | None = None,
+    ) -> int:
+        """Total owned keys for a caller-built (filtered, unsliced) statement."""
+        base = stmt if stmt is not None else select(ApiKey)
+        scoped = base.where(
+            ApiKey.workspace_id == workspace_id,
+            ApiKey.created_by_user_id == created_by_user_id,
+        )
+        count = await self._session.execute(
+            select(func.count()).select_from(scoped.order_by(None).subquery())
+        )
+        return count.scalar_one()
 
     async def revoke_api_key(
         self,
