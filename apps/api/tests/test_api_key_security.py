@@ -714,6 +714,30 @@ async def test_effective_permissions_requires_apikey_read(app_client):
     assert "*" in resp.json()["permissions"]
 
 
+# --------------------------------------------- deployment-wide power
+
+async def test_superuser_key_cannot_reach_superuser_routes(app_client):
+    """Keys never inherit deployment-wide power, even from a superuser.
+
+    Regression test for #93: `require_superuser` 403s key-authenticated
+    requests while the superuser's own session token still passes."""
+    client = app_client
+    root = await register_user(client, "root@example.com")  # SUPERADMIN_EMAIL
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(root))
+    assert me.json()["is_superuser"] is True
+    ws = await create_workspace(client, root)
+    key = await _create_key(client, ws_headers(root, ws["id"]), "root-key", ["*"])
+    key_headers = _key_headers(key["key"], ws["id"])
+    for method, url in [
+        ("get", "/api/v1/admin/users"),
+        ("get", "/api/v1/admin/workspaces"),
+        ("get", "/api/v1/jobs/global"),
+    ]:
+        resp = await client.request(method, url, headers=key_headers)
+        assert resp.status_code == 403, (method, url, resp.text)
+    session = await client.get("/api/v1/admin/users", headers=auth_headers(root))
+    assert session.status_code == 200, session.text
+
 # ------------------------------------------------------------------- seed
 
 

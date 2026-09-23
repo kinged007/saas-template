@@ -86,12 +86,18 @@ async def get_current_user(
 
 
 async def require_superuser(
-    user: Annotated[User, Depends(get_current_user)],
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
 ) -> User:
-    """Gate deployment-wide administration (e.g. global scheduled jobs)."""
-    if not user.is_superuser:
+    """Gate deployment-wide administration (e.g. global scheduled jobs).
+
+    API keys never carry deployment-wide power, even when minted by a
+    superuser: keys are workspace-scoped credentials, so key-authenticated
+    requests always 403 here."""
+    if principal.api_key is not None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "superuser access required")
-    return user
+    if not principal.user.is_superuser:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "superuser access required")
+    return principal.user
 
 
 async def get_current_workspace_id(
