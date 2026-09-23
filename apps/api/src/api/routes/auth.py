@@ -78,6 +78,24 @@ async def _maybe_join_single_workspace(db: AsyncSession, container, user) -> Non
     await WorkspaceService(db, container.bus).join_single_workspace(user)
 
 
+@router.get("/config")
+async def auth_config() -> dict:
+    """Public auth capabilities for the login UI (no secrets)."""
+    return {
+        "registration_enabled": settings.auth_allow_registration,
+        "password_enabled": settings.auth_password_enabled,
+        "oauth_enabled": bool(settings.oauth_provider_list),
+        "providers": [
+            {
+                "id": p.get("id"),
+                "display_name": p.get("display_name") or p.get("id"),
+            }
+            for p in settings.oauth_provider_list
+            if p.get("id")
+        ],
+    }
+
+
 @router.post("/register", response_model=TokenResponse, status_code=201)
 async def register(
     body: RegisterRequest,
@@ -93,6 +111,8 @@ async def register(
             "first_name and last_name are required (or display_name deprecated)",
         )
     # If only one of first/last provided without the other, still allow but derive
+    if not settings.auth_allow_registration:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "registration is disabled")
     try:
         user = await service.register(
             email=body.email,
@@ -104,6 +124,8 @@ async def register(
         )
     except AuthError as exc:
         msg = str(exc)
+        if msg == "registration is disabled":
+            raise HTTPException(status.HTTP_403_FORBIDDEN, msg) from None
         # Map missing names to 422, else 409
         if "first_name and last_name" in msg:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, msg) from None
@@ -130,6 +152,8 @@ async def forgot_password(
     container=Depends(get_container),
 ) -> dict:
     # Always 202 — never reveal whether the email is registered.
+    if not settings.auth_password_enabled:
+        return {"detail": "if an account exists for this email, a reset link was sent"}
     raw = await AuthService(db, container.bus).request_password_reset(
         str(body.email), ip_address=_client_ip(request)
     )
@@ -153,11 +177,16 @@ async def reset_password(
     container=Depends(get_container),
 ) -> dict:
     try:
+        if not settings.auth_password_enabled:
+            raise AuthError("password login is disabled")
         await AuthService(db, container.bus).reset_password(
             body.token, body.new_password, ip_address=_client_ip(request)
         )
     except AuthError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+        msg = str(exc)
+        if msg == "password login is disabled":
+            raise HTTPException(status.HTTP_403_FORBIDDEN, msg) from None
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, msg) from None
     return {"detail": "password updated"}
 
 
@@ -200,6 +229,8 @@ async def login(
 ) -> TokenResponse:
     key = _limit_key(request, body.email)
     get_auth_limiter().check(key)
+    if not settings.auth_password_enabled:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "password login is disabled")
     service = AuthService(db, container.bus)
     try:
         user = await service.login_password(
@@ -207,7 +238,10 @@ async def login(
         )
     except AuthError as exc:
         get_auth_limiter().fail(key)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+        msg = str(exc)
+        if msg in ("password login is disabled",):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, msg) from None
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, msg) from None
     get_auth_limiter().reset(key)
     try:
         await _maybe_join_single_workspace(db, container, user)
@@ -258,12 +292,20 @@ async def refresh(
     return TokenResponse(**pair.__dict__)
 
 
+def _require_session_user(principal: AuthPrincipal) -> None:
+    """Session routes are a user-session concept; API keys carry no session."""
+    if principal.api_key is not None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "session management is not available to API keys"
+        )
+
+
 def _session_to_dict(row, *, current: bool) -> dict:
     return {
         "id": row.id,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-        "expires_at": row.expires_at.isoformat() if row.expires_at else None,
-        "revoked_at": row.revoked_at.isoformat() if row.revoked_at else None,
+        "created_at": row.created_at,
+        "expires_at": row.expires_at,
+        "revoked_at": row.revoked_at,
         "ip_address": row.ip_address,
         "user_agent": row.user_agent,
         "current": current,
@@ -390,6 +432,7 @@ async def list_sessions(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    _require_session_user(principal)
     _ = container
     rows = await AuthService(db).list_sessions(principal.user.id)
     now = now_utc()
@@ -402,23 +445,17 @@ async def list_sessions(
 
 @router.delete("/sessions", status_code=204)
 async def revoke_all_sessions(
+    request: Request,
     principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> None:
-    _ = container
-    rows = await AuthService(db).list_sessions(principal.user.id)
-    now = now_utc()
-    changed = False
-    for r in rows:
-        if r.id == principal.session_id:
-            continue
-        if r.revoked_at is None and ensure_utc(r.expires_at) >= now:
-            r.revoked_at = now
-            changed = True
-    if changed:
-        await db.commit()
-        logger.info("other sessions revoked user=%s", principal.user.id)
+    _require_session_user(principal)
+    await AuthService(db, container.bus).revoke_other_sessions(
+        principal.user.id,
+        current_session_id=principal.session_id,
+        ip_address=_client_ip(request),
+    )
 
 
 @router.post("/logout", status_code=204)
@@ -436,21 +473,24 @@ async def logout(
 @router.delete("/sessions/{session_id}", status_code=204)
 async def revoke_session(
     session_id: str,
+    request: Request,
     principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> None:
-    _ = container
-    if session_id == principal.session_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "cannot revoke the current session")
-    rows = await AuthService(db).list_sessions(principal.user.id)
-    row = next((r for r in rows if r.id == session_id), None)
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "session not found")
-    if row.revoked_at is None:
-        row.revoked_at = now_utc()
-        await db.commit()
-        logger.info("session revoked user=%s session=%s", principal.user.id, session_id)
+    _require_session_user(principal)
+    try:
+        await AuthService(db, container.bus).revoke_session(
+            principal.user.id,
+            session_id,
+            current_session_id=principal.session_id,
+            ip_address=_client_ip(request),
+        )
+    except AuthError as exc:
+        msg = str(exc)
+        if msg == "cannot revoke the current session":
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, msg) from None
+        raise HTTPException(status.HTTP_404_NOT_FOUND, msg) from None
 
 
 @router.get("/me")

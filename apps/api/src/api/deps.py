@@ -130,6 +130,17 @@ def _quota_headers(api_key: ApiKey) -> dict[str, str]:
     }
 
 
+async def record_key_use(api_key: ApiKey, db: AsyncSession, response: Response) -> None:
+    """Quota-check + touch + headers for key-authenticated requests.
+
+    Shared by require_key_permission and require_permission so the two
+    branches cannot drift."""
+    _check_key_quota(api_key)
+    await ApiKeyService(db).touch(api_key)
+    for k, v in _quota_headers(api_key).items():
+        response.headers[k] = v
+
+
 def require_key_permission(permission: str):
     """Enforce a permission for API-key requests only.
 
@@ -155,10 +166,7 @@ def require_key_permission(permission: str):
                 status.HTTP_403_FORBIDDEN, "api key is not scoped to this workspace"
             )
         if "*" in api_key.permissions or permission in api_key.permissions:
-            _check_key_quota(api_key)
-            await ApiKeyService(db).touch(api_key)
-            for k, v in _quota_headers(api_key).items():
-                response.headers[k] = v
+            await record_key_use(api_key, db, response)
             return None
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, f"missing permission: {permission}"
@@ -195,10 +203,7 @@ def require_permission(permission: str):
                     status.HTTP_403_FORBIDDEN, "api key is not scoped to this workspace"
                 )
             if "*" in api_key.permissions or permission in api_key.permissions:
-                _check_key_quota(api_key)
-                await ApiKeyService(db).touch(api_key)
-                for k, v in _quota_headers(api_key).items():
-                    response.headers[k] = v
+                await record_key_use(api_key, db, response)
                 return None
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, f"missing permission: {permission}"

@@ -395,3 +395,9 @@ async def test_list_invitations_pagination(app_client):
     assert resp.headers["X-Total-Count"] == "3"
     assert len(resp.json()) == 1
     assert resp.json()[0]["email"] == "inv_page_2@example.com"
+
+    resp = await client.get("/api/v1/invitations?_start=2&_end=4", headers=owner_headers)
+    assert resp.status_code == 200
+    assert resp.headers["X-Total-Count"] == "3"
+    assert len(resp.json()) == 1
+    assert resp.json()[0]["email"] == "inv_page_2@example.com"

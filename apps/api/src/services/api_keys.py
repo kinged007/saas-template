@@ -223,9 +223,14 @@ class ApiKeyService:
         actor: User | None = None,
         ip_address: str | None = None,
     ) -> ApiKey:
-        """Set (or clear with None) a key's quota. Personal scope: checked by route."""
+        """Set (or clear with None) a key's quota.
+
+        Personal scope, like revoke: only the key's owner may change its
+        quota (404, not 403, so another user's key id is not leaked)."""
         key = await self._session.get(ApiKey, api_key_id)
         if key is None or key.workspace_id != workspace_id:
+            raise ApiKeyNotFound("api key not found")
+        if actor is not None and key.created_by_user_id != actor.id:
             raise ApiKeyNotFound("api key not found")
         if usage_quota is not None and usage_quota < 0:
             raise ApiKeyError("usage quota cannot be negative")

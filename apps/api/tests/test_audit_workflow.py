@@ -157,6 +157,34 @@ async def test_api_key_create_persists_audit(app_client):
     assert await _wait_for(lambda: _actions_contain("apikey.revoked"))
 
 
+async def test_session_revoke_persists_audit_rows(app_client):
+    from tests.conftest import auth_headers, login, register_user
+
+    client = app_client
+    await register_user(client, "audit6@example.com")
+    t2 = await login(client, "audit6@example.com")
+    h2 = auth_headers(t2)
+    assert await _wait_for(lambda: _actions_contain("user.login"))
+
+    resp = await client.get("/api/v1/auth/sessions", headers=h2)
+    assert resp.status_code == 200, resp.text
+    other = next(s for s in resp.json() if not s["current"])
+    resp = await client.delete(f"/api/v1/auth/sessions/{other['id']}", headers=h2)
+    assert resp.status_code == 204, resp.text
+    assert await _wait_for(lambda: _actions_contain("user.session_revoked"))
+
+    t3 = await login(client, "audit6@example.com")
+    resp = await client.delete("/api/v1/auth/sessions", headers=auth_headers(t3))
+    assert resp.status_code == 204, resp.text
+    assert await _wait_for(lambda: _actions_contain("user.sessions_revoked"))
+
+    rows = [r for r in await _audit_rows() if r.action.startswith("user.session")]
+    assert [r.action for r in rows] == ["user.session_revoked", "user.sessions_revoked"]
+    for row in rows:
+        assert row.workspace_id is None
+        assert row.resource_type == "user"
+
+
 async def test_audit_rows_carry_ip_address(app_client):
     await app_client.post(
         "/api/v1/auth/register",

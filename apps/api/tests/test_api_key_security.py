@@ -492,6 +492,37 @@ async def test_user_cannot_revoke_anothers_api_key(app_client):
     ).status_code == 204
 
 
+async def test_user_cannot_set_quota_on_anothers_api_key(app_client):
+    """PATCH quota on someone else's key 404s and leaves the quota untouched."""
+    client = app_client
+    owner = await register_user(client, "xavier@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+
+    editor = await _add_member(client, owner_headers, ws["id"], "yara@example.com", "editor")
+    editor_headers = ws_headers(editor, ws["id"])
+
+    admin_key = await _create_key(client, owner_headers, "admins", ["member:read"])
+
+    resp = await client.patch(
+        f"/api/v1/api-keys/{admin_key['id']}",
+        json={"usage_quota": 5},
+        headers=editor_headers,
+    )
+    assert resp.status_code == 404, resp.text
+
+    listing = (await client.get("/api/v1/api-keys", headers=owner_headers)).json()
+    assert next(k for k in listing if k["id"] == admin_key["id"])["usage_quota"] is None
+
+    resp = await client.patch(
+        f"/api/v1/api-keys/{admin_key['id']}",
+        json={"usage_quota": 5},
+        headers=owner_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["usage_quota"] == 5
+
+
 async def test_key_minted_by_a_key_is_capped_by_the_minting_key(app_client):
     """A key can never mint a new key carrying a permission it doesn't hold,
     even though its human owner's role is broader."""

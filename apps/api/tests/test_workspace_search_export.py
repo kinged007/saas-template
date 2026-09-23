@@ -139,11 +139,18 @@ async def test_search_escapes_like_wildcards(app_client):
     # "%_%" matches every row as wildcards; literally it appears nowhere.
     client, h, ws, conv = await _setup(app_client)
     resp = await client.get("/api/v1/workspaces/search", params={"q": "%"}, headers=h)
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["results"] == []
+    assert resp.status_code == 422, resp.text
     resp = await client.get("/api/v1/workspaces/search", params={"q": "%_%"}, headers=h)
     assert resp.status_code == 200, resp.text
     assert resp.json()["results"] == []
+
+
+async def test_conversation_list_escapes_like_wildcards(app_client):
+    # "%" appears in no title; unescaped it would match every conversation.
+    client, h, ws, conv = await _setup(app_client)
+    resp = await client.get("/api/v1/conversations", params={"q": "%"}, headers=h)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []
 
 
 async def test_export_strips_superuser_and_rejects_bad_format(app_client):
@@ -164,10 +171,13 @@ async def test_export_strips_superuser_and_rejects_bad_format(app_client):
     assert csv_resp.text.splitlines()[0] == "key,name,enabled,cron_schedule,next_run_at"
 
 
-async def test_search_rejects_blank_and_non_member(app_client):
+async def test_search_rejects_blank_and_short_and_non_member(app_client):
     client, h, ws, conv = await _setup(app_client)
     assert (
         await client.get("/api/v1/workspaces/search", params={"q": " "}, headers=h)
+    ).status_code == 422
+    assert (
+        await client.get("/api/v1/workspaces/search", params={"q": "z"}, headers=h)
     ).status_code == 422
     outsider = await register_user(client, "outsider@example.com")
     from tests.conftest import auth_headers

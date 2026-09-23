@@ -79,6 +79,8 @@ class AuthService:
         ip_address: str | None = None,
     ) -> User:
         email = email.lower()
+        if not settings.auth_allow_registration:
+            raise AuthError("registration is disabled")
         if await self.get_by_email(email):
             raise AuthError("an account with this email already exists")
         # Derive names — prefer explicit first/last, fallback to splitting display_name
@@ -148,7 +150,35 @@ class AuthService:
         first_name: str | None = None,
         last_name: str | None = None,
     ) -> User:
-        """Find or create a user for an OAuth identity. Links by verified email."""
+        """Find or create a user for an OAuth identity.
+
+        Links by (provider, subject) first so identity survives email changes;
+        falls back to verified email on first connect, so multiple providers
+        sharing an email link to the same user. New users are rejected when
+        AUTH_ALLOW_REGISTRATION is off — before any insert."""
+        from src.models.oauth import OAuthAccount
+
+        stmt = select(OAuthAccount).where(
+            OAuthAccount.provider == provider, OAuthAccount.subject == subject
+        )
+        link = (await self._session.execute(stmt)).scalar_one_or_none()
+        if link is not None:
+            user = await self._session.get(User, link.user_id)
+            if user is not None:
+                if not user.is_active:
+                    raise AuthError("account is disabled")
+                user.last_login_at = now_utc()
+                await self._session.commit()
+                await publish_audit(
+                    self._bus,
+                    workspace_id=None,
+                    resource_type="user",
+                    resource_id=user.id,
+                    action="user.login",
+                    actor_user_id=user.id,
+                    details={"email": user.email, "provider": provider},
+                )
+                return user
         # Derive first/last from display_name if not provided (OAuth often gives display_name)
         if not first_name and not last_name and display_name:
             first_name, last_name = self._split_display_name(display_name)
@@ -157,6 +187,8 @@ class AuthService:
         )
         user = await self.get_by_email(email)
         if user is None:
+            if not settings.auth_allow_registration:
+                raise AuthError("registration is disabled")
             email = email.lower()
             user = User(
                 email=email,
@@ -187,6 +219,33 @@ class AuthService:
                     await self._session.commit()
             except Exception:
                 logger.exception("failed to provision profile for oauth user %s", user.id)
+        else:
+            if not user.is_active:
+                raise AuthError("account is disabled")
+        self._session.add(OAuthAccount(user_id=user.id, provider=provider, subject=subject))
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            await self._session.commit()
+        except IntegrityError:
+            await self._session.rollback()
+            existing = (await self._session.execute(stmt)).scalar_one_or_none()
+            if existing is not None and existing.user_id != user.id:
+                raise AuthError("this sign-in is already linked to another account") from None
+            user = await self._session.get(User, existing.user_id) if existing else user
+            if user is None or not user.is_active:
+                raise AuthError("account is disabled") from None
+        user.last_login_at = now_utc()
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=None,
+            resource_type="user",
+            resource_id=user.id,
+            action="user.login",
+            actor_user_id=user.id,
+            details={"email": user.email, "provider": provider},
+        )
         return user
 
     def _is_superadmin_email(self, email: str) -> bool:
@@ -199,6 +258,8 @@ class AuthService:
     async def login_password(
         self, email: str, password: str, *, ip_address: str | None = None
     ) -> User:
+        if not settings.auth_password_enabled:
+            raise AuthError("password login is disabled")
         user = await self.get_by_email(email)
         if user is None or user.password_hash is None:
             raise AuthError("invalid credentials")
@@ -281,6 +342,64 @@ class AuthService:
             ip_address=ip_address,
         )
         return pair
+
+    async def revoke_session(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        current_session_id: str | None,
+        ip_address: str | None = None,
+    ) -> None:
+        """Revoke one session; raises AuthError when it is current or unknown."""
+        if session_id == current_session_id:
+            raise AuthError("cannot revoke the current session")
+        rows = await self.list_sessions(user_id)
+        row = next((r for r in rows if r.id == session_id), None)
+        if row is None:
+            raise AuthError("session not found")
+        if row.revoked_at is None:
+            row.revoked_at = now_utc()
+            await self._session.commit()
+            logger.info("session revoked user=%s session=%s", user_id, session_id)
+            await publish_audit(
+                self._bus,
+                workspace_id=None,
+                resource_type="user",
+                resource_id=user_id,
+                action="user.session_revoked",
+                actor_user_id=user_id,
+                details={"session_id": session_id},
+                ip_address=ip_address,
+            )
+
+    async def revoke_other_sessions(
+        self, user_id: str, *, current_session_id: str | None, ip_address: str | None = None
+    ) -> int:
+        """Revoke every live session except the current one; returns the count."""
+        rows = await self.list_sessions(user_id)
+        now = now_utc()
+        count = 0
+        for r in rows:
+            if r.id == current_session_id:
+                continue
+            if r.revoked_at is None and ensure_utc(r.expires_at) >= now:
+                r.revoked_at = now
+                count += 1
+        if count:
+            await self._session.commit()
+            logger.info("other sessions revoked user=%s count=%d", user_id, count)
+            await publish_audit(
+                self._bus,
+                workspace_id=None,
+                resource_type="user",
+                resource_id=user_id,
+                action="user.sessions_revoked",
+                actor_user_id=user_id,
+                details={"revoked_count": count},
+                ip_address=ip_address,
+            )
+        return count
 
     async def list_sessions(self, user_id: str) -> list[RefreshToken]:
         stmt = (

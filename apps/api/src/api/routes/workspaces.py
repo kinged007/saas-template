@@ -41,8 +41,8 @@ async def search_workspace(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    if not q or not q.strip() or len(q.strip()) > 200:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "q must be 1-200 characters")
+    if not q or not q.strip() or len(q.strip()) < 2 or len(q.strip()) > 200:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "q must be 2-200 characters")
     try:
         return await SearchExportService(db, container.bus).search(
             workspace_id=workspace_id, user_id=user.id, q=q.strip()
