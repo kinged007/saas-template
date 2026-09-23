@@ -72,7 +72,12 @@ auth_limiter = SlidingWindowLimiter()
 
 
 def get_auth_limiter() -> SlidingWindowLimiter:
-    """Limiter honoring settings (tests override settings before first use)."""
+    """Limiter honoring settings (tests override settings before first use).
+
+    Note: replacing the global drops all failure state when settings differ.
+    Harmless in production (settings are static); tests that monkeypatch
+    settings silently reset limiter state.
+    """
     from src.settings import settings
 
     global auth_limiter

@@ -39,7 +39,7 @@ async def test_sessions_list_and_revoke(app_client):
     assert resp.status_code == 200
     sessions = resp.json()
     assert len(sessions) == 1
-    assert sessions[0]["ip_address"] is not None or True  # test client may lack IP
+    assert sessions[0]["ip_address"] == "127.0.0.1"  # httpx ASGI test client
     assert sessions[0]["user_agent"] == "rotated-session-agent"
     assert sessions[0]["revoked_at"] is None
 

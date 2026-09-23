@@ -156,6 +156,7 @@ export function App() {
             <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
             <Route path="/verify-email" element={<VerifyEmailPage />} />
+            {/* Deliberate: signed-out typos land on / (which redirects to /login); signed-in unknown paths render NotFoundPage above. */}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
           <Toaster />
