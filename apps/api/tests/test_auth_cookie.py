@@ -149,9 +149,7 @@ async def test_2fa_cookie_login_omits_json_refresh(app_client):
         json={"email": "cookie2fa@example.com", "password": "Password123!"},
     )
     headers = auth_headers(login_resp.json())
-    setup = (
-        await app_client.post("/api/v1/auth/2fa/setup", headers=headers)
-    ).json()
+    setup = (await app_client.post("/api/v1/auth/2fa/setup", headers=headers)).json()
     b32 = setup["otpauth_uri"].split("secret=")[1].split("&")[0]
     code = current_code(secret_from_base32(b32))
     resp = await app_client.post(

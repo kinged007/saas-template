@@ -521,9 +521,7 @@ async def logout(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing refresh token")
     if cookie_token is not None:
         require_csrf(request)
-    await AuthService(db, container.bus).revoke_refresh(
-        raw, ip_address=_client_ip(request)
-    )
+    await AuthService(db, container.bus).revoke_refresh(raw, ip_address=_client_ip(request))
     if cookie_token is not None:
         clear_refresh_cookie(response)
 
