@@ -22,6 +22,8 @@ from fastapi import Request
 from sqlalchemy import Select, func, select
 from sqlalchemy.sql import ColumnElement
 
+from src.services.profile_helpers import escape_like
+
 _COMPARATORS = {
     "eq": lambda c, v: c == v,
     "ne": lambda c, v: c != v,
@@ -29,10 +31,10 @@ _COMPARATORS = {
     "gte": lambda c, v: c >= v,
     "lt": lambda c, v: c < v,
     "lte": lambda c, v: c <= v,
-    "contains": lambda c, v: c.ilike(f"%{v}%"),
-    "ncontains": lambda c, v: ~c.ilike(f"%{v}%"),
-    "startswith": lambda c, v: c.ilike(f"{v}%"),
-    "endswith": lambda c, v: c.ilike(f"%{v}"),
+    "contains": lambda c, v: c.ilike(f"%{escape_like(str(v))}%", escape="\\"),
+    "ncontains": lambda c, v: ~c.ilike(f"%{escape_like(str(v))}%", escape="\\"),
+    "startswith": lambda c, v: c.ilike(f"{escape_like(str(v))}%", escape="\\"),
+    "endswith": lambda c, v: c.ilike(f"%{escape_like(str(v))}", escape="\\"),
     "in": lambda c, v: c.in_([x for x in v.split(",") if x]),
     "nin": lambda c, v: ~c.in_([x for x in v.split(",") if x]),
     "isnull": lambda c, v: c.is_(None),
