@@ -2,7 +2,7 @@
 
 Permission model:
 - Workspace-scoped jobs follow the workspace permission system
-  (`jobs:view` to read history/config, `jobs:edit` to modify or trigger).
+  (`jobs:read` to read history/config, `jobs:update` to modify or trigger).
 - Global jobs are deployment-wide: every `/global*` route requires the
   superuser (SUPERADMIN_EMAIL bootstrap account). Superusers do NOT get an
   automatic bypass for workspace jobs — those stay governed by the
@@ -26,7 +26,7 @@ from src.api.deps import (
     require_superuser,
     resolve_auth_principal,
 )
-from src.core.permissions import JOB_EDIT, JOB_VIEW
+from src.core.permissions import JOB_READ, JOB_UPDATE
 from src.db.session import get_db
 from src.events.publisher import publish_audit
 from src.models.jobs import JobDefinition, JobRun, JobTrigger
@@ -193,7 +193,7 @@ async def get_job_run_logs(
 
 
 async def _require_run_access(db: AsyncSession, user, run: JobRun) -> None:
-    """Global runs are superuser-only; workspace runs need jobs:view there."""
+    """Global runs are superuser-only; workspace runs need jobs:read there."""
     if run.workspace_id is None:
         if not user.is_superuser:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "superuser access required")
@@ -202,8 +202,8 @@ async def _require_run_access(db: AsyncSession, user, run: JobRun) -> None:
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership
-    if not ("*" in role.permissions or JOB_VIEW in role.permissions):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, f"missing permission: {JOB_VIEW}")
+    if not ("*" in role.permissions or JOB_READ in role.permissions):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"missing permission: {JOB_READ}")
 
 
 async def _require_job_access(
@@ -213,8 +213,8 @@ async def _require_job_access(
     *,
     need_edit: bool = False,
 ) -> None:
-    """Unified check: global → superuser, workspace → jobs:view/edit."""
-    required = JOB_EDIT if need_edit else JOB_VIEW
+    """Unified check: global → superuser, workspace → jobs:read/update."""
+    required = JOB_UPDATE if need_edit else JOB_READ
     if definition.workspace_id is None:
         if not principal.user.is_superuser:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "superuser access required")
@@ -245,7 +245,7 @@ async def _require_job_access(
 @router.get("")
 async def list_workspace_jobs(
     workspace_id: str = Depends(get_current_workspace_id),
-    _=Depends(require_permission(JOB_VIEW)),
+    _=Depends(require_permission(JOB_READ)),
     db: AsyncSession = Depends(get_db),
 ):
     return [job_to_dict(d) for d in await JobService(db).list_definitions(workspace_id)]

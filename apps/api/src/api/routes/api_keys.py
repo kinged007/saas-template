@@ -14,7 +14,7 @@ from src.api.deps import (
     require_permission,
     resolve_auth_principal,
 )
-from src.core.permissions import APIKEY_MANAGE, APIKEY_READ
+from src.core.permissions import APIKEY_CREATE, APIKEY_DELETE, APIKEY_READ
 from src.db.session import get_db
 from src.models.api_key import ApiKey
 from src.schemas.api import ApiKeyCreate, ApiKeyQuotaUpdate
@@ -97,7 +97,7 @@ async def create_api_key(
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
-    _=Depends(require_permission(APIKEY_MANAGE)),
+    _=Depends(require_permission(APIKEY_CREATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -116,6 +116,8 @@ async def create_api_key(
         )
     except ApiKeyForbidden as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    except ApiKeyError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     return {**_key_dict(key), "key": raw}
 
 
@@ -126,7 +128,7 @@ async def set_api_key_quota(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(APIKEY_MANAGE)),
+    _=Depends(require_permission(APIKEY_DELETE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -153,7 +155,7 @@ async def revoke_api_key(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(APIKEY_MANAGE)),
+    _=Depends(require_permission(APIKEY_DELETE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):

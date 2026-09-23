@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dates import now_utc
+from src.core.permissions import ALL_PERMISSIONS_INCLUDING_KEY_ONLY, KEY_ONLY_PERMISSIONS
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
@@ -90,11 +91,17 @@ class ApiKeyService:
         _, role = membership
 
         requested = set(permissions)
+        unknown = sorted(requested - set(ALL_PERMISSIONS_INCLUDING_KEY_ONLY) - {"*"})
+        if unknown:
+            raise ApiKeyError(f"unknown permissions: {', '.join(unknown)}")
+        # Notification scopes are key-only: any member may hold them on a key
+        # (notifications are personal); the role cap applies to the rest.
+        capped = requested - set(KEY_ONLY_PERMISSIONS)
         allowed = set(role.permissions)
         if minting_key is not None and "*" not in minting_key.permissions:
             allowed &= set(minting_key.permissions)
-        if "*" not in allowed and not requested <= allowed:
-            denied = sorted(requested - allowed)
+        if "*" not in allowed and not capped <= allowed:
+            denied = sorted(capped - allowed)
             raise ApiKeyForbidden(f"cannot grant permissions you do not have: {', '.join(denied)}")
 
         if usage_quota is not None and usage_quota < 0:

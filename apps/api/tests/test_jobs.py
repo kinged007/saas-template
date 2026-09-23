@@ -187,7 +187,7 @@ async def test_job_permission_matrix(app_client):
 
     job = _by_key((await client.get("/api/v1/jobs", headers=owner_headers)).json(), "test.echo")
 
-    # viewer has no jobs:view: cannot read...
+    # viewer has no jobs:read: cannot read...
     assert (await client.get("/api/v1/jobs", headers=viewer_headers)).status_code == 403
     assert (
         await client.get(f"/api/v1/jobs/{job['id']}", headers=viewer_headers)
@@ -200,7 +200,7 @@ async def test_job_permission_matrix(app_client):
     execute = await client.post(f"/api/v1/jobs/{job['id']}/execute", headers=viewer_headers)
     assert execute.status_code == 403
 
-    # editor also lacks jobs:view by default
+    # editor also lacks jobs:read by default
     assert (await client.get("/api/v1/jobs", headers=editor_headers)).status_code == 403
     patch = await client.patch(
         f"/api/v1/jobs/{job['id']}", json={"enabled": True}, headers=editor_headers
@@ -221,8 +221,8 @@ async def test_job_permission_matrix(app_client):
 
 
 async def test_admin_can_view_and_edit_jobs(app_client):
-    """Admins are the default role holding jobs:view / jobs:edit."""
-    from src.core.permissions import JOB_EDIT, JOB_VIEW
+    """Admins are the default role holding jobs:read / jobs:update."""
+    from src.core.permissions import JOB_READ, JOB_UPDATE
 
     client = app_client
     _, ws, owner_headers, roles = await setup_workspace(client, "adminjobs-owner@example.com")
@@ -236,8 +236,8 @@ async def test_admin_can_view_and_edit_jobs(app_client):
         for r in (await client.get("/api/v1/roles", headers=admin_headers)).json()
         if r["name"] == "admin"
     )
-    assert JOB_VIEW in membership_role["permissions"]
-    assert JOB_EDIT in membership_role["permissions"]
+    assert JOB_READ in membership_role["permissions"]
+    assert JOB_UPDATE in membership_role["permissions"]
 
     job = _by_key((await client.get("/api/v1/jobs", headers=admin_headers)).json(), "test.echo")
     assert (await client.get(f"/api/v1/jobs/{job['id']}", headers=admin_headers)).status_code == 200

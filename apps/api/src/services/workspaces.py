@@ -9,7 +9,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dates import ensure_utc, now_utc
-from src.core.permissions import ALL_PERMISSIONS, permissions_for_role
+from src.core.permissions import (
+    ALL_PERMISSIONS,
+    KEY_ONLY_PERMISSIONS,
+    permissions_for_role,
+)
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
@@ -737,7 +741,9 @@ class WorkspaceService:
         self, permissions: list[str], assignable: set[str], *, owner: bool = False
     ) -> None:
         """Unknown strings and `"*"` fail fast; unheld permissions are Forbidden."""
-        unknown = sorted(set(permissions) - set(ALL_PERMISSIONS) - {"*"})
+        unknown = sorted(
+            set(permissions) - set(ALL_PERMISSIONS) - {"*"} - set(KEY_ONLY_PERMISSIONS)
+        )
         if unknown:
             raise WorkspaceError(f"unknown permissions: {', '.join(unknown)}")
         if "*" in permissions:

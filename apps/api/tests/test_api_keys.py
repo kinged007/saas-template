@@ -106,11 +106,11 @@ async def test_api_key_cannot_escalate_beyond_creator_permissions(app_client):
 
     resp = await client.post(
         "/api/v1/api-keys",
-        json={"name": "sneaky2", "permissions": ["member:read", "member:manage"]},
+        json={"name": "sneaky2", "permissions": ["member:read", "member:update"]},
         headers=member_headers,
     )
     assert resp.status_code == 403
-    assert "member:manage" in resp.json()["detail"]
+    assert "member:update" in resp.json()["detail"]
 
 
 async def test_api_key_enforces_its_own_permissions(app_client):
@@ -126,14 +126,14 @@ async def test_api_key_enforces_its_own_permissions(app_client):
     resp = await client.get("/api/v1/members", headers=key_headers)
     assert resp.status_code == 200
 
-    # missing member:manage → forbidden, even though the owner could do it
+    # missing member:update → forbidden, even though the owner could do it
     resp = await client.patch(
         "/api/v1/members/00000000-0000-0000-0000-000000000000",
         json={"role_id": "00000000-0000-0000-0000-000000000000"},
         headers=key_headers,
     )
     assert resp.status_code == 403
-    assert "member:manage" in resp.json()["detail"]
+    assert "member:update" in resp.json()["detail"]
 
     resp = await client.get("/api/v1/api-keys", headers=key_headers)
     assert resp.status_code == 403
@@ -215,7 +215,7 @@ async def test_api_key_management_requires_permissions(app_client):
     resp = await client.get("/api/v1/api-keys", headers=guest_headers)
     assert resp.status_code == 403
 
-    # a role without apikey:manage cannot create API keys
+    # a role without apikey:create cannot create API keys
     resp = await client.post(
         "/api/v1/api-keys", json={"name": "nope", "permissions": []}, headers=guest_headers
     )
@@ -293,7 +293,7 @@ async def test_effective_permissions_matches_role(app_client):
     )
     assert resp.status_code == 200
     perms = resp.json()["permissions"]
-    assert "apikey:manage" in perms
+    assert "apikey:create" in perms
     assert "workspace:delete" not in perms
 
 

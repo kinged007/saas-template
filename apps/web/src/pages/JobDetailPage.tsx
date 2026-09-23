@@ -284,7 +284,7 @@ export function JobDetailPage() {
 
   const { data: canEdit } = useCan({ resource: "jobs", action: "edit" });
 
-  // Unified detail endpoint — backend decides access by job scope (global→superuser, workspace→jobs:view)
+  // Unified detail endpoint — backend decides access by job scope (global→superuser, workspace→jobs:read)
   const { result: jobResult, query: jobQuery } = useWorkspaceCustom<ScheduledJob>({
     url: `jobs/${jobId}`,
     method: "get",
@@ -296,7 +296,7 @@ export function JobDetailPage() {
       : undefined;
   const isLoading = jobQuery.isPending;
   const isGlobal = job?.scope === "global";
-  // re-evaluate after job is known: global → superuser, workspace → jobs:edit
+  // re-evaluate after job is known: global → superuser, workspace → jobs:update
   const canEditJob = isGlobal ? isSuperuser : canEdit?.can === true;
 
   const {

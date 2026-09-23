@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.permissions import JOB_VIEW
+from src.core.permissions import JOB_READ
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
 from src.models.api_key import ApiKey
@@ -92,7 +92,7 @@ class SearchExportService:
     async def search(self, *, workspace_id: str, user_id: str, q: str) -> dict:
         await _ensure_membership(self._session, workspace_id, user_id)
         like = f"%{escape_like(q.strip())}%"
-        can_view_jobs = await self._can(workspace_id, user_id, JOB_VIEW)
+        can_view_jobs = await self._can(workspace_id, user_id, JOB_READ)
         results: list[dict] = []
 
         conv_rows = (
