@@ -10,6 +10,8 @@
 - created_by_user_id: str (index)
 - last_used_at: DateTime (nullable)
 - revoked_at: DateTime (nullable)
+- usage_count: Integer (default)
+- usage_quota: Integer (nullable)
 
 ### AuditLogEntry
 - id: str (pk, default)
@@ -62,6 +64,14 @@
 - expires_at: DateTime
 - accepted_at: DateTime (nullable)
 
+### NotificationPreference
+- id: str (pk, default)
+- user_id: str (index)
+- type: String
+- channel: String (default)
+- digest_enabled: Boolean (default)
+- unsubscribe_token: String (index, nullable)
+
 ### Notification
 - id: str (pk, default)
 - user_id: str (index)
@@ -110,6 +120,12 @@
 - level: String (default)
 - message: Text
 
+### OAuthAccount
+- id: str (pk, default)
+- user_id: str (fk, index)
+- provider: String
+- subject: String
+
 ### StoredSecret
 - id: str (pk, default)
 - workspace_id: str (index)
@@ -118,8 +134,14 @@
 - label: String (nullable)
 - ciphertext: Text
 - key_version: Integer
-- meta: JSON (default)
+- meta: JSON (nullable, default)
 - expires_at: DateTime (nullable)
+
+### UserTotpCredential
+- user_id: str (fk, pk)
+- secret_ciphertext: Text
+- last_counter: Integer (nullable)
+- backup_codes: JSON (default)
 
 ### UserProfile
 - user_id: str (fk, pk)
@@ -134,6 +156,30 @@
 - location: String (nullable)
 - custom_data: JSON (default)
 
+### WebhookSubscription
+- id: str (pk, default)
+- workspace_id: str (index)
+- url: String
+- events: JSON (default)
+- active: Boolean (default)
+- created_by_user_id: unknown (nullable)
+
+### WebhookDelivery
+- id: str (pk, default)
+- subscription_id: str (index)
+- workspace_id: str (index)
+- event_type: String
+- subject: String
+- payload: JSON (default)
+- status: String (default, index)
+- attempt_count: Integer (default)
+- next_retry_at: DateTime (nullable)
+- last_attempt_at: DateTime (nullable)
+- response_status: Integer (nullable)
+- error: Text (nullable)
+- event_id: String (nullable)
+- correlation_id: String (nullable)
+
 ### User
 - id: str (pk, default)
 - email: String (unique, index)
@@ -143,6 +189,16 @@
 - is_active: Boolean (default)
 - is_superuser: Boolean (default)
 - last_login_at: DateTime (nullable)
+- email_verified_at: DateTime (nullable)
+- totp_enabled: Boolean (default)
+
+### AuthToken
+- id: str (pk, default)
+- user_id: str (index)
+- purpose: String
+- token_hash: String (unique, index)
+- expires_at: DateTime
+- consumed_at: DateTime (nullable)
 
 ### RefreshToken
 - id: str (pk, default)
@@ -150,6 +206,8 @@
 - token_hash: String (unique, index)
 - expires_at: DateTime
 - revoked_at: DateTime (nullable)
+- ip_address: String (nullable)
+- user_agent: String (nullable)
 
 ### Workspace
 - id: str (pk, default)
@@ -157,6 +215,7 @@
 - slug: String (unique, index)
 - description: String (nullable)
 - created_by_user_id: str (index)
+- flags: JSON (default)
 
 ### Role
 - id: str (pk, default)
