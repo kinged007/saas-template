@@ -1,43 +1,32 @@
 # Next-issue workflow
 
-Pick up the next actionable piece of template work and implement it. Run from the repo root. All `gh` commands assume the repo default (current directory).
+Pick up the next actionable piece of work and implement it. Run from the repo root. All `gh` commands assume the repo default (current directory) — never hardcode `repos/<owner>/<repo>`.
 
-## 1. List all milestones
+This repo currently has zero milestones (`gh api repos/{owner}/{repo}/milestones` returns `[]`). There is no milestone ordering. Work directly from the open-issue list. If milestones are added later, process the lowest-numbered open milestone first, skipping staging/empty tracks unless told otherwise.
 
-```bash
-gh api repos/kinged007/saas-template/milestones --paginate \
-  -q '.[] | "\(.number) | \(.title) | open:\(.open_issues) closed:\(.closed_issues)"'
-```
-
-Known milestones (numbered prefix = implementation order):
-
-| # | Milestone | Why this order |
-|---|-----------|----------------|
-| 4 | 01 - Messaging & Notifications | Email infra unlocks recovery, digests, invites |
-| 3 | 02 - Auth & Account Security | Recovery/OIDC once email exists |
-| 5 | 03 - Workspaces & Members | Lifecycle on top of auth + email |
-| 6 | 04 - Data & Files | Storage + search after identity settles |
-| 7 | 05 - Ops & Admin | Operate once there are users |
-| 8 | 06 - Developer Experience | Versioning/quotas last, API must stabilize first |
-| 1 | Agent Platform | Separate track, not part of this ordering |
-| 2 | Core Features | Empty staging milestone — always skip |
-
-## 2. Drop finished or empty milestones
-
-Keep only milestones with `open > 0`. Skip `Core Features` (staging, permanently empty) and `Agent Platform` (separate track) unless the user says otherwise. Process the rest lowest-numbered first.
-
-## 3. Find the next unblocked open issue in the milestone
-
-Skip any issue labelled `wontfix` or `backlog` or `needs-human` or `in-progress` — never touch those, even if open. The listing query excludes them deterministically:
+## 1. List open issues
 
 ```bash
-MS="<milestone title>"
-gh issue list --milestone "$MS" --state open --limit 50 \
+gh issue list --state open --limit 50 \
   --json number,title,labels \
-  -q '.[] | select(([.labels[].name] | inside(["wontfix","backlog","needs-human","in-progress"]) | not)) | "\(.number) | \(.title)"'
+  -q '.[] | "\(.number) | \(.title) | \([.labels[].name] | join(","))"'
 ```
 
-If `gh`'s `--jq`/`-q` dialect rejects `inside`, fall back to filtering client-side (fetch `--json number,title,labels` and drop any issue whose label set intersects `wontfix`/`backlog`/`needs-human`/`in-progress`).
+## 2. Drop finished, invalid, or claimed issues
+
+Skip any issue labelled `wontfix`, `needs-human`, `in-progress`, `review-in-progress`, `invalid`, `duplicate`, or `agent:done` — never touch those, even if open. This repo has no `backlog` label. The listing query excludes them deterministically:
+
+```bash
+gh issue list --state open --limit 50 \
+  --json number,title,labels \
+  -q '.[] | select(([.labels[].name] | inside(["wontfix","needs-human","in-progress","review-in-progress","invalid","duplicate","agent:done"]) | not)) | "\(.number) | \(.title)"'
+```
+
+If `gh`'s `--jq`/`-q` dialect rejects `inside`, fall back to filtering client-side (fetch `--json number,title,labels` and drop any issue whose label set intersects the skip set above).
+
+## 3. Find the next unblocked and related open issues
+
+If a candidate carries the `agent:plan` label, post a brief issue comment saying planning is still pending and stop without making changes (the label was added after dispatch). Do not implement it.
 
 For each remaining candidate in listed order, check blockers:
 
@@ -46,29 +35,34 @@ gh issue view <n> --json blockedBy \
   -q '.blockedBy.nodes[] | "\(.number) \(.state) \(.title)"'
 ```
 
-Take the first issue with no blocker in `OPEN` state. If every open issue is blocked by another open issue, move to the next milestone. If no milestone yields an issue, stop and report that the backlog is drained or deadlocked.
+Take issues with no blocker in `OPEN` state, that are related or similar to each other. Take on no more than 5 minor issues at a time. The more complex the issue, the fewer to claim at the same time. Only claim issues that are related or similar, otherwise just claim ONE issue.
+If every open issue is blocked by another open issue, stop and report that the backlog is drained or deadlocked.
 
-## 4. Read the issue thread first, then plan, then post the plan
+## 4. Read the issue threads first, then plan, then post the plan
 
-Read ALL existing comments on the issue BEFORE planning — some issues already carry a plan or steering notes that override the body:
+Read ALL existing comments on the issues BEFORE planning — some issues already carry a plan or steering notes that override the body:
 
 ```bash
 gh issue view <n> --json title,body,comments,labels \
   -q '.title, .body, (.comments[] | "--- @\(.author.login) \(.createdAt) ---\n\(.body)")'
 ```
 
-Treat comments as authoritative over the body where they conflict (newest wins); if a comment already contains a plan, adopt it unless the codebase has moved on, and say so in your posted plan.
+Treat comments as authoritative over the body where they conflict (newest wins). Comments may contain corrections, reproduction details, or scope changes that override the description. If an approved plan was posted, follow it. If a comment already contains a plan, adopt it unless the codebase has moved on, and say so in the posted plan.
+
+If the task is already resolved, post an issue comment saying so and stop without making changes.
 
 Context to read:
 
-- `docs/ARCHITECTURE.md` for system design and conventions; check `docs/` for related docs (providers, setup) on the area you are touching.
+- `docs/ARCHITECTURE.md` for system design and conventions; check `docs/` for related docs (providers, claims-mapping, migration-pipeline) on the area being touched.
 - `.codesight/wiki/index.md`, then `overview.md`, then the domain article for the area, then the source files it lists. Never plan from the wiki alone.
-- Check `.codesight/graph.md` for blast radius before touching high-impact files.
+- Check `.codesight/graph.md` for blast radius before touching high-impact files (`apps/api/src/db/session.py`, `apps/web/src/types.ts`, `apps/api/src/providers/base.py`, `apps/api/src/settings.py`, `apps/api/src/models/workspace.py`).
 - Follow `AGENTS.md` (repo tooling, make targets, no new dependencies without asking).
 - Post the plan as an issue comment before writing code:
 
 ```bash
 gh issue comment <n> --body "## Plan
+...
+### Related issues
 ...
 ### Files to touch
 ...
@@ -76,7 +70,7 @@ gh issue comment <n> --body "## Plan
 ..."
 ```
 
-If the plan is pretty straight forward, meets the code structure and architecture design patterns, then you may proceed with auto-approval. If the plan contains architectural changes, or significant changes or shift in design, then you need to request a human approval. Apply the label 'needs-human' for this, then STOP. Do not procced!
+If the plan is straightforward and follows existing code structure and architecture patterns, proceed with auto-approval. If the plan contains architectural changes or a significant shift in design, request human approval. Apply the label `needs-human`, then STOP. Do not proceed.
 
 ```bash
 gh issue edit <n> --add-label needs-human
@@ -84,7 +78,7 @@ gh issue edit <n> --add-label needs-human
 
 ## 0. Dev environment and seeded credentials (read first)
 
-Start the stack with `make dev` (API on :8000, web on :5173 — Ctrl-C stops both; never leave it running orphaned). `make dev` migrates and seeds automatically. The seed (`apps/api/src/seed.py`, `make api-seed` to re-run) creates demo users all sharing password `password`: `admin@example.com`, `user1@example.com`, `user2@example.com`, with workspaces `acme-corp` and `globex`, memberships, and pending invitations.
+Start the stack with `make dev` (API on :8000, web on :5173 — Ctrl-C stops both; never leave it running orphaned). `make dev` installs deps, migrates, and seeds automatically. The seed (`apps/api/src/seed.py`, `make api-seed` to re-run) creates demo users all sharing password `Tenantflex1!`: `admin@tenantflex.dev`, `josh@tenantflex.dev`, `sam@tenantflex.dev`, `brandon@tenantflex.dev`, `maya@tenantflex.dev`, with workspaces `acme-corp` and `globex`, memberships, pending invitations, and notifications.
 
 Log in with a seeded account for manual/visual verification. If the task needs a different user shape, seed a new one via `seed.py` patterns or register through the UI — do not hardcode ad-hoc credentials in the codebase.
 
@@ -94,9 +88,84 @@ Log in with a seeded account for manual/visual verification. If the task needs a
 gh issue edit <n> --add-label in-progress
 ```
 
-Implement the posted plan, then run the repo quality gate (`make api-lint`, relevant `pytest`, `npm run build` for web changes). If the plan proves wrong mid-implementation, update the issue comment with what changed and why.
+Implement the posted plan, then run the repo quality gate:
 
-If the implementation and testing is successful, then please submit a PR for this issue. Explain in detail what the problem was and what you implemented, and how you verified it was correct.
+```bash
+make api-lint   # ruff check + format check in apps/api
+make api-test   # pytest in apps/api (sqlite in-memory, no docker)
+make web-build  # tsc --noEmit + vite build in apps/web (for web changes)
+```
+
+Review your own diff (`git diff`) for correctness, regressions, and convention compliance before finishing.
+
+## 5b. Pre-PR testing gate (MANDATORY)
+
+Before opening the PR, the agent MUST prove the change does not break the pipeline. If CI workflows exist (`.github/workflows/`), read them and manually run every check they run (lint, typecheck, tests, build) before submitting. If no CI exists, run the repo's full quality gate instead (see README / AGENTS.md — at minimum lint, tests, and a build of every area touched) and make sure all tests pass.
+
+Do not open the PR while any of these fail. If a check fails, fix the cause (not the check) and re-run until green. Never submit a PR with a red gate and a promise to fix it after — the next session starts from pushed state, so a broken push poisons every session after it. If a check cannot be made green for reasons outside the change, document the failure in the PR body under Verification and apply the `needs-human` label instead of submitting.
+
+If the plan proves wrong mid-implementation, update the issue comment with what changed and why.
+
+If implementation and testing succeed, submit a PR for the issue (push the branch first, see §6). Explain in detail what the problem was, what was implemented, and how correctness was verified.
+
+## 7. Open the pull request
+
+Do not push directly to the PR's base branch. Resolve the base first (never assume) and open the PR from a per-issue branch against it:
+
+```bash
+BASE=$(gh repo view --json defaultBranchRef -q '.defaultBranchRef.name')
+git checkout -b auto/<n>
+git push -u origin auto/<n>
+gh pr create --base "$BASE" --head auto/<n> --title "<summary>" --body "<body>"
+```
+
+The PR body must follow this structure — two-line bodies are not acceptable:
+
+```markdown
+Fixes #<n>.
+
+## Summary
+[one paragraph: what this PR does and why]
+
+## Solution
+[approach taken, key design decisions]
+
+## Changes
+- [file or area]: [what changed]
+
+## Verification
+- [checks run and their results]
+```
+
+Every section is required. Do not apply `agent:review` to the PR yourself; the human triggers the deep review when ready.
+
+## 8. Post the closing issue comment
+
+When done, post one detailed comment on the issue. A reader must understand what was done without reading the diff:
+
+```bash
+gh issue comment <n> --body "..."
+```
+
+Structure the comment as:
+
+```markdown
+## Summary
+[one paragraph: outcome and approach]
+
+## Changes
+- [file or area]: [what changed and why]
+
+## Verification
+- [checks run and their results]
+
+## Issues encountered
+[problems hit and how resolved, or "None"]
+
+PR: [link]
+```
+
+Every section is required; write "None" only when true. Do not compress this into a few lines.
 
 ## 6. Commit and push before finishing (MANDATORY)
 
