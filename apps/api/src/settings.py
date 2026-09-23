@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-change-me"
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
+    # Browser session refresh cookie (HttpOnly; JS can never read it).
+    # refresh_cookie_secure=None (default) → Secure unless development.
+    refresh_cookie_name: str = "st_refresh"
+    refresh_cookie_domain: str = ""
+    refresh_cookie_path: str = "/api/v1/auth"
+    refresh_cookie_secure: bool | None = None
     # Comma-separated Fernet keys (encryption key chosen by
     # SECRET_ENCRYPT_VERSION, rest = decryption/rotation history)
     fernet_keys: str = "dev-fernet-key-change-me-00000"
@@ -120,6 +126,14 @@ class Settings(BaseSettings):
     @property
     def fernet_key_list(self) -> list[str]:
         return [k.strip() for k in self.fernet_keys.split(",") if k.strip()]
+
+    @property
+    def refresh_cookie_secure_effective(self) -> bool:
+        if self.refresh_cookie_secure is not None:
+            return self.refresh_cookie_secure
+        # Dev and tests serve plain http:// — a Secure cookie would never
+        # store. Production-like envs default to Secure.
+        return self.environment not in ("development", "test")
 
     @property
     def cors_origin_list(self) -> list[str]:

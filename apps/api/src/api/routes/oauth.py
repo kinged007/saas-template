@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +23,7 @@ from src.api.routes.auth import (
     _maybe_join_single_workspace,
     _user_agent,
 )
+from src.core.security.cookies import browser_flow, set_refresh_cookie
 from src.core.security.ratelimit import get_auth_limiter
 from src.db.session import get_db
 from src.services.auth import AuthError, AuthService
@@ -45,6 +46,9 @@ router = APIRouter(prefix="/auth/oauth", tags=["auth"])
 
 class OAuthTokenRequest(BaseModel):
     code: str
+    # Browser opt-in: set the HttpOnly refresh cookie and omit the refresh
+    # token from the JSON body (in-memory access token only).
+    use_cookies: bool = False
 
 
 def _redirect_uri(request: Request, provider_id: str) -> str:
@@ -177,6 +181,7 @@ async def oauth_callback(
 async def oauth_token(
     body: OAuthTokenRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ):
     get_auth_limiter().check(f"oauth:{_client_ip(request) or 'unknown'}:token")
@@ -196,6 +201,32 @@ async def oauth_token(
             container.bus,
         ).issue_challenge(entry["user_id"])
         return {"challenge_token": challenge, "two_factor_required": True}
+    if browser_flow(request, body):
+        # The callback parked a minted refresh token in the cache entry; move
+        # it into the HttpOnly cookie so JS only ever sees the access token.
+        if entry.get("refresh_token"):
+            try:
+                service = AuthService(db, container.bus)
+                old = entry.get("refresh_token")
+                user = await service.get_user_by_refresh_token(old)
+                if user is not None:
+                    await service.revoke_refresh(old)
+                    pair = await service.issue_tokens(
+                        user,
+                        ip_address=_client_ip(request),
+                        user_agent=_user_agent(request),
+                    )
+                    set_refresh_cookie(response, pair.refresh_token)
+                    return {
+                        "access_token": pair.access_token,
+                        "token_type": "Bearer",
+                    }
+            except Exception:
+                logger.exception("oauth cookie reissue failed")
+        return {
+            "access_token": entry.get("access_token"),
+            "token_type": "Bearer",
+        }
     return {
         "access_token": entry.get("access_token"),
         "refresh_token": entry.get("refresh_token"),

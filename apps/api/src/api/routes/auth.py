@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import (
@@ -12,6 +12,13 @@ from src.api.deps import (
     resolve_auth_principal,
 )
 from src.core.dates import ensure_utc, now_utc
+from src.core.security.cookies import (
+    browser_flow,
+    clear_refresh_cookie,
+    get_refresh_token,
+    require_csrf,
+    set_refresh_cookie,
+)
 from src.core.security.ratelimit import get_auth_limiter
 from src.core.security.tokens import OpaqueToken
 from src.db.session import get_db
@@ -100,6 +107,7 @@ async def auth_config() -> dict:
 async def register(
     body: RegisterRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> TokenResponse:
@@ -141,6 +149,14 @@ async def register(
         await _send_verification(service, user)
     except Exception:
         logger.exception("failed to send verification email for user %s", user.id)
+    if browser_flow(request, body):
+        set_refresh_cookie(response, pair.refresh_token)
+        return TokenResponse(
+            access_token=pair.access_token,
+            refresh_token=None,
+            token_type=pair.token_type,
+            expires_in=pair.expires_in,
+        )
     return TokenResponse(**pair.__dict__)
 
 
@@ -224,6 +240,7 @@ async def resend_verification(
 async def login(
     body: LoginRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> TokenResponse:
@@ -257,6 +274,14 @@ async def login(
     pair = await service.issue_tokens(
         user, ip_address=_client_ip(request), user_agent=_user_agent(request)
     )
+    if browser_flow(request, body):
+        set_refresh_cookie(response, pair.refresh_token)
+        return TokenResponse(
+            access_token=pair.access_token,
+            refresh_token=None,
+            token_type=pair.token_type,
+            expires_in=pair.expires_in,
+        )
     return TokenResponse(**pair.__dict__)
 
 
@@ -264,15 +289,22 @@ async def login(
 async def refresh(
     body: RefreshRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> TokenResponse:
-    key = _limit_key(request, OpaqueToken.hash(body.refresh_token))
+    cookie_token = get_refresh_token(request)
+    raw = cookie_token or body.refresh_token
+    if raw is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing refresh token")
+    if cookie_token is not None:
+        require_csrf(request)
+    key = _limit_key(request, OpaqueToken.hash(raw))
     get_auth_limiter().check(key)
     service = AuthService(db, container.bus)
     try:
         pair = await service.rotate_refresh(
-            body.refresh_token,
+            raw,
             ip_address=_client_ip(request),
             user_agent=_user_agent(request),
         )
@@ -289,6 +321,14 @@ async def refresh(
         except Exception:
             await db.rollback()
             logger.exception("failed to join single workspace on refresh")
+    if cookie_token is not None or browser_flow(request, body):
+        set_refresh_cookie(response, pair.refresh_token)
+        return TokenResponse(
+            access_token=pair.access_token,
+            refresh_token=None,
+            token_type=pair.token_type,
+            expires_in=pair.expires_in,
+        )
     return TokenResponse(**pair.__dict__)
 
 
@@ -399,6 +439,7 @@ async def totp_backup_codes(
 async def totp_login(
     body: TwoFactorLogin,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> TokenResponse:
@@ -423,6 +464,14 @@ async def totp_login(
     pair = await AuthService(db, container.bus).issue_tokens(
         user, ip_address=_client_ip(request), user_agent=_user_agent(request)
     )
+    if browser_flow(request, body):
+        set_refresh_cookie(response, pair.refresh_token)
+        return TokenResponse(
+            access_token=pair.access_token,
+            refresh_token=None,
+            token_type=pair.token_type,
+            expires_in=pair.expires_in,
+        )
     return TokenResponse(**pair.__dict__)
 
 
@@ -460,14 +509,23 @@ async def revoke_all_sessions(
 
 @router.post("/logout", status_code=204)
 async def logout(
-    body: RefreshRequest,
     request: Request,
+    response: Response,
+    body: RefreshRequest = RefreshRequest(),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> None:
+    cookie_token = get_refresh_token(request)
+    raw = cookie_token or body.refresh_token
+    if raw is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing refresh token")
+    if cookie_token is not None:
+        require_csrf(request)
     await AuthService(db, container.bus).revoke_refresh(
-        body.refresh_token, ip_address=_client_ip(request)
+        raw, ip_address=_client_ip(request)
     )
+    if cookie_token is not None:
+        clear_refresh_cookie(response)
 
 
 @router.delete("/sessions/{session_id}", status_code=204)
