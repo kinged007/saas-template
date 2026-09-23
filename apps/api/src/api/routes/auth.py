@@ -515,6 +515,9 @@ async def logout(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> None:
+    """Revoke one refresh session. Cookie callers send an empty body (the
+    refresh comes from the HttpOnly cookie); JSON clients must send
+    ``{"refresh_token": ...}`` explicitly — an empty body 401s."""
     cookie_token = get_refresh_token(request)
     raw = cookie_token or body.refresh_token
     if raw is None:
