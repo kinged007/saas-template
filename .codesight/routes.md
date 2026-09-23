@@ -2,15 +2,32 @@
 
 ## CRUD Resources
 
+- **`/users`** GET | GET/:id | PATCH/:id | DELETE/:id → User
 - **``** GET | POST | GET/:id | PATCH/:id | DELETE/:id
+- **`/sessions`** GET | GET/:id | DELETE/:id → Session
 - **`/global`** GET | GET/:id | PATCH/:id → Global
+- **`/subscriptions`** GET | POST | GET/:id | PATCH/:id | DELETE/:id → Subscription
 
 ## Other Routes
 
+- `GET` `/workspaces` params() [db]
+- `PATCH` `/workspaces/{workspace_id}/flags` params(workspace_id)
+- `GET` `/audit` params() [db]
 - `GET` `/effective-permissions` params()
+- `GET` `/config` params() → out: TokenResponse [auth]
 - `POST` `/register` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/forgot-password` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/reset-password` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/verify-email` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/resend-verification` params() → in: RegisterRequest, out: TokenResponse [auth, email]
 - `POST` `/login` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/refresh` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `GET` `/2fa/status` params() → out: TokenResponse
+- `POST` `/2fa/setup` params() → in: RegisterRequest, out: TokenResponse
+- `POST` `/2fa/enable` params() → in: RegisterRequest, out: TokenResponse
+- `POST` `/2fa/disable` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/2fa/backup-codes` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/2fa/login` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/logout` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `GET` `/me` params() → out: TokenResponse
 - `GET` `/unread-count` params() → in: st
@@ -29,7 +46,15 @@
 - `POST` `/{definition_id}/execute` params(definition_id) [auth]
 - `GET` `/{definition_id}/runs` params(definition_id) [auth]
 - `GET` `/healthz` params()
+- `GET` `/metrics` params()
 - `GET` `/readyz` params()
+- `GET` `/preferences` params()
+- `PUT` `/preferences` params() → in: NotificationPreferencesUpdate
+- `GET` `/unsubscribe` params() [auth]
+- `PATCH` `/read-all` params()
+- `GET` `/{provider_id}/authorize` params(provider_id) [auth, cache]
+- `GET` `/{provider_id}/callback` params(provider_id) [auth, cache]
+- `POST` `/token` params() → in: OAuthTokenRequest [auth, db, cache]
 - `GET` `/me/profile` params() → in: Use
 - `PUT` `/me/profile` params() → in: ProfileUpdate [db]
 - `PATCH` `/me/profile` params() → in: ProfileUpdate [db]
@@ -37,6 +62,13 @@
 - `GET` `/me/export` params() → in: Use
 - `GET` `/users/{user_id}/export` params(user_id) → in: Use
 - `DELETE` `/me` params() → in: DeleteMeRequest [db]
-- `DELETE` `/users/{user_id}` params(user_id) → in: DeleteMeRequest [db]
 - `GET` `/permission-catalog` params()
+- `GET` `/events` params() [webhook]
+- `POST` `/subscriptions/{subscription_id}/rotate-secret` params(subscription_id) → in: WebhookSubscriptionCreate [webhook]
+- `GET` `/deliveries` params() [db, webhook]
+- `GET` `/subscriptions/{subscription_id}/deliveries` params(subscription_id) [db, webhook]
+- `GET` `/deliveries/{delivery_id}` params(delivery_id) [webhook]
+- `POST` `/deliveries/{delivery_id}/redeliver` params(delivery_id) → in: WebhookSubscriptionCreate [webhook]
+- `GET` `/search` params() → out: list
+- `GET` `/export` params() → out: list
 - `GET` `/` params() ✓

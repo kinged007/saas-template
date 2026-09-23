@@ -2,7 +2,7 @@
 
 > **Navigation aid.** Schema shapes and field types extracted via AST. Read the actual schema source files before writing migrations or query logic.
 
-**sqlalchemy** — 17 models
+**sqlalchemy** — 23 models
 
 ### ApiKey
 
@@ -17,6 +17,8 @@ pk: `id` (str)
 - `created_by_user_id`: str _(index)_
 - `last_used_at`: DateTime _(nullable)_
 - `revoked_at`: DateTime _(nullable)_
+- `usage_count`: Integer _(default)_
+- `usage_quota`: Integer _(nullable)_
 
 ### AuditLogEntry
 
@@ -84,6 +86,17 @@ pk: `id` (str)
 - `expires_at`: DateTime
 - `accepted_at`: DateTime _(nullable)_
 
+### NotificationPreference
+
+pk: `id` (str)
+
+- `id`: str _(pk, default)_
+- `user_id`: str _(index)_
+- `type`: String
+- `channel`: String _(default)_
+- `digest_enabled`: Boolean _(default)_
+- `unsubscribe_token`: String _(index, nullable)_
+
 ### Notification
 
 pk: `id` (str)
@@ -144,6 +157,15 @@ pk: `id` (str)
 - `level`: String _(default)_
 - `message`: Text
 
+### OAuthAccount
+
+pk: `id` (str) · fk: user_id
+
+- `id`: str _(pk, default)_
+- `user_id`: str _(fk, index)_
+- `provider`: String
+- `subject`: String
+
 ### StoredSecret
 
 pk: `id` (str)
@@ -155,8 +177,17 @@ pk: `id` (str)
 - `label`: String _(nullable)_
 - `ciphertext`: Text
 - `key_version`: Integer
-- `meta`: JSON _(default)_
+- `meta`: JSON _(nullable, default)_
 - `expires_at`: DateTime _(nullable)_
+
+### UserTotpCredential
+
+pk: `user_id` (str) · fk: user_id
+
+- `user_id`: str _(fk, pk)_
+- `secret_ciphertext`: Text
+- `last_counter`: Integer _(nullable)_
+- `backup_codes`: JSON _(default)_
 
 ### UserProfile
 
@@ -174,6 +205,36 @@ pk: `user_id` (str) · fk: user_id
 - `location`: String _(nullable)_
 - `custom_data`: JSON _(default)_
 
+### WebhookSubscription
+
+pk: `id` (str)
+
+- `id`: str _(pk, default)_
+- `workspace_id`: str _(index)_
+- `url`: String
+- `events`: JSON _(default)_
+- `active`: Boolean _(default)_
+- `created_by_user_id`: unknown _(nullable)_
+
+### WebhookDelivery
+
+pk: `id` (str)
+
+- `id`: str _(pk, default)_
+- `subscription_id`: str _(index)_
+- `workspace_id`: str _(index)_
+- `event_type`: String
+- `subject`: String
+- `payload`: JSON _(default)_
+- `status`: String _(default, index)_
+- `attempt_count`: Integer _(default)_
+- `next_retry_at`: DateTime _(nullable)_
+- `last_attempt_at`: DateTime _(nullable)_
+- `response_status`: Integer _(nullable)_
+- `error`: Text _(nullable)_
+- `event_id`: String _(nullable)_
+- `correlation_id`: String _(nullable)_
+
 ### User
 
 pk: `id` (str)
@@ -186,6 +247,19 @@ pk: `id` (str)
 - `is_active`: Boolean _(default)_
 - `is_superuser`: Boolean _(default)_
 - `last_login_at`: DateTime _(nullable)_
+- `email_verified_at`: DateTime _(nullable)_
+- `totp_enabled`: Boolean _(default)_
+
+### AuthToken
+
+pk: `id` (str)
+
+- `id`: str _(pk, default)_
+- `user_id`: str _(index)_
+- `purpose`: String
+- `token_hash`: String _(unique, index)_
+- `expires_at`: DateTime
+- `consumed_at`: DateTime _(nullable)_
 
 ### RefreshToken
 
@@ -196,6 +270,8 @@ pk: `id` (str)
 - `token_hash`: String _(unique, index)_
 - `expires_at`: DateTime
 - `revoked_at`: DateTime _(nullable)_
+- `ip_address`: String _(nullable)_
+- `user_agent`: String _(nullable)_
 
 ### Workspace
 
@@ -206,6 +282,7 @@ pk: `id` (str)
 - `slug`: String _(unique, index)_
 - `description`: String _(nullable)_
 - `created_by_user_id`: str _(index)_
+- `flags`: JSON _(default)_
 
 ### Role
 
@@ -232,12 +309,14 @@ pk: `id` (str)
 
 Read and edit these files when adding columns, creating migrations, or changing relations:
 
-- `apps/api/src/db/session.py` — imported by **32** files
-- `apps/api/src/models/workspace.py` — imported by **19** files
-- `apps/api/src/models/core.py` — imported by **13** files
-- `apps/api/src/db/base.py` — imported by **10** files
-- `apps/api/src/schemas/api.py` — imported by **10** files
-- `apps/api/src/models/api_key.py` — imported by **9** files
+- `apps/api/src/db/session.py` — imported by **44** files
+- `apps/api/src/models/workspace.py` — imported by **30** files
+- `apps/api/src/models/core.py` — imported by **19** files
+- `apps/api/src/db/base.py` — imported by **14** files
+- `apps/api/src/models/jobs.py` — imported by **13** files
+- `apps/api/src/models/api_key.py` — imported by **12** files
+- `apps/api/src/schemas/api.py` — imported by **12** files
+- `apps/api/src/models/audit.py` — imported by **11** files
 
 ---
 _Back to [overview.md](./overview.md)_

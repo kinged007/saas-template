@@ -49,3 +49,6 @@ crash.log
 
 # Logs
 *.log
+
+# Loop bookkeeping (overwritten every run; keep out of PR diffs)
+.sortie/scm.json
