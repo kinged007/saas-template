@@ -252,8 +252,44 @@ async def test_oauth_token_cookie_flow_omits_json_refresh(app_client, monkeypatc
         _set_cookie(tokens)
         assert tokens.json().get("refresh_token") is None
         assert tokens.json()["access_token"]
+        # The parked refresh moved into the cookie untouched: the cookie jar
+        # holds a live session — refresh via cookie works.
+        r2 = await app_client.post("/api/v1/auth/refresh", json={}, headers=CSRF)
+        assert r2.status_code == 200, r2.text
+        _set_cookie(r2)
         # The parked refresh was consumed server-side: replay rejected.
         again = await app_client.post("/api/v1/auth/oauth/token", json={"code": code})
         assert again.status_code == 400
     finally:
         monkeypatch.setattr(settings, "oauth_providers", "")
+
+
+async def test_cookie_secure_follows_forwarded_proto(app_client):
+    """Secure set on https (forwarded-proto) even with ENVIRONMENT=development."""
+    await register_user(app_client, "fwdproto@example.com")
+    resp = await app_client.post(
+        "/api/v1/auth/login",
+        json={"email": "fwdproto@example.com", "password": "Password123!", "use_cookies": True},
+        headers={"X-Forwarded-Proto": "https"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert "Secure" in resp.headers.get("set-cookie", ""), resp.headers.get("set-cookie")
+    plain = await app_client.post(
+        "/api/v1/auth/login",
+        json={"email": "fwdproto@example.com", "password": "Password123!"},
+    )
+    assert plain.status_code == 200, plain.text
+    assert "Secure" not in plain.headers.get("set-cookie", "")
+
+
+def test_cookie_secure_explicit_override_wins():
+    from src.core.security.cookies import cookie_secure_for
+
+    original = settings.refresh_cookie_secure
+    try:
+        settings.refresh_cookie_secure = False
+        assert cookie_secure_for(None) is False
+        settings.refresh_cookie_secure = True
+        assert cookie_secure_for(None) is True
+    finally:
+        settings.refresh_cookie_secure = original

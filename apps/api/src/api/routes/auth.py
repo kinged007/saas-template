@@ -150,7 +150,7 @@ async def register(
     except Exception:
         logger.exception("failed to send verification email for user %s", user.id)
     if browser_flow(request, body):
-        set_refresh_cookie(response, pair.refresh_token)
+        set_refresh_cookie(response, pair.refresh_token, request=request)
         return TokenResponse(
             access_token=pair.access_token,
             refresh_token=None,
@@ -275,7 +275,7 @@ async def login(
         user, ip_address=_client_ip(request), user_agent=_user_agent(request)
     )
     if browser_flow(request, body):
-        set_refresh_cookie(response, pair.refresh_token)
+        set_refresh_cookie(response, pair.refresh_token, request=request)
         return TokenResponse(
             access_token=pair.access_token,
             refresh_token=None,
@@ -322,7 +322,7 @@ async def refresh(
             await db.rollback()
             logger.exception("failed to join single workspace on refresh")
     if cookie_token is not None or browser_flow(request, body):
-        set_refresh_cookie(response, pair.refresh_token)
+        set_refresh_cookie(response, pair.refresh_token, request=request)
         return TokenResponse(
             access_token=pair.access_token,
             refresh_token=None,
@@ -465,7 +465,7 @@ async def totp_login(
         user, ip_address=_client_ip(request), user_agent=_user_agent(request)
     )
     if browser_flow(request, body):
-        set_refresh_cookie(response, pair.refresh_token)
+        set_refresh_cookie(response, pair.refresh_token, request=request)
         return TokenResponse(
             access_token=pair.access_token,
             refresh_token=None,

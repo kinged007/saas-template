@@ -16,12 +16,44 @@ CSRF_HEADER = "X-Requested-With"
 CSRF_HEADER_VALUE = "XMLHttpRequest"
 
 
-def set_refresh_cookie(response: Response, token: str) -> None:
+def _is_https_request(request: Request | None) -> bool:
+    """True when the request arrived over TLS (proxy-aware).
+
+    Uvicorn runs with --proxy-headers in prod, so request.url.scheme already
+    honors X-Forwarded-Proto; the explicit header check covers test clients
+    and servers without proxy-header handling. Port suffix (:443) covers
+    X-Forwarded-Host forms that carry no scheme."""
+    if request is None:
+        return False
+    if request.url.scheme == "https":
+        return True
+    proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    if proto == "https":
+        return True
+    host = request.headers.get("x-forwarded-host", "") or request.headers.get("host", "")
+    return host.strip().lower().endswith(":443")
+
+
+def cookie_secure_for(request: Request | None = None) -> bool:
+    """Secure flag for the refresh cookie.
+
+    Explicit REFRESH_COOKIE_SECURE wins; otherwise https requests get Secure
+    even when ENVIRONMENT says development (e.g. prod misconfig serving TLS
+    behind a plain-http app server), and plain-http requests skip it so the
+    cookie still stores."""
+    if settings.refresh_cookie_secure is not None:
+        return settings.refresh_cookie_secure
+    if _is_https_request(request):
+        return True
+    return settings.refresh_cookie_secure_effective
+
+
+def set_refresh_cookie(response: Response, token: str, request: Request | None = None) -> None:
     kwargs: dict = {
         "key": settings.refresh_cookie_name,
         "value": token,
         "httponly": True,
-        "secure": settings.refresh_cookie_secure_effective,
+        "secure": cookie_secure_for(request),
         "samesite": "lax",
         "path": settings.refresh_cookie_path,
         "max_age": settings.refresh_token_expire_days * 24 * 3600,
