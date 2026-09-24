@@ -37,7 +37,7 @@ import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "@/contexts/WorkspaceContex
 import { cn } from "@/lib/utils";
 
 const schema = z.object({
-  title: z.string().max(300, "Title must be at most 300 characters").optional(),
+  title: z.string().max(300, "Subject must be at most 300 characters").optional(),
   participantIds: z.array(z.string()).min(1, "Select at least one participant").max(19, "Max 19 other participants"),
   initialMessage: z.string().min(1, "Message is required").max(5000, "Message must be at most 5000 characters"),
 });
