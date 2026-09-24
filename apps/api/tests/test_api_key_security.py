@@ -199,7 +199,7 @@ async def test_key_reads_within_its_permission_scope(app_client):
         ("role:read", "GET", "/api/v1/roles", None),
         ("workspace:read", "GET", f"/api/v1/workspaces/{ws['id']}", None),
         ("apikey:read", "GET", "/api/v1/api-keys", None),
-        ("notification:read", "GET", "/api/v1/notifications", None),
+        ("notification:read", "GET", "/api/v1/notifications", None),  # key-only scope
     ]
     for perm, method, path, _ in cases:
         key = await _create_key(client, headers, f"read-{perm}", [perm])
@@ -281,8 +281,8 @@ async def test_edit_operations_require_matching_key_permission(app_client):
     read_key = await _create_key(client, headers, "read-only", ["member:read"])
     read_kh = _key_headers(read_key["key"], ws["id"])
 
-    # member:manage — role change
-    manage_key = await _create_key(client, headers, "member-manage", ["member:manage"])
+    # member:update — role change
+    manage_key = await _create_key(client, headers, "member-manage", ["member:update"])
     manage_kh = _key_headers(manage_key["key"], ws["id"])
     resp = await client.patch(
         f"/api/v1/members/{eve_membership}",
@@ -311,8 +311,8 @@ async def test_edit_operations_require_matching_key_permission(app_client):
     )
     assert resp.status_code == 403
 
-    # role:manage — create a custom role
-    role_key = await _create_key(client, headers, "role-manage", ["role:manage"])
+    # role:create — create a custom role
+    role_key = await _create_key(client, headers, "role-manage", ["role:create"])
     role_kh = _key_headers(role_key["key"], ws["id"])
     resp = await client.post(
         "/api/v1/roles",
@@ -327,9 +327,9 @@ async def test_edit_operations_require_matching_key_permission(app_client):
     )
     assert resp.status_code == 403
 
-    # notification:acknowledge — mark read
+    # notification:update — mark read
     nid = await _insert_notification(ws["id"], owner_id)
-    nkey = await _create_key(client, headers, "notif-ack", ["notification:acknowledge"])
+    nkey = await _create_key(client, headers, "notif-ack", ["notification:update"])
     nkh = _key_headers(nkey["key"], ws["id"])
     resp = await client.patch(
         f"/api/v1/notifications/{nid}", json={"acknowledged": True}, headers=nkh
@@ -340,7 +340,7 @@ async def test_edit_operations_require_matching_key_permission(app_client):
     )
     assert resp.status_code == 403
 
-    # key minted by the editor (who has no member:manage) cannot change roles
+    # key minted by the editor (who has no member:update) cannot change roles
     resp = await client.patch(
         f"/api/v1/members/{eve_membership}",
         json={"role_id": viewer_role},
@@ -365,8 +365,8 @@ async def test_delete_operations_require_matching_key_permission(app_client):
     read_key = await _create_key(client, headers, "read-only", ["member:read"])
     read_kh = _key_headers(read_key["key"], ws["id"])
 
-    # member:manage — remove a member
-    manage_key = await _create_key(client, headers, "member-manage", ["member:manage"])
+    # member:delete — remove a member
+    manage_key = await _create_key(client, headers, "member-manage", ["member:delete"])
     manage_kh = _key_headers(manage_key["key"], ws["id"])
     resp = await client.delete(f"/api/v1/members/{eve_membership}", headers=manage_kh)
     assert resp.status_code == 204
@@ -374,9 +374,9 @@ async def test_delete_operations_require_matching_key_permission(app_client):
         await client.delete(f"/api/v1/members/{eve_membership}", headers=read_kh)
     ).status_code == 403
 
-    # apikey:manage — revoke another key
+    # apikey:delete — revoke another key
     victim = await _create_key(client, headers, "victim", ["member:read"])
-    revoke_key = await _create_key(client, headers, "revoker", ["apikey:manage"])
+    revoke_key = await _create_key(client, headers, "revoker", ["apikey:delete"])
     revoke_kh = _key_headers(revoke_key["key"], ws["id"])
     resp = await client.delete(f"/api/v1/api-keys/{victim['id']}", headers=revoke_kh)
     assert resp.status_code == 204
@@ -385,9 +385,9 @@ async def test_delete_operations_require_matching_key_permission(app_client):
     resp = await client.delete(f"/api/v1/api-keys/{victim['id']}", headers=read_kh)
     assert resp.status_code == 403
 
-    # notification delete — gated like acknowledge
+    # notification delete — gated on notification:update for keys
     nid = await _insert_notification(ws["id"], owner_id)
-    nkey = await _create_key(client, headers, "notif-ack", ["notification:acknowledge"])
+    nkey = await _create_key(client, headers, "notif-ack", ["notification:update"])
     nkh = _key_headers(nkey["key"], ws["id"])
     resp = await client.delete(f"/api/v1/notifications/{nid}", headers=nkh)
     assert resp.status_code == 204
@@ -469,7 +469,7 @@ async def test_user_cannot_revoke_anothers_api_key(app_client):
     admin_key = await _create_key(client, owner_headers, "admins", ["member:read"])
     editor_key = await _create_key(client, editor_headers, "editors", ["member:read"])
 
-    # editor has apikey:manage (passes the permission gate) but not ownership → 404
+    # editor has apikey:delete (passes the permission gate) but not ownership → 404
     resp = await client.delete(f"/api/v1/api-keys/{admin_key['id']}", headers=editor_headers)
     assert resp.status_code == 404, resp.text
 
@@ -532,7 +532,7 @@ async def test_key_minted_by_a_key_is_capped_by_the_minting_key(app_client):
     owner_headers = ws_headers(owner, ws["id"])
 
     automation = await _create_key(
-        client, owner_headers, "automation", ["apikey:manage", "apikey:read"]
+        client, owner_headers, "automation", ["apikey:create", "apikey:delete", "apikey:read"]
     )
     auto_kh = _key_headers(automation["key"], ws["id"])
 
@@ -540,11 +540,11 @@ async def test_key_minted_by_a_key_is_capped_by_the_minting_key(app_client):
     # requesting a permission outside the key's own list must be rejected
     resp = await client.post(
         "/api/v1/api-keys",
-        json={"name": "escalated", "permissions": ["member:manage"]},
+        json={"name": "escalated", "permissions": ["member:update"]},
         headers=auto_kh,
     )
     assert resp.status_code == 403, resp.text
-    assert "member:manage" in resp.json()["detail"]
+    assert "member:update" in resp.json()["detail"]
 
     # wildcard escalation via the same route
     resp = await client.post(
@@ -559,9 +559,9 @@ async def test_key_minted_by_a_key_is_capped_by_the_minting_key(app_client):
     # a "*" key acts with its owner's full authority and may grant broadly
     superkey = await _create_key(client, owner_headers, "superkey", ["*"])
     broad = await _create_key(
-        client, _key_headers(superkey["key"], ws["id"]), "broad", ["member:manage"]
+        client, _key_headers(superkey["key"], ws["id"]), "broad", ["member:update"]
     )
-    assert broad["permissions"] == ["member:manage"]
+    assert broad["permissions"] == ["member:update"]
 
 
 # ------------------------------------------------------- workspace scoping
@@ -650,7 +650,7 @@ async def test_session_and_key_permissions_are_independent(app_client):
     eve_membership = await _membership_id(client, headers, ws["id"], "eve@example.com")
     viewer_role = await _role_id(client, headers, ws["id"], "viewer")
 
-    # the owner's session can change roles (role has member:manage)...
+    # the owner's session can change roles (role has member:update)...
     resp = await client.patch(
         f"/api/v1/members/{eve_membership}",
         json={"role_id": viewer_role},
@@ -658,7 +658,7 @@ async def test_session_and_key_permissions_are_independent(app_client):
     )
     assert resp.status_code == 200
 
-    # ...but a key minted by the same owner without member:manage cannot
+    # ...but a key minted by the same owner without member:update cannot
     key = await _create_key(client, headers, "read-only", ["member:read"])
     resp = await client.patch(
         f"/api/v1/members/{eve_membership}",
@@ -666,7 +666,7 @@ async def test_session_and_key_permissions_are_independent(app_client):
         headers=_key_headers(key["key"], ws["id"]),
     )
     assert resp.status_code == 403
-    assert "member:manage" in resp.json()["detail"]
+    assert "member:update" in resp.json()["detail"]
 
 
 async def test_garbage_and_revoked_keys_are_rejected(app_client):
@@ -729,11 +729,15 @@ async def test_seed_api_key_definitions_stay_within_creator_scope():
     }
     assert API_KEYS, "seed should define at least one api key"
 
+    from src.core.permissions import KEY_ONLY_PERMISSIONS
+
     for slug, email, name, permissions in API_KEYS:
         role_name = role_by_creator.get((slug, email))
         assert role_name, f"seed key {name} has no known creator role"
         role_perms = set(permissions_for_role(role_name))
-        assert set(permissions) <= role_perms or "*" in role_perms, (
+        # Key-only scopes (notifications) may ride on any member's key.
+        capped = set(permissions) - set(KEY_ONLY_PERMISSIONS)
+        assert capped <= role_perms or "*" in role_perms, (
             f"seed key {name} grants permissions outside {role_name} scope"
         )
 

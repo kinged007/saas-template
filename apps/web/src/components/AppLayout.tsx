@@ -59,7 +59,7 @@ import { getDisplayName } from "../types";
 
 const MENU_ITEMS = [
   { key: "/", label: "Dashboard", icon: LayoutDashboard, permission: "workspace:read" },
-  { key: "/inbox", label: "Inbox", icon: Inbox, permission: "notification:read" },
+  { key: "/inbox", label: "Inbox", icon: Inbox, permission: null },
   { key: "/members", label: "Members", icon: Users, permission: "member:read" },
 ];
 
@@ -68,7 +68,8 @@ function SidebarNav() {
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
   const { workspace } = useWorkspace();
   const permissions = activeWorkspacePermissions(identity);
-  const can = (p: string) => permissions.includes("*") || permissions.includes(p);
+  const can = (p: string | null) =>
+    p === null || permissions.includes("*") || permissions.includes(p);
   const items = MENU_ITEMS.filter((i) => can(i.permission));
   const activeKey = `/${location.pathname.split("/")[1] || ""}`;
   const isActive = (key: string) => (key === "/" ? location.pathname === "/" : activeKey === key);

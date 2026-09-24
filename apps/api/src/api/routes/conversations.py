@@ -13,7 +13,7 @@ from src.api.deps import (
     require_key_permission,
     resolve_auth_principal,
 )
-from src.core.permissions import MESSAGE_READ, MESSAGE_SEND
+from src.core.permissions import MESSAGE_CREATE, MESSAGE_READ
 from src.db.session import get_db
 from src.schemas.api import (
     ConversationArchive,
@@ -136,7 +136,7 @@ async def create_conversation(
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
-    _=Depends(require_key_permission(MESSAGE_SEND)),
+    _=Depends(require_key_permission(MESSAGE_CREATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -190,7 +190,7 @@ async def update_conversation(
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
-    _=Depends(require_key_permission(MESSAGE_SEND)),
+    _=Depends(require_key_permission(MESSAGE_CREATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -347,7 +347,7 @@ async def send_message(
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
-    _=Depends(require_key_permission(MESSAGE_SEND)),
+    _=Depends(require_key_permission(MESSAGE_CREATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):

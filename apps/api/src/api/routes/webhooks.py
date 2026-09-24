@@ -20,7 +20,7 @@ from src.api.deps import (
     get_current_workspace_id,
     require_permission,
 )
-from src.core.permissions import WEBHOOK_MANAGE, WEBHOOK_READ
+from src.core.permissions import WEBHOOK_CREATE, WEBHOOK_DELETE, WEBHOOK_READ, WEBHOOK_UPDATE
 from src.db.session import get_db
 from src.events.publisher import publish_audit
 from src.events.webhook_events import webhook_event_names
@@ -84,7 +84,7 @@ async def create_subscription(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(WEBHOOK_MANAGE)),
+    _=Depends(require_permission(WEBHOOK_CREATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -118,7 +118,7 @@ async def update_subscription(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(WEBHOOK_MANAGE)),
+    _=Depends(require_permission(WEBHOOK_UPDATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -153,7 +153,7 @@ async def delete_subscription(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(WEBHOOK_MANAGE)),
+    _=Depends(require_permission(WEBHOOK_DELETE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -181,7 +181,7 @@ async def rotate_secret(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(WEBHOOK_MANAGE)),
+    _=Depends(require_permission(WEBHOOK_UPDATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -299,7 +299,7 @@ async def redeliver(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(WEBHOOK_MANAGE)),
+    _=Depends(require_permission(WEBHOOK_UPDATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):

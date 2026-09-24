@@ -16,7 +16,7 @@ from src.api.deps import (
     require_key_permission,
     resolve_auth_principal,
 )
-from src.core.permissions import NOTIFICATION_ACK, NOTIFICATION_READ
+from src.core.permissions import NOTIFICATION_READ, NOTIFICATION_UPDATE
 from src.db.session import get_db
 from src.events.publisher import publish_audit
 from src.models.core import Notification
@@ -123,7 +123,7 @@ async def update_preferences(
     body: NotificationPreferencesUpdate,
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
-    _=Depends(require_key_permission(NOTIFICATION_ACK)),
+    _=Depends(require_key_permission(NOTIFICATION_UPDATE)),
     db: AsyncSession = Depends(get_db),
 ):
     for type, channel in body.channels.items():
@@ -163,7 +163,7 @@ async def acknowledge_all(
     request: Request,
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
-    _=Depends(require_key_permission(NOTIFICATION_ACK)),
+    _=Depends(require_key_permission(NOTIFICATION_UPDATE)),
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
@@ -181,7 +181,7 @@ async def acknowledge(
     request: Request,
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
-    _=Depends(require_key_permission(NOTIFICATION_ACK)),
+    _=Depends(require_key_permission(NOTIFICATION_UPDATE)),
     workspace_id: str | None = Depends(get_optional_workspace_id),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
@@ -207,7 +207,7 @@ async def delete_notification(
     request: Request,
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
-    _=Depends(require_key_permission(NOTIFICATION_ACK)),
+    _=Depends(require_key_permission(NOTIFICATION_UPDATE)),
     workspace_id: str | None = Depends(get_optional_workspace_id),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),

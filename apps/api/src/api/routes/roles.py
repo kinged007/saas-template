@@ -13,7 +13,7 @@ from src.api.deps import (
     get_current_workspace_id,
     require_permission,
 )
-from src.core.permissions import PERMISSION_DEFINITIONS, ROLE_MANAGE, ROLE_READ
+from src.core.permissions import ALL_PERMISSIONS, PERMISSION_DEFINITIONS, ROLE_CREATE, ROLE_READ
 from src.db.session import get_db
 from src.models.workspace import Role
 from src.schemas.api import RoleCreate, RoleUpdate
@@ -84,11 +84,11 @@ async def permission_catalog(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership
     assignable = (
-        sorted(PERMISSION_DEFINITIONS)
+        sorted(ALL_PERMISSIONS)
         if "*" in role.permissions
         else sorted(set(role.permissions) & set(PERMISSION_DEFINITIONS))
     )
-    return {"catalog": sorted(PERMISSION_DEFINITIONS), "permissions": assignable}
+    return {"catalog": sorted(ALL_PERMISSIONS), "permissions": assignable}
 
 
 @router.post("", status_code=201)
@@ -97,7 +97,7 @@ async def create_role(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(ROLE_MANAGE)),
+    _=Depends(require_permission(ROLE_CREATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -126,7 +126,7 @@ async def update_role(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(ROLE_MANAGE)),
+    _=Depends(require_permission(ROLE_CREATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):

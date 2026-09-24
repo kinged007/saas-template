@@ -58,7 +58,7 @@ export const workspaceSettings = createSettingsRegistry([
     label: "Jobs",
     icon: Clock,
     component: JobsSection,
-    permission: "jobs:view",
+    permission: "jobs:read",
     order: 30,
   },
   {

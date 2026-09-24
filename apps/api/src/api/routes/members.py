@@ -13,7 +13,7 @@ from src.api.deps import (
     get_current_workspace_id,
     require_permission,
 )
-from src.core.permissions import MEMBER_MANAGE, MEMBER_READ
+from src.core.permissions import MEMBER_DELETE, MEMBER_READ, MEMBER_UPDATE
 from src.db.session import get_db
 from src.models.user_profile import UserProfile
 from src.models.workspace import Role, User, WorkspaceMember
@@ -98,7 +98,7 @@ async def set_member_role(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(MEMBER_MANAGE)),
+    _=Depends(require_permission(MEMBER_UPDATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -125,7 +125,7 @@ async def remove_member(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(MEMBER_MANAGE)),
+    _=Depends(require_permission(MEMBER_DELETE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
