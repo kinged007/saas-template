@@ -1,5 +1,3 @@
-const ACCESS_KEY = "tf_access_token";
-const REFRESH_KEY = "tf_refresh_token";
 const IDENTITY_KEY = "tf_identity";
 // Per-user selection: the last workspace each user had open is restored on
 // their next login. The shared key is the pre-upgrade fallback, adopted once.
@@ -64,18 +62,34 @@ const storage = createSafeStorage();
 type TokensListener = () => void;
 const tokensListeners = new Set<TokensListener>();
 
+// Access token lives in module memory only: the refresh token is an HttpOnly
+// cookie (JS can never read it) and nothing persistent may hold either token.
+let accessToken: string | null = null;
+
+// Signed-in marker: set whenever a session is established (login, register,
+// refresh, OAuth exchange, 2FA login) and cleared on logout. Lets the silent
+// refresh short-circuit for visitors who never signed in, so logged-out
+// boots never POST /auth/refresh just to learn they are logged out. A stale
+// "1" (e.g. cookie cleared server-side) only costs one failed refresh.
+const SESSION_KEY = "tf_has_session";
+
+export const sessionHint = {
+  get: () => storage.get(SESSION_KEY) === "1",
+  set: () => storage.set(SESSION_KEY, "1"),
+  clear: () => storage.remove(SESSION_KEY),
+};
+
 export const tokenStore = {
-  getAccess: () => storage.get(ACCESS_KEY),
-  getRefresh: () => storage.get(REFRESH_KEY),
-  setTokens: (access: string, refresh: string) => {
-    storage.set(ACCESS_KEY, access);
-    storage.set(REFRESH_KEY, refresh);
+  getAccess: () => accessToken,
+  setTokens: (access: string) => {
+    accessToken = access;
+    sessionHint.set();
     tokensListeners.forEach((listener) => listener());
   },
   clear: () => {
-    storage.remove(ACCESS_KEY);
-    storage.remove(REFRESH_KEY);
+    accessToken = null;
     storage.remove(IDENTITY_KEY);
+    sessionHint.clear();
     // Only the legacy shared workspace key is safe to drop blindly: the
     // per-user entry belongs to whoever logs in next and is restored then.
     storage.remove(WORKSPACE_PREFIX + "legacy");
@@ -84,9 +98,9 @@ export const tokenStore = {
   },
   /** Logout variant: also drops the signing-out user's workspace selection. */
   clearForUser: (userId?: string | null) => {
-    storage.remove(ACCESS_KEY);
-    storage.remove(REFRESH_KEY);
+    accessToken = null;
     storage.remove(IDENTITY_KEY);
+    sessionHint.clear();
     workspaceStore.clear(userId);
     tokensListeners.forEach((listener) => listener());
   },

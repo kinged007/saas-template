@@ -58,12 +58,16 @@ export function SsoButtons({ providers, disabled }: { providers: AuthConfig["pro
 
 /** Exchange the one-time OAuth code for tokens, then seed identity/workspace like login. */
 export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: string }> {
-  const { data } = await httpClient.post(`${API_URL}/auth/oauth/token`, { code });
+  const { data } = await httpClient.post(`${API_URL}/auth/oauth/token`, {
+    code,
+    use_cookies: true,
+  });
   if (data.two_factor_required) return { twoFactor: data.challenge_token as string };
   workspaceStore.clear();
   identityStore.set(null);
   clearAllCaches(queryClient);
-  tokenStore.setTokens(data.access_token, data.refresh_token);
+  // Refresh token is in the HttpOnly cookie; only the access token is stored.
+  tokenStore.setTokens(data.access_token);
   try {
     const { data: identity } = await httpClient.get(`${API_URL}/auth/me`);
     await seedWorkspace(identity);

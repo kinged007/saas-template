@@ -37,11 +37,12 @@ export function LoginPage() {
   // Same token + identity + workspace seeding as a normal login (see
   // authProvider): without this the identity query settles with no
   // workspace selected and the app mounts behind a blank gate.
-  const storeTokens = async (tokens: { access_token: string; refresh_token: string }) => {
+  // Access token only — the refresh token lives in the HttpOnly cookie.
+  const storeTokens = async (tokens: { access_token: string }) => {
     workspaceStore.clear();
     identityStore.set(null);
     clearAllCaches(queryClient);
-    tokenStore.setTokens(tokens.access_token, tokens.refresh_token);
+    tokenStore.setTokens(tokens.access_token);
     try {
       const { data: identity } = await httpClient.get(`${API_URL}/auth/me`);
       await seedWorkspace(identity);
@@ -62,6 +63,7 @@ export function LoginPage() {
         const { data } = await httpClient.post(`${API_URL}/auth/2fa/login`, {
           challenge_token: challenge,
           code,
+          use_cookies: true,
         });
         await storeTokens(data);
         window.location.assign("/");

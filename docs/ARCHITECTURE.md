@@ -88,8 +88,12 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 
 | Flow | Mechanism |
 |---|---|
-| Password | `POST /auth/login` → access + refresh; `POST /auth/refresh` (rotating, hashed opaque token in DB); `POST /auth/logout` revokes |
-| API keys | `Authorization: Bearer <key>`; permissions resolved per workspace |
+| Password (browser) | `POST /auth/login` (`use_cookies: true`) → access JWT in JSON + refresh in `HttpOnly; Secure; SameSite=Lax` cookie; `POST /auth/refresh` reads the cookie (rotating, hashed opaque token in DB); `POST /auth/logout` revokes + clears the cookie |
+| Password (non-browser) | `POST /auth/login` → access + refresh in JSON; `POST /auth/refresh` takes `{"refresh_token"}` as before |
+| 2FA / OAuth (browser) | `POST /auth/2fa/login` / `POST /auth/oauth/token` with `use_cookies: true` set the same cookie and omit the JSON refresh; the OAuth one-time code handoff carries only the access token for cookie callers |
+| API keys | `Authorization: Bearer <key>`; permissions resolved per workspace (untouched by the cookie flow) |
+
+Browser session storage model: the refresh token is never JS-readable (HttpOnly cookie, path `/api/v1/auth`); the 15-min access JWT lives in frontend memory only (nothing persists, so boot does one silent `POST /auth/refresh` — via the shared `ensureSession()` single-flight used by both `authProvider.check()` and the dataProvider 401 retry — to restore the session after reload, skipped entirely when the `tf_has_session` marker is absent). Cookie refresh/logout require the `X-Requested-With: XMLHttpRequest` header plus an allowlisted `Origin`/`Referer` (CSRF mitigation); non-browser JSON clients are unaffected. Future session endpoints (OAuth/2FA variants) must reuse `src/core/security/cookies.py` rather than reimplementing flags.
 
 Session binding: every authenticated request costs one extra PK lookup
 (`is_session_active`) to enforce immediate revocation; if that ever hurts,
@@ -203,7 +207,9 @@ A shared `crud` helper turns Refine params into safe SQLAlchemy queries
 ## 9. Security
 
 - bcrypt password hashing, Fernet-encrypted secrets (versioned keys)
-- CORS allowlist from env; refresh-token rotation + revocation
+- CORS allowlist from env (`allow_credentials` on); refresh-token rotation + revocation
+- Browser refresh tokens in `HttpOnly; Secure; SameSite=Lax` cookies (JS cannot exfiltrate them); CSRF covered by SameSite + `Origin`/`Referer` allowlist check + required `X-Requested-With` custom header on cookie-authenticated refresh/logout
+- HttpOnly narrows theft to the live session — injected JS can still ride the session while the page is open, so CSP and output escaping remain the real XSS defense
 - Permission checks server-side on every workspace-scoped route
 - No secrets in responses; API-key raw values returned once at creation
 

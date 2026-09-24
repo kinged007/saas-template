@@ -2,7 +2,7 @@ import type { DataProvider } from "@refinedev/core";
 import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import dataProviderModule from "@refinedev/simple-rest";
 
-import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId } from "../utils/storage";
+import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId, sessionHint } from "../utils/storage";
 import { clearAllCaches, queryClient } from "./queryClient";
 
 // Same-origin API path: the vite dev proxy (and nginx in production) forwards
@@ -10,7 +10,7 @@ import { clearAllCaches, queryClient } from "./queryClient";
 // reached. Override with VITE_API_URL when a direct endpoint is preferred.
 export const API_URL = import.meta.env.VITE_API_URL || "/api/v1";
 
-export const httpClient = axios.create();
+export const httpClient = axios.create({ withCredentials: true });
 
 /** True when the JWT's `exp` claim has passed (with a small clock-skew buffer). */
 function isAccessTokenExpired(token: string | null): boolean {
@@ -63,19 +63,37 @@ export function cancelPendingRefresh() {
   refreshPromise = null;
 }
 
+/**
+ * Shared single-flight session restore: one refresh serves all concurrent
+ * callers (boot check + a 401 retry racing would otherwise double-rotate a
+ * rotating refresh token and log the user out). Returns false immediately
+ * when the signed-in marker is absent, so logged-out boots never POST.
+ */
+export async function ensureSession(): Promise<boolean> {
+  if (!sessionHint.get()) return false;
+  return tryRefresh();
+}
+
 async function tryRefresh(): Promise<boolean> {
   if (!refreshPromise) {
-    const capturedRefresh = tokenStore.getRefresh();
-    if (!capturedRefresh) return false;
+    // The refresh token travels in the HttpOnly cookie (withCredentials) —
+    // JS never sees it.
+    const capturedAccess = tokenStore.getAccess();
     refreshPromise = (async () => {
       try {
-        const { data } = await axios.post(`${API_URL}/auth/refresh`, {
-          refresh_token: capturedRefresh,
-        });
+        const { data } = await axios.post(
+          `${API_URL}/auth/refresh`,
+          {},
+          {
+            withCredentials: true,
+            headers: { "X-Requested-With": "XMLHttpRequest" },
+          },
+        );
         // Logout may have cleared tokens while refresh was in-flight —
         // don't restore a session the user just ended.
-        if (tokenStore.getRefresh() !== capturedRefresh) return false;
-        tokenStore.setTokens(data.access_token, data.refresh_token);
+        if (capturedAccess !== null && tokenStore.getAccess() !== capturedAccess) return false;
+        if (!data?.access_token) return false;
+        tokenStore.setTokens(data.access_token);
         return true;
       } catch {
         return false;
@@ -116,7 +134,8 @@ function forceLogout() {
   // Revoked/expired session: drop everything synchronously so no further
   // request can go out with the dead tokens, then bounce to /login. The
   // queryClient listener notifies the live socket via onTokensChanged.
-  const hadSession = Boolean(tokenStore.getAccess() ?? tokenStore.getRefresh());
+  // tokenStore.clear() also drops the signed-in marker.
+  const hadSession = Boolean(tokenStore.getAccess());
   tokenStore.clear();
   clearAllCaches(queryClient);
   if (hadSession && window.location.pathname !== "/login") {
