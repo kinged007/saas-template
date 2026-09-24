@@ -163,7 +163,11 @@ export function RolesSection() {
   const { data: canManage } = useCan({ resource: "roles", action: "create" });
   const { data: canEdit } = useCan({ resource: "roles", action: "edit" });
 
-  const rows = result?.data ?? [];
+  const rows = [...(result?.data ?? [])].sort((a, b) => {
+    const rank = (name: string) =>
+      ({ owner: 0, admin: 1, editor: 2, viewer: 3 })[name.toLowerCase()] ?? 4;
+    return rank(a.name) - rank(b.name) || a.name.localeCompare(b.name);
+  });
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
