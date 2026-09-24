@@ -62,6 +62,29 @@ async def test_json_flow_still_returns_refresh(app_client):
     assert _cookie_name() not in resp.headers.get("set-cookie", "")
 
 
+async def test_header_opt_in_sets_cookie(app_client):
+    await register_user(app_client, "hdr1@example.com")
+    resp = await app_client.post(
+        "/api/v1/auth/login",
+        json={"email": "hdr1@example.com", "password": "Password123!"},
+        headers={"X-Session-Flow": "cookie"},
+    )
+    assert resp.status_code == 200, resp.text
+    _set_cookie(resp)
+    assert resp.json().get("refresh_token") is None
+
+
+async def test_query_param_opt_in_sets_cookie(app_client):
+    await register_user(app_client, "qp1@example.com")
+    resp = await app_client.post(
+        "/api/v1/auth/login?use_cookies=true",
+        json={"email": "qp1@example.com", "password": "Password123!"},
+    )
+    assert resp.status_code == 200, resp.text
+    _set_cookie(resp)
+    assert resp.json().get("refresh_token") is None
+
+
 async def test_login_without_opt_in_does_not_set_cookie(app_client):
     await register_user(app_client, "json2@example.com")
     resp = await app_client.post(
