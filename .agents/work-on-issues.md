@@ -2,7 +2,7 @@
 
 Pick up the next actionable piece of work and implement it. Run from the repo root. All `gh` commands assume the repo default (current directory) — never hardcode `repos/<owner>/<repo>`.
 
-This repo currently has zero milestones (`gh api repos/{owner}/{repo}/milestones` returns `[]`). There is no milestone ordering. Work directly from the open-issue list. If milestones are added later, process the lowest-numbered open milestone first, skipping staging/empty tracks unless told otherwise.
+This repo currently has zero milestones. There is no milestone ordering. Work directly from the open-issue list. If milestones are added later, process the lowest-numbered open milestone first, skipping staging/empty tracks unless told otherwise.
 
 ## 1. List open issues
 
@@ -14,7 +14,7 @@ gh issue list --state open --limit 50 \
 
 ## 2. Drop finished, invalid, or claimed issues
 
-Skip any issue labelled `wontfix`, `needs-human`, `in-progress`, `review-in-progress`, `invalid`, `duplicate`, or `agent:done` — never touch those, even if open. This repo has no `backlog` label. The listing query excludes them deterministically:
+Skip any issue labelled `wontfix`, `needs-human`, `in-progress`, `review-in-progress`, `invalid`, `duplicate`, or `agent:done` — never touch those, even if open. There is no `backlog` label. The listing query excludes them deterministically:
 
 ```bash
 gh issue list --state open --limit 50 \
@@ -53,10 +53,10 @@ If the task is already resolved, post an issue comment saying so and stop withou
 
 Context to read:
 
-- `docs/ARCHITECTURE.md` for system design and conventions; check `docs/` for related docs (providers, claims-mapping, migration-pipeline) on the area being touched.
-- `.codesight/wiki/index.md`, then `overview.md`, then the domain article for the area, then the source files it lists. Never plan from the wiki alone.
-- Check `.codesight/graph.md` for blast radius before touching high-impact files (`apps/api/src/db/session.py`, `apps/web/src/types.ts`, `apps/api/src/providers/base.py`, `apps/api/src/settings.py`, `apps/api/src/models/workspace.py`).
-- Follow `AGENTS.md` (repo tooling, make targets, no new dependencies without asking).
+- the repo's architecture docs; check `docs/` for related docs on the area being touched.
+- the project's context map / wiki if present, then the source files it lists. Never plan from the wiki alone.
+- check blast radius before touching widely-imported files.
+- Follow the repo's own instructions (tooling, make targets, no new dependencies without asking).
 - Post the plan as an issue comment before writing code:
 
 ```bash
@@ -78,9 +78,13 @@ gh issue edit <n> --add-label needs-human
 
 ## 0. Dev environment and seeded credentials (read first)
 
-Start the stack with `make dev` (API on :8000, web on :5173 — Ctrl-C stops both; never leave it running orphaned). `make dev` installs deps, migrates, and seeds automatically. The seed (`apps/api/src/seed.py`, `make api-seed` to re-run) creates demo users all sharing password `Tenantflex1!`: `admin@tenantflex.dev`, `josh@tenantflex.dev`, `sam@tenantflex.dev`, `brandon@tenantflex.dev`, `maya@tenantflex.dev`, with workspaces `acme-corp` and `globex`, memberships, pending invitations, and notifications.
+Start the stack with the repo's own dev command (see README / AGENTS.md / Makefile — never leave it running orphaned). The dev command usually installs deps, migrates, and seeds automatically.
 
-Log in with a seeded account for manual/visual verification. If the task needs a different user shape, seed a new one via `seed.py` patterns or register through the UI — do not hardcode ad-hoc credentials in the codebase.
+Discover the seeded credentials yourself — they show in the dev startup output and live in the repo's seed script/fixtures.
+
+Log in with a seeded account for manual/visual verification. If the task needs a different user shape, seed one following the repo's seed patterns or register through the UI — do not hardcode ad-hoc credentials in the codebase.
+
+Browser: Obscura only. Any browser use MUST be Obscura — never standalone Playwright or chrome-devtools (playwright-core is allowed only as a CDP client driving `obscura serve`). If `obscura` is not installed, install it from https://github.com/h4ckf0r0day/obscura. Always pass `--allow-private-network` (loopback is blocked without it). Use the `localhost` URL of the dev frontend, never its `127.0.0.1` equivalent — login can break on 127.x (dev CORS default, not a product bug; do not file it). For login-gated screenshots: `obscura serve --allow-private-network --storage-dir <dir>`, connect over CDP (`chromium.connectOverCDP`, install `playwright-core` if needed), fill the login form's email/password fields via pressSequentially, click submit — one-shot `obscura fetch -e` cannot do multi-step login. Screenshots MUST be taken logged in with a seeded account. Review each screenshot yourself; if it does not show the intended page, retry until it does. A login-screen screenshot when a logged-in page was intended is not acceptable.
 
 ## 5. Mark in-progress, then implement
 
@@ -88,13 +92,7 @@ Log in with a seeded account for manual/visual verification. If the task needs a
 gh issue edit <n> --add-label in-progress
 ```
 
-Implement the posted plan, then run the repo quality gate:
-
-```bash
-make api-lint   # ruff check + format check in apps/api
-make api-test   # pytest in apps/api (sqlite in-memory, no docker)
-make web-build  # tsc --noEmit + vite build in apps/web (for web changes)
-```
+Implement the posted plan, then run the repo quality gate (resolve from README / AGENTS.md / Makefile / CI workflows — at minimum lint, tests, and a build of every area touched).
 
 Review your own diff (`git diff`) for correctness, regressions, and convention compliance before finishing.
 
