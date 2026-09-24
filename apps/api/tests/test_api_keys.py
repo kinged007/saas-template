@@ -295,6 +295,9 @@ async def test_effective_permissions_matches_role(app_client):
     perms = resp.json()["permissions"]
     assert "apikey:create" in perms
     assert "workspace:delete" not in perms
+    # Key-only scopes are always offerable for keys, even though no role holds them.
+    assert "notification:read" in perms
+    assert "notification:update" in perms
 
 
 async def test_list_requires_workspace_header(app_client):

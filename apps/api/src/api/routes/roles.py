@@ -13,7 +13,7 @@ from src.api.deps import (
     get_current_workspace_id,
     require_permission,
 )
-from src.core.permissions import ALL_PERMISSIONS, PERMISSION_DEFINITIONS, ROLE_CREATE, ROLE_READ
+from src.core.permissions import ALL_PERMISSIONS, ROLE_CREATE, ROLE_READ
 from src.db.session import get_db
 from src.models.workspace import Role
 from src.schemas.api import RoleCreate, RoleUpdate
@@ -86,7 +86,9 @@ async def permission_catalog(
     assignable = (
         sorted(ALL_PERMISSIONS)
         if "*" in role.permissions
-        else sorted(set(role.permissions) & set(PERMISSION_DEFINITIONS))
+        # Intersect against ALL_PERMISSIONS (not the full registry): a stale
+        # role row holding a legacy key-only scope must not resurface it here.
+        else sorted(set(role.permissions) & set(ALL_PERMISSIONS))
     )
     return {"catalog": sorted(ALL_PERMISSIONS), "permissions": assignable}
 
@@ -119,6 +121,8 @@ async def create_role(
     return _role_dict(role)
 
 
+# ROLE_CREATE is the single custom-role writer guard (no ROLE_UPDATE/ROLE_DELETE
+# exist by design) — it covers both create and update below.
 @router.patch("/{role_id}")
 async def update_role(
     role_id: str,
