@@ -10,7 +10,7 @@ import { clearAllCaches, queryClient } from "./queryClient";
 // reached. Override with VITE_API_URL when a direct endpoint is preferred.
 export const API_URL = import.meta.env.VITE_API_URL || "/api/v1";
 
-export const httpClient = axios.create();
+export const httpClient = axios.create({ withCredentials: true });
 
 /** True when the JWT's `exp` claim has passed (with a small clock-skew buffer). */
 function isAccessTokenExpired(token: string | null): boolean {
@@ -65,17 +65,25 @@ export function cancelPendingRefresh() {
 
 async function tryRefresh(): Promise<boolean> {
   if (!refreshPromise) {
-    const capturedRefresh = tokenStore.getRefresh();
-    if (!capturedRefresh) return false;
+    // The refresh token travels in the HttpOnly cookie (withCredentials) —
+    // JS never sees it. Skip the round-trip when there is no cookie session
+    // (anonymous page) so public screens don't POST on every 401.
+    const capturedAccess = tokenStore.getAccess();
     refreshPromise = (async () => {
       try {
-        const { data } = await axios.post(`${API_URL}/auth/refresh`, {
-          refresh_token: capturedRefresh,
-        });
+        const { data } = await axios.post(
+          `${API_URL}/auth/refresh`,
+          {},
+          {
+            withCredentials: true,
+            headers: { "X-Requested-With": "XMLHttpRequest" },
+          },
+        );
         // Logout may have cleared tokens while refresh was in-flight —
         // don't restore a session the user just ended.
-        if (tokenStore.getRefresh() !== capturedRefresh) return false;
-        tokenStore.setTokens(data.access_token, data.refresh_token);
+        if (capturedAccess !== null && tokenStore.getAccess() !== capturedAccess) return false;
+        if (!data?.access_token) return false;
+        tokenStore.setTokens(data.access_token);
         return true;
       } catch {
         return false;
@@ -116,7 +124,7 @@ function forceLogout() {
   // Revoked/expired session: drop everything synchronously so no further
   // request can go out with the dead tokens, then bounce to /login. The
   // queryClient listener notifies the live socket via onTokensChanged.
-  const hadSession = Boolean(tokenStore.getAccess() ?? tokenStore.getRefresh());
+  const hadSession = Boolean(tokenStore.getAccess());
   tokenStore.clear();
   clearAllCaches(queryClient);
   if (hadSession && window.location.pathname !== "/login") {
