@@ -74,6 +74,7 @@ export function AdminPage() {
           type: "success",
         },
         errorNotification: false,
+        invalidates: ["list"],
       },
       {
         onSuccess: (response) => {
@@ -89,7 +90,13 @@ export function AdminPage() {
     <ListView>
       <ListViewHeader title="Admin" />
       {(listError ?? detailError) && <p className="text-destructive text-sm">{listError ?? detailError}</p>}
-      <div className="flex items-end gap-2">
+      <form
+        className="flex items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (search.trim()) setSubmittedSearch(search.trim());
+        }}
+      >
         <div className="grid gap-1.5">
           <Label htmlFor="admin-search">Find user by email or name</Label>
           <Input
@@ -97,13 +104,15 @@ export function AdminPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="user@example.com"
-            onKeyDown={(e) => e.key === "Enter" && setSubmittedSearch(search.trim())}
           />
         </div>
-        <Button onClick={() => setSubmittedSearch(search.trim())} disabled={busy || !search.trim()}>
+        <Button type="submit" disabled={busy || !search.trim()}>
           Search
         </Button>
-      </div>
+      </form>
+      {submittedSearch === null && (
+        <p className="text-muted-foreground text-sm">Enter an email or name above, then Search.</p>
+      )}
       {submittedSearch !== null && (
         <Table>
           <TableHeader>
