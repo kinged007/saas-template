@@ -1,20 +1,31 @@
-/** Mirror of the backend permission catalog (core/permissions.py). */
+/** Mirror of the backend permission catalog (core/permissions.py).
+
+Notification scopes (`notification:read` / `notification:update`) are
+API-key-only: session users always access their own notifications, keys
+must list the scope to use notification routes.
+*/
 export const ALL_PERMISSIONS = [
   "workspace:read",
   "workspace:update",
   "workspace:delete",
   "member:read",
-  "member:invite",
-  "member:manage",
+  "member:create",
+  "member:update",
+  "member:delete",
   "role:read",
-  "role:manage",
+  "role:create",
   "apikey:read",
-  "apikey:manage",
-  "notification:read",
-  "notification:acknowledge",
+  "apikey:create",
+  "apikey:delete",
   "message:read",
-  "message:send",
-  "jobs:view",
-  "jobs:edit",
+  "message:create",
+  "jobs:read",
+  "jobs:update",
+  "webhook:read",
+  "webhook:create",
+  "webhook:update",
+  "webhook:delete",
   "audit:read",
 ];
+
+export const KEY_ONLY_PERMISSIONS = ["notification:read", "notification:update"];

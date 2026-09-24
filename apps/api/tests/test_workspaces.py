@@ -54,7 +54,7 @@ async def test_permission_denied_without_privilege(app_client):
         headers=auth_headers(other),
     )
 
-    # Try to manage members as viewer (missing member:manage permission)
+    # Try to manage members as viewer (missing member:update permission)
     resp = await client.get(
         "/api/v1/members",
         headers=ws_headers(other, ws["id"]),
@@ -62,7 +62,7 @@ async def test_permission_denied_without_privilege(app_client):
     # members:list is allowed for all members, so check 200
     assert resp.status_code == 200
 
-    # Try to manage roles as viewer (missing role:manage permission)
+    # Try to manage roles as viewer (missing role:create permission)
     resp = await client.post(
         "/api/v1/roles",
         json={"name": "custom", "permissions": ["workspace:read"]},

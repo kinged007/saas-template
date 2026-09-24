@@ -103,7 +103,7 @@ async def test_search_restricted_to_participant_conversations(app_client):
 
 
 async def test_search_hides_jobs_without_jobs_view(app_client):
-    """Viewer/editor roles lack jobs:view, so search must omit job definitions."""
+    """Viewer/editor roles lack jobs:read, so search must omit job definitions."""
     client, h, ws, conv = await _setup(app_client)
     roles = (await client.get("/api/v1/roles", headers=h)).json()
     viewer = next(r for r in roles if r["name"] == "viewer")

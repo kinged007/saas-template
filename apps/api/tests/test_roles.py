@@ -24,7 +24,7 @@ def _guarded_permissions() -> set[str]:
             assert value is not None, f"{path.name}: unknown permission constant {name}"
             found.add(value)
     # Constants used indirectly (e.g. jobs' _require_job_access switch).
-    for name in ("JOB_VIEW", "JOB_EDIT"):
+    for name in ("JOB_READ", "JOB_UPDATE"):
         found.add(getattr(perms, name))
     return found
 
