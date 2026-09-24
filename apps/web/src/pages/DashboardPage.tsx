@@ -1,12 +1,15 @@
-import { useCan, useList } from "@refinedev/core";
+import { useState } from "react";
+import { useCan, useGetIdentity, useList } from "@refinedev/core";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { CheckCircle2, Circle, PlusCircle } from "lucide-react";
+import { CheckCircle2, Circle, PlusCircle, X } from "lucide-react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { WorkspaceSearch } from "@/components/WorkspaceSearch";
 import { useWorkspace } from "../contexts/WorkspaceContext";
-import type { ApiKey, Invitation } from "../types";
+import { onboardingStore } from "@/utils/storage";
+import { IDENTITY_QUERY_OPTIONS } from "../contexts/WorkspaceContext";
+import type { ApiKey, Identity, Invitation } from "../types";
 
 function Step({ done, title, hint, to, cta }: { done: boolean; title: string; hint: string; to: string; cta: string }) {
   return (
@@ -33,6 +36,11 @@ function Step({ done, title, hint, to, cta }: { done: boolean; title: string; hi
 
 export function DashboardPage() {
   const { workspace } = useWorkspace();
+  const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
+  // Dismissal persists per user + workspace; re-render on dismiss via state.
+  const [dismissed, setDismissed] = useState(false);
+  const onboardingDismissed =
+    dismissed || (workspace ? onboardingStore.isDismissed(workspace.id, identity?.id) : false);
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
   const { result: keysResult } = useList<ApiKey>({
     resource: "api-keys",
@@ -84,13 +92,29 @@ export function DashboardPage() {
         </p>
       </div>
 
-      {!allDone && (
+      {!allDone && !onboardingDismissed && (
         <Card>
           <CardHeader>
-            <CardTitle>Get set up</CardTitle>
-            <CardDescription>
-              {workspace ? "Finish these steps to get the most out of your workspace." : "Create a workspace to get started with managing your team."}
-            </CardDescription>
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <CardTitle>Get set up</CardTitle>
+                <CardDescription>
+                  {workspace ? "Finish these steps to get the most out of your workspace." : "Create a workspace to get started with managing your team."}
+                </CardDescription>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0"
+                aria-label="Dismiss onboarding"
+                onClick={() => {
+                  if (workspace) onboardingStore.dismiss(workspace.id, identity?.id);
+                  setDismissed(true);
+                }}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="divide-y">
             {!workspace && (
