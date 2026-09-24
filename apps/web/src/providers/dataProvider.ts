@@ -2,7 +2,7 @@ import type { DataProvider } from "@refinedev/core";
 import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import dataProviderModule from "@refinedev/simple-rest";
 
-import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId } from "../utils/storage";
+import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId, sessionHint } from "../utils/storage";
 import { clearAllCaches, queryClient } from "./queryClient";
 
 // Same-origin API path: the vite dev proxy (and nginx in production) forwards
@@ -63,11 +63,21 @@ export function cancelPendingRefresh() {
   refreshPromise = null;
 }
 
+/**
+ * Shared single-flight session restore: one refresh serves all concurrent
+ * callers (boot check + a 401 retry racing would otherwise double-rotate a
+ * rotating refresh token and log the user out). Returns false immediately
+ * when the signed-in marker is absent, so logged-out boots never POST.
+ */
+export async function ensureSession(): Promise<boolean> {
+  if (!sessionHint.get()) return false;
+  return tryRefresh();
+}
+
 async function tryRefresh(): Promise<boolean> {
   if (!refreshPromise) {
     // The refresh token travels in the HttpOnly cookie (withCredentials) —
-    // JS never sees it. Skip the round-trip when there is no cookie session
-    // (anonymous page) so public screens don't POST on every 401.
+    // JS never sees it.
     const capturedAccess = tokenStore.getAccess();
     refreshPromise = (async () => {
       try {
@@ -124,6 +134,7 @@ function forceLogout() {
   // Revoked/expired session: drop everything synchronously so no further
   // request can go out with the dead tokens, then bounce to /login. The
   // queryClient listener notifies the live socket via onTokensChanged.
+  // tokenStore.clear() also drops the signed-in marker.
   const hadSession = Boolean(tokenStore.getAccess());
   tokenStore.clear();
   clearAllCaches(queryClient);

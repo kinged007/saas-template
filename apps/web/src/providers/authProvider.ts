@@ -1,7 +1,7 @@
 import type { AuthProvider } from "@refinedev/core";
 
 import { activeWorkspacePermissions } from "../utils/permissions";
-import { API_URL, cancelPendingRefresh, httpClient } from "./dataProvider";
+import { API_URL, cancelPendingRefresh, ensureSession, httpClient } from "./dataProvider";
 import {
   identityStore,
   tokenStore,
@@ -157,26 +157,16 @@ export const authProvider: AuthProvider = {
   check: async () => {
     // The access token is in-memory only, so a reload starts empty even with
     // a live cookie session. One silent refresh restores it; failure means
-    // signed out. Single-flight via the dataProvider's shared refreshPromise.
+    // signed out. Shared single-flight with the dataProvider's 401 retries.
     if (tokenStore.getAccess()) return { authenticated: true };
-    try {
-      const { data } = await httpClient.post(
-        `${API_URL}/auth/refresh`,
-        {},
-        { headers: { "X-Requested-With": "XMLHttpRequest" } },
-      );
-      if (data?.access_token) {
-        tokenStore.setTokens(data.access_token);
-        return { authenticated: true };
-      }
-    } catch {
-      /* no cookie session — fall through to signed out */
-    }
+    if (await ensureSession()) return { authenticated: true };
     return { authenticated: false, redirectTo: "/login" };
   },
 
   onError: async (error) => {
     if ((error as { statusCode?: number })?.statusCode === 401) {
+      // tokenStore.clear() also drops the signed-in marker, so the next
+      // check() short-circuits instead of retrying a dead session.
       tokenStore.clear();
       setActiveWorkspaceId(null);
       clearAllCaches(queryClient);
