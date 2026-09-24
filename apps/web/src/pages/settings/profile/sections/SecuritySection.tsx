@@ -56,6 +56,10 @@ export function SecuritySection() {
   const [backupCodes, setBackupCodes] = useState<string[] | null>(null);
   const [password, setPassword] = useState("");
   const [disableOpen, setDisableOpen] = useState(false);
+  const [currentPw, setCurrentPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [changeCode, setChangeCode] = useState("");
 
   const refresh = () => {
     sessions.query.refetch();
@@ -127,8 +131,68 @@ export function SecuritySection() {
     }
   };
 
+  const changePassword = async () => {
+    try {
+      await call("auth/change-password", "post", {
+        current_password: currentPw,
+        new_password: newPw,
+        ...(enabled && changeCode ? { code: changeCode } : {}),
+      });
+      toast.success("Password changed — sign in again");
+      setCurrentPw("");
+      setNewPw("");
+      setConfirmPw("");
+      setChangeCode("");
+      // All sessions are revoked server-side; the access token is dead.
+      window.location.assign("/login");
+    } catch (e) {
+      toast.error((e as Error)?.message ?? "Change failed");
+    }
+  };
+
+  const changeValid =
+    currentPw.length >= 8 && newPw.length >= 8 && newPw === confirmPw && (!enabled || changeCode.length >= 6);
+
   return (
     <div className="flex flex-col gap-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Change password</CardTitle>
+          <CardDescription>
+            {enabled
+              ? "Confirm with your current password and a 2FA code. All sessions are revoked."
+              : "Confirm with your current password. All sessions are revoked."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="change-current">Current password</Label>
+            <Input id="change-current" type="password" autoComplete="current-password" value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="change-new">New password</Label>
+            <Input id="change-new" type="password" autoComplete="new-password" value={newPw} onChange={(e) => setNewPw(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="change-confirm">Confirm new password</Label>
+            <Input id="change-confirm" type="password" autoComplete="new-password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} />
+            {confirmPw && newPw !== confirmPw && (
+              <p className="text-sm text-destructive">Passwords do not match.</p>
+            )}
+          </div>
+          {enabled && (
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="change-code">Two-factor code</Label>
+              <Input id="change-code" inputMode="numeric" maxLength={10} value={changeCode} onChange={(e) => setChangeCode(e.target.value)} placeholder="123456" />
+            </div>
+          )}
+          <div>
+            <Button onClick={changePassword} disabled={!changeValid || mutation.isPending}>
+              Change password
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader>
           <CardTitle>Two-factor authentication</CardTitle>

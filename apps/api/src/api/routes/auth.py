@@ -25,6 +25,7 @@ from src.db.session import get_db
 from src.email import factory as email_factory
 from src.email import templates
 from src.schemas.api import (
+    ChangePasswordRequest,
     ForgotPasswordRequest,
     LoginRequest,
     RefreshRequest,
@@ -350,6 +351,45 @@ def _session_to_dict(row, *, current: bool) -> dict:
         "user_agent": row.user_agent,
         "current": current,
     }
+
+
+@router.post("/change-password", status_code=204)
+async def change_password(
+    body: ChangePasswordRequest,
+    request: Request,
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+) -> None:
+    """Change password: current password always, 2FA code when TOTP is on.
+
+    Revokes every session (including the current one) — the client must
+    re-login with the new password. Mirrors the totp_disable password
+    check and the 2fa/login code verification."""
+    key = _limit_key(request, user.email)
+    get_auth_limiter().check(key)
+    service = AuthService(db, container.bus)
+    try:
+        await service.login_password(
+            user.email, body.current_password, ip_address=_client_ip(request)
+        )
+    except AuthError as exc:
+        get_auth_limiter().fail(key)
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+    get_auth_limiter().reset(key)
+    if user.totp_enabled:
+        if not body.code:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "two-factor code required")
+        try:
+            ok = await TwoFactorService(db, container.cipher, container.bus).verify_login_code(
+                user, code=body.code
+            )
+        except TwoFactorError as exc:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+        if not ok:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid code")
+    fresh = await db.get(type(user), user.id)
+    await service.change_password(fresh or user, body.new_password, ip_address=_client_ip(request))
 
 
 @router.get("/2fa/status")

@@ -453,6 +453,51 @@ class WorkspaceService:
             ip_address=ip_address,
         )
 
+    async def leave_workspace(
+        self,
+        workspace_id: str,
+        *,
+        actor: User,
+        ip_address: str | None = None,
+    ) -> None:
+        """Delete the actor's own membership. Owners cannot leave."""
+        stmt = select(WorkspaceMember).where(
+            WorkspaceMember.workspace_id == workspace_id,
+            WorkspaceMember.user_id == actor.id,
+            WorkspaceMember.status == "active",
+        )
+        member = (await self._session.execute(stmt)).scalar_one_or_none()
+        if member is None:
+            raise WorkspaceError("membership not found")
+        role = await self._session.get(Role, member.role_id)
+        if role and role.name == "owner":
+            raise WorkspaceError("owners cannot leave the workspace")
+        workspace = await self._session.get(Workspace, workspace_id)
+        workspace_name = workspace.name if workspace else "workspace"
+        await self._session.delete(member)
+        await self._session.commit()
+        await publish_event(
+            self._bus,
+            Subjects.WORKSPACE_MEMBER_REMOVED,
+            {
+                "workspace_id": workspace_id,
+                "workspace_name": workspace_name,
+                "user_id": actor.id,
+                "removed_by_user_id": actor.id,
+                "removed_by_name": actor.display_name,
+            },
+        )
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="member",
+            resource_id=member.id,
+            action="member.left",
+            actor_user_id=actor.id,
+            details={"workspace_name": workspace_name},
+            ip_address=ip_address,
+        )
+
     # ------------------------------------------------------------- invitations
 
     async def create_invitation(

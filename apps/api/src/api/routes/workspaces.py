@@ -136,8 +136,12 @@ async def list_workspaces(
     rows = await db.execute(stmt)
     memberships = await service.list_workspaces(user.id)
     roles_by_ws = {w.id: role.name for w, role, _ in memberships}
+    joined_by_ws = {w.id: m.created_at for w, _, m in memberships}
     response.headers["X-Total-Count"] = str(total)
-    return [workspace_to_dict(w, role=roles_by_ws.get(w.id)) for w in rows.scalars().all()]
+    return [
+        workspace_to_dict(w, role=roles_by_ws.get(w.id), joined_at=joined_by_ws.get(w.id))
+        for w in rows.scalars().all()
+    ]
 
 
 @router.post("", response_model=dict, status_code=201)
@@ -234,3 +238,28 @@ async def delete_workspace(
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+
+
+@router.delete("/{workspace_id}/membership", status_code=204)
+async def leave_workspace(
+    workspace_id: str,
+    request: Request,
+    user=Depends(get_current_user),
+    _=Depends(require_existing_workspace),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+) -> None:
+    """Leave a workspace. Owners cannot leave; transfer or delete instead."""
+    try:
+        await WorkspaceService(db, container.bus).leave_workspace(
+            workspace_id,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    except WorkspaceError as exc:
+        msg = str(exc)
+        if msg == "owners cannot leave the workspace":
+            raise HTTPException(status.HTTP_409_CONFLICT, msg) from None
+        raise HTTPException(status.HTTP_404_NOT_FOUND, msg) from None
