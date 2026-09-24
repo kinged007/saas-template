@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useReducer } from "react";
 import { useCan, useGetIdentity, useList } from "@refinedev/core";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle2, Circle, PlusCircle, X } from "lucide-react";
@@ -37,10 +37,13 @@ function Step({ done, title, hint, to, cta }: { done: boolean; title: string; hi
 export function DashboardPage() {
   const { workspace } = useWorkspace();
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
-  // Dismissal persists per user + workspace; re-render on dismiss via state.
-  const [dismissed, setDismissed] = useState(false);
-  const onboardingDismissed =
-    dismissed || (workspace ? onboardingStore.isDismissed(workspace.id, identity?.id) : false);
+  // Dismissal is read from the store every render; force() only triggers a
+  // re-render after dismiss. No dismissed state is kept, so switching
+  // workspaces can never show a stale dismissal from another workspace.
+  const [, force] = useReducer((x: number) => x + 1, 0);
+  const onboardingDismissed = workspace
+    ? onboardingStore.isDismissed(workspace.id, identity?.id)
+    : false;
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
   const { result: keysResult } = useList<ApiKey>({
     resource: "api-keys",
@@ -74,7 +77,7 @@ export function DashboardPage() {
 
   const keys = keysResult?.data ?? [];
   const invitations = invitationsResult?.data ?? [];
-  // ponytail: progress is derived per render (no persistence); add a dismissible tour store when onboarding grows past 3 steps.
+  // ponytail: step progress is derived per render; only dismissal persists (onboardingStore). Add a tour store when onboarding grows past 3 steps.
   const steps = workspace
     ? [
         { done: invitations.length > 0, title: "Invite your team", hint: "Members get workspace access by role.", to: "/members", cta: "Invite" },
@@ -107,9 +110,10 @@ export function DashboardPage() {
                 size="icon"
                 className="h-7 w-7 shrink-0"
                 aria-label="Dismiss onboarding"
+                disabled={!identity}
                 onClick={() => {
                   if (workspace) onboardingStore.dismiss(workspace.id, identity?.id);
-                  setDismissed(true);
+                  force();
                 }}
               >
                 <X className="h-4 w-4" />
