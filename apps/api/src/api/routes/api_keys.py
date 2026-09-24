@@ -95,8 +95,6 @@ async def effective_permissions(
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership
-    if "*" in role.permissions:
-        return {"permissions": sorted(role.permissions)}
     return {"permissions": sorted(set(role.permissions) | set(KEY_ONLY_PERMISSIONS))}
 
 

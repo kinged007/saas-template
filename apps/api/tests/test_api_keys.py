@@ -271,7 +271,11 @@ async def test_effective_permissions_matches_role(app_client):
 
     resp = await client.get("/api/v1/api-keys/effective-permissions", headers=headers)
     assert resp.status_code == 200
-    assert "*" in resp.json()["permissions"]
+    owner_perms = resp.json()["permissions"]
+    assert "*" in owner_perms
+    # Owners mint keys too: key-only scopes must be offerable here as well.
+    assert "notification:read" in owner_perms
+    assert "notification:update" in owner_perms
 
     roles = await client.get("/api/v1/roles", headers=headers)
     editor = next(r for r in roles.json() if r["name"] == "editor")
