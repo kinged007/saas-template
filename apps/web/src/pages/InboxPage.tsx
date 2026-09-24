@@ -492,33 +492,33 @@ export function InboxPage() {
       <TabbedPageHeader
         title="Inbox"
         tabs={
-          <div className="flex w-full rounded-lg border p-1 sm:w-auto">
-            <Button
-              variant={tab === "messages" ? "secondary" : "ghost"}
-              size="sm"
-              className="h-7 flex-1 justify-center sm:flex-none"
-              onClick={() => setTab("messages")}
-            >
-              <MessageSquare className="mr-1 h-3.5 w-3.5" />
-              Messages
-            </Button>
-            <Button
-              variant={tab === "notifications" ? "secondary" : "ghost"}
-              size="sm"
-              className="h-7 flex-1 justify-center sm:flex-none"
-              onClick={() => setTab("notifications")}
-            >
-              <Mail className="mr-1 h-3.5 w-3.5" />
-              Notifications
-            </Button>
+          <div className="flex w-full items-center gap-2 sm:w-auto">
+            {tab === "messages" && (
+              <Button size="sm" onClick={() => setComposeOpen(true)}>
+                Compose
+              </Button>
+            )}
+            <div className="flex flex-1 rounded-lg border p-1 sm:flex-none">
+              <Button
+                variant={tab === "messages" ? "secondary" : "ghost"}
+                size="sm"
+                className="h-7 flex-1 justify-center sm:flex-none"
+                onClick={() => setTab("messages")}
+              >
+                <MessageSquare className="mr-1 h-3.5 w-3.5" />
+                Messages
+              </Button>
+              <Button
+                variant={tab === "notifications" ? "secondary" : "ghost"}
+                size="sm"
+                className="h-7 flex-1 justify-center sm:flex-none"
+                onClick={() => setTab("notifications")}
+              >
+                <Mail className="mr-1 h-3.5 w-3.5" />
+                Notifications
+              </Button>
+            </div>
           </div>
-        }
-        actions={
-          tab === "messages" ? (
-            <Button size="sm" onClick={() => setComposeOpen(true)}>
-              Compose
-            </Button>
-          ) : undefined
         }
       />
 

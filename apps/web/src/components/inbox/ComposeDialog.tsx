@@ -120,21 +120,6 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
         </DialogHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col gap-4">
-            <FormField
-              control={form.control}
-              name="title"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Title (optional)</FormLabel>
-                  <FormControl>
-                    <Input placeholder="Project discussion" {...field} />
-                  </FormControl>
-                  <FormDescription>Subject — like an email. Leave blank to auto-generate.</FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
             {/* Flex container for participant selector + future select box */}
             <div className="flex gap-2">
               <FormField
@@ -274,6 +259,21 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
                 }}
               />
             </div>
+
+            <FormField
+              control={form.control}
+              name="title"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Subject (optional)</FormLabel>
+                  <FormControl>
+                    <Input placeholder="Project discussion" {...field} />
+                  </FormControl>
+                  <FormDescription>Leave blank to auto-generate.</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             <FormField
               control={form.control}
