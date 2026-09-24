@@ -49,3 +49,6 @@ crash.log
 
 # Logs
 *.log
+
+# Sortie
+.sortie/
