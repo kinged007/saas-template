@@ -334,7 +334,9 @@ export function GeneralSection() {
                       <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger>
-                            <SelectValue placeholder="Select timezone" />
+                            <SelectValue placeholder="Select timezone">
+                              {field.value || undefined}
+                            </SelectValue>
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent className="max-h-64">
@@ -361,7 +363,9 @@ export function GeneralSection() {
                       <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger>
-                            <SelectValue placeholder="Select locale" />
+                            <SelectValue placeholder="Select locale">
+                              {LOCALE_OPTIONS.find((o) => o.value === field.value)?.label}
+                            </SelectValue>
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>

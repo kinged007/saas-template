@@ -98,6 +98,10 @@ const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
 >(({ className, children, position = "popper", ...props }, ref) => {
+  // Closed content stays unmounted: Radix tears its internal fragment down
+  // while React still owns the children, which throws on unmount.
+  // SelectValue therefore gets no item text to read and every caller with a
+  // value must pass children explicitly.
   const open = React.useContext(SelectOpenContext);
   if (!open) return null;
 

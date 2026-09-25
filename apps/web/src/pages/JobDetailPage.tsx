@@ -231,7 +231,9 @@ function EditDialog({
               }
             >
               <SelectTrigger>
-                <SelectValue />
+                <SelectValue>
+                  {policy === "ignore" ? "Ignore missed runs" : "Catch up once (fire immediately)"}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="single">
