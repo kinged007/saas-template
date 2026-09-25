@@ -2,7 +2,7 @@ import os
 import re
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.email.base import EmailDriver  # noqa: E402  (base has no settings import)
@@ -71,6 +71,18 @@ class Settings(BaseSettings):
                 "NATS names may contain only letters, numbers, underscores, and hyphens"
             )
         return value
+
+    @model_validator(mode="after")
+    def _derive_identifiers(self):
+        if "app_slug" not in self.model_fields_set:
+            self.app_slug = _slugify(self.app_name).removesuffix("-api") or "app"
+        if "refresh_cookie_name" not in self.model_fields_set:
+            self.refresh_cookie_name = (
+                "st_refresh"
+                if self.app_slug == DEFAULT_APP_SLUG
+                else f"{self.app_slug.replace('-', '_')}_refresh"
+            )
+        return self
 
     @field_validator("use_sqlite", mode="before")
     @classmethod
@@ -157,7 +169,9 @@ class Settings(BaseSettings):
                 "slug": _slugify(name),
                 "description": "Demo workspace" if index == 0 else "Second demo workspace",
             }
-            for index, name in enumerate(self.seed_workspace_names.split(","))
+            for index, name in enumerate(
+                name.strip() for name in self.seed_workspace_names.split(",")
+            )
         ]
 
     # Auth methods: registration kill-switch and password kill-switch (SSO-only mode).

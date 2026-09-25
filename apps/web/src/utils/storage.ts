@@ -157,6 +157,12 @@ export const workspaceStore = {
     if (userId) {
       const own = storage.get(WORKSPACE_PREFIX + userId);
       if (own) return own;
+      const legacyOwn = storage.get(LEGACY_WORKSPACE_PREFIX + userId);
+      if (legacyOwn) {
+        storage.set(WORKSPACE_PREFIX + userId, legacyOwn);
+        storage.remove(LEGACY_WORKSPACE_PREFIX + userId);
+        return legacyOwn;
+      }
     }
     const legacy =
       storage.get(WORKSPACE_PREFIX + "legacy") ??
@@ -174,7 +180,10 @@ export const workspaceStore = {
   set: (id: string, userId?: string | null) =>
     storage.set(WORKSPACE_PREFIX + (userId ?? "legacy"), id),
   clear: (userId?: string | null) => {
-    if (userId) storage.remove(WORKSPACE_PREFIX + userId);
+    if (userId) {
+      storage.remove(WORKSPACE_PREFIX + userId);
+      storage.remove(LEGACY_WORKSPACE_PREFIX + userId);
+    }
     storage.remove(WORKSPACE_PREFIX + "legacy");
     storage.remove(LEGACY_WORKSPACE_PREFIX + "legacy");
     storage.remove(LEGACY_WORKSPACE_KEY);

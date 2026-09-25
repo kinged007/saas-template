@@ -54,7 +54,6 @@ services:
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in infra/docker/.env}
       FERNET_KEYS: ${FERNET_KEYS:?set FERNET_KEYS in infra/docker/.env}
       SECRET_ENCRYPT_VERSION: ${SECRET_ENCRYPT_VERSION:-1}
-      REFRESH_COOKIE_NAME: ${REFRESH_COOKIE_NAME:?set REFRESH_COOKIE_NAME in infra/docker/.env}
       EVENT_BUS_DRIVER: nats
       NATS_URL: nats://nats:4222
       # Public origin of the app (used for links in emails etc.). CORS is only

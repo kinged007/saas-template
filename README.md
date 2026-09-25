@@ -67,7 +67,6 @@ Set the same values in both files to rebrand the application:
 # apps/api/.env
 APP_NAME=My Product
 APP_SLUG=my-product
-REFRESH_COOKIE_NAME=my_product_refresh
 
 # apps/web/.env
 VITE_APP_NAME=My Product
@@ -77,13 +76,14 @@ VITE_LOGO_URL=/brand/logo.svg
 
 `APP_SLUG` must be a lowercase DNS-style identifier. It controls the API user-config
 path, embedded database directory, default NATS stream, and default NATS consumer
-prefix. `REFRESH_COOKIE_NAME`, an explicitly configured `NATS_STREAM_NAME`, and
-Docker volumes are stateful: changing them can orphan existing data or sign
-browser sessions out. The frontend reads legacy `tf_*` storage keys when no
-namespaced value exists, then writes the namespaced key.
+prefix, and refresh cookie name. The refresh cookie, an explicitly configured
+`NATS_STREAM_NAME`, and Docker volumes are stateful: changing their names can
+orphan existing data or sign browser sessions out. The frontend reads legacy
+`tf_*` storage keys when no namespaced value exists, then writes the namespaced key.
 
 For Docker Compose, copy `infra/docker/.env.example` to `infra/docker/.env` and set
-`COMPOSE_PROJECT_NAME`, `APP_NAME`, `APP_SLUG`, and `REFRESH_COOKIE_NAME`. For Helm,
+`COMPOSE_PROJECT_NAME`, `APP_NAME`, and `APP_SLUG`; optionally set
+`REFRESH_COOKIE_NAME` to retain an existing stateful cookie name. For Helm,
 set `appName` and `appSlug`; build the web image with matching `VITE_APP_*` build
 arguments. The reference Terraform module uses the same `app_name` and `app_slug`
 variables.

@@ -54,12 +54,24 @@ def test_branding_settings_drive_runtime_identifiers():
 
     assert s.api_name == "My Product API"
     assert s.service_name == "my-product-api"
+    assert s.refresh_cookie_name == "my_product_refresh"
     assert s.nats_stream_name_effective == "MY_PRODUCT"
     assert s.nats_consumer_prefix_effective == "mp"
     assert s.seed_workspace_specs == [
         {"name": "First", "slug": "first", "description": "Demo workspace"},
         {"name": "Second", "slug": "second", "description": "Second demo workspace"},
     ]
+
+
+def test_default_identifiers_preserve_existing_names(monkeypatch):
+    monkeypatch.delenv("APP_SLUG", raising=False)
+    monkeypatch.delenv("APP_NAME", raising=False)
+    s = Settings(_env_file=None)
+
+    assert s.app_slug == "saas-template"
+    assert s.refresh_cookie_name == "st_refresh"
+    assert s.nats_stream_name_effective == "SAAS_TEMPLATE"
+    assert s.nats_consumer_prefix_effective == "st"
 
 
 def test_app_slug_rejects_non_dns_identifiers():
