@@ -32,6 +32,7 @@ from src.settings import settings
 from src.workflows import build_workflows
 
 STREAM_NAME = settings.nats_stream_name_effective
+CONSUMER_PREFIX = settings.nats_consumer_prefix_effective
 MAX_DELIVER = 10
 ACK_WAIT_SECONDS = 30.0
 
@@ -223,7 +224,7 @@ async def test_unsubscribe_stops_delivery(bus: NatsEventBus):
 
 async def test_durable_consumer_config(bus: NatsEventBus):
     subject = _unique_subject()
-    durable_name = f"st-{subject.replace('.', '-')}"
+    durable_name = f"{CONSUMER_PREFIX}-{subject.replace('.', '-')}"
     received, sub_id = await _collect(bus, subject)
     await bus.publish(subject, {"cfg": True})
     assert await _wait_for(lambda: len(received) == 1)
