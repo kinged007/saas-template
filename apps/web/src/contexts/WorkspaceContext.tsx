@@ -204,6 +204,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (workspaces.length === 0) {
       // Logged-out or identity not yet hydrated: don't auto-pick.
       if (!identityId) return;
+      if (selected || getActiveWorkspaceId() || workspaceStore.get(identityId)) {
+        workspaceStore.clear(identityId);
+        setActiveWorkspaceId(null);
+        setSelected(undefined);
+        prevWorkspaceIdRef.current = null;
+      }
       return;
     }
     const stored = workspaceStore.get(identityId);

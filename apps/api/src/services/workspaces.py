@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import secrets
 import uuid
 from datetime import timedelta
@@ -20,6 +21,8 @@ from src.events.subjects import Subjects
 from src.models.core import Invitation
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.services.auth import AuthService
+
+logger = logging.getLogger(__name__)
 
 
 class WorkspaceError(Exception):
@@ -90,7 +93,7 @@ class WorkspaceService:
                 WorkspaceMember.user_id == user.id,
             )
         )
-        if existing.scalar_one_or_none() is None:
+        if existing.scalars().first() is None:
             role = await self._single_workspace_role(workspace.id)
             self._session.add(
                 WorkspaceMember(
@@ -466,37 +469,45 @@ class WorkspaceService:
             WorkspaceMember.user_id == actor.id,
             WorkspaceMember.status == "active",
         )
-        member = (await self._session.execute(stmt)).scalar_one_or_none()
+        member = (await self._session.execute(stmt)).scalars().first()
         if member is None:
             raise WorkspaceError("membership not found")
         role = await self._session.get(Role, member.role_id)
         if role and role.name == "owner":
             raise WorkspaceError("owners cannot leave the workspace")
+        if self.single_workspace_enabled():
+            raise WorkspaceForbidden("leaving is disabled in single-workspace mode")
         workspace = await self._session.get(Workspace, workspace_id)
         workspace_name = workspace.name if workspace else "workspace"
         await self._session.delete(member)
         await self._session.commit()
-        await publish_event(
-            self._bus,
-            Subjects.WORKSPACE_MEMBER_REMOVED,
-            {
-                "workspace_id": workspace_id,
-                "workspace_name": workspace_name,
-                "user_id": actor.id,
-                "removed_by_user_id": actor.id,
-                "removed_by_name": actor.display_name,
-            },
-        )
-        await publish_audit(
-            self._bus,
-            workspace_id=workspace_id,
-            resource_type="member",
-            resource_id=member.id,
-            action="member.left",
-            actor_user_id=actor.id,
-            details={"workspace_name": workspace_name},
-            ip_address=ip_address,
-        )
+        try:
+            await publish_event(
+                self._bus,
+                Subjects.WORKSPACE_MEMBER_REMOVED,
+                {
+                    "workspace_id": workspace_id,
+                    "workspace_name": workspace_name,
+                    "user_id": actor.id,
+                    "removed_by_user_id": actor.id,
+                    "removed_by_name": actor.display_name,
+                },
+            )
+        except Exception:
+            logger.exception("failed to publish member-left event for workspace %s", workspace_id)
+        try:
+            await publish_audit(
+                self._bus,
+                workspace_id=workspace_id,
+                resource_type="member",
+                resource_id=member.id,
+                action="member.left",
+                actor_user_id=actor.id,
+                details={"workspace_name": workspace_name},
+                ip_address=ip_address,
+            )
+        except Exception:
+            logger.exception("failed to publish member-left audit for workspace %s", workspace_id)
 
     # ------------------------------------------------------------- invitations
 
@@ -670,7 +681,7 @@ class WorkspaceService:
     async def accept_invitation(
         self, token: str, user: User, *, ip_address: str | None = None
     ) -> Workspace:
-        stmt = select(Invitation).where(Invitation.token == token)
+        stmt = select(Invitation).where(Invitation.token == token).with_for_update()
         result = await self._session.execute(stmt)
         invite = result.scalar_one_or_none()
         if invite is None or invite.status != "pending":
@@ -682,44 +693,77 @@ class WorkspaceService:
         if invite.email != user.email.lower():
             raise WorkspaceError("this invitation was issued for a different email")
 
+        user_id = user.id
+        user_email = user.email
+        user_display_name = user.display_name
         existing = await self._session.execute(
             select(WorkspaceMember).where(
                 WorkspaceMember.workspace_id == invite.workspace_id,
-                WorkspaceMember.user_id == user.id,
+                WorkspaceMember.user_id == user_id,
             )
         )
-        if existing.scalar_one_or_none() is None:
+        existing_member = existing.scalars().first()
+        member_created = existing_member is None
+        invite_id = invite.id
+        workspace_id = invite.workspace_id
+        invited_by_user_id = invite.invited_by_user_id
+        if member_created:
             self._session.add(
                 WorkspaceMember(
-                    workspace_id=invite.workspace_id,
-                    user_id=user.id,
+                    workspace_id=workspace_id,
+                    user_id=user_id,
                     role_id=invite.role_id,
                     status="active",
                 )
             )
         invite.status = "accepted"
         invite.accepted_at = now_utc()
-        await self._session.commit()
-        workspace = await self._session.get(Workspace, invite.workspace_id)
-        if self._bus is not None:
+        try:
+            await self._session.commit()
+        except IntegrityError:
+            await self._session.rollback()
+            existing_member = (
+                (
+                    await self._session.execute(
+                        select(WorkspaceMember).where(
+                            WorkspaceMember.workspace_id == workspace_id,
+                            WorkspaceMember.user_id == user_id,
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if existing_member is None:
+                raise
+            invite = await self._session.get(Invitation, invite_id)
+            if invite is None:
+                raise WorkspaceError("invitation not found or no longer valid") from None
+            if invite.status == "pending":
+                invite.status = "accepted"
+                invite.accepted_at = now_utc()
+                await self._session.commit()
+            member_created = False
+        workspace = await self._session.get(Workspace, workspace_id)
+        if self._bus is not None and member_created:
             await self._bus.publish(
                 Subjects.WORKSPACE_MEMBER_JOINED,
                 {
                     "workspace_id": workspace.id,
                     "workspace_name": workspace.name,
-                    "user_id": user.id,
-                    "user_name": user.display_name,
-                    "invited_by_user_id": invite.invited_by_user_id,
+                    "user_id": user_id,
+                    "user_name": user_display_name,
+                    "invited_by_user_id": invited_by_user_id,
                 },
             )
         await publish_audit(
             self._bus,
-            workspace_id=invite.workspace_id,
+            workspace_id=workspace_id,
             resource_type="invitation",
-            resource_id=invite.id,
+            resource_id=invite_id,
             action="invitation.accepted",
-            actor_user_id=user.id,
-            details={"workspace_name": workspace.name, "email": user.email},
+            actor_user_id=user_id,
+            details={"workspace_name": workspace.name, "email": user_email},
             ip_address=ip_address,
         )
         return workspace

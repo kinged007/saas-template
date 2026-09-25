@@ -116,8 +116,15 @@ async def list_workspaces(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
         membership = await service.get_membership(workspace_id, user.id)
         role = membership[1] if membership else None
+        joined_at = membership[0].created_at if membership else None
         response.headers["X-Total-Count"] = "1"
-        return [workspace_to_dict(workspace, role=role.name if role else None)]
+        return [
+            workspace_to_dict(
+                workspace,
+                role=role.name if role else None,
+                joined_at=joined_at,
+            )
+        ]
     stmt = (
         select(Workspace)
         .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)

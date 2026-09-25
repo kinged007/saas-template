@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.core.dates import ensure_utc
 from src.models.core import Notification
 from src.models.user_profile import UserProfile
 from src.models.workspace import User, Workspace
 
 
 def _to_iso(value: Any) -> str | None:
-    return value.isoformat() if value else None
+    return ensure_utc(value).isoformat() if value else None
 
 
 def notification_to_dict(n: Notification, *, workspace_name: str | None = None) -> dict:

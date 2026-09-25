@@ -116,3 +116,53 @@ async def test_api_key_cannot_change_password(app_client):
         headers={"Authorization": f"Bearer {key}"},
     )
     assert resp.status_code == 403, resp.text
+
+
+async def test_password_check_does_not_record_a_login(app_client):
+    from src.db.session import SessionFactory
+    from src.services.auth import AuthService
+
+    client = app_client
+    tokens = await register_user(client, "chg-no-login@example.com")
+    resp = await client.post(
+        "/api/v1/auth/change-password",
+        json={"current_password": "Password123!", "new_password": "Newpass123!"},
+        headers=auth_headers(tokens),
+    )
+    assert resp.status_code == 204, resp.text
+    async with SessionFactory() as session:
+        user = await AuthService(session).get_by_email("chg-no-login@example.com")
+        assert user is not None
+        assert user.last_login_at is None
+
+
+async def test_2fa_failures_are_rate_limited(app_client, monkeypatch):
+    from src.core.security.totp import current_code, secret_from_base32
+    from src.settings import settings
+
+    monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 2)
+    client = app_client
+    tokens = await register_user(client, "chg-limit@example.com")
+    headers = auth_headers(tokens)
+    setup_resp = await client.post("/api/v1/auth/2fa/setup", headers=headers)
+    assert setup_resp.status_code == 200, setup_resp.text
+    setup = setup_resp.json()
+    b32 = setup["otpauth_uri"].split("secret=")[1].split("&")[0]
+    enable = await client.post(
+        "/api/v1/auth/2fa/enable",
+        json={"setup_token": setup["setup_token"], "code": current_code(secret_from_base32(b32))},
+        headers=headers,
+    )
+    assert enable.status_code == 200, enable.text
+
+    for expected in (400, 400, 429):
+        resp = await client.post(
+            "/api/v1/auth/change-password",
+            json={
+                "current_password": "Password123!",
+                "new_password": "Newpass123!",
+                "code": "invalid",
+            },
+            headers=headers,
+        )
+        assert resp.status_code == expected, resp.text

@@ -217,6 +217,7 @@ async def test_key_reads_within_its_permission_scope(app_client):
     resp = await client.get("/api/v1/workspaces", headers=_key_headers(wkey["key"], ws["id"]))
     assert resp.status_code == 200
     assert [w["id"] for w in resp.json()] == [ws["id"]]
+    assert resp.json()[0].get("joined_at")
 
 
 async def test_key_cannot_read_outside_its_permission_scope(app_client):

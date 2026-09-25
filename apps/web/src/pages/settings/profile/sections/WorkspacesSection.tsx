@@ -88,7 +88,11 @@ export function WorkspacesSection() {
                       {formatDate(w.joined_at)}
                     </TableCell>
                     <TableCell className="text-right">
-                      {w.role !== "owner" ? (
+                      {identity?.single_workspace ? (
+                        <span className="text-muted-foreground text-xs">
+                          Leaving is disabled in single-workspace mode
+                        </span>
+                      ) : w.role !== "owner" ? (
                         <Button variant="outline" size="sm" onClick={() => setLeaving(w)}>
                           Leave
                         </Button>

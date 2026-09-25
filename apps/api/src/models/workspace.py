@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import JSON, Boolean, DateTime, String
+from sqlalchemy import JSON, Boolean, DateTime, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.base import Base, StringUUID, TimestampMixin
@@ -104,6 +104,13 @@ class Role(Base, TimestampMixin):
 
 class WorkspaceMember(Base, TimestampMixin):
     __tablename__ = "workspace_members"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "user_id",
+            name="uq_workspace_members_workspace_id_user_id",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(
         StringUUID(), primary_key=True, default=lambda: str(uuid.uuid4())

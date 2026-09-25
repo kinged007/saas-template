@@ -376,26 +376,26 @@ async def change_password(
     get_auth_limiter().check(key)
     service = AuthService(db, container.bus)
     try:
-        await service.login_password(
-            user.email, body.current_password, ip_address=_client_ip(request)
-        )
+        current_user = await service.verify_password(user.email, body.current_password)
     except AuthError as exc:
         get_auth_limiter().fail(key)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
-    get_auth_limiter().reset(key)
-    if user.totp_enabled:
+    if current_user.totp_enabled:
         if not body.code:
+            get_auth_limiter().fail(key)
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "two-factor code required")
         try:
             ok = await TwoFactorService(db, container.cipher, container.bus).verify_login_code(
-                user, code=body.code
+                current_user, code=body.code
             )
         except TwoFactorError as exc:
+            get_auth_limiter().fail(key)
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
         if not ok:
+            get_auth_limiter().fail(key)
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid code")
-    fresh = await db.get(type(user), user.id)
-    await service.change_password(fresh or user, body.new_password, ip_address=_client_ip(request))
+    await service.change_password(current_user, body.new_password, ip_address=_client_ip(request))
+    get_auth_limiter().reset(key)
 
 
 @router.get("/2fa/status")

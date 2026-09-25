@@ -17,6 +17,11 @@ from src.services.workspaces import WorkspaceService
 from tests.bus_doubles import RecordingBus
 
 
+class FailingBus(RecordingBus):
+    async def publish(self, *args, **kwargs):
+        raise RuntimeError("publish failed")
+
+
 @pytest.fixture
 async def bus():
     return RecordingBus()
@@ -271,6 +276,18 @@ async def test_role_change_emits_event_and_audit(bus, owner):
     assert audit["actor_user_id"] == owner.id
     assert audit["details"]["from_role"] == "editor"
     assert audit["details"]["to_role"] == "viewer"
+
+
+async def test_leave_survives_event_publish_failure(bus, owner):
+    invitee = await _register(bus, "leave-failure@example.com", "Member")
+    workspace = await _create_workspace(bus, owner.id, slug="leave-failure")
+    invite = await _invite_member(bus, owner.id, workspace, "leave-failure@example.com")
+    await _accept_invitation(bus, invite.token, invitee)
+
+    async with SessionFactory() as session:
+        actor = await AuthService(session).get_user(invitee.id)
+        await WorkspaceService(session, FailingBus()).leave_workspace(workspace.id, actor=actor)
+        assert await WorkspaceService(session).get_membership(workspace.id, invitee.id) is None
 
 
 async def test_member_removed_emits_event_and_audit(bus, owner):

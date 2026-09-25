@@ -152,11 +152,6 @@ async def _seed_workspace(session, workspace_id: str, owner: User, editor_role_i
     from src.models.webhook import WebhookSubscription
     from src.services.api_keys import ApiKeyService
 
-    session.add(
-        WorkspaceMember(
-            workspace_id=workspace_id, user_id=owner.id, role_id=editor_role_id, status="active"
-        )
-    )
     await ApiKeyService(session).create_api_key(
         workspace_id=workspace_id, name="k", permissions=["*"], actor=owner
     )

@@ -1,5 +1,7 @@
 """My workspaces list + leave (issue #173)."""
 
+import asyncio
+
 from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
 
 
@@ -12,11 +14,15 @@ async def test_list_shows_role_and_joined_at(app_client):
     rows = resp.json()
     mine = next(r for r in rows if r["id"] == ws["id"])
     assert mine["role"] == "owner", mine
-    assert mine.get("joined_at"), mine
+    assert mine.get("joined_at", "").endswith("+00:00"), mine
     # /auth/me is the other workspace list the UI reads; same shape.
     me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
     assert me.status_code == 200, me.text
-    assert next(r for r in me.json()["workspaces"] if r["id"] == ws["id"]).get("joined_at")
+    assert (
+        next(r for r in me.json()["workspaces"] if r["id"] == ws["id"])
+        .get("joined_at", "")
+        .endswith("+00:00")
+    )
 
 
 async def test_leave_removes_membership(app_client):
@@ -47,6 +53,37 @@ async def test_leave_removes_membership(app_client):
     assert resp.status_code == 204, resp.text
     listed = await client.get("/api/v1/workspaces", headers=auth_headers(member))
     assert all(r["id"] != ws["id"] for r in listed.json())
+
+
+async def test_concurrent_invitation_acceptance_creates_one_membership(app_client):
+    client = app_client
+    owner = await register_user(client, "concurrent-owner@example.com")
+    workspace = await create_workspace(client, owner)
+    member = await register_user(client, "concurrent-member@example.com")
+    roles = await client.get("/api/v1/roles", headers=ws_headers(owner, workspace["id"]))
+    viewer = next(role for role in roles.json() if role["name"] == "viewer")
+    invitation = await client.post(
+        "/api/v1/invitations",
+        json={"email": "concurrent-member@example.com", "role_id": viewer["id"]},
+        headers=ws_headers(owner, workspace["id"]),
+    )
+    assert invitation.status_code == 201, invitation.text
+    token = invitation.json()["token"]
+
+    async def accept():
+        return await client.post(
+            "/api/v1/invitations/accept",
+            params={"token": token},
+            headers=auth_headers(member),
+        )
+
+    results = await asyncio.gather(accept(), accept())
+    assert all(result.status_code in (200, 400) for result in results), [
+        result.text for result in results
+    ]
+    listed = await client.get("/api/v1/workspaces", headers=auth_headers(member))
+    assert listed.status_code == 200, listed.text
+    assert [row["id"] for row in listed.json()].count(workspace["id"]) == 1
 
 
 async def test_owner_cannot_leave(app_client):

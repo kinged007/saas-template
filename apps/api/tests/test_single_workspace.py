@@ -42,6 +42,22 @@ async def test_second_register_joins_same_workspace(app_client, single_workspace
     assert me2.json()["workspaces"][0]["role"] == "viewer"
 
 
+async def test_leave_is_rejected_in_single_workspace_mode(app_client, single_workspace_on):
+    await register_user(app_client, "first@example.com")
+    second = await register_user(app_client, "second@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(second))
+    assert me.status_code == 200, me.text
+    workspace_id = me.json()["workspaces"][0]["id"]
+
+    resp = await app_client.delete(
+        f"/api/v1/workspaces/{workspace_id}/membership",
+        headers=auth_headers(second),
+    )
+    assert resp.status_code == 403, resp.text
+    still_member = await app_client.get("/api/v1/auth/me", headers=auth_headers(second))
+    assert [w["id"] for w in still_member.json()["workspaces"]] == [workspace_id]
+
+
 async def test_login_joins_single_workspace(app_client, single_workspace_on):
     await register_user(app_client, "first@example.com")
     await register_user(app_client, "second@example.com")

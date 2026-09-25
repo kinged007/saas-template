@@ -255,9 +255,7 @@ class AuthService:
 
     # ------------------------------------------------------------------ auth
 
-    async def login_password(
-        self, email: str, password: str, *, ip_address: str | None = None
-    ) -> User:
+    async def verify_password(self, email: str, password: str) -> User:
         if not settings.auth_password_enabled:
             raise AuthError("password login is disabled")
         user = await self.get_by_email(email)
@@ -267,6 +265,12 @@ class AuthService:
             raise AuthError("invalid credentials")
         if not user.is_active:
             raise AuthError("account is disabled")
+        return user
+
+    async def login_password(
+        self, email: str, password: str, *, ip_address: str | None = None
+    ) -> User:
+        user = await self.verify_password(email, password)
         user.last_login_at = now_utc()
         await self._session.commit()
         await publish_audit(
