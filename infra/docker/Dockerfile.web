@@ -8,8 +8,8 @@ COPY apps/web/ ./
 # which is correct behind the nginx proxy. Set only for split-origin deploys.
 ARG VITE_API_URL=
 ARG VITE_WS_URL=
-ARG VITE_APP_NAME=Application
-ARG VITE_APP_SLUG=app
+ARG VITE_APP_NAME="SaaS Template"
+ARG VITE_APP_SLUG="saas-template"
 ARG VITE_LOGO_URL=
 ENV VITE_API_URL=$VITE_API_URL VITE_WS_URL=$VITE_WS_URL \
     VITE_APP_NAME=$VITE_APP_NAME VITE_APP_SLUG=$VITE_APP_SLUG VITE_LOGO_URL=$VITE_LOGO_URL

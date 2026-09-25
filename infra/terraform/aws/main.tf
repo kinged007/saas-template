@@ -15,12 +15,12 @@ variable "region" {
 
 variable "app_name" {
   description = "Human-facing application name"
-  default     = "Application"
+  default     = "SaaS Template"
 }
 
 variable "app_slug" {
   description = "Lowercase DNS-style application identifier"
-  default     = "app"
+  default     = "saas-template"
 
   validation {
     condition     = can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", var.app_slug))
@@ -113,7 +113,7 @@ resource "kubernetes_secret" "app" {
   data = {
     SECRET_KEY   = var.secret_key
     FERNET_KEYS  = var.fernet_keys
-    DATABASE_URL = "postgresql+asyncpg://app:change-me@${var.app_slug}-postgres.${var.app_slug}.svc.cluster.local:5432/app"
+    DATABASE_URL = "postgresql+asyncpg://${replace(var.app_slug, "-", "_")}:change-me@${var.app_slug}-postgres.${var.app_slug}.svc.cluster.local:5432/${replace(var.app_slug, "-", "_")}"
     NATS_URL     = "nats://${var.app_slug}-nats.${var.app_slug}.svc.cluster.local:4222"
   }
 }
@@ -129,6 +129,10 @@ resource "helm_release" "app" {
     appName: ${jsonencode(var.app_name)}
     appSlug: "${var.app_slug}"
     nameOverride: "${var.app_slug}"
+    postgres:
+      user: "${replace(var.app_slug, "-", "_")}"
+      database: "${replace(var.app_slug, "-", "_")}"
+      password: "change-me"
     image:
       repository: <your-registry>/${var.app_slug}
       apiTag: latest

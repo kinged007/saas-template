@@ -30,6 +30,18 @@ spec:
               value: {{ .Values.appName | quote }}
             - name: APP_SLUG
               value: {{ .Values.appSlug | quote }}
+            {{ with .Values.refreshCookieName }}
+            - name: REFRESH_COOKIE_NAME
+              value: {{ . | quote }}
+            {{ end }}
+            {{ with .Values.natsStreamName }}
+            - name: NATS_STREAM_NAME
+              value: {{ . | quote }}
+            {{ end }}
+            {{ with .Values.natsConsumerPrefix }}
+            - name: NATS_CONSUMER_PREFIX
+              value: {{ . | quote }}
+            {{ end }}
             - name: ENVIRONMENT
               value: "production"
             - name: EVENT_BUS_DRIVER

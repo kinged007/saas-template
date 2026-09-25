@@ -1,13 +1,16 @@
 # Application Helm values
 nameOverride: ""
 fullnameOverride: ""
-appName: Application
-appSlug: app
+appName: SaaS Template
+appSlug: saas-template
+refreshCookieName: ""
+natsStreamName: ""
+natsConsumerPrefix: ""
 
 replicaCount: 2
 
 image:
-  repository: app
+  repository: saas-template
   apiTag: api
   webTag: web
   pullPolicy: IfNotPresent
@@ -43,8 +46,8 @@ fernetKeys: "change-me"
 databaseUrl: ""
 natsUrl: ""
 eventBusDriver: "nats"
-corsOrigins: "https://app.example.com"
-frontendUrl: "https://app.example.com"
+corsOrigins: "https://saas-template.example.com"
+frontendUrl: "https://saas-template.example.com"
 
 # Deploy postgres + nats as part of the chart (production-grade external
 # instances are recommended; set postgres.enabled=false / nats.enabled=false
@@ -52,8 +55,8 @@ frontendUrl: "https://app.example.com"
 postgres:
   enabled: true
   image: postgres:16-alpine
-  user: app
-  database: app
+  user: saas-template
+  database: saas-template
   password: change-me
   persistence:
     size: 8Gi
@@ -64,7 +67,7 @@ nats:
 ingress:
   enabled: true
   className: nginx
-  host: app.example.com
+  host: saas-template.example.com
   tls:
     enabled: true
-    secretName: app-tls
+    secretName: saas-template-tls
