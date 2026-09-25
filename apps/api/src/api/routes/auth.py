@@ -357,6 +357,7 @@ def _session_to_dict(row, *, current: bool) -> dict:
 async def change_password(
     body: ChangePasswordRequest,
     request: Request,
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
     user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
@@ -365,7 +366,12 @@ async def change_password(
 
     Revokes every session (including the current one) — the client must
     re-login with the new password. Mirrors the totp_disable password
-    check and the 2fa/login code verification."""
+    check and the 2fa/login code verification.
+
+    The session stays valid when the submitted credentials are wrong, so a bad
+    current password or 2FA code answers 400 — 401 is reserved for a dead
+    session and would sign the caller out."""
+    _require_session_user(principal)
     key = _limit_key(request, user.email)
     get_auth_limiter().check(key)
     service = AuthService(db, container.bus)
@@ -375,19 +381,19 @@ async def change_password(
         )
     except AuthError as exc:
         get_auth_limiter().fail(key)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
     get_auth_limiter().reset(key)
     if user.totp_enabled:
         if not body.code:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "two-factor code required")
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "two-factor code required")
         try:
             ok = await TwoFactorService(db, container.cipher, container.bus).verify_login_code(
                 user, code=body.code
             )
         except TwoFactorError as exc:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
         if not ok:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid code")
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid code")
     fresh = await db.get(type(user), user.id)
     await service.change_password(fresh or user, body.new_password, ip_address=_client_ip(request))
 
@@ -608,8 +614,10 @@ async def me(
         if single is not None:
             memberships = [m for m in memberships if m[0].id == single.id]
     data["workspaces"] = [
-        workspace_to_dict(w, role=role.name, permissions=role.permissions)
-        for w, role, _ in memberships
+        workspace_to_dict(
+            w, role=role.name, permissions=role.permissions, joined_at=member.created_at
+        )
+        for w, role, member in memberships
     ]
     data["permissions"] = sorted({p for _, role, _ in memberships for p in role.permissions})
     data["single_workspace"] = settings.single_workspace

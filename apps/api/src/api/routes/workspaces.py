@@ -245,11 +245,17 @@ async def leave_workspace(
     workspace_id: str,
     request: Request,
     user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
     _=Depends(require_existing_workspace),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> None:
     """Leave a workspace. Owners cannot leave; transfer or delete instead."""
+    if principal.api_key is not None:
+        # Leaving ends a user's own membership; API keys hold no membership
+        # of their own (the row found would be the key owner's), so they
+        # cannot walk away from a workspace like a session user can.
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "api keys cannot leave workspaces")
     try:
         await WorkspaceService(db, container.bus).leave_workspace(
             workspace_id,

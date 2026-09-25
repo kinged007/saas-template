@@ -1,9 +1,9 @@
 """Change password (issue #174): current password always, 2FA code when on."""
 
-from tests.conftest import auth_headers, login, register_user
+from tests.conftest import auth_headers, create_workspace, login, register_user, ws_headers
 
 
-async def test_wrong_current_password_401(app_client):
+async def test_wrong_current_password_keeps_session(app_client):
     client = app_client
     tokens = await register_user(client, "chg@example.com")
     resp = await client.post(
@@ -11,7 +11,14 @@ async def test_wrong_current_password_401(app_client):
         json={"current_password": "Wrongpass1!", "new_password": "Newpass123!"},
         headers=auth_headers(tokens),
     )
-    assert resp.status_code == 401, resp.text
+    # 400, not 401: the session is alive, only the submitted password was wrong.
+    assert resp.status_code == 400, resp.text
+    retry = await client.post(
+        "/api/v1/auth/change-password",
+        json={"current_password": "Password123!", "new_password": "Newpass123!"},
+        headers=auth_headers(tokens),
+    )
+    assert retry.status_code == 204, retry.text
 
 
 async def test_success_revokes_all_sessions_and_rotates_password(app_client):
@@ -60,14 +67,14 @@ async def test_2fa_user_needs_code(app_client):
     assert en.status_code == 200, en.text
     backup = en.json()["backup_codes"][0]
 
-    # no code -> 401
+    # no code -> 400
     resp = await client.post(
         "/api/v1/auth/change-password",
         json={"current_password": "Password123!", "new_password": "Newpass123!"},
         headers=headers,
     )
-    assert resp.status_code == 401, resp.text
-    # wrong code -> 401
+    assert resp.status_code == 400, resp.text
+    # wrong code -> 400
     resp = await client.post(
         "/api/v1/auth/change-password",
         json={
@@ -77,7 +84,7 @@ async def test_2fa_user_needs_code(app_client):
         },
         headers=headers,
     )
-    assert resp.status_code == 401, resp.text
+    assert resp.status_code == 400, resp.text
     # backup code (single-use) -> 204. Same counter can't be reused: verify()
     # enforces replay protection via last_counter, so TOTP codes only work once.
     resp = await client.post(
@@ -90,3 +97,22 @@ async def test_2fa_user_needs_code(app_client):
         headers=headers,
     )
     assert resp.status_code == 204, resp.text
+
+
+async def test_api_key_cannot_change_password(app_client):
+    client = app_client
+    owner = await register_user(client, "chg-key@example.com")
+    ws = await create_workspace(client, owner)
+    resp = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "k", "permissions": []},
+        headers=ws_headers(owner, ws["id"]),
+    )
+    assert resp.status_code == 201, resp.text
+    key = resp.json()["key"]
+    resp = await client.post(
+        "/api/v1/auth/change-password",
+        json={"current_password": "Password123!", "new_password": "Newpass123!"},
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    assert resp.status_code == 403, resp.text

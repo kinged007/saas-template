@@ -22,10 +22,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { EmptyRow, formatDate } from "@/components/ui";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import type { Identity, Workspace } from "@/types";
 
 export function WorkspacesSection() {
   const { data: identity } = useGetIdentity<Identity>();
+  const { refresh } = useWorkspace();
   const invalidate = useInvalidate();
   const list = useCustom<Workspace[]>({ url: "workspaces", method: "get" });
   const { mutateAsync, mutation } = useCustomMutation();
@@ -46,6 +48,10 @@ export function WorkspacesSection() {
       } as never) as Promise<unknown>);
       toast.success(`Left ${leaving.name}`);
       setLeaving(null);
+      // The identity carries the workspace list, the active workspace id and
+      // every workspace-scoped permission; without it the switcher and the
+      // X-Workspace-ID header keep pointing at the workspace just left.
+      refresh();
       invalidate({ resource: "workspaces", invalidates: ["all"] });
       list.query.refetch();
     } catch (e) {

@@ -13,6 +13,10 @@ async def test_list_shows_role_and_joined_at(app_client):
     mine = next(r for r in rows if r["id"] == ws["id"])
     assert mine["role"] == "owner", mine
     assert mine.get("joined_at"), mine
+    # /auth/me is the other workspace list the UI reads; same shape.
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert me.status_code == 200, me.text
+    assert next(r for r in me.json()["workspaces"] if r["id"] == ws["id"]).get("joined_at")
 
 
 async def test_leave_removes_membership(app_client):
@@ -53,3 +57,21 @@ async def test_owner_cannot_leave(app_client):
         f"/api/v1/workspaces/{ws['id']}/membership", headers=auth_headers(tokens)
     )
     assert resp.status_code == 409, resp.text
+
+
+async def test_api_key_cannot_leave(app_client):
+    client = app_client
+    owner = await register_user(client, "leave-key@example.com")
+    ws = await create_workspace(client, owner)
+    resp = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "k", "permissions": ["workspace:read"]},
+        headers=ws_headers(owner, ws["id"]),
+    )
+    assert resp.status_code == 201, resp.text
+    key = resp.json()["key"]
+    resp = await client.delete(
+        f"/api/v1/workspaces/{ws['id']}/membership",
+        headers={"Authorization": f"Bearer {key}", "X-Workspace-ID": ws["id"]},
+    )
+    assert resp.status_code == 403, resp.text

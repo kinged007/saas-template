@@ -183,7 +183,7 @@ export function SecuritySection() {
           {enabled && (
             <div className="flex flex-col gap-2">
               <Label htmlFor="change-code">Two-factor code</Label>
-              <Input id="change-code" inputMode="numeric" maxLength={10} value={changeCode} onChange={(e) => setChangeCode(e.target.value)} placeholder="123456" />
+              <Input id="change-code" maxLength={10} value={changeCode} onChange={(e) => setChangeCode(e.target.value)} placeholder="123456" />
             </div>
           )}
           <div>
