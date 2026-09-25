@@ -44,6 +44,11 @@ export function DashboardPage() {
   const onboardingDismissed = workspace
     ? onboardingStore.isDismissed(workspace.id, identity?.id)
     : false;
+  // Workspace-wide switch (workspace:update): off hides the card for everyone,
+  // including users who never dismissed it. A user's own dismissal is
+  // deliberately not cleared when this is switched back on — it is their
+  // choice, and the flag exists to control what new users are shown.
+  const onboardingOffForWorkspace = workspace?.onboarding_enabled === false;
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
   const { result: keysResult } = useList<ApiKey>({
     resource: "api-keys",
@@ -95,7 +100,7 @@ export function DashboardPage() {
         </p>
       </div>
 
-      {!allDone && !onboardingDismissed && (
+      {!allDone && !onboardingDismissed && !onboardingOffForWorkspace && (
         <Card>
           <CardHeader>
             <div className="flex items-start justify-between gap-2">

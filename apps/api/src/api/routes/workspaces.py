@@ -203,6 +203,7 @@ async def update_workspace(
             workspace_id,
             name=body.name,
             description=body.description,
+            onboarding_enabled=body.onboarding_enabled,
             actor=user,
             ip_address=request.client.host if request.client else None,
         )

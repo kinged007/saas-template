@@ -96,6 +96,9 @@ class WorkspaceCreate(BaseModel):
 class WorkspaceUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=150)
     description: str | None = Field(default=None, max_length=500)
+    # StrictBool so a string/int is rejected with 422 rather than coerced.
+    # None = leave the flag alone; the flag itself is default-on.
+    onboarding_enabled: StrictBool | None = None
 
 
 class InvitationCreate(BaseModel):

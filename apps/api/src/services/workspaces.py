@@ -20,6 +20,7 @@ from src.events.subjects import Subjects
 from src.models.core import Invitation
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.services.auth import AuthService
+from src.services.serializers import ONBOARDING_ENABLED_FLAG
 
 
 class WorkspaceError(Exception):
@@ -177,6 +178,7 @@ class WorkspaceService:
         *,
         name: str | None = None,
         description: str | None = None,
+        onboarding_enabled: bool | None = None,
         actor: User | None = None,
         ip_address: str | None = None,
     ) -> Workspace:
@@ -190,6 +192,21 @@ class WorkspaceService:
         if description is not None and description != workspace.description:
             changes["description"] = {"from": workspace.description, "to": description}
             workspace.description = description
+        if onboarding_enabled is not None:
+            # Stored in the flags JSON (FEATURE_FLAGS.md), default-on: a stored
+            # True is dropped so the key never implies anything but "off".
+            current = (workspace.flags or {}).get(ONBOARDING_ENABLED_FLAG) is not False
+            if current != onboarding_enabled:
+                changes[ONBOARDING_ENABLED_FLAG] = {
+                    "from": current,
+                    "to": onboarding_enabled,
+                }
+                flags = {
+                    k: v for k, v in (workspace.flags or {}).items() if k != ONBOARDING_ENABLED_FLAG
+                }
+                if not onboarding_enabled:
+                    flags[ONBOARDING_ENABLED_FLAG] = False
+                workspace.flags = flags
         await self._session.commit()
         if changes:
             await publish_audit(
