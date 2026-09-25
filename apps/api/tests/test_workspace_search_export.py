@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 
 from tests.conftest import create_workspace, register_user, ws_headers
@@ -207,10 +209,24 @@ async def test_export_json_and_csv(app_client):
         "messages",
         "notifications",
         "webhook_subscriptions",
+        "audit",
     ):
         assert key in bundle, key
     assert bundle["workspace"]["id"] == ws["id"]
     assert any(m["email"] == "searcher@example.com" for m in bundle["members"])
+    # Every member carries a profile key even when the user has no profile row,
+    # so importers see one uniform member shape.
+    assert all("profile" in m for m in bundle["members"])
+    audit = bundle["audit"]
+    assert audit, "expected audit rows in the bundle"
+    for key in ("id", "actor_email", "action", "resource_type", "resource_id", "created_at"):
+        assert key in audit[0], key
+    assert any(
+        a["action"] == "workspace.created"
+        and a["actor_email"] == "searcher@example.com"
+        and a["resource_id"] == ws["id"]
+        for a in audit
+    )
     # No secrets leak: key hashes, webhook secrets, job ciphertext stay out.
     assert not any("key_hash" in k or "secret" in str(k).lower() for k in bundle["api_keys"])
     assert not any("secret" in str(s).lower() for s in bundle["webhook_subscriptions"])
@@ -220,13 +236,57 @@ async def test_export_json_and_csv(app_client):
     )
     assert csv_resp.status_code == 200, csv_resp.text
     assert csv_resp.headers["content-type"].startswith("text/csv")
-    assert csv_resp.text.splitlines()[0] == "email,display_name,role,status,joined_at"
+    assert csv_resp.text.splitlines()[0] == (
+        "id,email,display_name,avatar_url,email_verified,role,status,joined_at"
+    )
     bad = await client.get(
         "/api/v1/workspaces/export",
         params={"format": "csv", "resource": "nope"},
         headers=h,
     )
     assert bad.status_code == 422
+
+
+async def test_export_audit_csv(app_client):
+    """The audit log is selectable in the export card and exports as CSV."""
+    from src.services.search_export import CSV_RESOURCES
+
+    client, h, ws, conv = await _setup(app_client)
+    resp = await client.get(
+        "/api/v1/workspaces/export", params={"format": "csv", "resource": "audit"}, headers=h
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert "attachment" in resp.headers["content-disposition"]
+    assert (
+        resp.text.splitlines()[0]
+        == "created_at,actor_email,action,resource_type,resource_id,ip_address"
+    )
+    rows = list(csv.DictReader(io.StringIO(resp.text)))
+    assert rows, "expected audit rows"
+    # Every row carries the full column set; unset values are empty, not dropped.
+    assert all(set(r) == set(CSV_RESOURCES["audit"]) for r in rows)
+    # `workspace.created` is written exactly once, so it is the one row that is
+    # stable across the two separate export calls the suite makes. Later entries
+    # (message.created, and the export's own workspace.exported) land
+    # asynchronously and vary run to run.
+    created = [r for r in rows if r["action"] == "workspace.created"]
+    assert len(created) == 1, created
+    assert created[0]["actor_email"] == "searcher@example.com"
+    assert created[0]["resource_type"] == "workspace"
+    assert created[0]["resource_id"] == ws["id"]
+    assert created[0]["created_at"]
+
+
+async def test_export_resources_endpoint_is_the_selector_source(app_client):
+    """The frontend selector reads this list, so it must match CSV_RESOURCES."""
+    from src.services.search_export import CSV_RESOURCES
+
+    client, h, ws, conv = await _setup(app_client)
+    resp = await client.get("/api/v1/workspaces/export/resources", headers=h)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["resources"] == list(CSV_RESOURCES)
+    assert "audit" in resp.json()["resources"]
 
 
 async def test_export_requires_audit_read(app_client):

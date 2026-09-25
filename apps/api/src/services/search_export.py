@@ -20,6 +20,7 @@ from src.core.permissions import JOB_READ
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
 from src.models.api_key import ApiKey
+from src.models.audit import AuditLogEntry
 from src.models.conversation import Conversation, ConversationParticipant, Message
 from src.models.core import Invitation, Notification
 from src.models.jobs import JobDefinition
@@ -45,14 +46,36 @@ _EXPORT_MESSAGES_CAP = 5000
 _EXPORT_NOTIFICATIONS_CAP = 5000
 
 
+_EXPORT_AUDIT_CAP = 5000
+
+
 # resource -> tabular CSV columns for ?format=csv&resource=<name>
+# Single source of truth: GET /workspaces/export/resources serves these keys so
+# the frontend selector never carries its own copy of the list.
 CSV_RESOURCES: dict[str, list[str]] = {
-    "members": ["email", "display_name", "role", "status", "joined_at"],
+    "members": [
+        "id",
+        "email",
+        "display_name",
+        "avatar_url",
+        "email_verified",
+        "role",
+        "status",
+        "joined_at",
+    ],
     "invitations": ["email", "status", "expires_at", "created_at"],
     "api_keys": ["name", "key_prefix", "permissions", "revoked_at", "created_at"],
     "jobs": ["key", "name", "enabled", "cron_schedule", "next_run_at"],
     "conversations": ["title", "last_message_preview", "last_message_at", "created_at"],
     "notifications": ["type", "title", "acknowledged_at", "created_at"],
+    "audit": [
+        "created_at",
+        "actor_email",
+        "action",
+        "resource_type",
+        "resource_id",
+        "ip_address",
+    ],
 }
 
 
@@ -291,8 +314,9 @@ class SearchExportService:
                     "joined_at": m.created_at.isoformat() if m.created_at else None,
                 }
             )
-            if p is not None:
-                entry["profile"] = public_projection(p, u)
+            # Key stays present even without a profile row, so importers see a
+            # uniform member shape.
+            entry["profile"] = public_projection(p, u) if p is not None else None
             members.append(entry)
 
         roles = (
@@ -364,6 +388,18 @@ class SearchExportService:
         )
         if len(notifs) > _EXPORT_NOTIFICATIONS_CAP:
             notifs = notifs[:_EXPORT_NOTIFICATIONS_CAP]
+            truncated = True
+        audit_rows = (
+            await self._session.execute(
+                select(AuditLogEntry, User.email)
+                .outerjoin(User, User.id == AuditLogEntry.actor_user_id)
+                .where(AuditLogEntry.workspace_id == workspace_id)
+                .order_by(AuditLogEntry.created_at.asc())
+                .limit(_EXPORT_AUDIT_CAP + 1)
+            )
+        ).all()
+        if len(audit_rows) > _EXPORT_AUDIT_CAP:
+            audit_rows = audit_rows[:_EXPORT_AUDIT_CAP]
             truncated = True
         subs = (
             (
@@ -449,6 +485,22 @@ class SearchExportService:
                 for m in messages
             ],
             "notifications": [notification_to_dict(n) for n in notifs],
+            "audit": [
+                {
+                    "id": e.id,
+                    "actor_user_id": e.actor_user_id,
+                    "actor_email": email,
+                    "resource_type": e.resource_type,
+                    "resource_id": e.resource_id,
+                    "action": e.action,
+                    # `details` is already readable through GET /audit by anyone
+                    # holding audit:read, which gates this export too.
+                    "details": e.details,
+                    "ip_address": e.ip_address,
+                    "created_at": e.created_at.isoformat() if e.created_at else None,
+                }
+                for e, email in audit_rows
+            ],
             "webhook_subscriptions": [
                 {"url": s.url, "events": s.events or [], "active": s.active} for s in subs
             ],
@@ -474,8 +526,11 @@ class SearchExportService:
         if resource == "members":
             flat = [
                 {
+                    "id": r.get("id"),
                     "email": r.get("email"),
                     "display_name": r.get("display_name"),
+                    "avatar_url": r.get("avatar_url"),
+                    "email_verified": r.get("email_verified"),
                     "role": r.get("role"),
                     "status": r.get("status"),
                     "joined_at": r.get("joined_at"),
@@ -521,6 +576,18 @@ class SearchExportService:
                     "title": r.get("title"),
                     "acknowledged_at": r.get("acknowledged_at"),
                     "created_at": r.get("created_at"),
+                }
+                for r in rows
+            ]
+        elif resource == "audit":
+            flat = [
+                {
+                    "created_at": r.get("created_at"),
+                    "actor_email": r.get("actor_email"),
+                    "action": r.get("action"),
+                    "resource_type": r.get("resource_type"),
+                    "resource_id": r.get("resource_id"),
+                    "ip_address": r.get("ip_address"),
                 }
                 for r in rows
             ]
