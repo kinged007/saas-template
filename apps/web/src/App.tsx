@@ -37,6 +37,7 @@ import { ProfileSettingsLayout } from "./pages/settings/profile/ProfileSettingsL
 import { GeneralSection as ProfileGeneralSection } from "./pages/settings/profile/sections/GeneralSection";
 import { NotificationsSection as ProfileNotificationsSection } from "./pages/settings/profile/sections/NotificationsSection";
 import { SecuritySection } from "./pages/settings/profile/sections/SecuritySection";
+import { WorkspacesSection } from "./pages/settings/profile/sections/WorkspacesSection";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { WorkspaceSettingsLayout } from "./pages/settings/workspace/WorkspaceSettingsLayout";
 import { GeneralSection } from "./pages/settings/workspace/sections/GeneralSection";
@@ -120,6 +121,7 @@ export function App() {
                 <Route path="general" element={<ProfileGeneralSection />} />
                 <Route path="notifications" element={<ProfileNotificationsSection />} />
                 <Route path="security" element={<SecuritySection />} />
+                <Route path="workspaces" element={<WorkspacesSection />} />
                 <Route path="*" element={<Navigate to="/settings/profile/general" replace />} />
               </Route>
               <Route path="settings/workspace" element={<WorkspaceSettingsLayout />}>

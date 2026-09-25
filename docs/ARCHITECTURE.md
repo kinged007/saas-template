@@ -165,7 +165,7 @@ Transient subject (core NATS, realtime fan-out, no persistence):
 
 Every user/automatic action publishes an audit event (`audit.entry.created`):
 `user.register/login/token_refresh/logout`, `workspace.created/updated/deleted`,
-`member.role_changed/removed`, `invitation.created/accepted/declined/revoked`, `user.session_revoked/sessions_revoked`,
+`member.role_changed/removed/left`, `invitation.created/accepted/declined/revoked`, `user.session_revoked/sessions_revoked`,
 `role.created`, `apikey.created/revoked`, `notification.acknowledged/
 unacknowledged`, `job.run_*`. The audit workflow persists them (committed) to
 `audit_log_entries`.

@@ -4,6 +4,7 @@ export type Workspace = {
   slug: string;
   description?: string;
   role?: string;
+  joined_at?: string;
   /** Permissions granted by this user's role in this workspace. */
   permissions?: string[];
   created_by_user_id?: string;

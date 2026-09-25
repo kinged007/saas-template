@@ -77,6 +77,12 @@ class TwoFactorDisable(BaseModel):
     password: str = Field(min_length=8)
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=8)
+    new_password: str = Field(min_length=8)
+    code: str | None = Field(default=None, min_length=6, max_length=10)
+
+
 class SessionRead(BaseModel):
     id: str
     created_at: datetime | None = None

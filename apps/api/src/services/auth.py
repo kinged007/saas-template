@@ -531,6 +531,34 @@ class AuthService:
         )
         return user
 
+    async def change_password(
+        self, user: User, new_password: str, *, ip_address: str | None = None
+    ) -> User:
+        """Set a new password hash and revoke every refresh session.
+
+        Unlike revoke_other_sessions the current session dies too — the
+        caller must force a re-login. Same write pair reset_password does."""
+        user.password_hash = PasswordHasher.hash(new_password)
+        await self._session.execute(
+            update(RefreshToken)
+            .where(
+                RefreshToken.user_id == user.id,
+                RefreshToken.revoked_at.is_(None),
+            )
+            .values(revoked_at=now_utc())
+        )
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=None,
+            resource_type="user",
+            resource_id=user.id,
+            action="user.password_changed",
+            actor_user_id=user.id,
+            ip_address=ip_address,
+        )
+        return user
+
     async def request_verification(self, user: User) -> str:
         raw = self._mint_token(user.id, VERIFY_PURPOSE, VERIFY_TOKEN_TTL)
         await self._session.commit()
