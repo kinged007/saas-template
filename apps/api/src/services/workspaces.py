@@ -758,6 +758,12 @@ class WorkspaceService:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_role(self, workspace_id: str, role_id: str) -> Role:
+        role = await self._session.get(Role, role_id)
+        if role is None or role.workspace_id != workspace_id:
+            raise WorkspaceNotFound("role not found")
+        return role
+
     async def _single_workspace_role(self, workspace_id: str) -> Role:
         """Auto-join role: viewer, else the lowest non-owner system role.
 
@@ -866,9 +872,7 @@ class WorkspaceService:
         actor: User | None = None,
         ip_address: str | None = None,
     ) -> Role:
-        role = await self._session.get(Role, role_id)
-        if role is None or role.workspace_id != workspace_id:
-            raise WorkspaceNotFound("role not found")
+        role = await self.get_role(workspace_id, role_id)
         if role.name == "owner":
             raise WorkspaceForbidden("the owner role cannot be edited")
         changed = False

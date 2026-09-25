@@ -159,7 +159,8 @@ async def get_role(
     _=Depends(require_permission(ROLE_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    role = await db.get(Role, role_id)
-    if role is None or role.workspace_id != workspace_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "role not found")
+    try:
+        role = await WorkspaceService(db).get_role(workspace_id, role_id)
+    except WorkspaceNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     return _role_dict(role)
