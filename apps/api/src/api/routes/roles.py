@@ -21,6 +21,7 @@ from src.services.workspaces import (
     WorkspaceConflict,
     WorkspaceError,
     WorkspaceForbidden,
+    WorkspaceNotFound,
     WorkspaceService,
 )
 
@@ -144,13 +145,10 @@ async def update_role(
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     except WorkspaceConflict as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    except WorkspaceNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     except WorkspaceError as exc:
-        code = (
-            status.HTTP_404_NOT_FOUND
-            if str(exc) == "role not found"
-            else status.HTTP_422_UNPROCESSABLE_ENTITY
-        )
-        raise HTTPException(code, str(exc)) from None
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     return _role_dict(role)
 
 

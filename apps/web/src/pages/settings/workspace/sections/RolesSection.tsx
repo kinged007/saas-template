@@ -182,11 +182,15 @@ export function RolesSection() {
   const togglePermission = (p: string) =>
     setPermissions((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
 
-  const resetCreate = () => {
-    setCreateOpen(false);
+  const clearForm = () => {
     setName("");
     setDescription("");
     setPermissions([]);
+  };
+
+  const resetCreate = () => {
+    setCreateOpen(false);
+    clearForm();
   };
 
   const submitCreate = (e: React.FormEvent) => {
@@ -197,7 +201,6 @@ export function RolesSection() {
         resource: "roles",
         values: { name, description: description || undefined, permissions },
         successNotification: { message: "Role created", type: "success" },
-        errorNotification: false,
       },
       { onSuccess: resetCreate },
     );
@@ -212,9 +215,7 @@ export function RolesSection() {
 
   const closeEdit = () => {
     setEditing(null);
-    setName("");
-    setDescription("");
-    setPermissions([]);
+    clearForm();
   };
 
   const submitEdit = (e: React.FormEvent) => {
@@ -226,7 +227,6 @@ export function RolesSection() {
         id: editing.id,
         values: { name, description: description || undefined, permissions },
         successNotification: { message: "Role updated", type: "success" },
-        errorNotification: false,
       },
       { onSuccess: closeEdit },
     );
@@ -287,7 +287,10 @@ export function RolesSection() {
             <CardTitle>Roles</CardTitle>
             <CardDescription>Workspace roles and their permissions.</CardDescription>
           </div>
-          <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+          <Dialog
+            open={createOpen}
+            onOpenChange={(open) => (open ? setCreateOpen(true) : resetCreate())}
+          >
             <DialogTrigger asChild>
               <Button disabled={!canManage?.can}>
                 <Plus className="mr-2 h-4 w-4" />
