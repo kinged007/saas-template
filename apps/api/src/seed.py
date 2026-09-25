@@ -195,9 +195,15 @@ async def main() -> None:
             logger.info("promoted admin@example.com to superuser")
 
         workspaces: dict[str, Workspace] = {}
-        for spec in WORKSPACES:
-            result = await session.execute(select(Workspace).where(Workspace.slug == spec["slug"]))
-            workspace = result.scalar_one_or_none()
+        workspace_specs = WORKSPACES[:1] if settings.single_workspace else WORKSPACES
+        for spec in workspace_specs:
+            if settings.single_workspace:
+                workspace = await ws_service.get_single_workspace()
+            else:
+                result = await session.execute(
+                    select(Workspace).where(Workspace.slug == spec["slug"])
+                )
+                workspace = result.scalar_one_or_none()
             if workspace is None:
                 workspace = await ws_service.create_workspace(
                     name=spec["name"],
@@ -209,6 +215,8 @@ async def main() -> None:
             workspaces[spec["slug"]] = workspace
 
         for slug, email, role_name in MEMBERSHIPS:
+            if slug not in workspaces:
+                continue
             workspace = workspaces[slug]
             member = await session.execute(
                 select(WorkspaceMember).where(
@@ -232,6 +240,8 @@ async def main() -> None:
         api_keys: list[tuple[str, str, str]] = []
         api_service = ApiKeyService(session)
         for slug, email, name, permissions in API_KEYS:
+            if slug not in workspaces:
+                continue
             workspace = workspaces[slug]
             user = users[email]
             existing = await session.execute(
@@ -250,6 +260,8 @@ async def main() -> None:
 
         invitations: dict[tuple[str, str], Invitation] = {}
         for slug, email, role_name in INVITATIONS:
+            if slug not in workspaces:
+                continue
             workspace = workspaces[slug]
             existing = await session.execute(
                 select(Invitation).where(
@@ -272,6 +284,8 @@ async def main() -> None:
 
         now = now_utc()
         for email, slug, type_, title, body, acknowledged, age_hours in _notifications():
+            if slug not in workspaces:
+                continue
             user = users[email]
             workspace = workspaces[slug]
             existing = await session.execute(
