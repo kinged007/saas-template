@@ -56,12 +56,15 @@ export function SsoButtons({ providers, disabled }: { providers: AuthConfig["pro
   );
 }
 
-/** Exchange the one-time OAuth code for tokens, then seed identity/workspace like login. */
-export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: string }> {
+/** Exchange the one-time OAuth code for tokens, then seed identity/workspace like login.
+ *  A `linked` result means the callback attached an identity to the already
+ *  signed-in account: no tokens are minted, so just return to settings. */
+export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: string; linked?: string }> {
   const { data } = await httpClient.post(`${API_URL}/auth/oauth/token`, {
     code,
     use_cookies: true,
   });
+  if (data.linked) return { linked: data.provider as string };
   if (data.two_factor_required) return { twoFactor: data.challenge_token as string };
   workspaceStore.clear();
   identityStore.set(null);
@@ -84,7 +87,12 @@ export function OAuthCallbackPage() {
     const code = params.get("code");
     const error = params.get("error");
     if (error) {
-      setStatus(error === "registration is disabled" ? "Registration is disabled." : "Sign-in failed.");
+      const messages: Record<string, string> = {
+        "registration is disabled": "Registration is disabled.",
+        "this sign-in is already linked to another account":
+          "That sign-in is already linked to a different account.",
+      };
+      setStatus(messages[error] ?? "Sign-in failed.");
       return;
     }
     if (!code) {
@@ -95,6 +103,10 @@ export function OAuthCallbackPage() {
       .then((res) => {
         if (res.twoFactor) {
           window.location.assign(`/login?challenge=${encodeURIComponent(res.twoFactor)}`);
+          return;
+        }
+        if (res.linked) {
+          window.location.assign("/settings/profile");
           return;
         }
         window.location.assign("/");

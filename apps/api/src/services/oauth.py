@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 STATE_TTL_HINT = "oauth:state:"
 CODE_TTL_HINT = "oauth:code:"
+LINK_TTL_HINT = "oauth:link:"
 
 DEFAULT_SCOPES = "openid email profile"
 
@@ -102,13 +103,23 @@ async def _discovery(provider: ProviderConfig, cache: TtlCache) -> dict[str, Any
 
 
 def build_authorize_url(
-    provider: ProviderConfig, doc: dict[str, Any], cache: TtlCache, redirect_uri: str
+    provider: ProviderConfig,
+    doc: dict[str, Any],
+    cache: TtlCache,
+    redirect_uri: str,
+    *,
+    link_user_id: str | None = None,
 ) -> str:
+    """Provider authorize URL. A `link_user_id` rides the state entry, so the
+    callback attaches the identity to that user instead of signing anyone in."""
     endpoint = doc.get("authorization_endpoint") or provider.authorize_url
     if not endpoint:
         raise OAuthError(f"oauth provider '{provider.id}' has no authorize endpoint")
     state = secrets.token_urlsafe(32)
-    cache.set(STATE_TTL_HINT + state, {"provider": provider.id, "redirect_uri": redirect_uri})
+    saved: dict[str, Any] = {"provider": provider.id, "redirect_uri": redirect_uri}
+    if link_user_id is not None:
+        saved["link_user_id"] = link_user_id
+    cache.set(STATE_TTL_HINT + state, saved)
     params = httpx.QueryParams(
         {
             "response_type": "code",
@@ -130,6 +141,25 @@ def consume_state(cache: TtlCache, state: str) -> dict[str, Any]:
     if not isinstance(entry, dict) or not entry.get("provider"):
         raise OAuthError("invalid or expired state")
     return entry
+
+
+def mint_link_token(cache: TtlCache, user_id: str) -> str:
+    """Short-lived, single-use ticket meaning 'attach the next identity to
+    this user'. Minted only for an already-authenticated caller, so it is a
+    CSRF-shaped convenience, not an authorization grant on its own."""
+    token = secrets.token_urlsafe(32)
+    cache.set(LINK_TTL_HINT + token, {"user_id": user_id})
+    return token
+
+
+def consume_link_token(cache: TtlCache, token: str) -> str:
+    entry = cache.get(LINK_TTL_HINT + token)
+    if entry is None:
+        raise OAuthError("invalid or expired link token")
+    cache.delete(LINK_TTL_HINT + token)
+    if not isinstance(entry, dict) or not entry.get("user_id"):
+        raise OAuthError("invalid or expired link token")
+    return str(entry["user_id"])
 
 
 async def exchange_code(

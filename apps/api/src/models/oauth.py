@@ -27,3 +27,7 @@ class OAuthAccount(Base, TimestampMixin):
     )
     provider: Mapped[str] = mapped_column(String(100), nullable=False)
     subject: Mapped[str] = mapped_column(String(320), nullable=False)
+    # Email the provider reported at connect time. Lets the "connected
+    # accounts" list tell two same-provider logins apart; not an identity
+    # key, so a change at the provider never re-keys the link.
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)

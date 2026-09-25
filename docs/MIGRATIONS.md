@@ -44,11 +44,24 @@ Don't enforce the full dev sequence on template consumers. At release
 boundaries (or ~10 migrations), squash `versions/` to one baseline:
 
 ```bash
+make db-squash m="baseline schema"
+```
+
+The script autogenerates the baseline against an empty DB, then proves it
+twice before it will touch anything: the baseline alone must reproduce the
+schema, and the old chain must reach the same schema. Both checks run
+autogenerate on a scratch DB and require zero `op.*` calls. It refuses to
+run with uncommitted changes under `versions/`, and the old revisions end up
+in git history rather than the tree.
+
+Doing it by hand instead:
+
+```bash
 cd apps/api
-uv run alembic upgrade head                    # scratch DB at head
-uv run alembic revision --autogenerate -m "baseline schema"
-# move old versions aside, set baseline down_revision = None,
-# upgrade an empty DB, pg_dump both schemas and diff — must match
+uv run alembic stamp head                      # empty DB, so autogenerate emits creates
+uv run alembic revision --autogenerate --rev-id 0001 -m "baseline schema"
+# set down_revision = None, move the old files away,
+# upgrade an empty DB, autogenerate again — must be empty
 ```
 
 Open PRs that branched pre-squash repoint `down_revision` to the new
@@ -56,6 +69,11 @@ baseline (or delete their file if the change is already in it). Consumers
 upgrading past a squash: their `alembic_version` names a deleted revision —
 `stamp` to the baseline, then `upgrade head`. Document the stamp target in
 the release notes.
+
+A squashed tree has one revision, so two branches that both append a
+migration collide on filename rather than revision id, and a duplicate
+`revision = "0011"` (which git merges silently, because the filenames
+differ) becomes impossible.
 
 ## Fresh installs vs upgrades
 

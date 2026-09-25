@@ -122,6 +122,9 @@ db-new:
 db-history:
 	cd apps/api && uv run alembic history
 
+db-squash:
+	./scripts/db-squash.sh "$(m)"
+
 api:
 	cd apps/api && uv run uvicorn src.main:app --reload --port $(API_PORT)
 

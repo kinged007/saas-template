@@ -12,6 +12,7 @@ from src.core.security.password import PasswordHasher
 from src.core.security.tokens import OpaqueToken, create_access_token
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
+from src.models.oauth import OAuthAccount
 from src.models.workspace import AuthToken, RefreshToken, User
 from src.services.profile_helpers import format_display_name
 from src.settings import settings
@@ -46,6 +47,12 @@ class AuthService:
 
     async def get_user(self, user_id: str) -> User | None:
         return await self._session.get(User, user_id)
+
+    async def get_current_link_user(self, session, user_id: str | None) -> User | None:
+        """Resolve the password-session user that started a link flow."""
+        if not user_id:
+            return None
+        return await session.get(User, user_id)
 
     async def get_by_email(self, email: str) -> User | None:
         stmt = select(User).where(User.email == email.lower())
@@ -247,6 +254,78 @@ class AuthService:
             details={"email": user.email, "provider": provider},
         )
         return user
+
+    # ------------------------------------------------- oauth identity links
+
+    async def list_oauth_identities(self, user_id: str) -> list[OAuthAccount]:
+        stmt = (
+            select(OAuthAccount)
+            .where(OAuthAccount.user_id == user_id)
+            .order_by(OAuthAccount.created_at)
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def link_oauth_identity(
+        self, *, user_id: str, provider: str, subject: str, email: str | None
+    ) -> OAuthAccount:
+        """Attach an OAuth identity to an already-authenticated user.
+
+        The caller authenticated by password first, so ownership of the
+        current account is proven; this only decides which provider identity
+        to attach. An identity already bound to a different user is
+        rejected — that is the account-takeover case, never a silent re-link.
+        """
+        user = await self._session.get(User, user_id)
+        if user is None:
+            raise AuthError("account is disabled")
+        if not user.is_active:
+            raise AuthError("account is disabled")
+        stmt = select(OAuthAccount).where(
+            OAuthAccount.provider == provider, OAuthAccount.subject == subject
+        )
+        existing = (await self._session.execute(stmt)).scalar_one_or_none()
+        if existing is not None:
+            if existing.user_id != user_id:
+                raise AuthError("this sign-in is already linked to another account")
+            if email and not existing.email:
+                existing.email = email
+                await self._session.commit()
+            return existing
+        link = OAuthAccount(user_id=user_id, provider=provider, subject=subject, email=email)
+        self._session.add(link)
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=None,
+            resource_type="user",
+            resource_id=user_id,
+            action="user.oauth_linked",
+            actor_user_id=user_id,
+            details={"provider": provider},
+        )
+        return link
+
+    async def unlink_oauth_identity(self, *, user_id: str, link_id: str) -> None:
+        """Detach an OAuth identity, refusing to strand an SSO-only account."""
+        link = await self._session.get(OAuthAccount, link_id)
+        if link is None or link.user_id != user_id:
+            raise AuthError("linked account not found")
+        remaining = [row for row in await self.list_oauth_identities(user_id) if row.id != link_id]
+        user = await self._session.get(User, user_id)
+        if not remaining and (user is None or not user.password_hash):
+            raise AuthError("set a password before unlinking your only sign-in method")
+        provider = link.provider
+        await self._session.delete(link)
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=None,
+            resource_type="user",
+            resource_id=user_id,
+            action="user.oauth_unlinked",
+            actor_user_id=user_id,
+            details={"provider": provider},
+        )
 
     def _is_superadmin_email(self, email: str) -> bool:
         """The SUPERADMIN_EMAIL account bootstraps as superuser on registration."""

@@ -35,6 +35,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDeleteAccount, useExportProfile, useProfile, useUpdateProfile } from "@/hooks/useProfile";
+import { useAuthConfig } from "@/components/AuthConfig";
+import {
+  startLinkProvider,
+  useOAuthIdentities,
+  useUnlinkOAuthIdentity,
+} from "@/hooks/useOAuthIdentities";
 import type { Identity, UserProfile } from "@/types";
 import { getProfileField } from "@/types";
 
@@ -127,6 +133,64 @@ function getDetectedTimezone(): string {
   } catch {
     return "";
   }
+}
+
+function ConnectedAccounts() {
+  const config = useAuthConfig();
+  const { data: identities } = useOAuthIdentities();
+  const { mutate: unlink, isPending } = useUnlinkOAuthIdentity();
+  const [error, setError] = useState<string | null>(null);
+  const providers = config?.providers ?? [];
+  const linked = new Map((identities ?? []).map((i) => [i.provider, i]));
+
+  const link = async (provider: string) => {
+    setError(null);
+    try {
+      await startLinkProvider(provider);
+    } catch {
+      setError("Could not start linking. Please try again.");
+    }
+  };
+
+  if (providers.length === 0) {
+    return <p className="text-muted-foreground text-sm">No sign-on providers configured.</p>;
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {providers.map((p) => {
+        const row = linked.get(p.id);
+        return (
+          <div key={p.id} className="flex items-center justify-between gap-2">
+            <div>
+              <p className="font-medium">{p.display_name}</p>
+              {row && <p className="text-muted-foreground text-sm">{row.email ?? "Linked"}</p>}
+            </div>
+            {row ? (
+              <Button
+                variant="outline"
+                disabled={isPending}
+                onClick={() =>
+                  unlink(row.id, {
+                    onError: (e) =>
+                      setError(
+                        (e as { message?: string })?.message ?? "Could not unlink this account.",
+                      ),
+                  })
+                }
+              >
+                Unlink
+              </Button>
+            ) : (
+              <Button variant="outline" onClick={() => link(p.id)}>
+                Link
+              </Button>
+            )}
+          </div>
+        );
+      })}
+      {error && <p className="text-destructive text-sm">{error}</p>}
+    </div>
+  );
 }
 
 export function GeneralSection() {
@@ -443,6 +507,18 @@ export function GeneralSection() {
               </div>
             </form>
           </Form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Connected accounts</CardTitle>
+          <CardDescription>
+            Link a single sign-on provider. New providers sign you in with the same account.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ConnectedAccounts />
         </CardContent>
       </Card>
 

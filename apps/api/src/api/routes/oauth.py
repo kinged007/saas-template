@@ -17,7 +17,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_container
+from src.api.deps import get_container, get_current_user
 from src.api.routes.auth import (
     _client_ip,
     _maybe_join_single_workspace,
@@ -32,10 +32,12 @@ from src.services.oauth import (
     OAuthError,
     build_authorize_url,
     claims_from_id_token,
+    consume_link_token,
     consume_state,
     exchange_code,
     fetch_userinfo,
     get_provider,
+    mint_link_token,
     normalize_identity,
 )
 
@@ -66,8 +68,10 @@ ALLOWED_OAUTH_ERRORS = frozenset(
     {
         "missing code or state",
         "invalid or expired state",
+        "invalid or expired link token",
         "sign-in failed",
         "registration is disabled",
+        "this sign-in is already linked to another account",
     }
 )
 
@@ -90,14 +94,69 @@ async def oauth_authorize(provider_id: str, request: Request):
         provider = get_provider(provider_id)
     except OAuthError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    # ?link=<token> attaches the identity to an already-signed-in user
+    # instead of running the sign-in branch below.
+    link_user_id = None
+    raw_link = request.query_params.get("link")
+    if raw_link:
+        try:
+            link_user_id = consume_link_token(container.cache, raw_link)
+        except OAuthError as exc:
+            return _error_redirect(str(exc))
     try:
         doc = await _discovery(provider, container.cache)
         url = build_authorize_url(
-            provider, doc, container.cache, _redirect_uri(request, provider_id)
+            provider,
+            doc,
+            container.cache,
+            _redirect_uri(request, provider_id),
+            link_user_id=link_user_id,
         )
     except OAuthError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from None
     return RedirectResponse(url, status_code=302)
+
+
+@router.get("/identities")
+async def oauth_identities(
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """OAuth identities linked to the signed-in user."""
+    rows = await AuthService(db).list_oauth_identities(user.id)
+    return [
+        {
+            "id": row.id,
+            "provider": row.provider,
+            "email": row.email,
+            "created_at": row.created_at,
+        }
+        for row in rows
+    ]
+
+
+@router.post("/identities/link-token", status_code=201)
+async def oauth_link_token(
+    request: Request,
+    user=Depends(get_current_user),
+):
+    """Mint the single-use ticket the settings page hands to /authorize."""
+    get_auth_limiter().check(f"oauth:{_client_ip(request) or 'unknown'}:link")
+    container = get_container(request)
+    return {"link_token": mint_link_token(container.cache, user.id)}
+
+
+@router.delete("/identities/{link_id}", status_code=204)
+async def oauth_unlink(
+    link_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    try:
+        await AuthService(db).unlink_oauth_identity(user_id=user.id, link_id=link_id)
+    except AuthError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/{provider_id}/callback")
@@ -136,6 +195,28 @@ async def oauth_callback(
         logger.warning("oauth callback failed provider=%s: %s", provider_id, exc)
         return _error_redirect("sign-in failed")
     service = AuthService(db, container.bus)
+    link_user_id = saved.get("link_user_id")
+    if link_user_id:
+        # Link mode: the caller already proved who they are with a password
+        # (link token is only minted for an authenticated session), so this
+        # attaches the provider identity to that account. It never signs the
+        # identity's own account in, and never mints a token.
+        try:
+            await service.link_oauth_identity(
+                user_id=link_user_id,
+                provider=identity["provider"],
+                subject=identity["subject"],
+                email=identity["email"],
+            )
+        except AuthError as exc:
+            logger.info("oauth link rejected provider=%s: %s", provider_id, exc)
+            return _error_redirect(str(exc))
+        one_time = secrets.token_urlsafe(32)
+        container.cache.set(
+            CODE_TTL_HINT + one_time,
+            {"type": "linked", "provider": provider_id},
+        )
+        return RedirectResponse(_frontend_callback(one_time), status_code=302)
     try:
         user = await service.upsert_oauth_user(
             provider=identity["provider"],
@@ -192,6 +273,10 @@ async def oauth_token(
     container.cache.delete(CODE_TTL_HINT + body.code)
     if not isinstance(entry, dict):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid or expired code")
+    if entry.get("type") == "linked":
+        # Nothing to exchange: the browser is already authenticated and the
+        # identity is attached. No tokens are minted or returned here.
+        return {"linked": True, "provider": entry.get("provider")}
     if entry.get("type") == "2fa":
         from src.services.two_factor import TwoFactorService
 
