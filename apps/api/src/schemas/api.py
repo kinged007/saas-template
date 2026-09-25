@@ -154,12 +154,19 @@ class ConversationUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=300)
 
 
+class ConversationParticipantsUpdate(BaseModel):
+    # The caller must keep their own id in the list; the service rejects removal.
+    participant_user_ids: list[str] = Field(min_length=1, max_length=19)
+
+
 class ConversationArchive(BaseModel):
     archived: bool
 
 
 class MessageCreate(BaseModel):
     body: str = Field(min_length=1, max_length=5000)
+    # Mentioned users are added to the conversation so they receive the message.
+    mentioned_user_ids: list[str] = Field(default_factory=list, max_length=19)
 
 
 class ConversationRead(BaseModel):

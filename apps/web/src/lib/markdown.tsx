@@ -1,5 +1,6 @@
 import * as React from "react";
 import type { Components } from "react-markdown";
+import { cn } from "./utils";
 
 /**
  * Strip markdown syntax so the preview shows only plain text.
@@ -81,10 +82,51 @@ function LinkBase({
   );
 }
 
+/** Protocol marker `highlightMentions` emits; `a` overrides turn it into a span. */
+const MENTION_SCHEME = "mention:";
+
+/**
+ * Rewrite `@Name` occurrences of known people into a marker link so the `a`
+ * overrides can style them. The message body itself stays plain markdown —
+ * other clients read the raw text.
+ *
+ * ponytail: plain string replacement, so a name that also appears inside a
+ * fenced code block or a URL gets highlighted too. Replace with an AST pass if
+ * that ever matters.
+ */
+export function highlightMentions(markdown: string, names: string[]): string {
+  // One pass, so a replacement can never be re-matched by a later name.
+  const unique = [...new Set(names.filter(Boolean))].sort((a, b) => b.length - a.length);
+  if (unique.length === 0) return markdown;
+  // Longest first so "Ann Lee" wins over "Ann" at the same position.
+  const alternation = unique.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  return markdown.replace(
+    new RegExp(`@(${alternation})`, "g"),
+    (_match, name: string) => `[@${name}](${MENTION_SCHEME})`,
+  );
+}
+
+/** Shared render for a highlighted mention; not a real link. */
+function MentionSpan({ children, inverted }: { children?: React.ReactNode; inverted?: boolean }) {
+  return (
+    <span
+      className={cn(
+        "rounded px-1 py-0.5 font-medium",
+        inverted ? "bg-white/20 text-primary-foreground" : "bg-primary/10 text-primary"
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
 export const markdownComponents: Components = {
   a(props) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { children, href, node: _node, ...rest } = props as any;
+    if (typeof href === "string" && href.startsWith(MENTION_SCHEME)) {
+      return <MentionSpan>{children}</MentionSpan>;
+    }
     return (
       <LinkBase href={href} className="text-primary underline underline-offset-4 hover:text-primary/80" {...(rest as any)}>
         {children}
@@ -206,6 +248,9 @@ export const markdownComponentsInverted: Components = {
   a(props) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { children, href, node: _node, ...rest } = props as any;
+    if (typeof href === "string" && href.startsWith(MENTION_SCHEME)) {
+      return <MentionSpan inverted>{children}</MentionSpan>;
+    }
     return (
       <LinkBase href={href} className="text-primary-foreground underline decoration-primary-foreground/60 underline-offset-4 hover:opacity-90" {...(rest as any)}>
         {children}
