@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,6 +20,7 @@ export function LoginPage() {
   const [challenge, setChallenge] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [config, setConfig] = useState<AuthConfig | null>(null);
+  const [passwordChanged, setPasswordChanged] = useState(false);
   const codeRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -28,6 +30,9 @@ export function LoginPage() {
     if (challengeParam) setChallenge(challengeParam);
     const err = params.get("error");
     if (err) setError(err === "registration is disabled" ? "Registration is disabled." : "Sign-in failed.");
+    // Set by the change-password redirect: that flow revokes every session,
+    // so the user lands here instead of staying on the settings page.
+    if (params.get("password_changed") === "1") setPasswordChanged(true);
   }, []);
 
   useEffect(() => {
@@ -107,6 +112,11 @@ export function LoginPage() {
         <CardHeader className="text-center">
           <img src="/logo.svg" alt="SaaS Template" className="mx-auto mb-2 w-48" />
           <CardDescription>Sign in to your account</CardDescription>
+          {passwordChanged && (
+            <Badge variant="success" className="mt-2 w-fit self-center">
+              Password changed — sign in with your new password
+            </Badge>
+          )}
         </CardHeader>
         <CardContent>
           {ssoProviders.length > 0 && !challenge && (
