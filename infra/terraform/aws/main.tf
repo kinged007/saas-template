@@ -126,7 +126,7 @@ resource "helm_release" "app" {
 
   values = [
     <<-EOT
-    appName: "${var.app_name}"
+    appName: ${jsonencode(var.app_name)}
     appSlug: "${var.app_slug}"
     nameOverride: "${var.app_slug}"
     image:
