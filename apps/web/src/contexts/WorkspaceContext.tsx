@@ -237,7 +237,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       selected.slug !== next.slug ||
       // permissions/role may have changed after a role update
       JSON.stringify(selected.permissions) !== JSON.stringify(next.permissions) ||
-      selected.role !== next.role
+      selected.role !== next.role ||
+      // onboarding_enabled is a PATCH-able field too: a flag-only patch
+      // changes nothing else, so without this the selected workspace would
+      // keep the pre-patch value and the toggle would look like it did nothing.
+      selected.onboarding_enabled !== next.onboarding_enabled
     ) {
       setSelected(next);
     }

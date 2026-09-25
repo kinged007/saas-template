@@ -50,7 +50,9 @@ export function GeneralSection() {
   const isSaving = mutation.isPending;
   const { data: canDelete } = useCan({ resource: "workspaces", action: "delete" });
   // workspace:update is held by owners and admins, so both can run this toggle.
-  const { data: canUpdate } = useCan({ resource: "workspaces", action: "update" });
+  // "edit" is the mapped action for that permission; an unmapped action makes
+  // accessControlProvider fall through to `{ can: true }` for everyone.
+  const { data: canUpdate } = useCan({ resource: "workspaces", action: "edit" });
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
   // SINGLE_WORKSPACE: the one shared workspace can never be deleted.
   const singleWorkspace = identity?.single_workspace === true;
