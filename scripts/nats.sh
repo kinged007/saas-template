@@ -13,7 +13,7 @@
 # the printed client/monitor URLs and the status check use that host.
 set -euo pipefail
 
-APP_SLUG="${APP_SLUG:-app}"
+APP_SLUG="${APP_SLUG:-saas-template}"
 NAME="${NATS_CONTAINER_NAME:-${APP_SLUG}-nats}"
 IMAGE="nats:2.10-alpine"
 MONITOR_PORT="${NATS_MONITOR_PORT:-8222}"

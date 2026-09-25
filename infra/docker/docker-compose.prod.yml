@@ -12,6 +12,8 @@
 #
 # Migrations run automatically before each api start (`alembic upgrade head`).
 # Demo seed data is NOT applied — create the first user via /api/v1/register.
+name: ${COMPOSE_PROJECT_NAME:-saas-template}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -90,4 +92,6 @@ services:
 
 volumes:
   postgres:
+    name: ${POSTGRES_VOLUME:-saas_template_pg}
   nats:
+    name: ${NATS_VOLUME:-saas_template_nats}
