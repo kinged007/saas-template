@@ -128,6 +128,7 @@ resource "helm_release" "app" {
     <<-EOT
     appName: "${var.app_name}"
     appSlug: "${var.app_slug}"
+    nameOverride: "${var.app_slug}"
     image:
       repository: <your-registry>/${var.app_slug}
       apiTag: latest

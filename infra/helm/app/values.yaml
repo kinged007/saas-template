@@ -38,8 +38,10 @@ web:
 existingSecret: ""
 secretKey: "change-me"
 fernetKeys: "change-me"
-databaseUrl: "postgresql+asyncpg://app:change-me@postgres:5432/app"
-natsUrl: "nats://nats:4222"
+# Empty URLs use the chart's optional PostgreSQL and NATS services.
+# Set these to use external managed services.
+databaseUrl: ""
+natsUrl: ""
 eventBusDriver: "nats"
 corsOrigins: "https://app.example.com"
 frontendUrl: "https://app.example.com"
