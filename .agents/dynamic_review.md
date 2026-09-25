@@ -40,19 +40,48 @@ A good repo documents all of this — read before discovering. Order matters: re
 - `.agents/deep_review.md` step 0 (same orientation files).
 - Dev/seed commands + credentials: README/AGENTS first, seed script second, grep last (`seed` / `password` in backend source). If the docs name them, adopt and move on. Record the login email + password here before proceeding — the authenticated pass (step 3) needs them.
 
+## Process lifecycle and cleanup (MANDATORY)
+
+Never finish a run with a process started by the agent still running. This includes the API/frontend stack, supervisors, watchers, test servers, `obscura serve`, and CDP clients. Stop every owned process on success, failure, cancellation, timeout, and every early `STOP` path. A timeout is only a safety net, not cleanup.
+
+Run long-lived commands in the foreground when possible. If backgrounding is necessary, give the command a finite budget and record its PID. For this repo, use `python3 scripts/dev.py` directly after setup rather than backgrounding `make dev`; the supervisor handles `SIGINT` and `SIGTERM` and kills its child process groups.
+
+Use a task-appropriate cap for every background service. `obscura fetch` is one-shot and exits by itself. `obscura serve` has no built-in duration option, so use a one-hour cap and a session-specific storage directory:
+
+```bash
+timeout --signal=TERM --kill-after=15s 1h obscura serve --allow-private-network --storage-dir <session-dir>
+```
+
+At every exit path, stop every process started in this run, including the stack supervisor, Obscura, and any CDP client. Send `SIGTERM` to the exact process you started, wait for it, and use `SIGKILL` only if it remains alive. Check its children and the ports it owns. Never kill an unknown process or clear a port you did not open. Remove temporary PID/log/browser files. If cleanup cannot be verified, do not report the run as complete.
+
 ## 1. Own the stack
 
-One stack, yours, on the reviewed commit. The dev supervisor only stops servers it started — nothing orphaned if you stop it, but strays from dead sessions survive. Never trust a port you didn't start.
+One stack, yours, on the reviewed commit. Before starting, check that the API and web ports are free. If either is occupied by a process you did not start, STOP and report it; never kill an unknown process.
+
+Use the repo's foreground supervisor. For this repo, invoke `python3 scripts/dev.py` directly after setup instead of backgrounding `make dev`; the supervisor handles `SIGINT` and `SIGTERM` and kills both child process groups. If the workflow must continue while the stack runs, put the supervisor under a finite budget and keep its PID:
 
 ```bash
 git status -sb  # must be clean — the scan is only valid on committed code
-(ss -tln 2>/dev/null | grep -qE ":($API_PORT|$WEB_PORT)" && ss -tlnp 2>/dev/null | grep -E ":($API_PORT|$WEB_PORT)" || echo "ports free")  # lsof may not be installed; ss is the fallback
-fuser -k $API_PORT/tcp $WEB_PORT/tcp 2>/dev/null; sleep 2  # clear strays yourself
-nohup <DEV> > /tmp/dev-dynamic.log 2>&1 &  # foreground supervisor directly, NOT via make — make ignores SIGINT and orphans servers
+if ss -tln 2>/dev/null | grep -qE ":($API_PORT|$WEB_PORT)([[:space:]]|$)"; then
+  echo "API/web port already in use; refusing to start another stack" >&2
+  exit 1
+fi
+runtime_dir=$(mktemp -d /tmp/dynamic-review.XXXXXX)
+nohup timeout --signal=TERM --kill-after=15s 2h <DEV> >"$runtime_dir/dev.log" 2>&1 &
+DEV_PID=$!
+echo "$DEV_PID" >"$runtime_dir/dev.pid"
 sleep 25 && check <HEALTH> returns 2xx  # find the health endpoint first (grep healthz/readyz/health in backend routes); a bare / is usually NOT it
 ```
 
-Verify the stack serves the reviewed tree: `git rev-parse --short HEAD` matches the checkout the server started from (same shell, same `git status -sb` as above — if you pulled or switched branches after starting, restart). If a port re-binds right after your kill, stop and ask — another live session may own it.
+Keep `DEV_PID` and `runtime_dir`; do not lose them. Verify the stack serves the reviewed tree: `git rev-parse --short HEAD` matches the checkout the server started from (same shell, same `git status -sb` as above — if you pulled or switched branches after starting, restart). If a port re-binds right after your kill, stop and ask — another live session may own it.
+
+If browser verification is required, start Obscura separately under the same process policy. `obscura serve` has no built-in duration flag, so use a one-hour cap and a session-specific storage directory:
+
+```bash
+timeout --signal=TERM --kill-after=15s 1h obscura serve --allow-private-network --storage-dir "$runtime_dir/obscura"
+```
+
+Use a task-appropriate cap for the application stack as well. At every exit path, stop every process started in this run, including the stack supervisor, Obscura, and any CDP client. Send `SIGTERM` to the exact process you started, wait for it, and use `SIGKILL` only if it remains alive. Check its children and the ports it owns. Never kill an unknown process or clear a port you did not open. Remove temporary PID/log/browser files. If cleanup cannot be verified, do not report the run as complete.
 
 ## 2. Install vigolium (once per machine)
 

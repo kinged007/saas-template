@@ -2,6 +2,21 @@
 
 Whole-repo static audit for bugs, design drift, and AI slop. Read-only: find, classify, file issues, STOP. Never fix in the same run — fixes go through the repo's issue workflow (executor ≠ verifier). Run from the repo root. No servers, no live traffic; the dynamic half lives in `.agents/dynamic_review.md`.
 
+## Process lifecycle and cleanup (MANDATORY)
+
+This workflow is static: do not start the application, a dev server, or Obscura. If a quality gate or helper starts a process anyway, the agent owns it and MUST stop it before the final report.
+
+Never finish a run with any process started by the agent still running. This includes background commands, test servers, watchers, and any browser or CDP process. Stop owned processes on success, failure, cancellation, timeout, and every early `STOP` path. A timeout is a safety net, not cleanup.
+
+Prefer a foreground supervisor. If a long-lived command must run in the background, use a finite `timeout` budget and record its PID. `obscura serve` has no built-in duration flag; if browser verification is required, use a one-hour cap and a session-specific storage directory:
+
+```bash
+timeout --signal=TERM --kill-after=15s 1h \
+  obscura serve --allow-private-network --storage-dir <session-dir>
+```
+
+Use a task-appropriate cap for the application stack as well. On cleanup, send `SIGTERM` to the exact process or supervisor you started, wait for it, and use `SIGKILL` only if it is still alive. Check its children and the ports it owns. Never kill an unknown process or clear a port you did not open. Remove temporary PID/log/browser files. If cleanup cannot be verified, do not report the run as complete.
+
 Scope: whole repo by default. Optional narrow scope: `--folder <path>`, `--file <a,b>`, or `--pr <n>` (checks out the PR branch and audits whole files touched by the diff, not just hunks).
 
 ## Project overrides (fill per repo; empty = generic)
@@ -60,7 +75,7 @@ Work file-by-file: take the top-10 from the step-1 size listing, intersect with 
 4. **Hardcoded / non-agnostic** — tenant slugs, domains, emails, URLs, ports, provider names, claim URIs, magic numbers baked into logic. Must come from settings, env template, or provider/integration classes. Seed/demo values outside the seed script are majors.
 5. **Data leaks** — PII/secrets in logs, error responses echoing internals, notification bodies over-sharing, audit trails missing on sensitive ops, seed credentials reachable outside dev, overly broad serializers on user objects.
 6. **Engineering quality** — dead code, unreachable branches, unused params/imports, copy-paste siblings that should be one function, boolean-flag params, functions returning `None` on some paths and values on others, tests asserting implementation instead of behavior.
-7. **AI slop** — speculative generality (config for one value, factory for one product, interface for one impl), comment restating the code, empty try/pass, placeholder text in UI, three near-identical components, dependency added for a few lines of stdlib. Subtract before adding: prove the abstraction has ≥2 callers or delete it. Reference: https://github.com/petergyang/no-ai-slop (prose patterns, adapted to code).
+7. **AI slop** — speculative generality (config for one value, factory for one product, interface for one impl), comment restating the code, empty try/pass, placeholder text in UI, three near-identical components, dependency added for a few lines of stdlib. Subtract before adding: prove the abstraction has ≥2 callers or delete it. Reference: [https://github.com/petergyang/no-ai-slop](https://github.com/petergyang/no-ai-slop) (prose patterns, adapted to code).
 8. **Contract drift** — frontend types vs API schemas: fields the UI reads that the API no longer sends, shapes the API sends that no type covers, `any` casts hiding drift, capability flags the UI ignores.
 9. **Test gaps** — risk-bearing function (writes, auth, money/state transitions, migrations) with no test. Name the missing case, don't write it.
 
@@ -77,6 +92,7 @@ For each candidate: `grep -n` the quote in the file, read the surrounding functi
 ```
 Usage: self ~X tokens · subagent <task> ~Y tokens (model Z, Ns) · tool <name>: <verbatim or not reported>
 ```
+
 4. STOP. Do not fix. Do not merge. Fixes happen in fresh sessions via the repo's issue workflow.
 
 ## Toolchain (why these)

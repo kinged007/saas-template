@@ -4,6 +4,25 @@ Pick up the next open PR, review it, and either fix-and-stop or merge-and-close.
 
 There is no `backlog` label. The review labels are `review-in-progress` (claimed for review), `needs-human` (blocked, needs the owner), and `agent:done` (reviewed, ready to merge or merged).
 
+## Process lifecycle and cleanup (MANDATORY)
+
+Never finish a run with a process started by the agent still running. This includes the API/frontend stack, supervisors, watchers, test servers, `obscura serve`, and CDP clients. Stop every owned process on success, failure, cancellation, timeout, and every early `STOP` path. A timeout is only a safety net, not cleanup.
+
+Run long-lived commands in the foreground when possible. If backgrounding is necessary, give the command a finite budget and record its PID. For example, on Linux:
+
+```bash
+timeout --signal=TERM --kill-after=15s 1h <command>
+```
+
+`obscura serve` has no built-in duration option, so use a one-hour cap and a session-specific storage directory:
+
+```bash
+timeout --signal=TERM --kill-after=15s 1h \
+  obscura serve --allow-private-network --storage-dir <session-dir>
+```
+
+Use a task-appropriate cap for the application stack as well. At cleanup, send `SIGTERM` to the exact supervisor or process you started, wait for it, then use `SIGKILL` only if it remains alive. Verify its children and the ports it owns. Never kill an unknown process or clear a port you did not open. Remove temporary PID/log/browser files. If cleanup cannot be verified, do not report completion.
+
 ## 0. Dev environment and seeded credentials (read first)
 
 Start the stack with the repo's own dev command (see README / AGENTS.md / Makefile — never leave it running orphaned). The dev command usually installs deps, migrates, and seeds automatically.
