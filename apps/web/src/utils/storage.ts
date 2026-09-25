@@ -104,6 +104,7 @@ export const tokenStore = {
     // Only the legacy shared workspace key is safe to drop blindly: the
     // per-user entry belongs to whoever logs in next and is restored then.
     storage.remove(WORKSPACE_PREFIX + "legacy");
+    storage.remove(LEGACY_WORKSPACE_PREFIX + "legacy");
     storage.remove(LEGACY_WORKSPACE_KEY);
     tokensListeners.forEach((listener) => listener());
   },
