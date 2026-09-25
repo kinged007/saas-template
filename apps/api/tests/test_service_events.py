@@ -38,7 +38,7 @@ async def _get_user(bus, user_id):
         return await AuthService(session, bus).get_user(user_id)
 
 
-async def _create_workspace(bus, owner_id, *, slug, name="Acme Corp"):
+async def _create_workspace(bus, owner_id, *, slug, name="Test Workspace"):
     async with SessionFactory() as session:
         return await WorkspaceService(session, bus).create_workspace(
             name=name,
@@ -119,7 +119,7 @@ async def test_workspace_create_emits_event_and_audit(bus, owner):
     assert len(created) == 1
     payload = created[0][0]
     assert payload["workspace_id"] == workspace.id
-    assert payload["name"] == "Acme Corp"
+    assert payload["name"] == "Test Workspace"
     assert payload["created_by_user_id"] == owner.id
 
     assert bus.actions() == ["workspace.created"]
@@ -135,17 +135,20 @@ async def test_workspace_update_emits_audit_only_when_changed(bus, owner):
     async with SessionFactory() as session:
         service = WorkspaceService(session, bus)
         await service.update_workspace(
-            workspace.id, name="Acme Renamed", actor=owner, ip_address="10.0.0.1"
+            workspace.id, name="Test Workspace Renamed", actor=owner, ip_address="10.0.0.1"
         )
     assert bus.actions() == ["workspace.updated"]
     assert bus.by_subject(Subjects.WORKSPACE_CREATED) == []
     audit = bus.audit()[0][0]
-    assert audit["details"]["name"] == {"from": "Acme Corp", "to": "Acme Renamed"}
+    assert audit["details"]["name"] == {
+        "from": "Test Workspace",
+        "to": "Test Workspace Renamed",
+    }
 
     bus.events.clear()
     async with SessionFactory() as session:
         service = WorkspaceService(session, bus)
-        await service.update_workspace(workspace.id, name="Acme Renamed", actor=owner)
+        await service.update_workspace(workspace.id, name="Test Workspace Renamed", actor=owner)
     assert bus.events == []  # no change → no event
 
 
@@ -211,7 +214,7 @@ async def test_accept_invitation_emits_member_joined(bus, owner):
     payload = joined[0][0]
     assert payload["user_id"] == invitee.id
     assert payload["workspace_id"] == workspace.id
-    assert payload["workspace_name"] == "Acme Corp"
+    assert payload["workspace_name"] == "Test Workspace"
     assert payload["invited_by_user_id"] == owner.id
     assert payload["user_name"] == "Member"
 
@@ -383,6 +386,6 @@ async def test_services_without_bus_are_noops():
         )
         service = WorkspaceService(session)
         workspace = await service.create_workspace(
-            name="Acme Corp", slug="nobus-ws", description=None, owner=user
+            name="Test Workspace", slug="nobus-ws", description=None, owner=user
         )
         assert workspace.id is not None

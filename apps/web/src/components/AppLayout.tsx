@@ -56,6 +56,7 @@ import { NotificationCenter } from "./NotificationCenter";
 import { cn } from "@/lib/utils";
 import type { Identity } from "../types";
 import { getDisplayName } from "../types";
+import { APP_NAME, LOGO_URL } from "../config";
 
 const MENU_ITEMS = [
   { key: "/", label: "Dashboard", icon: LayoutDashboard, permission: "workspace:read" },
@@ -290,13 +291,13 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         <SidebarHeader>
           <div className="flex items-center gap-2 px-2 py-1 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:px-0">
             <img
-              src="/logo.svg"
-              alt="SaaS Template"
-              className="mx-auto w-[70%] shrink-0 group-data-[collapsible=icon]:hidden"
+              src={LOGO_URL}
+              alt={APP_NAME}
+              className="mx-auto h-8 w-24 shrink-0 object-contain group-data-[collapsible=icon]:hidden"
             />
             <img
               src="/favicon.svg"
-              alt="SaaS Template"
+              alt={APP_NAME}
               className="hidden w-auto max-w-8 shrink-0 group-data-[collapsible=icon]:block"
             />
           </div>

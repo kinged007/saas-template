@@ -1,5 +1,8 @@
+from urllib.parse import quote, quote_plus
+
 from src.core.security.ratelimit import SlidingWindowLimiter
 from src.core.security.totp import current_code, otpauth_uri, secret_from_base32
+from src.settings import settings
 from tests.conftest import auth_headers, login, register_user
 
 
@@ -13,15 +16,13 @@ async def _totp_for(client, headers):
 
 
 def test_otpauth_uri_encodes_issuer_and_email():
-    uri = otpauth_uri(
-        secret_b32="ABC123",
-        issuer="SaaS Template API",
-        email="user+test@example.com",
-    )
+    issuer = settings.api_name
+    email = "user+test@example.com"
+    uri = otpauth_uri(secret_b32="ABC123", issuer=issuer, email=email)
 
     assert uri == (
-        "otpauth://totp/SaaS%20Template%20API:user%2Btest%40example.com"
-        "?secret=ABC123&issuer=SaaS+Template+API&algorithm=SHA1&digits=6&period=30"
+        f"otpauth://totp/{quote(issuer)}:{quote(email)}"
+        f"?secret=ABC123&issuer={quote_plus(issuer)}&algorithm=SHA1&digits=6&period=30"
     )
 
 

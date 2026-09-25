@@ -10,6 +10,7 @@ import { authProvider, seedWorkspace } from "@/providers/authProvider";
 import { API_URL, httpClient } from "@/providers/dataProvider";
 import { identityStore, tokenStore, workspaceStore } from "@/utils/storage";
 import { clearAllCaches, queryClient } from "@/providers/queryClient";
+import { APP_NAME, LOGO_URL } from "@/config";
 
 export function LoginPage() {
   const [pending, setPending] = useState(false);
@@ -105,7 +106,7 @@ export function LoginPage() {
     <div className="bg-background flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <img src="/logo.svg" alt="SaaS Template" className="mx-auto mb-2 w-48" />
+          <img src={LOGO_URL} alt={APP_NAME} className="mx-auto mb-2 h-12 w-48 object-contain" />
           <CardDescription>Sign in to your account</CardDescription>
         </CardHeader>
         <CardContent>

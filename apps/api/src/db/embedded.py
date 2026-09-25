@@ -10,9 +10,10 @@ Production overrides this by setting DATABASE_URL.
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from pathlib import Path
+
+from src.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +23,9 @@ _started = False
 
 
 def data_dir() -> Path:
-    override = os.environ.get("EMBEDDED_DB_DIR")
-    if override:
-        path = Path(override)
-    else:
-        path = Path.home() / ".local" / "share" / "saas-template" / "pgdata"
+    path = Path(
+        settings.embedded_db_dir or Path.home() / ".local" / "share" / settings.app_slug / "pgdata"
+    )
     path.mkdir(parents=True, exist_ok=True)
     return path
 

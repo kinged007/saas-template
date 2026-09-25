@@ -13,7 +13,8 @@
 # the printed client/monitor URLs and the status check use that host.
 set -euo pipefail
 
-NAME="saas-template-nats"
+APP_SLUG="${APP_SLUG:-app}"
+NAME="${NATS_CONTAINER_NAME:-${APP_SLUG}-nats}"
 IMAGE="nats:2.10-alpine"
 MONITOR_PORT="${NATS_MONITOR_PORT:-8222}"
 CLIENT_PORT="${NATS_CLIENT_PORT:-4222}"
@@ -48,7 +49,7 @@ start() {
         -p "${CLIENT_PORT}:4222" \
         -p "${MONITOR_PORT}:8222" \
         "$IMAGE" \
-        -js -m 8222 --server_name saas-template
+        -js -m 8222 --server_name "$APP_SLUG"
     echo "nats started ($NAME)"
     echo "  client : nats://${HOST}:${CLIENT_PORT}"
     echo "  monitor: http://${HOST}:${MONITOR_PORT}"

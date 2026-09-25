@@ -720,12 +720,12 @@ async def test_effective_permissions_requires_apikey_read(app_client):
 async def test_seed_api_key_definitions_stay_within_creator_scope():
     """The seed's declared keys must never exceed the creator's role — the
     same invariant the API enforces at runtime."""
-    from src.seed import API_KEYS
+    from src.seed import ADMIN_EMAIL, API_KEYS, FIRST_WORKSPACE, SECOND_WORKSPACE, USER1_EMAIL
 
     role_by_creator: dict[tuple[str, str], str] = {
-        ("acme-corp", "admin@example.com"): "owner",
-        ("acme-corp", "user1@example.com"): "editor",
-        ("globex", "user1@example.com"): "viewer",
+        (FIRST_WORKSPACE["slug"], ADMIN_EMAIL): "owner",
+        (FIRST_WORKSPACE["slug"], USER1_EMAIL): "editor",
+        (SECOND_WORKSPACE["slug"], USER1_EMAIL): "viewer",
     }
     assert API_KEYS, "seed should define at least one api key"
 

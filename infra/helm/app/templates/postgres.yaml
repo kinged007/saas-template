@@ -2,21 +2,21 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "saas-template.fullname" . }}-postgres
+  name: {{ include "app.fullname" . }}-postgres
   labels:
-    app.kubernetes.io/name: saas-template
+    app.kubernetes.io/name: {{ include "app.name" . | quote }}
     app.kubernetes.io/component: postgres
 spec:
-  serviceName: {{ include "saas-template.fullname" . }}-postgres
+  serviceName: {{ include "app.fullname" . }}-postgres
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: saas-template
+      app.kubernetes.io/name: {{ include "app.name" . | quote }}
       app.kubernetes.io/component: postgres
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: saas-template
+        app.kubernetes.io/name: {{ include "app.name" . | quote }}
         app.kubernetes.io/component: postgres
     spec:
       containers:
@@ -26,24 +26,24 @@ spec:
             - containerPort: 5432
           env:
             - name: POSTGRES_USER
-              value: "saas-template"
+              value: {{ .Values.postgres.user | quote }}
             - name: POSTGRES_PASSWORD
               value: {{ .Values.postgres.password | quote }}
             - name: POSTGRES_DB
-              value: "saas-template"
+              value: {{ .Values.postgres.database | quote }}
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "saas-template"]
+              command: ["pg_isready", "-U", {{ .Values.postgres.user | quote }}]
             initialDelaySeconds: 5
             periodSeconds: 5
   volumeClaimTemplates:
     - metadata:
         name: data
       spec:
-        accessModes: ["ReadWriteOnce"]
+        accessModes: ["ReadOnlyOnce"]
         resources:
           requests:
             storage: {{ .Values.postgres.persistence.size }}
@@ -51,13 +51,13 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "saas-template.fullname" . }}-postgres
+  name: {{ include "app.fullname" . }}-postgres
   labels:
-    app.kubernetes.io/name: saas-template
+    app.kubernetes.io/name: {{ include "app.name" . | quote }}
     app.kubernetes.io/component: postgres
 spec:
   selector:
-    app.kubernetes.io/name: saas-template
+    app.kubernetes.io/name: {{ include "app.name" . | quote }}
     app.kubernetes.io/component: postgres
   ports:
     - port: 5432

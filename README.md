@@ -1,11 +1,11 @@
-# SaaS Template
+# Full-stack SaaS Starter
 
-A production-oriented multi-tenant SaaS starter: FastAPI + SQLAlchemy backend
+A production-oriented multi-tenant application starter: FastAPI + SQLAlchemy backend
 and a Refine.dev (React) frontend, with workspaces, RBAC, invitations, API
 keys, notifications, an event bus and framework-level scheduled jobs.
 
 - **apps/api** — FastAPI backend (auth, workspaces, members, roles, invitations, API keys, notifications, scheduled jobs, events, WebSocket)
-- **apps/web** — Refine.dev + Ant Design frontend
+- **apps/web** — Refine.dev + React + shadcn/ui frontend
 - **infra** — Dockerfiles, Helm chart, Terraform (for production / prod-like testing)
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
@@ -32,7 +32,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
 ## Quick start (development — all terminal, no docker)
 
 The dev stack is self-contained: the API embeds PostgreSQL (via `pgserver`,
-real Postgres 16 binaries, data in `~/.local/share/saas-template/pgdata`) and
+real Postgres 16 binaries, data in `~/.local/share/<APP_SLUG>/pgdata`) and
 consumes events asynchronously in-process. Switching to NATS JetStream is a
 single env var swap (`EVENT_BUS_DRIVER=nats`).
 
@@ -56,15 +56,42 @@ OpenAPI docs: http://localhost:8000/docs
 Demo logins (from `make api-seed`): all seeded users share the password
 `password` — e.g. `admin@example.com` / `password` (`admin@example.com` is the dev superuser).
 
-## Env
+## Env and branding
 
 Copy `apps/api/.env.example` → `apps/api/.env` and `apps/web/.env.example` → `apps/web/.env`.
 `DATABASE_URL` unset = embedded Postgres; set it to use a managed database.
 
+Set the same values in both files to rebrand the application:
+
+```dotenv
+# apps/api/.env
+APP_NAME=My Product
+APP_SLUG=my-product
+REFRESH_COOKIE_NAME=my_product_refresh
+
+# apps/web/.env
+VITE_APP_NAME=My Product
+VITE_APP_SLUG=my-product
+VITE_LOGO_URL=/brand/logo.svg
+```
+
+`APP_SLUG` must be a lowercase DNS-style identifier. It controls the API user-config
+path, embedded database directory, default NATS stream, and default NATS consumer
+prefix. `REFRESH_COOKIE_NAME`, an explicitly configured `NATS_STREAM_NAME`, and
+Docker volumes are stateful: changing them can orphan existing data or sign
+browser sessions out. The frontend reads legacy `tf_*` storage keys when no
+namespaced value exists, then writes the namespaced key.
+
+For Docker Compose, copy `infra/docker/.env.example` to `infra/docker/.env` and set
+`COMPOSE_PROJECT_NAME`, `APP_NAME`, `APP_SLUG`, and `REFRESH_COOKIE_NAME`. For Helm,
+set `appName` and `appSlug`; build the web image with matching `VITE_APP_*` build
+arguments. The reference Terraform module uses the same `app_name` and `app_slug`
+variables.
+
 ## Tests
 
 ```bash
-make api-test     # pytest (sqlite, in-process event bus, no docker required)
+make api-test     # pytest (SQLite, in-process event bus, no docker required)
 make api-test-nats  # pytest incl. real-NATS integration (skips if NATS is down)
 ```
 

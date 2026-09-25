@@ -2,7 +2,7 @@
 
 When SUPERADMIN_EMAIL names a real address, the bootstrap account (granted
 superuser by AuthService.register) is the superuser — the unconditional
-admin@example.com promotion must be skipped. Gate: settings.superadmin_email.
+seed-admin promotion must be skipped. Gate: settings.superadmin_email.
 """
 
 from types import SimpleNamespace
@@ -16,10 +16,10 @@ from src import seed as seed_mod
 @pytest.fixture
 def _stub_seed_deps(monkeypatch):
     """Replace the seed's DB-touching collaborators with in-memory stubs."""
-    admin = SimpleNamespace(email="admin@example.com", is_superuser=False)
+    admin = SimpleNamespace(email=seed_mod.ADMIN_EMAIL, is_superuser=False)
 
     async def fake_get_by_email(self, email):
-        return admin if email == "admin@example.com" else SimpleNamespace(email=email)
+        return admin if email == seed_mod.ADMIN_EMAIL else SimpleNamespace(email=email)
 
     monkeypatch.setattr(
         seed_mod.AuthService, "register", AsyncMock(side_effect=RuntimeError("no-op"))

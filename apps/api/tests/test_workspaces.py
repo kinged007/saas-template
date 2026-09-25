@@ -4,8 +4,8 @@ from tests.conftest import auth_headers, create_workspace, register_user, ws_hea
 async def test_create_and_list_workspace(app_client):
     client = app_client
     tokens = await register_user(client, "dave@example.com")
-    ws = await create_workspace(client, tokens, name="Globex")
-    assert ws["slug"] == "globex"
+    ws = await create_workspace(client, tokens, name="Example Workspace")
+    assert ws["slug"] == "example-workspace"
     assert ws["role"] == "owner"
 
     listed = await client.get("/api/v1/workspaces", headers=auth_headers(tokens))

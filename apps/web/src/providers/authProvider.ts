@@ -35,8 +35,8 @@ const post = async (path: string, body: unknown) => {
  * Seed the persisted store + live header id BEFORE refine navigates: the
  * context auto-select only runs after the identity query settles, but list
  * queries fire on the same mount. Stored per-user selection wins; otherwise
- * the backend's first workspace (Acme Corp in this deployment). Failures
- * are non-fatal — the context falls back the same way.
+ * the first workspace returned by the API is used. Failures are non-fatal —
+ * the context falls back the same way.
  */
 export async function seedWorkspace(identity: Identity): Promise<void> {
   identityStore.set(identity);

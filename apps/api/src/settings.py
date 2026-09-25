@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 from pydantic import Field, field_validator
@@ -7,16 +8,36 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from src.email.base import EmailDriver  # noqa: E402  (base has no settings import)
 from src.events.subjects import EventBusDriver
 
+DEFAULT_APP_NAME = "SaaS Template"
+DEFAULT_APP_SLUG = "saas-template"
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:63].rstrip("-")
+    return slug or "app"
+
+
+def _default_app_slug() -> str:
+    value = os.environ.get("APP_SLUG") or os.environ.get("APP_NAME")
+    if not value:
+        return DEFAULT_APP_SLUG
+    slug = _slugify(value)
+    return slug.removesuffix("-api") or "app"
+
+
+_CONFIG_ENV_FILE = Path.home() / ".config" / _default_app_slug() / ".env"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=(".env", os.path.expanduser("~/.config/saas-template/.env")),
+        env_file=(".env", _CONFIG_ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
     )
 
     environment: str = "development"
-    app_name: str = "saas-template-api"
+    app_name: str = Field(default=DEFAULT_APP_NAME, min_length=1)
+    app_slug: str = Field(default_factory=_default_app_slug)
     debug: bool = False
 
     # Database. Empty → embedded PostgreSQL (pgserver; dev, no external deps).
@@ -27,6 +48,29 @@ class Settings(BaseSettings):
     # Per-checkout file, so multiple worktrees don't share a server or data
     # dir; startup is instant (no postgres boot). Explicit DATABASE_URL wins.
     use_sqlite: bool = False
+    embedded_db_dir: str = ""
+
+    @field_validator("app_name", mode="before")
+    @classmethod
+    def _strip_app_name(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("app_slug")
+    @classmethod
+    def _validate_app_slug(cls, value: str) -> str:
+        if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", value):
+            raise ValueError("app_slug must be a lowercase DNS-style identifier")
+        return value
+
+    @field_validator("nats_stream_name", "nats_consumer_prefix")
+    @classmethod
+    def _validate_nats_name(cls, value: str) -> str:
+        value = value.strip()
+        if value and not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+            raise ValueError(
+                "NATS names may contain only letters, numbers, underscores, and hyphens"
+            )
+        return value
 
     @field_validator("use_sqlite", mode="before")
     @classmethod
@@ -57,6 +101,8 @@ class Settings(BaseSettings):
     # Events
     event_bus_driver: EventBusDriver = EventBusDriver.INPROCESS
     nats_url: str = "nats://localhost:4222"
+    nats_stream_name: str = ""
+    nats_consumer_prefix: str = ""
 
     # Email: console (dev log + in-memory capture) | smtp (real delivery)
     email_driver: EmailDriver = EmailDriver.CONSOLE
@@ -75,6 +121,44 @@ class Settings(BaseSettings):
     # Superadmin. The user who registers with this email becomes the
     # superuser (global jobs, etc.). Empty disables the bootstrap.
     superadmin_email: str = ""
+    seed_email_domain: str = "example.com"
+    seed_workspace_names: str = "Acme Corp,Globex"
+
+    @field_validator("refresh_cookie_name")
+    @classmethod
+    def _validate_refresh_cookie_name(cls, value: str) -> str:
+        if not re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+", value):
+            raise ValueError("refresh_cookie_name must be a valid HTTP cookie name")
+        return value
+
+    @field_validator("seed_email_domain", "seed_workspace_names")
+    @classmethod
+    def _strip_nonempty(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("value cannot be empty")
+        return value
+
+    @field_validator("seed_workspace_names")
+    @classmethod
+    def _validate_seed_workspace_names(cls, value: str) -> str:
+        names = [name.strip() for name in value.split(",")]
+        if len(names) != 2 or not all(names):
+            raise ValueError("seed_workspace_names must contain exactly two comma-separated names")
+        if len({_slugify(name) for name in names}) != 2:
+            raise ValueError("seed workspace names must produce different slugs")
+        return ", ".join(names)
+
+    @property
+    def seed_workspace_specs(self) -> list[dict[str, str]]:
+        return [
+            {
+                "name": name,
+                "slug": _slugify(name),
+                "description": "Demo workspace" if index == 0 else "Second demo workspace",
+            }
+            for index, name in enumerate(self.seed_workspace_names.split(","))
+        ]
 
     # Auth methods: registration kill-switch and password kill-switch (SSO-only mode).
     auth_allow_registration: bool = True
@@ -107,6 +191,25 @@ class Settings(BaseSettings):
     jobs_log_retention_days: int = Field(default=90, ge=0)
     notifications_retention_days: int = Field(default=90, ge=0)
     audit_log_retention_days: int = Field(default=0, ge=0)
+
+    @property
+    def api_name(self) -> str:
+        return f"{self.app_name} API"
+
+    @property
+    def service_name(self) -> str:
+        return f"{self.app_slug}-api"
+
+    @property
+    def nats_stream_name_effective(self) -> str:
+        return (self.nats_stream_name.strip() or self.app_slug.replace("-", "_")).upper()
+
+    @property
+    def nats_consumer_prefix_effective(self) -> str:
+        explicit = self.nats_consumer_prefix.strip()
+        if explicit:
+            return explicit
+        return "".join(part[0] for part in self.app_slug.split("-") if part) or "app"
 
     @property
     def database_url_sqlite(self) -> bool:

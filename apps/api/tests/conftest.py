@@ -1,7 +1,7 @@
 import asyncio  # noqa: E402
 import os  # noqa: E402
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_saas_template.db"
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test.db"
 os.environ["SECRET_KEY"] = "test-secret-key-not-for-production"
 os.environ["FERNET_KEYS"] = "test-fernet-key-value"
 os.environ["EVENT_BUS_DRIVER"] = "inprocess"
@@ -120,7 +120,7 @@ def auth_headers(tokens: dict) -> dict:
     return {"Authorization": f"Bearer {tokens['access_token']}"}
 
 
-async def create_workspace(client: AsyncClient, tokens: dict, name: str = "Acme Corp") -> dict:
+async def create_workspace(client: AsyncClient, tokens: dict, name: str = "Test Workspace") -> dict:
     resp = await client.post(
         "/api/v1/workspaces",
         json={"name": name},

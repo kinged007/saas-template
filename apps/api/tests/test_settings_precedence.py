@@ -41,3 +41,38 @@ def test_whitespace_use_sqlite_string_is_unset():
     for v in [" ", "   ", "\t\n"]:
         s = Settings.model_validate({"use_sqlite": v})
         assert s.use_sqlite is False
+
+
+def test_branding_settings_drive_runtime_identifiers():
+    s = Settings(
+        _env_file=None,
+        app_name="My Product",
+        app_slug="my-product",
+        seed_email_domain="test.invalid",
+        seed_workspace_names="First, Second",
+    )
+
+    assert s.api_name == "My Product API"
+    assert s.service_name == "my-product-api"
+    assert s.nats_stream_name_effective == "MY_PRODUCT"
+    assert s.nats_consumer_prefix_effective == "mp"
+    assert s.seed_workspace_specs == [
+        {"name": "First", "slug": "first", "description": "Demo workspace"},
+        {"name": "Second", "slug": "second", "description": "Second demo workspace"},
+    ]
+
+
+def test_app_slug_rejects_non_dns_identifiers():
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        Settings(_env_file=None, app_slug="Not A Slug")
+
+
+def test_app_name_env_derives_default_slug(monkeypatch):
+    monkeypatch.delenv("APP_SLUG", raising=False)
+    monkeypatch.setenv("APP_NAME", "My Product")
+
+    s = Settings(_env_file=None)
+
+    assert s.app_slug == "my-product"

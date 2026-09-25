@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "saas-template.fullname" . }}-api
+  name: {{ include "app.fullname" . }}-api
   labels:
-    app.kubernetes.io/name: saas-template
+    app.kubernetes.io/name: {{ include "app.name" . | quote }}
     app.kubernetes.io/component: api
 spec:
   selector:
-    app.kubernetes.io/name: saas-template
+    app.kubernetes.io/name: {{ include "app.name" . | quote }}
     app.kubernetes.io/component: api
   ports:
     - port: 80
@@ -17,13 +17,13 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "saas-template.fullname" . }}-web
+  name: {{ include "app.fullname" . }}-web
   labels:
-    app.kubernetes.io/name: saas-template
+    app.kubernetes.io/name: {{ include "app.name" . | quote }}
     app.kubernetes.io/component: web
 spec:
   selector:
-    app.kubernetes.io/name: saas-template
+    app.kubernetes.io/name: {{ include "app.name" . | quote }}
     app.kubernetes.io/component: web
   ports:
     - port: 80

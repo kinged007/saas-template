@@ -198,8 +198,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // workspaces list (e.g. after login as different user where the logout
   // path didn't trigger, or the user was removed from the active workspace).
   // Resolution order: per-user stored → live/fallback id → first workspace
-  // (workspaces[0] is the backend's newest-first order; in this deployment
-  // that is always Acme Corp).
+  // returned by the API.
   useLayoutEffect(() => {
     if (workspaces.length === 0) {
       // Logged-out or identity not yet hydrated: don't auto-pick.

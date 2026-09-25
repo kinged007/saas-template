@@ -21,7 +21,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../apps/api"
 
-export EMBEDDED_DB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/saas-dbcheck-XXXXXX")"
+export EMBEDDED_DB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/app-dbcheck-XXXXXX")"
 trap 'rm -rf "$EMBEDDED_DB_DIR"' EXIT
 
 echo "==> check 1/2: single migration head"

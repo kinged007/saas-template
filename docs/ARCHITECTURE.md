@@ -1,10 +1,10 @@
-# SaaS Template — Architecture
+# Application Architecture
 
 ## 1. Purpose
 
-A production-oriented multi-tenant SaaS template: a FastAPI + SQLAlchemy
-backend and a Refine.dev (React) frontend, covering the cross-cutting concerns
-every SaaS product needs — auth, workspaces, RBAC, invitations, API keys,
+A production-oriented multi-tenant application: a FastAPI + SQLAlchemy
+backend and a Refine.dev (React) frontend, covering cross-cutting product concerns
+such as auth, workspaces, RBAC, invitations, API keys,
 notifications, an event bus, scheduled jobs and a WebSocket realtime layer —
 as a coherent, tested reference implementation you can build a product on.
 
@@ -14,7 +14,7 @@ as a coherent, tested reference implementation you can build a product on.
 apps/api        FastAPI service: auth, workspaces, members, roles, invitations,
                 API keys, notifications, scheduled jobs, outbound webhooks,
                 WS realtime.
-apps/web        Refine.dev SPA (React + Antd).
+apps/web        Refine.dev SPA (React + shadcn/ui).
 infra/          docker-compose, Dockerfiles, Helm chart, Terraform.
 ```
 
@@ -93,7 +93,7 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 | 2FA / OAuth (browser) | `POST /auth/2fa/login` / `POST /auth/oauth/token` with `use_cookies: true` set the same cookie and omit the JSON refresh; the OAuth one-time code handoff carries only the access token for cookie callers |
 | API keys | `Authorization: Bearer <key>`; permissions resolved per workspace (untouched by the cookie flow) |
 
-Browser session storage model: the refresh token is never JS-readable (HttpOnly cookie, path `/api/v1/auth`); the 15-min access JWT lives in frontend memory only (nothing persists, so boot does one silent `POST /auth/refresh` — via the shared `ensureSession()` single-flight used by both `authProvider.check()` and the dataProvider 401 retry — to restore the session after reload, skipped entirely when the `tf_has_session` marker is absent). Cookie refresh/logout require the `X-Requested-With: XMLHttpRequest` header plus an allowlisted `Origin`/`Referer` (CSRF mitigation); non-browser JSON clients are unaffected. Future session endpoints (OAuth/2FA variants) must reuse `src/core/security/cookies.py` rather than reimplementing flags.
+Browser session storage model: the refresh token is never JS-readable (HttpOnly cookie, path `/api/v1/auth`); the 15-min access JWT lives in frontend memory only (nothing persists, so boot does one silent `POST /auth/refresh` — via the shared `ensureSession()` single-flight used by both `authProvider.check()` and the dataProvider 401 retry — to restore the session after reload, skipped entirely when the namespaced `has_session` marker is absent; legacy `tf_has_session` remains a read fallback). Cookie refresh/logout require the `X-Requested-With: XMLHttpRequest` header plus an allowlisted `Origin`/`Referer` (CSRF mitigation); non-browser JSON clients are unaffected. Future session endpoints (OAuth/2FA variants) must reuse `src/core/security/cookies.py` rather than reimplementing flags.
 
 Session binding: every authenticated request costs one extra PK lookup
 (`is_session_active`) to enforce immediate revocation; if that ever hurts,
@@ -125,7 +125,7 @@ workflows/*.py         subscribers orchestrated by a small WorkflowRegistry
   dispatcher loop CAS-claims due rows and POSTs them HMAC-signed, with
   backoff retry. See `docs/WEBHOOKS.md`.
 - `NatsEventBus` uses JetStream:
-  - One workqueue stream (`SAAS_TEMPLATE`) with subjects `workspaces.>`,
+  - One workqueue stream (`NATS_STREAM_NAME`, or the uppercased app slug by default) with subjects `workspaces.>`,
     `apikeys.>`, `audit.>`; durable consumers are **shared by name across
     replicas** — the server load-balances delivery (queue-group semantics
     without explicit bindings, which workqueue streams reject).
@@ -217,7 +217,23 @@ A shared `crud` helper turns Refine params into safe SQLAlchemy queries
 
 - **Dev**: docker-compose → postgres + nats; run `make api` / `make web` from terminal
 - **Container**: `infra/docker/` (multi-stage Dockerfiles)
-- **Kubernetes**: `infra/helm/saas-template` (api, web, postgres optional, nats optional, ingress, secrets)
+- **Kubernetes**: `infra/helm/app` (api, web, postgres optional, nats optional, ingress, secrets)
 - **Cloud**: `infra/terraform/` example — AWS EKS + RDS + NATS on EKS via Helm
   (same chart used for GCP GKE / Azure AKS)
 - All services 12-factor: config via env, structured logs, `/healthz` + `/readyz`
+
+## 11. Branding and persistent identifiers
+
+`APP_NAME` is the human-facing product name used by OpenAPI, health metadata, and
+2FA. `APP_SLUG` is a lowercase DNS-style identifier used for the API user-config
+directory, embedded PostgreSQL data directory, default JetStream stream, and
+default consumer prefix. Docker Compose reads the equivalent values from
+`infra/docker/.env`; Helm uses `appName` and `appSlug`; Terraform uses
+`app_name` and `app_slug`.
+
+Stateful names are explicit because automatic renames can make existing data
+unreachable: `REFRESH_COOKIE_NAME` controls browser sessions, `NATS_STREAM_NAME`
+can retain an existing stream, and Docker volume/project names control local
+persistent data. The web client namespaces local storage with `VITE_APP_SLUG`
+and reads legacy `tf_*` keys when the namespaced value is absent. Vite branding
+values are build-time inputs; rebuild the web image after changing them.

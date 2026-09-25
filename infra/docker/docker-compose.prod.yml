@@ -1,7 +1,7 @@
 # Production stack: postgres, nats (JetStream), api (FastAPI + migrations), web (nginx).
 #
 # First-time setup:
-#   cp infra/docker/.env.production.example infra/docker/.env   # then edit the secrets
+#   cp infra/docker/.env.example infra/docker/.env   # then edit the secrets
 #
 # Deploy / update:
 #   docker compose -f infra/docker/docker-compose.prod.yml up --build -d
@@ -12,20 +12,18 @@
 #
 # Migrations run automatically before each api start (`alembic upgrade head`).
 # Demo seed data is NOT applied — create the first user via /api/v1/register.
-name: saas-template
-
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: saas_template
+      POSTGRES_USER: ${POSTGRES_USER:-app}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in infra/docker/.env}
-      POSTGRES_DB: saas_template
+      POSTGRES_DB: ${POSTGRES_DB:-app}
     volumes:
-      - saas_template_pg:/var/lib/postgresql/data
+      - postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U saas_template -d saas_template"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app}"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -33,9 +31,9 @@ services:
   nats:
     image: nats:2.10-alpine
     restart: unless-stopped
-    command: ["-js", "-sd", "/data", "-m", "8222", "--server_name", "saas-template"]
+    command: ["-js", "-sd", "/data", "-m", "8222", "--server_name", "${APP_SLUG:-app}"]
     volumes:
-      - saas_template_nats:/data
+      - nats:/data
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz >/dev/null || exit 1"]
       interval: 5s
@@ -48,12 +46,15 @@ services:
       dockerfile: infra/docker/Dockerfile.api
     restart: unless-stopped
     environment:
+      APP_NAME: ${APP_NAME:-Application}
+      APP_SLUG: ${APP_SLUG:-app}
       ENVIRONMENT: production
       DEBUG: "false"
-      DATABASE_URL: postgresql+asyncpg://saas_template:${POSTGRES_PASSWORD}@postgres:5432/saas_template
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-app}
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in infra/docker/.env}
       FERNET_KEYS: ${FERNET_KEYS:?set FERNET_KEYS in infra/docker/.env}
       SECRET_ENCRYPT_VERSION: ${SECRET_ENCRYPT_VERSION:-1}
+      REFRESH_COOKIE_NAME: ${REFRESH_COOKIE_NAME:?set REFRESH_COOKIE_NAME in infra/docker/.env}
       EVENT_BUS_DRIVER: nats
       NATS_URL: nats://nats:4222
       # Public origin of the app (used for links in emails etc.). CORS is only
@@ -78,6 +79,9 @@ services:
         # Leave unset for same-origin relative URLs (default, recommended).
         VITE_API_URL: ${VITE_API_URL:-}
         VITE_WS_URL: ${VITE_WS_URL:-}
+        VITE_APP_NAME: ${APP_NAME:-Application}
+        VITE_APP_SLUG: ${APP_SLUG:-app}
+        VITE_LOGO_URL: ${VITE_LOGO_URL:-}
     restart: unless-stopped
     ports:
       - "${WEB_PORT:-8080}:80"
@@ -86,5 +90,5 @@ services:
         condition: service_healthy
 
 volumes:
-  saas_template_pg:
-  saas_template_nats:
+  postgres:
+  nats:

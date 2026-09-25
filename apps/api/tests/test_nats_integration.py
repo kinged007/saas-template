@@ -24,12 +24,14 @@ import pytest
 from src.db.session import SessionFactory
 from src.events.bus import SubscriptionError
 from src.events.factory import WorkflowRegistry
-from src.events.nats import STREAM_NAME, STREAM_SUBJECTS, NatsEventBus
+from src.events.nats import STREAM_SUBJECTS, NatsEventBus
 from src.events.subjects import Subjects
 from src.realtime.manager import ConnectionManager
 from src.services.auth import AuthService
+from src.settings import settings
 from src.workflows import build_workflows
 
+STREAM_NAME = settings.nats_stream_name_effective
 MAX_DELIVER = 10
 ACK_WAIT_SECONDS = 30.0
 

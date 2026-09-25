@@ -103,7 +103,7 @@ export function WorkspaceCreatePage() {
             <Label htmlFor="name">Name</Label>
             <Input
               id="name"
-              placeholder="Acme Corp"
+              placeholder="Example Workspace"
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
@@ -113,7 +113,7 @@ export function WorkspaceCreatePage() {
             <Label htmlFor="slug">Slug</Label>
             <Input
               id="slug"
-              placeholder="acme-corp (optional)"
+              placeholder="example-workspace (optional)"
               value={slug}
               onChange={(e) => setSlug(e.target.value)}
             />

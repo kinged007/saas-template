@@ -1,7 +1,7 @@
-# saas-template — Project Context
+# Application — Project Context
 
 **Stack:** fastapi | sqlalchemy | typescript
-**Monorepo:** api, saas-template-web
+**Monorepo:** api, app-web
 
 26 routes | 10 models | 17 env vars | 247 import links
 

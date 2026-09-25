@@ -1,0 +1,12 @@
+apiVersion: v2
+name: app
+description: Configurable multi-tenant application chart (auth, RBAC, jobs, events)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - multi-tenant
+  - application
+  - starter
+maintainers:
+  - name: Application team

@@ -14,7 +14,7 @@ export USE_SQLITE
 endif
 
 help:
-	@echo "SaaS Template targets (development runs from the terminal — no docker needed):"
+	@echo "Application targets (development runs from the terminal — no docker needed):"
 	@echo "  make setup        one-time: install uv + Node.js if missing (fnm -> apt -> nvm)"
 	@echo "  make dev          install deps, migrate, seed, then run api (:8000) + web (:5173)"
 	@echo "  make api-install  install backend deps (uv sync)"

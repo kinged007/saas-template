@@ -64,7 +64,7 @@ class TwoFactorService:
         token = secrets.token_urlsafe(32)
         _prune(_pending_setups, now_utc())
         _pending_setups[token] = (user.id, b32, now_utc() + SETUP_TTL)
-        issuer = settings.app_name
+        issuer = settings.api_name
         return {
             "setup_token": token,
             "otpauth_uri": otpauth_uri(secret_b32=b32, email=user.email, issuer=issuer),

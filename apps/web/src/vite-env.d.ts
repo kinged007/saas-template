@@ -3,6 +3,9 @@
 interface ImportMetaEnv {
   readonly VITE_API_URL?: string;
   readonly VITE_WS_URL?: string;
+  readonly VITE_APP_NAME?: string;
+  readonly VITE_APP_SLUG?: string;
+  readonly VITE_LOGO_URL?: string;
 }
 
 interface ImportMeta {

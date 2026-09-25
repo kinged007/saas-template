@@ -50,8 +50,8 @@ async def test_invite_creates_notification_for_existing_user(app_client):
     assert items[0]["type"] == "workspace_invitation"
     assert items[0]["acknowledged"] is False
     assert items[0]["workspace_id"] == ws["id"]
-    assert items[0]["workspace_name"] == "Acme Corp"
-    assert items[0]["payload"]["workspace_name"] == "Acme Corp"
+    assert items[0]["workspace_name"] == "Test Workspace"
+    assert items[0]["payload"]["workspace_name"] == "Test Workspace"
 
     # invitee accepts → becomes member with editor role
     accepted = await client.post(
@@ -163,7 +163,7 @@ async def test_my_invitations_lists_received_with_workspace_and_inviter(app_clie
     items = resp.json()
     assert len(items) == 1
     item = items[0]
-    assert item["workspace_name"] == "Acme Corp"
+    assert item["workspace_name"] == "Test Workspace"
     assert item["invited_by_name"] == "Test U."
     assert item["status"] == "pending"
     assert item["expired"] is False

@@ -20,10 +20,10 @@ from src.events.bus import (
     SubscriptionError,
 )
 from src.events.subjects import TRANSIENT_SUBJECTS, Subjects
+from src.settings import settings
 
 logger = logging.getLogger(__name__)
 
-STREAM_NAME = "SAAS_TEMPLATE"
 STREAM_SUBJECTS = [
     f"{Subjects.WORKSPACES}.>",
     f"{Subjects.APIKEYS}.>",
@@ -38,8 +38,8 @@ ACK_WAIT_SECONDS = 30.0
 class NatsEventBus(EventBus):
     """Production event bus backed by NATS JetStream.
 
-    - One stream (SAAS_TEMPLATE, workqueue retention) with subjects for each
-      durable namespace (workspaces.>, apikeys.>, audit.>, jobs.>,
+    - One configurable workqueue stream with subjects for each durable
+      namespace (workspaces.>, apikeys.>, audit.>, jobs.>,
       conversations.>).
     - Each durable subscription is a durable consumer: events survive
       restarts, are delivered with acks, and load-balance across replicas
@@ -58,9 +58,12 @@ class NatsEventBus(EventBus):
 
     name = "nats"
 
-    def __init__(self, url: str, *, queue_group: str = "saas-template-workers") -> None:
+    def __init__(
+        self, url: str, *, stream_name: str | None = None, consumer_prefix: str | None = None
+    ) -> None:
         self._url = url
-        self._queue_group = queue_group
+        self._stream_name = stream_name or settings.nats_stream_name_effective
+        self._consumer_prefix = consumer_prefix or settings.nats_consumer_prefix_effective
         self._nc: nats.NATS | None = None
         self._js: JetStreamContext | None = None
         self._subscriptions: dict[str, tuple[SubscriberHandler, object]] = {}
@@ -129,7 +132,11 @@ class NatsEventBus(EventBus):
         pending_publishes, self._pending_publishes = self._pending_publishes, []
         for subject, payload, correlation_id, transient in pending_publishes:
             await self.publish(subject, payload, correlation_id=correlation_id, transient=transient)
-        logger.info("nats event bus started (%d subscriptions)", len(self._subscriptions))
+        logger.info(
+            "nats event bus started on stream %s (%d subscriptions)",
+            self._stream_name,
+            len(self._subscriptions),
+        )
 
     async def stop(self) -> None:
         if self._nc:
@@ -159,12 +166,12 @@ class NatsEventBus(EventBus):
                 "messages; subscribe with fanout=True or move the subject to the durable set"
             )
         js = self._require_js()
-        durable_name = f"st-{subject.replace('.', '-')}"
+        durable_name = f"{self._consumer_prefix}-{subject.replace('.', '-')}"
         try:
             sub = await js.subscribe(
                 subject,
                 durable=durable_name,
-                stream=STREAM_NAME,
+                stream=self._stream_name,
                 manual_ack=True,
                 config=ConsumerConfig(
                     ack_wait=ACK_WAIT_SECONDS,
@@ -179,7 +186,7 @@ class NatsEventBus(EventBus):
                 sub = await js.subscribe(
                     subject,
                     durable=durable_name,
-                    stream=STREAM_NAME,
+                    stream=self._stream_name,
                     manual_ack=True,
                     config=ConsumerConfig(
                         ack_wait=ACK_WAIT_SECONDS,
@@ -202,12 +209,12 @@ class NatsEventBus(EventBus):
         logger.warning("subscribe failed for %s (%s); attempting recovery", subject, original_error)
         nc = self._require_nc()
         try:
-            req = await nc.request(f"$JS.API.CONSUMER.LIST.{STREAM_NAME}", b"", timeout=5)
+            req = await nc.request(f"$JS.API.CONSUMER.LIST.{self._stream_name}", b"", timeout=5)
             data = json.loads(req.data)
             for consumer in data.get("consumers", []):
                 if consumer["config"].get("filter_subject") == subject:
                     name = consumer["config"]["durable_name"]
-                    await js.delete_consumer(STREAM_NAME, name)
+                    await js.delete_consumer(self._stream_name, name)
                     logger.info("removed stale consumer %s for %s", name, subject)
         except Exception as exc:  # recovery is best-effort
             logger.warning("consumer recovery failed: %s", exc)
@@ -225,24 +232,24 @@ class NatsEventBus(EventBus):
     async def _ensure_stream(self) -> None:
         js = self._require_js()
         try:
-            info = await js.stream_info(STREAM_NAME)
+            info = await js.stream_info(self._stream_name)
         except Exception:
             await js.add_stream(
-                name=STREAM_NAME,
+                name=self._stream_name,
                 subjects=STREAM_SUBJECTS,
                 retention="workqueue",
                 max_msgs=10_000,
             )
-            logger.info("created jetstream stream %s", STREAM_NAME)
+            logger.info("created jetstream stream %s", self._stream_name)
             return
         if set(info.config.subjects) != set(STREAM_SUBJECTS):
             await js.update_stream(
-                name=STREAM_NAME,
+                name=self._stream_name,
                 subjects=STREAM_SUBJECTS,
                 retention="workqueue",
                 max_msgs=10_000,
             )
-            logger.info("reconciled stream %s subjects", STREAM_NAME)
+            logger.info("reconciled stream %s subjects", self._stream_name)
 
     def _deliver_js(self, handler: SubscriberHandler):
         async def callback(msg: Msg) -> None:

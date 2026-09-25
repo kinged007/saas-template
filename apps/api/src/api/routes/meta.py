@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse
 
 from src.core.metrics import render_prometheus
+from src.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,7 @@ router = APIRouter(tags=["meta"])
 
 @router.get("/healthz")
 async def healthz() -> dict:
-    return {"status": "ok", "service": "saas-template-api"}
+    return {"status": "ok", "service": settings.service_name}
 
 
 @router.get("/metrics")

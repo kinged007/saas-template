@@ -4,6 +4,9 @@ import ReactDOM from "react-dom/client";
 import "./index.css";
 import { App } from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { APP_NAME } from "./config";
+
+document.title = APP_NAME;
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

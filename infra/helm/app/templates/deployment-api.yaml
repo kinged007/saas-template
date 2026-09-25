@@ -1,23 +1,23 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "saas-template.fullname" . }}-api
+  name: {{ include "app.fullname" . }}-api
   labels:
-    app.kubernetes.io/name: saas-template
+    app.kubernetes.io/name: {{ include "app.name" . | quote }}
     app.kubernetes.io/component: api
 spec:
   replicas: {{ .Values.api.replicas }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: saas-template
+      app.kubernetes.io/name: {{ include "app.name" . | quote }}
       app.kubernetes.io/component: api
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: saas-template
+        app.kubernetes.io/name: {{ include "app.name" . | quote }}
         app.kubernetes.io/component: api
     spec:
-      serviceAccountName: {{ include "saas-template.fullname" . }}
+      serviceAccountName: {{ include "app.fullname" . }}
       containers:
         - name: api
           image: "{{ .Values.image.repository }}:{{ .Values.image.apiTag }}"
@@ -26,6 +26,10 @@ spec:
             - containerPort: {{ .Values.api.port }}
               name: http
           env:
+            - name: APP_NAME
+              value: {{ .Values.appName | quote }}
+            - name: APP_SLUG
+              value: {{ .Values.appSlug | quote }}
             - name: ENVIRONMENT
               value: "production"
             - name: EVENT_BUS_DRIVER
@@ -45,7 +49,7 @@ spec:
           {{- else }}
           envFrom:
             - secretRef:
-                name: {{ include "saas-template.fullname" . }}-secrets
+                name: {{ include "app.fullname" . }}-secrets
           {{- end }}
           {{- with .Values.api.resources }}
           resources: {{ toYaml . | nindent 12 }}
@@ -74,5 +78,5 @@ spec:
           {{- else }}
           envFrom:
             - secretRef:
-                name: {{ include "saas-template.fullname" . }}-secrets
+                name: {{ include "app.fullname" . }}-secrets
           {{- end }}

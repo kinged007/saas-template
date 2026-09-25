@@ -24,36 +24,30 @@ from src.settings import settings
 logger = logging.getLogger(__name__)
 
 DEMO_PASSWORD = "password"
+ADMIN_EMAIL = f"admin@{settings.seed_email_domain}"
+USER1_EMAIL = f"user1@{settings.seed_email_domain}"
+USER2_EMAIL = f"user2@{settings.seed_email_domain}"
+ADMIN_DISPLAY_NAME = "Admin User"
 
 DEMO_USERS = [
-    ("admin@example.com", "Admin", "User"),
-    ("user1@example.com", "User", "One"),
-    ("user2@example.com", "User", "Two"),
+    (ADMIN_EMAIL, "Admin", "User"),
+    (USER1_EMAIL, "User", "One"),
+    (USER2_EMAIL, "User", "Two"),
 ]
 
-WORKSPACES = [
-    {
-        "name": "Acme Corp",
-        "slug": "acme-corp",
-        "description": "Demo workspace",
-    },
-    {
-        "name": "Globex",
-        "slug": "globex",
-        "description": "Second demo workspace",
-    },
-]
+WORKSPACES = settings.seed_workspace_specs
+FIRST_WORKSPACE, SECOND_WORKSPACE = WORKSPACES
 
 # (workspace slug, user email, role) — the owner is added by create_workspace.
 MEMBERSHIPS = [
-    ("acme-corp", "user1@example.com", "editor"),
-    ("globex", "user1@example.com", "viewer"),
+    (FIRST_WORKSPACE["slug"], USER1_EMAIL, "editor"),
+    (SECOND_WORKSPACE["slug"], USER1_EMAIL, "viewer"),
 ]
 
 # (workspace slug, email, role) — pending invitations shown in the members page.
 INVITATIONS = [
-    ("acme-corp", "user2@example.com", "viewer"),
-    ("globex", "user2@example.com", "editor"),
+    (FIRST_WORKSPACE["slug"], USER2_EMAIL, "viewer"),
+    (SECOND_WORKSPACE["slug"], USER2_EMAIL, "editor"),
 ]
 
 # (workspace slug, creator email, name, permissions).
@@ -62,14 +56,14 @@ INVITATIONS = [
 # once, at creation time; re-running the seed keeps existing keys untouched.
 API_KEYS = [
     (
-        "acme-corp",
-        "admin@example.com",
+        FIRST_WORKSPACE["slug"],
+        ADMIN_EMAIL,
         "ci-deploy",
         ["member:read", "role:read"],
     ),
     (
-        "acme-corp",
-        "admin@example.com",
+        FIRST_WORKSPACE["slug"],
+        ADMIN_EMAIL,
         "automation",
         [
             "workspace:read",
@@ -87,14 +81,14 @@ API_KEYS = [
         ],
     ),
     (
-        "acme-corp",
-        "user1@example.com",
+        FIRST_WORKSPACE["slug"],
+        USER1_EMAIL,
         "editor-script",
         ["member:read", "role:read", "notification:read"],
     ),
     (
-        "globex",
-        "user1@example.com",
+        SECOND_WORKSPACE["slug"],
+        USER1_EMAIL,
         "viewer-read",
         ["member:read"],
     ),
@@ -103,62 +97,60 @@ API_KEYS = [
 
 def _notifications() -> list[dict]:
     """(user email, workspace slug, type, title, body, acknowledged, age_hours)."""
+    first_name = FIRST_WORKSPACE["name"]
+    second_name = SECOND_WORKSPACE["name"]
     return [
-        # ---- admin — Acme Corp ----
         (
-            "admin@example.com",
-            "acme-corp",
+            ADMIN_EMAIL,
+            FIRST_WORKSPACE["slug"],
             "workspace_invitation",
             "New invitation sent",
-            "You invited user2@example.com to Acme Corp as a viewer.",
+            f"You invited {USER2_EMAIL} to {first_name} as a viewer.",
             False,
             2,
         ),
-        # ---- admin — Globex ----
         (
-            "admin@example.com",
-            "globex",
+            ADMIN_EMAIL,
+            SECOND_WORKSPACE["slug"],
             "workspace_invitation",
             "New invitation sent",
-            "You invited user2@example.com to Globex as an editor.",
+            f"You invited {USER2_EMAIL} to {second_name} as an editor.",
             False,
             1,
         ),
-        # ---- user1 — Acme Corp + Globex ----
         (
-            "user1@example.com",
-            "acme-corp",
+            USER1_EMAIL,
+            FIRST_WORKSPACE["slug"],
             "workspace_invitation",
-            "You were invited to Acme Corp",
-            "Admin User invited you to the Acme Corp workspace.",
+            f"You were invited to {first_name}",
+            f"{ADMIN_DISPLAY_NAME} invited you to the {first_name} workspace.",
             False,
             6,
         ),
         (
-            "user1@example.com",
-            "globex",
+            USER1_EMAIL,
+            SECOND_WORKSPACE["slug"],
             "workspace_invitation",
-            "You were invited to Globex",
-            "Admin User invited you to the Globex workspace.",
+            f"You were invited to {second_name}",
+            f"{ADMIN_DISPLAY_NAME} invited you to the {second_name} workspace.",
             False,
             3,
         ),
-        # ---- user2 — invited to both workspaces ----
         (
-            "user2@example.com",
-            "acme-corp",
+            USER2_EMAIL,
+            FIRST_WORKSPACE["slug"],
             "workspace_invitation",
-            "You were invited to Acme Corp",
-            "Admin User invited you to the Acme Corp workspace.",
+            f"You were invited to {first_name}",
+            f"{ADMIN_DISPLAY_NAME} invited you to the {first_name} workspace.",
             False,
             2,
         ),
         (
-            "user2@example.com",
-            "globex",
+            USER2_EMAIL,
+            SECOND_WORKSPACE["slug"],
             "workspace_invitation",
-            "You were invited to Globex",
-            "Admin User invited you to the Globex workspace.",
+            f"You were invited to {second_name}",
+            f"{ADMIN_DISPLAY_NAME} invited you to the {second_name} workspace.",
             False,
             1,
         ),
@@ -189,10 +181,10 @@ async def main() -> None:
 
         # Dev-only ceiling: only when SUPERADMIN_EMAIL is unset. A set value
         # means the bootstrap account (via register) is the real superuser.
-        admin = users["admin@example.com"]
+        admin = users[ADMIN_EMAIL]
         if not settings.superadmin_email.strip() and not admin.is_superuser:
             admin.is_superuser = True
-            logger.info("promoted admin@example.com to superuser")
+            logger.info("promoted %s to superuser", ADMIN_EMAIL)
 
         workspaces: dict[str, Workspace] = {}
         for spec in WORKSPACES:
@@ -203,7 +195,7 @@ async def main() -> None:
                     name=spec["name"],
                     slug=spec["slug"],
                     description=spec["description"],
-                    owner=users["admin@example.com"],
+                    owner=users[ADMIN_EMAIL],
                 )
                 logger.info("created demo workspace %s", spec["slug"])
             workspaces[spec["slug"]] = workspace
@@ -265,7 +257,7 @@ async def main() -> None:
                     workspace=workspace,
                     email=email,
                     role=role,
-                    invited_by=users["admin@example.com"],
+                    invited_by=users[ADMIN_EMAIL],
                 )
                 logger.info("invited %s to %s as %s", email, slug, role_name)
             invitations[(slug, email)] = invite
@@ -286,7 +278,7 @@ async def main() -> None:
             invite = invitations.get((slug, email))
             payload: dict = {"workspace_id": workspace.id, "workspace_name": workspace.name}
             if type_ == "workspace_invitation" and invite is not None:
-                payload.update({"invitation_id": invite.id, "invited_by": "Admin User"})
+                payload.update({"invitation_id": invite.id, "invited_by": ADMIN_DISPLAY_NAME})
             created_at = now - timedelta(hours=age_hours)
             session.add(
                 Notification(

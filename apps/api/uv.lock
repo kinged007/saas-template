@@ -973,7 +973,7 @@ wheels = [
 ]
 
 [[package]]
-name = "saas-template-api"
+name = "app-api"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

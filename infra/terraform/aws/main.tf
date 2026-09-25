@@ -1,23 +1,35 @@
-# SaaS template on AWS EKS — reference deployment (same chart works on GKE/AKS).
+# Reference AWS EKS deployment (the same chart works on GKE/AKS).
 #
 # Usage:
 #   terraform init
-#   terraform plan -var="domain=saas-template.example.com" -var="secret_key=..." -var="fernet_keys=..."
+#   terraform plan -var="app_name=My Product" -var="app_slug=my-product" \
+#     -var="domain=my-product.example.com" -var="secret_key=..." -var="fernet_keys=..."
 #   terraform apply
 #
-# Creates: VPC + EKS cluster + node group, then installs the SaaS template Helm
+# Creates: VPC + EKS cluster + node group, then installs the application Helm
 # chart (API + Web + optional postgres/NATS) behind an ALB ingress.
 
 variable "region" {
   default = "eu-west-1"
 }
 
-variable "cluster_name" {
-  default = "saas-template"
+variable "app_name" {
+  description = "Human-facing application name"
+  default     = "Application"
+}
+
+variable "app_slug" {
+  description = "Lowercase DNS-style application identifier"
+  default     = "app"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", var.app_slug))
+    error_message = "app_slug must be a lowercase DNS-style identifier."
+  }
 }
 
 variable "domain" {
-  description = "Ingress host, e.g. saas-template.example.com"
+  description = "Ingress host, e.g. app.example.com"
 }
 
 variable "secret_key" {
@@ -50,7 +62,7 @@ module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
   version = "5.8.1"
 
-  name = "${var.cluster_name}-vpc"
+  name = "${var.app_slug}-vpc"
   cidr = "10.0.0.0/16"
 
   azs             = data.aws_availability_zones.available.names
@@ -66,7 +78,7 @@ module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "20.8.5"
 
-  cluster_name    = var.cluster_name
+  cluster_name    = var.app_slug
   cluster_version = var.eks_version
 
   vpc_id     = module.vpc.vpc_id
@@ -83,42 +95,44 @@ module "eks" {
 }
 
 # ----------------------------------------------------------------------------
-# SaaS template Helm release
+# Application Helm release
 # ----------------------------------------------------------------------------
 
-resource "kubernetes_namespace" "saas_template" {
+resource "kubernetes_namespace" "app" {
   metadata {
-    name = "saas-template"
+    name = var.app_slug
   }
 }
 
-resource "kubernetes_secret" "saas_template_secrets" {
+resource "kubernetes_secret" "app" {
   metadata {
-    name      = "saas-template-secrets"
-    namespace = kubernetes_namespace.saas_template.metadata[0].name
+    name      = "${var.app_slug}-secrets"
+    namespace = kubernetes_namespace.app.metadata[0].name
   }
 
   data = {
     SECRET_KEY   = var.secret_key
     FERNET_KEYS  = var.fernet_keys
-    DATABASE_URL = "postgresql+asyncpg://saas_template:change-me@saas-template-postgres.saas-template.svc.cluster.local:5432/saas_template"
-    NATS_URL     = "nats://saas-template-nats.saas-template.svc.cluster.local:4222"
+    DATABASE_URL = "postgresql+asyncpg://app:change-me@${var.app_slug}-postgres.${var.app_slug}.svc.cluster.local:5432/app"
+    NATS_URL     = "nats://${var.app_slug}-nats.${var.app_slug}.svc.cluster.local:4222"
   }
 }
 
-resource "helm_release" "saas_template" {
-  name       = "saas-template"
-  namespace  = kubernetes_namespace.saas_template.metadata[0].name
-  chart      = "../../infra/helm/saas-template"
-  depends_on = [kubernetes_secret.saas_template_secrets]
+resource "helm_release" "app" {
+  name       = var.app_slug
+  namespace  = kubernetes_namespace.app.metadata[0].name
+  chart      = "../../infra/helm/app"
+  depends_on = [kubernetes_secret.app]
 
   values = [
     <<-EOT
+    appName: "${var.app_name}"
+    appSlug: "${var.app_slug}"
     image:
-      repository: <your-registry>/saas-template
+      repository: <your-registry>/${var.app_slug}
       apiTag: latest
       webTag: latest
-    existingSecret: saas-template-secrets
+    existingSecret: ${var.app_slug}-secrets
     corsOrigins: "https://${var.domain}"
     frontendUrl: "https://${var.domain}"
     ingress:
@@ -144,7 +158,7 @@ resource "helm_release" "aws_lb_controller" {
 
   set {
     name  = "clusterName"
-    value = var.cluster_name
+    value = var.app_slug
   }
 
   set {
@@ -164,7 +178,7 @@ module "aws_lb_iam_role" {
   source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
   version = "5.39.0"
 
-  role_name                              = "saas-template-lb-controller"
+  role_name                              = "${var.app_slug}-lb-controller"
   attach_load_balancer_controller_policy = true
 
   oidc_providers = {
@@ -182,7 +196,7 @@ provider "helm" {
     exec {
       api_version = "client.authentication.k8s.io/v1beta1"
       command     = "aws"
-      args        = ["eks", "get-token", "--cluster-name", var.cluster_name]
+      args        = ["eks", "get-token", "--cluster-name", var.app_slug]
     }
   }
 }
@@ -193,7 +207,7 @@ provider "kubernetes" {
   exec {
     api_version = "client.authentication.k8s.io/v1beta1"
     command     = "aws"
-    args        = ["eks", "get-token", "--cluster-name", var.cluster_name]
+    args        = ["eks", "get-token", "--cluster-name", var.app_slug]
   }
 }
 
