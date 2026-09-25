@@ -113,7 +113,7 @@ export function LoginPage() {
           <img src="/logo.svg" alt="SaaS Template" className="mx-auto mb-2 w-48" />
           <CardDescription>Sign in to your account</CardDescription>
           {passwordChanged && (
-            <Badge variant="success" className="mt-2 w-fit self-center">
+            <Badge variant="success" className="mt-2 w-fit self-center bg-green-800 hover:bg-green-900">
               Password changed — sign in with your new password
             </Badge>
           )}
