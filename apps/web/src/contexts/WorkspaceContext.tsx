@@ -63,8 +63,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // useSyncExternalStore subscription re-renders this provider whenever the
   // identity cache entry changes, so hydration propagates without an
   // observer of our own.
+  const subscribeToIdentity = useCallback(
+    (onChange: () => void) =>
+      queryClient.getQueryCache().subscribe((event) => {
+        if (
+          event.query.queryKey[0] === "auth" &&
+          event.query.queryKey[1] === "identity"
+        ) {
+          onChange();
+        }
+      }),
+    [queryClient],
+  );
   const cachedIdentity = useSyncExternalStore(
-    (onChange) => queryClient.getQueryCache().subscribe(onChange),
+    subscribeToIdentity,
     () => queryClient.getQueryData<Identity & { workspaces: Workspace[] }>(["auth", "identity"]),
     () => undefined,
   );
