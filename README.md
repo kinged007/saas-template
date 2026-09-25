@@ -41,14 +41,21 @@ make setup  # one-time: installs uv + Node.js if missing (tries fnm, then apt, t
 make dev    # install deps, migrate, seed, then run api (:8000) + web (:5173)
 ```
 
+If :8000 or :5173 is already taken (e.g. another checkout's dev server), pick
+other ports — the API, the Vite proxy and the cookie origin all follow:
+
+```bash
+make dev API_PORT=8010 WEB_PORT=5273   # open http://localhost:5273
+```
+
 Or run each step individually:
 
 ```bash
 make api-install  # uv sync in apps/api
 make api-migrate  # alembic migrations (starts embedded postgres automatically)
 make api-seed     # demo users + workspaces
-make api          # uvicorn on :8000
-make web          # vite dev on :5173 (open http://localhost:5173)
+make api          # uvicorn on :8000 (or $API_PORT)
+make web          # vite dev on :5173 (or $WEB_PORT; open http://localhost:5173)
 ```
 
 OpenAPI docs: http://localhost:8000/docs
