@@ -52,6 +52,9 @@ async def test_invite_creates_notification_for_existing_user(app_client):
     assert items[0]["workspace_id"] == ws["id"]
     assert items[0]["workspace_name"] == "Acme Corp"
     assert items[0]["payload"]["workspace_name"] == "Acme Corp"
+    # NotificationCenter renders the "Open" button off payload.url; without it
+    # the invite is a dead end in the bell.
+    assert items[0]["payload"]["url"] == "/invitations"
 
     # invitee accepts → becomes member with editor role
     accepted = await client.post(
