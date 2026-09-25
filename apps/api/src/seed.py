@@ -195,16 +195,16 @@ async def main() -> None:
             logger.info("promoted admin@example.com to superuser")
 
         workspaces: dict[str, Workspace] = {}
-        workspace_specs = WORKSPACES[:1] if settings.single_workspace else WORKSPACES
-        for spec in workspace_specs:
-            if settings.single_workspace:
-                workspace = await ws_service.get_single_workspace()
-            else:
-                result = await session.execute(
-                    select(Workspace).where(Workspace.slug == spec["slug"])
-                )
-                workspace = result.scalar_one_or_none()
+        if settings.single_workspace:
+            # The canonical workspace is the oldest existing row, not the
+            # demo fixture: a developer who registered before the first seed
+            # already owns it. Fixture-keyed demo data is only attached when
+            # that workspace is still empty of other owners — attaching it to
+            # a workspace someone else created would mix demo API keys,
+            # invitations and notifications into their real data.
+            workspace = await ws_service.get_single_workspace()
             if workspace is None:
+                spec = WORKSPACES[0]
                 workspace = await ws_service.create_workspace(
                     name=spec["name"],
                     slug=spec["slug"],
@@ -212,7 +212,31 @@ async def main() -> None:
                     owner=users["admin@example.com"],
                 )
                 logger.info("created demo workspace %s", spec["slug"])
-            workspaces[spec["slug"]] = workspace
+            else:
+                owner = await session.scalar(
+                    select(WorkspaceMember).where(
+                        WorkspaceMember.workspace_id == workspace.id,
+                        WorkspaceMember.role_id
+                        == await _system_role_id(session, workspace.id, "owner"),
+                    )
+                )
+                if owner is None or owner.user_id == users["admin@example.com"].id:
+                    workspaces[WORKSPACES[0]["slug"]] = workspace
+        else:
+            for spec in WORKSPACES:
+                result = await session.execute(
+                    select(Workspace).where(Workspace.slug == spec["slug"])
+                )
+                workspace = result.scalar_one_or_none()
+                if workspace is None:
+                    workspace = await ws_service.create_workspace(
+                        name=spec["name"],
+                        slug=spec["slug"],
+                        description=spec["description"],
+                        owner=users["admin@example.com"],
+                    )
+                    logger.info("created demo workspace %s", spec["slug"])
+                workspaces[spec["slug"]] = workspace
 
         for slug, email, role_name in MEMBERSHIPS:
             if slug not in workspaces:
@@ -248,6 +272,11 @@ async def main() -> None:
                 select(ApiKey).where(ApiKey.workspace_id == workspace.id, ApiKey.name == name)
             )
             if existing.scalar_one_or_none() is not None:
+                continue
+            if await ws_service.get_membership(workspace.id, user.id) is None:
+                # The canonical workspace pre-existed and its owner is not the
+                # demo admin, who never auto-joins (no login event yet).
+                logger.info("skipped api key %s in %s: %s is not a member", name, slug, email)
                 continue
             key, raw = await api_service.create_api_key(
                 workspace_id=workspace.id,
@@ -328,6 +357,10 @@ async def main() -> None:
         print("  api keys (secrets shown once, at creation):")
         for name, slug, raw in api_keys:
             print(f"    {name:<16} ({slug}) {raw}")
+
+
+async def _system_role_id(session, workspace_id: str, name: str) -> str:
+    return (await _role_by_name(session, workspace_id, name)).id
 
 
 async def _role_by_name(session, workspace_id: str, name: str) -> Role:
