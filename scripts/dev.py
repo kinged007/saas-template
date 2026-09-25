@@ -9,6 +9,8 @@ handlers (Python can override the inherited ignore), gives each server its
 own process group, and kills those groups explicitly (SIGTERM, then SIGKILL
 after a grace period) so no orphan keeps listening on :8000 or :5173.
 
+Ports: API_PORT / WEB_PORT (defaults 8000 / 5173).
+
 Stdlib only. Run from the repo root.
 """
 
@@ -21,12 +23,14 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+API_PORT = os.environ.get("API_PORT", "8000")
+WEB_PORT = os.environ.get("WEB_PORT", "5173")
 
 SERVERS = [
     {
         "name": "api",
         "cwd": os.path.join(ROOT, "apps", "api"),
-        "cmd": ["uv", "run", "uvicorn", "src.main:app", "--reload", "--port", "8000"],
+        "cmd": ["uv", "run", "uvicorn", "src.main:app", "--reload", "--port", API_PORT],
     },
     {
         "name": "web",
@@ -56,10 +60,24 @@ def main() -> int:
 
     exit_code = None
     try:
+        web_origin = f"http://localhost:{WEB_PORT}"
+        # The API's cookie endpoints allowlist the browser origin, so a
+        # non-default web port needs it too. Keep the default 5173 allowed so
+        # a later plain `make dev` in the same shell still authenticates.
+        allowed = dict.fromkeys(
+            ["http://localhost:5173", web_origin, *os.environ.get("CORS_ORIGINS", "").split(",")]
+        )
         for s in SERVERS:
-            procs[s["name"]] = subprocess.Popen(s["cmd"], cwd=s["cwd"], start_new_session=True)
+            env = os.environ.copy()
+            env["CORS_ORIGINS"] = ",".join(o for o in allowed if o)
+            env["FRONTEND_URL"] = os.environ.get("FRONTEND_URL") or web_origin
+            if s["name"] == "web":
+                env["API_PORT"] = API_PORT
+            procs[s["name"]] = subprocess.Popen(
+                s["cmd"], cwd=s["cwd"], start_new_session=True, env=env
+            )
 
-        print("==> api on :8000, web on :5173 (open http://localhost:5173) — Ctrl-C stops both")
+        print(f"==> api on :{API_PORT}, web on :{WEB_PORT} (open {web_origin}) — Ctrl-C stops both")
 
         while True:
             if stop_signal is not None:

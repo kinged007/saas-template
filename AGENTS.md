@@ -16,6 +16,20 @@
 
 **Required env vars:** DATABASE_URL
 
+## Dev stack ports
+
+`make dev` runs api on :8000 and web on :5173 by default. If those ports are
+taken (e.g. another checkout's dev server), override them for that run:
+
+```bash
+make dev API_PORT=8010 WEB_PORT=5273   # open http://localhost:5273
+```
+
+`API_PORT` / `WEB_PORT` also work on `make api` and `make web`. `scripts/dev.py`
+passes the chosen web origin to the API as `CORS_ORIGINS` / `FRONTEND_URL` (the
+default :5173 stays allowed), and `apps/web/vite.config.ts` proxies `/api/` and
+`/ws` to `API_PORT`. No other port configuration is needed.
+
 ## Migrations
 
 Models are the source of truth; migrations are generated, reviewed, committed.
