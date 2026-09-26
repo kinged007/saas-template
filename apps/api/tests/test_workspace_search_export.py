@@ -1,8 +1,25 @@
+import asyncio
 import csv
 import io
 import json
 
 from tests.conftest import create_workspace, register_user, ws_headers
+
+
+async def _wait_for_audit_export(client, headers, params=None, tries: int = 150):
+    """Re-read the export until the bus has committed `workspace.created`.
+
+    Audit rows are written by a background event-bus task, so a request issued
+    right after setup can be served before they land. The last read is returned
+    either way, so a genuine failure still shows the export body.
+    """
+    for _ in range(tries):
+        resp = await client.get("/api/v1/workspaces/export", params=params, headers=headers)
+        assert resp.status_code == 200, resp.text
+        if "workspace.created" in resp.text:
+            break
+        await asyncio.sleep(0.02)
+    return resp
 
 
 async def _me_id(client, tokens):
@@ -194,8 +211,7 @@ async def test_search_rejects_blank_and_short_and_non_member(app_client):
 
 async def test_export_json_and_csv(app_client):
     client, h, ws, conv = await _setup(app_client)
-    resp = await client.get("/api/v1/workspaces/export", headers=h)
-    assert resp.status_code == 200, resp.text
+    resp = await _wait_for_audit_export(client, h)
     assert "attachment" in resp.headers["content-disposition"]
     bundle = json.loads(resp.text)
     for key in (
@@ -309,10 +325,7 @@ async def test_export_audit_csv(app_client):
     from src.services.search_export import CSV_RESOURCES
 
     client, h, ws, conv = await _setup(app_client)
-    resp = await client.get(
-        "/api/v1/workspaces/export", params={"format": "csv", "resource": "audit"}, headers=h
-    )
-    assert resp.status_code == 200, resp.text
+    resp = await _wait_for_audit_export(client, h, params={"format": "csv", "resource": "audit"})
     assert resp.headers["content-type"].startswith("text/csv")
     assert "attachment" in resp.headers["content-disposition"]
     assert (
