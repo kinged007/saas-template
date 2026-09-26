@@ -1,6 +1,6 @@
 apiVersion: v2
 name: saas-template
-description: SaaS template — multi-tenant SaaS starter (auth, RBAC, jobs, events)
+description: Multi-tenant SaaS starter (auth, RBAC, jobs, events) — set `nameOverride` to rebrand
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
@@ -10,4 +10,4 @@ keywords:
   - starter
   - template
 maintainers:
-  - name: SaaS template team
+  - name: Platform team

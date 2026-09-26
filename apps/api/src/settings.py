@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 from pydantic import Field, field_validator
@@ -8,16 +9,38 @@ from src.email.base import EmailDriver  # noqa: E402  (base has no settings impo
 from src.events.subjects import EventBusDriver
 
 
+def slugify(value: str) -> str:
+    """Lowercase kebab identifier, safe for paths, NATS names and resource names."""
+    return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+
+
+# The env-file location is fixed at class-creation time, so it cannot come from
+# a field. Both it and the app_slug default follow the process env; a project
+# .env is still read first and wins.
+APP_SLUG = slugify(os.environ.get("APP_SLUG", "saas-template")) or "app"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=(".env", os.path.expanduser("~/.config/saas-template/.env")),
+        env_file=(".env", os.path.expanduser(f"~/.config/{APP_SLUG}/.env")),
         env_file_encoding="utf-8",
         extra="ignore",
     )
 
     environment: str = "development"
+    # Human-facing product name: OpenAPI title, TOTP issuer, GET / and /healthz.
     app_name: str = "saas-template-api"
+    # Machine identifier for everything that must be stable and lowercase:
+    # NATS stream/queue group, the user config dir, the embedded-DB data dir.
+    app_slug: str = APP_SLUG
     debug: bool = False
+
+    @field_validator("app_slug", mode="after")
+    @classmethod
+    def _app_slug_is_kebab(cls, v: str) -> str:
+        # An empty APP_SLUG must not yield "" (paths like ~/.config//, an empty
+        # NATS stream name); "app" is the neutral floor.
+        return slugify(v) or "app"
 
     # Database. Empty → embedded PostgreSQL (pgserver; dev, no external deps).
     # Set DATABASE_URL (e.g. managed postgres) to override in production.
@@ -39,6 +62,9 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
     # Browser session refresh cookie (HttpOnly; JS can never read it).
+    # The default is a historical name; changing it invalidates every existing
+    # session, so renaming is opt-in (REFRESH_COOKIE_NAME) rather than derived
+    # from app_slug.
     # refresh_cookie_secure=None (default) → Secure unless development.
     refresh_cookie_name: str = "st_refresh"
     refresh_cookie_domain: str = ""

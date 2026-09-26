@@ -1,7 +1,7 @@
 [project]
 name = "saas-template-api"
 version = "0.1.0"
-description = "General-purpose SaaS template API"
+description = "General-purpose multi-tenant API"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

@@ -87,9 +87,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="SaaS Template API",
+    title=settings.app_name,
     version="0.1.0",
-    description="General-purpose SaaS template",
+    description="General-purpose multi-tenant API",
     lifespan=lifespan,
 )
 
@@ -131,7 +131,7 @@ app.state.container = Container()
 @app.get("/")
 async def root() -> dict:
     return {
-        "service": "saas-template-api",
+        "service": settings.app_name,
         "api_version": API_VERSION,
         "docs": "/docs",
         "health": "/healthz",

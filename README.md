@@ -32,7 +32,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
 ## Quick start (development — all terminal, no docker)
 
 The dev stack is self-contained: the API embeds PostgreSQL (via `pgserver`,
-real Postgres 16 binaries, data in `~/.local/share/saas-template/pgdata`) and
+real Postgres 16 binaries, data in `~/.local/share/<APP_SLUG>/pgdata`) and
 consumes events asynchronously in-process. Switching to NATS JetStream is a
 single env var swap (`EVENT_BUS_DRIVER=nats`).
 
@@ -67,6 +67,36 @@ Demo logins (from `make api-seed`): all seeded users share the password
 
 Copy `apps/api/.env.example` → `apps/api/.env` and `apps/web/.env.example` → `apps/web/.env`.
 `DATABASE_URL` unset = embedded Postgres; set it to use a managed database.
+
+## Rebranding
+
+The product name is configuration, not code. Set these and nothing else needs editing:
+
+| Variable | Where | Drives |
+| --- | --- | --- |
+| `APP_NAME` | `apps/api/.env` | OpenAPI title, TOTP issuer, `GET /` and `/healthz` `service` |
+| `APP_SLUG` | `apps/api/.env`; compose env; `scripts/nats.sh` | NATS stream + queue group, `~/.config/<slug>/.env`, embedded-Postgres data dir, compose project/volumes, NATS `--server_name` |
+| `VITE_APP_NAME` | `apps/web/.env`, web build args | document title, logo `alt` text |
+| `VITE_STORAGE_PREFIX` | `apps/web/.env`, web build args | `localStorage` key prefix |
+| `nameOverride` | Helm values | chart fullname, `app.kubernetes.io/name`, postgres user/db, NATS `--server_name` |
+| `project` | `terraform plan -var="project=…"` | cluster, namespace, release, service DNS names, LB role |
+
+Remaining one-time edits, all outside the runtime: `apps/web/public/logo.svg`
+and `favicon.svg`, `apps/web/package.json` `name`, `apps/api/pyproject.toml`
+`name` (mirrored in `uv.lock` — run `uv lock`), and the chart directory
+`infra/helm/saas-template` (update the `chart =` path in
+`infra/terraform/aws/main.tf`).
+
+Renaming stateful identifiers orphans the data behind them. Every default
+below keeps today's name, so an unset variable changes nothing; a rename means:
+
+- **NATS JetStream stream** — the new stream is created on first connect and
+  the old one keeps its messages. Delete it after the cutover.
+- **`REFRESH_COOKIE_NAME`** — not derived from the slug on purpose: renaming it
+  signs every browser out.
+- **`VITE_STORAGE_PREFIX`** — clears per-user browser state, not the session.
+- **Embedded-Postgres dir / compose volumes** — a new path starts a fresh
+  database. Point `EMBEDDED_DB_DIR` at the old one to keep it.
 
 ## Tests
 

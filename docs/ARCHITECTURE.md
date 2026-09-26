@@ -1,8 +1,8 @@
-# SaaS Template — Architecture
+# Architecture
 
 ## 1. Purpose
 
-A production-oriented multi-tenant SaaS template: a FastAPI + SQLAlchemy
+A production-oriented multi-tenant SaaS starter: a FastAPI + SQLAlchemy
 backend and a Refine.dev (React) frontend, covering the cross-cutting concerns
 every SaaS product needs — auth, workspaces, RBAC, invitations, API keys,
 notifications, an event bus, scheduled jobs and a WebSocket realtime layer —
@@ -217,7 +217,9 @@ A shared `crud` helper turns Refine params into safe SQLAlchemy queries
 
 - **Dev**: docker-compose → postgres + nats; run `make api` / `make web` from terminal
 - **Container**: `infra/docker/` (multi-stage Dockerfiles)
-- **Kubernetes**: `infra/helm/saas-template` (api, web, postgres optional, nats optional, ingress, secrets)
+- **Kubernetes**: `infra/helm/saas-template` (api, web, postgres optional, nats optional, ingress, secrets).
+  Object names, labels, the postgres identity and the NATS server name follow
+  the `nameOverride` value — see "Rebranding" in the README.
 - **Cloud**: `infra/terraform/` example — AWS EKS + RDS + NATS on EKS via Helm
   (same chart used for GCP GKE / Azure AKS)
 - All services 12-factor: config via env, structured logs, `/healthz` + `/readyz`

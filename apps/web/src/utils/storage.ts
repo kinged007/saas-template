@@ -1,8 +1,10 @@
-const IDENTITY_KEY = "tf_identity";
+import { STORAGE_PREFIX } from "@/config";
+
+const IDENTITY_KEY = `${STORAGE_PREFIX}_identity`;
 // Per-user selection: the last workspace each user had open is restored on
 // their next login. The shared key is the pre-upgrade fallback, adopted once.
-const WORKSPACE_PREFIX = "tf_workspace_id:";
-const LEGACY_WORKSPACE_KEY = "tf_workspace_id";
+const WORKSPACE_PREFIX = `${STORAGE_PREFIX}_workspace_id:`;
+const LEGACY_WORKSPACE_KEY = `${STORAGE_PREFIX}_workspace_id`;
 
 /**
  * Storage wrapper resilient to blocked/partitioned storage (e.g. sandboxed
@@ -71,7 +73,7 @@ let accessToken: string | null = null;
 // refresh short-circuit for visitors who never signed in, so logged-out
 // boots never POST /auth/refresh just to learn they are logged out. A stale
 // "1" (e.g. cookie cleared server-side) only costs one failed refresh.
-const SESSION_KEY = "tf_has_session";
+const SESSION_KEY = `${STORAGE_PREFIX}_has_session`;
 
 export const sessionHint = {
   get: () => storage.get(SESSION_KEY) === "1",
@@ -165,7 +167,7 @@ export const workspaceStore = {
   },
 };
 
-const ONBOARDING_PREFIX = "tf_onboarding_dismissed:";
+const ONBOARDING_PREFIX = `${STORAGE_PREFIX}_onboarding_dismissed:`;
 
 export const onboardingStore = {
   isDismissed: (workspaceId: string, userId?: string | null) =>

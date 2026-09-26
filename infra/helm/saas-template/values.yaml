@@ -1,8 +1,11 @@
-# SaaS template Helm values
+# Helm values. Rebrand the release by setting `nameOverride`: it drives the
+# fullname, the app.kubernetes.io/name label, the postgres user/db and the
+# NATS --server_name. Everything else below is a placeholder to replace.
+nameOverride: ""
 replicaCount: 2
 
 image:
-  repository: saas-template
+  repository: my-app
   apiTag: api
   webTag: web
   pullPolicy: IfNotPresent
@@ -28,16 +31,16 @@ api:
 web:
   port: 80
 
-# Existing secrets — set via values or a pre-created secret `saas-template-secrets`
+# Existing secrets — set via values or a pre-created secret `<fullname>-secrets`
 # with keys: SECRET_KEY, FERNET_KEYS, DATABASE_URL, NATS_URL
 existingSecret: ""
 secretKey: "change-me"
 fernetKeys: "change-me"
-databaseUrl: "postgresql+asyncpg://saas_template:change-me@postgres:5432/saas_template"
+databaseUrl: "postgresql+asyncpg://my-app:change-me@postgres:5432/my-app"
 natsUrl: "nats://nats:4222"
 eventBusDriver: "nats"
-corsOrigins: "https://saas-template.example.com"
-frontendUrl: "https://saas-template.example.com"
+corsOrigins: "https://app.example.com"
+frontendUrl: "https://app.example.com"
 
 # Deploy postgres + nats as part of the chart (production-grade external
 # instances are recommended; set postgres.enabled=false / nats.enabled=false
@@ -55,7 +58,7 @@ nats:
 ingress:
   enabled: true
   className: nginx
-  host: saas-template.example.com
+  host: app.example.com
   tls:
     enabled: true
-    secretName: saas-template-tls
+    secretName: app-tls
