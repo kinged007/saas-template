@@ -17,11 +17,12 @@ from src.api.deps import (
     require_key_permission,
     require_permission,
     resolve_auth_principal,
+    skip_workspace_security,
 )
 from src.core.permissions import AUDIT_READ, WORKSPACE_DELETE, WORKSPACE_READ, WORKSPACE_UPDATE
 from src.db.session import get_db
 from src.models.workspace import Workspace, WorkspaceMember
-from src.schemas.api import WorkspaceCreate, WorkspaceUpdate
+from src.schemas.api import WorkspaceCreate, WorkspaceSecurityUpdate, WorkspaceUpdate
 from src.services.conversations import ConversationForbidden
 from src.services.search_export import CSV_RESOURCES, SearchExportService
 from src.services.serializers import workspace_to_dict
@@ -212,6 +213,40 @@ async def update_workspace(
         )
     except WorkspaceForbidden as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    except WorkspaceError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    return workspace_to_dict(workspace)
+
+
+@router.patch("/{workspace_id}/security")
+async def update_workspace_security(
+    workspace_id: str,
+    body: WorkspaceSecurityUpdate,
+    request: Request,
+    user=Depends(get_current_user),
+    # Declared before require_permission on purpose: FastAPI resolves
+    # dependencies in order, so the gate must already know this route is
+    # exempt. An admin who turns the requirement on without 2FA of their own is
+    # otherwise locked out, and this route would be the only way back.
+    _skip=Depends(skip_workspace_security),
+    _=Depends(require_existing_workspace),
+    _perm=Depends(require_permission(WORKSPACE_UPDATE)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    """Set workspace security posture (currently: require 2FA).
+
+    A sub-route rather than a field on PATCH /workspaces/{id}: the generic
+    update keeps its name/description contract and its own audit action.
+    """
+    service = WorkspaceService(db, container.bus)
+    try:
+        workspace = await service.set_require_2fa(
+            workspace_id,
+            require_2fa=body.require_2fa,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     return workspace_to_dict(workspace)

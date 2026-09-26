@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/ui/user-avatar";
+import { WorkspaceSecurityGuard } from "@/components/WorkspaceSecurityGuard";
 import {
   Select,
   SelectContent,
@@ -286,6 +287,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <SidebarProvider>
+      <WorkspaceSecurityGuard />
       <Sidebar collapsible="icon">
         <SidebarHeader>
           <div className="flex items-center gap-2 px-2 py-1 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:px-0">

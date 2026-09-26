@@ -41,6 +41,7 @@ import { WorkspacesSection } from "./pages/settings/profile/sections/WorkspacesS
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { WorkspaceSettingsLayout } from "./pages/settings/workspace/WorkspaceSettingsLayout";
 import { GeneralSection } from "./pages/settings/workspace/sections/GeneralSection";
+import { SecuritySection as WorkspaceSecuritySection } from "./pages/settings/workspace/sections/SecuritySection";
 import { RolesSection } from "./pages/settings/workspace/sections/RolesSection";
 import { JobsSection } from "./pages/settings/workspace/sections/JobsSection";
 import { UsersSection } from "./pages/settings/workspace/sections/UsersSection";
@@ -127,6 +128,7 @@ export function App() {
               <Route path="settings/workspace" element={<WorkspaceSettingsLayout />}>
                 <Route index element={<Navigate to="general" replace />} />
                 <Route path="general" element={<GeneralSection />} />
+                <Route path="security" element={<WorkspaceSecuritySection />} />
                 <Route path="roles" element={<RolesSection />} />
                 <Route path="jobs" element={<JobsSection />} />
                 <Route path="users" element={<UsersSection />} />

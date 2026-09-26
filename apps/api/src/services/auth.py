@@ -282,13 +282,19 @@ class AuthService:
         return user
 
     async def issue_tokens(
-        self, user: User, *, ip_address: str | None = None, user_agent: str | None = None
+        self,
+        user: User,
+        *,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        two_factor_verified: bool = False,
     ) -> TokenPair:
         refresh = OpaqueToken.generate()
         row = RefreshToken(
             user_id=user.id,
             token_hash=OpaqueToken.hash(refresh),
             expires_at=now_utc() + timedelta(days=settings.refresh_token_expire_days),
+            two_factor_verified_at=now_utc() if two_factor_verified else None,
             ip_address=ip_address,
             user_agent=user_agent,
         )
@@ -305,6 +311,31 @@ class AuthService:
         if row is None or row.user_id != user_id or row.revoked_at is not None:
             return False
         return ensure_utc(row.expires_at) >= now_utc()
+
+    async def is_session_two_factor_verified(self, session_id: str, user_id: str) -> bool:
+        """True when the session cleared a 2FA challenge. False for unknown or
+        password-only sessions — the workspace `require_2fa` gate fails closed."""
+        row = await self._session.get(RefreshToken, session_id)
+        if row is None or row.user_id != user_id or row.revoked_at is not None:
+            return False
+        return row.two_factor_verified_at is not None
+
+    async def mark_session_two_factor_verified(self, session_id: str, user_id: str) -> None:
+        """Stamp an already-live session as 2FA-verified.
+
+        Called when a user enables 2FA from inside an existing session: they
+        just proved possession of the secret with a valid code, which is the
+        same evidence the login challenge collects. Without this, a user who
+        opts in mid-session is bounced to the setup page forever, because the
+        session that enabled 2FA never recorded having passed it.
+        """
+        row = await self._session.get(RefreshToken, session_id)
+        if row is None or row.user_id != user_id or row.revoked_at is not None:
+            return
+        if row.two_factor_verified_at is not None:
+            return
+        row.two_factor_verified_at = now_utc()
+        await self._session.commit()
 
     async def rotate_refresh(
         self,
@@ -329,8 +360,17 @@ class AuthService:
         if user is None or not user.is_active:
             raise AuthError("account is disabled")
         row.revoked_at = now_utc()
+        # Carry the 2FA verdict onto the successor row. Without this a refresh
+        # would reset the session to password-only and lock the user out of any
+        # workspace that sets require_2fa.
+        verified_at = row.two_factor_verified_at
         await self._session.commit()
-        pair = await self.issue_tokens(user, ip_address=ip_address, user_agent=user_agent)
+        pair = await self.issue_tokens(
+            user,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            two_factor_verified=verified_at is not None,
+        )
         await publish_audit(
             self._bus,
             workspace_id=None,

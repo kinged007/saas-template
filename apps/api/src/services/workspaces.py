@@ -20,6 +20,7 @@ from src.events.subjects import Subjects
 from src.models.core import Invitation
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.services.auth import AuthService
+from src.services.flags import INVITES_ENABLED_FLAG, REQUIRE_2FA_FLAG
 
 
 class WorkspaceError(Exception):
@@ -206,6 +207,43 @@ class WorkspaceService:
                 details=changes,
                 ip_address=ip_address,
             )
+        return workspace
+
+    async def set_require_2fa(
+        self,
+        workspace_id: str,
+        *,
+        require_2fa: bool,
+        actor: User | None = None,
+        ip_address: str | None = None,
+    ) -> Workspace:
+        """Set the workspace's 2FA enforcement flag (docs/FEATURE_FLAGS.md).
+
+        Separate from update_workspace so the audit trail distinguishes a
+        security-posture change from a name/description edit.
+        """
+        workspace = await self._session.get(Workspace, workspace_id)
+        if workspace is None:
+            raise WorkspaceError("workspace not found")
+        flags = {**(workspace.flags or {})}
+        if require_2fa:
+            flags[REQUIRE_2FA_FLAG] = True
+        else:
+            flags.pop(REQUIRE_2FA_FLAG, None)
+        if flags == (workspace.flags or {}):
+            return workspace
+        workspace.flags = flags
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="workspace",
+            resource_id=workspace_id,
+            action="workspace.security_updated",
+            actor_user_id=actor.id if actor else None,
+            details={"require_2fa": require_2fa},
+            ip_address=ip_address,
+        )
         return workspace
 
     async def delete_workspace(
@@ -515,7 +553,7 @@ class WorkspaceService:
         ip_address: str | None = None,
     ) -> Invitation:
         email = email.lower()
-        if (workspace.flags or {}).get("invites_enabled") is False:
+        if (workspace.flags or {}).get(INVITES_ENABLED_FLAG) is False:
             raise WorkspaceError("invitations are disabled for this workspace")
         if role.name == "owner":
             raise WorkspaceConflict("cannot invite a user to the owner role")

@@ -1,4 +1,4 @@
-import { Building2, Users, ShieldCheck, Clock, ScrollText } from "lucide-react";
+import { Building2, Users, ShieldCheck, Clock, ScrollText, Lock } from "lucide-react";
 
 import { createSettingsRegistry } from "../types";
 import { GeneralSection } from "./sections/GeneralSection";
@@ -6,6 +6,7 @@ import { RolesSection } from "./sections/RolesSection";
 import { JobsSection } from "./sections/JobsSection";
 import { UsersSection } from "./sections/UsersSection";
 import { AuditLogSection } from "./sections/AuditLogSection";
+import { SecuritySection } from "./sections/SecuritySection";
 
 /**
  * Workspace settings registry — the single extension seam for workspace admin pages.
@@ -44,6 +45,14 @@ export const workspaceSettings = createSettingsRegistry([
     component: GeneralSection,
     order: 10,
     // visible to anyone who can view workspace; edits are gated inside the form by workspace:update
+  },
+  {
+    key: "security",
+    label: "Security",
+    icon: Lock,
+    component: SecuritySection,
+    permission: "workspace:update",
+    order: 15,
   },
   {
     key: "roles",

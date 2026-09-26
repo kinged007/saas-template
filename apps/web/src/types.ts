@@ -9,6 +9,10 @@ export type Workspace = {
   permissions?: string[];
   created_by_user_id?: string;
   created_at?: string;
+  /** Workspace refuses sessions that have not cleared 2FA. */
+  require_2fa?: boolean;
+  /** This user has TOTP enabled (their half of the above). */
+  two_factor_enabled?: boolean;
 };
 
 export type UserProfile = {

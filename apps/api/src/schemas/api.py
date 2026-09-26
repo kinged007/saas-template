@@ -104,6 +104,12 @@ class WorkspaceUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=500)
 
 
+class WorkspaceSecurityUpdate(BaseModel):
+    # Security posture, not a feature toggle: enforcement is opt-in, so an
+    # absent flag means "not required". See docs/FEATURE_FLAGS.md.
+    require_2fa: StrictBool
+
+
 class InvitationCreate(BaseModel):
     email: EmailStr
     role_id: str

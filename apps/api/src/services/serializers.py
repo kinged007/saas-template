@@ -5,6 +5,7 @@ from typing import Any
 from src.models.core import Notification
 from src.models.user_profile import UserProfile
 from src.models.workspace import User, Workspace
+from src.services.flags import requires_2fa
 
 
 def _to_iso(value: Any) -> str | None:
@@ -54,6 +55,10 @@ def workspace_to_dict(
         "description": w.description,
         "created_by_user_id": w.created_by_user_id,
         "created_at": _to_iso(w.created_at),
+        # Security posture, surfaced as its own field rather than the whole
+        # flags blob: clients need to know whether 2FA is enforced, not to
+        # enumerate internal feature toggles.
+        "require_2fa": requires_2fa(w),
     }
     if role:
         data["role"] = role

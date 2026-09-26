@@ -68,6 +68,13 @@ class RefreshToken(Base, TimestampMixin):
     token_hash: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     expires_at: Mapped[object] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set when this session cleared a TOTP/backup-code check. Drives the
+    # workspace `require_2fa` gate (see docs/FEATURE_FLAGS.md): a session
+    # with no timestamp is password-only. Copied onto the new row by
+    # rotate_refresh, so refreshing never drops the proof.
+    two_factor_verified_at: Mapped[object | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
 

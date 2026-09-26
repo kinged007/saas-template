@@ -420,16 +420,23 @@ async def totp_setup(
 @router.post("/2fa/enable")
 async def totp_enable(
     body: TwoFactorSetupConfirm,
-    user=Depends(get_current_user),
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    user = principal.user
     try:
         codes = await TwoFactorService(db, container.cipher, container.bus).confirm_setup(
             user, setup_token=body.setup_token, code=body.code
         )
     except TwoFactorError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+    # The code that just verified is the same evidence a login challenge
+    # collects, so this session counts as 2FA-verified from here on. Without
+    # it, enabling 2FA mid-session would bounce the user back to this same
+    # page forever on a workspace that requires 2FA.
+    if principal.session_id is not None:
+        await AuthService(db).mark_session_two_factor_verified(principal.session_id, user.id)
     return {"backup_codes": codes}
 
 
@@ -508,7 +515,12 @@ async def totp_login(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid code")
     get_auth_limiter().reset(key)
     pair = await AuthService(db, container.bus).issue_tokens(
-        user, ip_address=_client_ip(request), user_agent=_user_agent(request)
+        user,
+        ip_address=_client_ip(request),
+        user_agent=_user_agent(request),
+        # The code just verified, so this session satisfies a workspace's
+        # require_2fa gate (see docs/FEATURE_FLAGS.md).
+        two_factor_verified=True,
     )
     if browser_flow(request, body):
         set_refresh_cookie(response, pair.refresh_token)
@@ -614,9 +626,16 @@ async def me(
         if single is not None:
             memberships = [m for m in memberships if m[0].id == single.id]
     data["workspaces"] = [
-        workspace_to_dict(
-            w, role=role.name, permissions=role.permissions, joined_at=member.created_at
-        )
+        {
+            **workspace_to_dict(
+                w, role=role.name, permissions=role.permissions, joined_at=member.created_at
+            ),
+            # The client needs both to decide whether to send this user to the
+            # 2FA setup flow: the workspace demands it, and this user has not
+            # satisfied it. Whether the current session already proved 2FA is
+            # the server's check, not something /me needs to restate.
+            "two_factor_enabled": bool(user.totp_enabled),
+        }
         for w, role, member in memberships
     ]
     data["permissions"] = sorted({p for _, role, _ in memberships for p in role.permissions})

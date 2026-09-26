@@ -14,6 +14,7 @@ from src.models.api_key import ApiKey
 from src.models.workspace import User, Workspace
 from src.services.api_keys import ApiKeyService
 from src.services.auth import AuthService
+from src.services.flags import requires_2fa
 from src.services.workspaces import WorkspaceService
 
 logger = logging.getLogger(__name__)
@@ -141,6 +142,61 @@ async def record_key_use(api_key: ApiKey, db: AsyncSession, response: Response) 
         response.headers[k] = v
 
 
+def skip_workspace_security(request: Request) -> None:
+    """Exempt the current request from the workspace security gate.
+
+    Declare this in a route's signature *before* ``require_permission`` so the
+    flag is set before the gate runs (FastAPI resolves dependencies in
+    declaration order). Reserved for routes that manage the security setting
+    itself: an admin who turns 2FA on without having any is otherwise locked
+    out with no way to turn it off again.
+    """
+    request.state.skip_workspace_security = True
+
+
+async def enforce_workspace_security(
+    principal: AuthPrincipal, workspace_id: str | None, db: AsyncSession, request: Request
+) -> None:
+    """Workspace security checks that apply to every request on a resource.
+
+    Currently one rule: a workspace with `require_2fa` refuses sessions that
+    have not cleared a TOTP/backup-code check. The verdict is read from the
+    session row (`sid`), so it survives refresh and a replica restart.
+
+    API keys are exempt. A key is a server-side credential with its own
+    permission list and no authenticator app; enforcing 2FA on it would lock
+    out every key already issued for the workspace the moment an admin turns
+    the requirement on.
+
+    Sessions are exempt when the route called `skip_workspace_security`.
+
+    Raises 403 with a machine-readable `code` so the frontend can redirect to
+    the 2FA setup flow instead of showing a generic failure.
+    """
+    if principal.api_key is not None or principal.session_id is None:
+        return
+    if workspace_id is None:
+        # User-scoped routes pass the optional workspace id. With no workspace
+        # selected there is no security posture to enforce.
+        return
+    if getattr(request.state, "skip_workspace_security", False):
+        return
+    workspace = await db.get(Workspace, workspace_id)
+    if workspace is None or not requires_2fa(workspace):
+        return
+    if await AuthService(db).is_session_two_factor_verified(
+        principal.session_id, principal.user.id
+    ):
+        return
+    raise HTTPException(
+        status.HTTP_403_FORBIDDEN,
+        {
+            "code": "2fa_required_for_workspace",
+            "detail": "this workspace requires two-factor authentication",
+        },
+    )
+
+
 def require_key_permission(permission: str):
     """Enforce a permission for API-key requests only.
 
@@ -151,12 +207,14 @@ def require_key_permission(permission: str):
     """
 
     async def checker(
+        request: Request,
         response: Response,
         db: Annotated[AsyncSession, Depends(get_db)],
         principal: AuthPrincipal = Depends(resolve_auth_principal),
         workspace_id: str | None = Depends(get_optional_workspace_id),
     ):
         if principal.api_key is None:
+            await enforce_workspace_security(principal, workspace_id, db, request)
             return None
         api_key = principal.api_key
         if not workspace_id:
@@ -188,6 +246,7 @@ async def resolve_membership(
 
 def require_permission(permission: str):
     async def checker(
+        request: Request,
         response: Response,
         db: Annotated[AsyncSession, Depends(get_db)],
         principal: AuthPrincipal = Depends(resolve_auth_principal),
@@ -212,6 +271,7 @@ def require_permission(permission: str):
         membership = await service.get_membership(workspace_id, principal.user.id)
         if membership is None:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
+        await enforce_workspace_security(principal, workspace_id, db, request)
         _, role = membership
         if "*" in role.permissions or permission in role.permissions:
             return None
