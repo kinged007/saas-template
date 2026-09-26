@@ -58,7 +58,8 @@ INVITATIONS = [
 
 # (workspace slug, creator email, name, permissions).
 # Permissions are validated against the creator's role by ApiKeyService —
-# they must be a subset of what the creator can do. Raw secrets are printed
+# they must be a subset of what the creator can do, except key-only scopes
+# (notification:*) which any member may hold on a key. Raw secrets are printed
 # once, at creation time; re-running the seed keeps existing keys untouched.
 API_KEYS = [
     (

@@ -83,5 +83,6 @@ one, so rotate during a quiet window or tolerate one overlap.
 - Subscriptions are workspace-scoped (`X-Workspace-ID`); cross-workspace ids
   return 404 so callers cannot probe other workspaces.
 - Permissions: `webhook:read` (list subscriptions/deliveries),
-  `webhook:manage` (create/update/delete, rotate, redeliver) — both held by
-  the `admin` role (owners hold `*`).
+  `webhook:create` / `webhook:update` / `webhook:delete` (subscribe, update /
+  rotate / redeliver, unsubscribe) — all held by the `admin` role (owners
+  hold `*`).

@@ -818,6 +818,11 @@ class WorkspaceService:
         )
         if unknown:
             raise WorkspaceError(f"unknown permissions: {', '.join(unknown)}")
+        key_only = sorted(set(permissions) & set(KEY_ONLY_PERMISSIONS))
+        if key_only:
+            raise WorkspaceError(
+                f"API-key-only permissions cannot be granted to roles: {', '.join(key_only)}"
+            )
         if "*" in permissions:
             # Reserved for owner — minting it would clone owner minus the name.
             raise WorkspaceError('"*" is reserved for the owner role')

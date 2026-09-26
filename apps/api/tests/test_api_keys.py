@@ -271,7 +271,11 @@ async def test_effective_permissions_matches_role(app_client):
 
     resp = await client.get("/api/v1/api-keys/effective-permissions", headers=headers)
     assert resp.status_code == 200
-    assert "*" in resp.json()["permissions"]
+    owner_perms = resp.json()["permissions"]
+    assert "*" in owner_perms
+    # Owners mint keys too: key-only scopes must be offerable here as well.
+    assert "notification:read" in owner_perms
+    assert "notification:update" in owner_perms
 
     roles = await client.get("/api/v1/roles", headers=headers)
     editor = next(r for r in roles.json() if r["name"] == "editor")
@@ -295,6 +299,9 @@ async def test_effective_permissions_matches_role(app_client):
     perms = resp.json()["permissions"]
     assert "apikey:create" in perms
     assert "workspace:delete" not in perms
+    # Key-only scopes are always offerable for keys, even though no role holds them.
+    assert "notification:read" in perms
+    assert "notification:update" in perms
 
 
 async def test_list_requires_workspace_header(app_client):
