@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from src.core.dates import ensure_utc, now_utc
 from src.jobs.registry import JobContext, JobSpec, job_registry
@@ -272,9 +272,9 @@ async def retention_cleanup(ctx: JobContext) -> None:
         name="API key expiry cleanup",
         description=(
             "Revokes API keys whose expires_at has passed and hard-deletes keys "
-            "revoked or expired more than the retention window ago. Expired keys "
-            "already fail authentication immediately, so revoking them here keeps "
-            "the stored state honest rather than gating access."
+            "revoked more than the retention window ago. Expired keys already "
+            "fail authentication immediately, so revoking them here keeps the "
+            "stored state honest rather than gating access."
         ),
         scope="global",
         schedule="0 5 * * *",
@@ -287,35 +287,76 @@ async def retention_cleanup(ctx: JobContext) -> None:
 async def api_key_cleanup(ctx: JobContext) -> None:
     from datetime import timedelta
 
+    from src.events.publisher import publish_audit, publish_event
+    from src.events.subjects import Subjects
     from src.settings import settings
 
     now = now_utc()
     async with ctx.session() as session:
-        rows = list((await session.execute(select(ApiKey))).scalars().all())
-        expired = [
-            k
-            for k in rows
-            if k.revoked_at is None and k.expires_at is not None and ensure_utc(k.expires_at) <= now
-        ]
-        for key in expired:
-            key.revoked_at = now
+        # Only the keys that actually expired are read — the id and label
+        # columns the audit trail needs — so a large table is never
+        # materialized. The mutation itself is a set-based UPDATE.
+        expired = (
+            (
+                await session.execute(
+                    select(ApiKey.id, ApiKey.workspace_id, ApiKey.name, ApiKey.key_prefix).where(
+                        ApiKey.revoked_at.is_(None),
+                        ApiKey.expires_at.is_not(None),
+                        ApiKey.expires_at <= now,
+                    )
+                )
+            )
+            .tuples()
+            .all()
+        )
+        revoked = 0
+        if expired:
+            result = await session.execute(
+                update(ApiKey)
+                .where(ApiKey.id.in_([e[0] for e in expired]))
+                .values(revoked_at=now)
+                .execution_options(synchronize_session=False)
+            )
+            revoked = result.rowcount or 0
 
         removed = 0
         if settings.api_key_retention_days > 0:
             cutoff = now - timedelta(days=settings.api_key_retention_days)
-            stale = [
-                k for k in rows if k.revoked_at is not None and ensure_utc(k.revoked_at) <= cutoff
-            ]
-            for key in stale:
-                await session.delete(key)
-            removed = len(stale)
+            # Keys the UPDATE above just revoked carry revoked_at == now, so
+            # they never match this cutoff: expiry starts the retention clock,
+            # it does not end the key.
+            result = await session.execute(delete(ApiKey).where(ApiKey.revoked_at <= cutoff))
+            removed = result.rowcount or 0
         await session.commit()
+
+    for key_id, workspace_id, name, key_prefix in expired:
+        await publish_event(
+            ctx.bus,
+            Subjects.APIKEY_REVOKED,
+            {
+                "apikey_id": key_id,
+                "workspace_id": workspace_id,
+                "name": name,
+                "key_prefix": key_prefix,
+                "revoked_by_user_id": None,
+            },
+        )
+        await publish_audit(
+            ctx.bus,
+            workspace_id=workspace_id,
+            resource_type="apikey",
+            resource_id=key_id,
+            action="apikey.revoked",
+            actor_user_id=None,
+            details={"name": name, "key_prefix": key_prefix, "reason": "expired"},
+        )
+
     logger.info(
         "api key cleanup — %d key(s) revoked as expired, %d key(s) deleted",
-        len(expired),
+        revoked,
         removed,
     )
-    print(f"api key cleanup — {len(expired)} key(s) revoked as expired, {removed} key(s) deleted")
+    print(f"api key cleanup — {revoked} key(s) revoked as expired, {removed} key(s) deleted")
 
 
 @job_registry.register(

@@ -1,12 +1,15 @@
 """API key expiry: creation validation, auth rejection, and the cleanup job."""
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
-from src.core.dates import now_utc
+from src.core.dates import ensure_utc, now_utc
 from src.db.session import SessionFactory
+from src.events.subjects import Subjects
 from src.jobs.builtin import api_key_cleanup
 from src.jobs.registry import job_registry
 from src.models.api_key import ApiKey
+from src.settings import settings
+from tests.bus_doubles import RecordingBus
 from tests.conftest import create_workspace, register_user, ws_headers
 
 
@@ -39,6 +42,48 @@ async def test_key_with_future_expiry_authenticates(app_client):
     assert next(k for k in items if k["id"] == key["id"])["expires_at"] is not None
     resp = await client.get("/api/v1/api-keys?sort[]=expires_at", headers=headers)
     assert resp.status_code == 200
+
+
+async def test_non_utc_offset_expiry_stores_the_requested_instant(app_client):
+    """The key must expire at the instant the caller named, not 9 hours later.
+
+    SQLite's DateTime drops the offset on write, so an unnormalized aware
+    datetime lands as its local wall clock and `authenticate` reads it back
+    as UTC — the key would outlive its stated expiry by the offset.
+    """
+    client = app_client
+    owner = await register_user(client, "naomi@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    # 2027-01-01T14:00+09:00 is the same instant as 2027-01-01T05:00Z.
+    resp = await _create_key(client, headers, body={"expires_at": "2027-01-01T14:00:00+09:00"})
+    assert resp.status_code == 201, resp.text
+    requested = datetime(2027, 1, 1, 5, 0, tzinfo=UTC)
+
+    key = resp.json()
+    assert key["expires_at"] == requested.isoformat()
+
+    async with SessionFactory() as session:
+        row = await session.get(ApiKey, key["id"])
+        assert ensure_utc(row.expires_at) == requested
+
+
+async def test_expiry_accepts_any_offset(app_client):
+    """Any offset lands on the same stored instant, so the API stays honest."""
+    client = app_client
+    owner = await register_user(client, "nadia@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    instant = now_utc() + timedelta(days=30)
+    resp = await _create_key(
+        client,
+        headers,
+        body={"expires_at": instant.astimezone(timezone(timedelta(hours=-5))).isoformat()},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["expires_at"] == instant.isoformat()
 
 
 async def test_create_rejects_past_and_naive_expiry(app_client):
@@ -125,7 +170,8 @@ async def test_cleanup_job_revokes_expired_and_deletes_aged(app_client):
             rows[key_id] = row.id
         await session.commit()
 
-    await api_key_cleanup(_FakeCtx())
+    bus = RecordingBus()
+    await api_key_cleanup(_FakeCtx(bus))
 
     async with SessionFactory() as session:
         # expired key now revoked
@@ -137,9 +183,41 @@ async def test_cleanup_job_revokes_expired_and_deletes_aged(app_client):
         assert row.revoked_at is None
         assert row.expires_at is None
 
+    # Automated revocations leave the same audit trail a manual revoke does.
+    assert [p["apikey_id"] for p, _, _ in bus.by_subject(Subjects.APIKEY_REVOKED)] == [
+        expired["id"]
+    ]
+    assert [
+        (a["action"], a["resource_id"], a["details"]["reason"], a["actor_user_id"])
+        for a, _, _ in bus.audit()
+    ] == [("apikey.revoked", expired["id"], "expired", None)]
+
+
+async def test_cleanup_job_keeps_aged_keys_when_retention_is_disabled(app_client, monkeypatch):
+    """api_key_retention_days=0 is a supported mode: revoke, never delete."""
+    monkeypatch.setattr(settings, "api_key_retention_days", 0)
+    client = app_client
+    owner = await register_user(client, "nina@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    aged = (await _create_key(client, headers, name="aged")).json()
+    async with SessionFactory() as session:
+        row = await session.get(ApiKey, aged["id"])
+        row.revoked_at = now_utc() - timedelta(days=400)
+        await session.commit()
+
+    await api_key_cleanup(_FakeCtx())
+
+    async with SessionFactory() as session:
+        assert await session.get(ApiKey, aged["id"]) is not None
+
 
 class _FakeCtx:
     """Minimal JobContext stand-in: the handler only needs a session()."""
+
+    def __init__(self, bus=None) -> None:
+        self.bus = bus
 
     def session(self):
         return SessionFactory()

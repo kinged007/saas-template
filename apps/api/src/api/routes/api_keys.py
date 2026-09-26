@@ -14,6 +14,7 @@ from src.api.deps import (
     require_permission,
     resolve_auth_principal,
 )
+from src.core.dates import ensure_utc
 from src.core.permissions import APIKEY_CREATE, APIKEY_DELETE, APIKEY_READ
 from src.db.session import get_db
 from src.models.api_key import ApiKey
@@ -40,7 +41,7 @@ def _key_dict(k: ApiKey) -> dict:
         "usage_count": k.usage_count,
         "usage_quota": k.usage_quota,
         "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
-        "expires_at": k.expires_at.isoformat() if k.expires_at else None,
+        "expires_at": ensure_utc(k.expires_at).isoformat() if k.expires_at else None,
         "revoked_at": k.revoked_at.isoformat() if k.revoked_at else None,
         "created_at": k.created_at.isoformat() if k.created_at else None,
     }

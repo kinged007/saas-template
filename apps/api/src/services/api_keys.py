@@ -120,7 +120,9 @@ class ApiKeyService:
             permissions=sorted(requested),
             created_by_user_id=actor.id,
             usage_quota=usage_quota,
-            expires_at=expires_at,
+            # Normalize to UTC on write: SQLite's DateTime drops the offset and
+            # stores the wall clock, which would shift the instant auth compares.
+            expires_at=ensure_utc(expires_at) if expires_at is not None else None,
         )
         self._session.add(key)
         await self._session.commit()

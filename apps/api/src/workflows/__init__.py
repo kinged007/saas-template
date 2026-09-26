@@ -444,7 +444,7 @@ def build_workflows(
         run_id = payload.get("run_id")
         if not run_id:
             return
-        await execute_run(run_id)
+        await execute_run(run_id, bus=bus)
 
     async def _fan_out_webhooks(payload: dict, metadata) -> None:
         """Fan one domain event out into pending webhook deliveries.

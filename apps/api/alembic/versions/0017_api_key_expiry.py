@@ -25,10 +25,17 @@ def upgrade() -> None:
             "api_keys",
             sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
         )
+    # Indexed for the apikeys.cleanup scan and the list view's expires_at sort.
+    idx = {i["name"] for i in sa.inspect(bind).get_indexes("api_keys")}
+    if "ix_api_keys_expires_at" not in idx:
+        op.create_index("ix_api_keys_expires_at", "api_keys", ["expires_at"])
 
 
 def downgrade() -> None:
     bind = op.get_bind()
     cols = {c["name"] for c in sa.inspect(bind).get_columns("api_keys")}
     if "expires_at" in cols:
+        idx = {i["name"] for i in sa.inspect(bind).get_indexes("api_keys")}
+        if "ix_api_keys_expires_at" in idx:
+            op.drop_index("ix_api_keys_expires_at", table_name="api_keys")
         op.drop_column("api_keys", "expires_at")

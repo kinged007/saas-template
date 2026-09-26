@@ -85,21 +85,27 @@ export function ApiKeysPage() {
                   {formatDate(key.created_at)}
                 </TableCell>
                 <TableCell className="text-right">
+                  {/* An expired key stays deletable: revocation is idempotent,
+                      so the row never loses its only affordance while the
+                      cleanup job has yet to run. */}
                   {key.revoked_at ? (
                     <Badge variant="secondary">
                       {isExpired(key) ? "expired" : "revoked"}
                     </Badge>
-                  ) : isExpired(key) ? (
-                    <Badge variant="secondary">expired</Badge>
                   ) : (
-                    canManage?.can && (
-                      <DeleteButton
-                        resource="api-keys"
-                        recordItemId={key.id}
-                        variant="ghost"
-                        size="sm"
-                      />
-                    )
+                    <div className="flex items-center justify-end gap-2">
+                      {isExpired(key) && (
+                        <Badge variant="secondary">expired</Badge>
+                      )}
+                      {canManage?.can && (
+                        <DeleteButton
+                          resource="api-keys"
+                          recordItemId={key.id}
+                          variant="ghost"
+                          size="sm"
+                        />
+                      )}
+                    </div>
                   )}
                 </TableCell>
               </TableRow>
