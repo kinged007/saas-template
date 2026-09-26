@@ -262,6 +262,9 @@ async def test_oauth_token_cookie_flow_omits_json_refresh(app_client, monkeypatc
             oauth_svc.STATE_TTL_HINT + "s-cookie",
             {"provider": "testidp", "redirect_uri": "http://test/cb"},
         )
+        # /authorize pins the state to the browser with a cookie; the callback
+        # rejects a state this client never received.
+        app_client.cookies.set(oauth_routes.STATE_COOKIE, "s-cookie")
         cb = await app_client.get(
             "/api/v1/auth/oauth/testidp/callback?code=authcode&state=s-cookie",
             follow_redirects=False,

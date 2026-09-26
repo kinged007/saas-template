@@ -34,6 +34,8 @@ export async function startLinkProvider(provider: string) {
   const { data } = await httpClient.post<{ link_token: string }>(
     `${API_URL}/auth/oauth/identities/link-token`,
   );
+  // The POST is the only part that can fail; the assign below never rejects,
+  // so callers must not treat this whole function as a redirect that can throw.
   window.location.assign(
     `${API_URL}/auth/oauth/${encodeURIComponent(provider)}/authorize?link=${encodeURIComponent(
       data.link_token,

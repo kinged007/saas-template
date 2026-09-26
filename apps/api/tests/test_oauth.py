@@ -106,6 +106,9 @@ async def _callback(app_client, monkeypatch, state="s"):
     fastapi_app.state.container.cache.set(
         oauth_svc.STATE_TTL_HINT + state, {"provider": "testidp", "redirect_uri": "http://test/cb"}
     )
+    # /authorize also pins the state to the browser with a cookie; the callback
+    # rejects a state the browser never received.
+    app_client.cookies.set(oauth_routes.STATE_COOKIE, state)
     resp = await app_client.get(
         f"/api/v1/auth/oauth/testidp/callback?code=authcode&state={state}",
         follow_redirects=False,
@@ -240,3 +243,15 @@ async def test_oauth_error_redirect_allowlisted(app_client, oauth_on):
     )
     assert resp.status_code == 302
     assert resp.headers["location"].startswith("http://localhost:5173/login?error=")
+
+
+async def test_authorize_sets_state_cookie(app_client, oauth_on):
+    """/authorize must pin the state it minted to the browser; the callback
+    compares against it, so the two have to come from the same response."""
+    resp = await app_client.get("/api/v1/auth/oauth/testidp/authorize", follow_redirects=False)
+    assert resp.status_code == 302
+    state = resp.headers["location"].split("state=")[1].split("&")[0]
+    raw = resp.headers["set-cookie"]
+    assert "oauth_state=" in raw
+    assert "httponly" in raw.lower()
+    assert f"oauth_state={state}" in raw

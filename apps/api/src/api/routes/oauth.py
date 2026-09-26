@@ -23,7 +23,7 @@ from src.api.routes.auth import (
     _maybe_join_single_workspace,
     _user_agent,
 )
-from src.core.security.cookies import browser_flow, set_refresh_cookie
+from src.core.security.cookies import browser_flow, require_csrf, set_refresh_cookie
 from src.core.security.ratelimit import get_auth_limiter
 from src.db.session import get_db
 from src.services.auth import AuthError, AuthService
@@ -40,10 +40,16 @@ from src.services.oauth import (
     mint_link_token,
     normalize_identity,
 )
+from src.settings import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth/oauth", tags=["auth"])
+
+STATE_COOKIE = "oauth_state"
+# The cookie only has to outlive the state it mirrors, which shares the
+# container cache TTL.
+STATE_COOKIE_MAX_AGE = 300
 
 
 class OAuthTokenRequest(BaseModel):
@@ -105,7 +111,7 @@ async def oauth_authorize(provider_id: str, request: Request):
             return _error_redirect(str(exc))
     try:
         doc = await _discovery(provider, container.cache)
-        url = build_authorize_url(
+        state, url = build_authorize_url(
             provider,
             doc,
             container.cache,
@@ -114,7 +120,20 @@ async def oauth_authorize(provider_id: str, request: Request):
         )
     except OAuthError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from None
-    return RedirectResponse(url, status_code=302)
+    # The state is the CSRF token for the whole flow, so bind it to this
+    # browser. Without the cookie, any valid state/code pair opened in another
+    # browser signs that browser in as the attacker's account.
+    response = RedirectResponse(url, status_code=302)
+    response.set_cookie(
+        STATE_COOKIE,
+        state,
+        httponly=True,
+        secure=settings.refresh_cookie_secure_effective,
+        samesite="lax",
+        path=f"/api/v1/auth/oauth/{provider_id}/callback",
+        max_age=STATE_COOKIE_MAX_AGE,
+    )
+    return response
 
 
 @router.get("/identities")
@@ -142,6 +161,10 @@ async def oauth_link_token(
 ):
     """Mint the single-use ticket the settings page hands to /authorize."""
     get_auth_limiter().check(f"oauth:{_client_ip(request) or 'unknown'}:link")
+    # Minting the ticket is what commits the caller to the link, and the flow
+    # ends in a redirect, so a cross-site POST here would be invisible to the
+    # victim's session. Refresh-cookie auth carries no CSRF header of its own.
+    require_csrf(request)
     container = get_container(request)
     return {"link_token": mint_link_token(container.cache, user.id)}
 
@@ -169,8 +192,11 @@ async def oauth_callback(
     container = get_container(request)
     code = request.query_params.get("code")
     state = request.query_params.get("state")
+    cookie_state = request.cookies.get(STATE_COOKIE)
     if not code or not state:
         return _error_redirect("missing code or state")
+    if not cookie_state or not secrets.compare_digest(state, cookie_state):
+        return _error_redirect("invalid or expired state")
     try:
         saved = consume_state(container.cache, state)
     except OAuthError:

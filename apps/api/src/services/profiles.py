@@ -15,6 +15,7 @@ from src.events.publisher import publish_audit
 from src.models.api_key import ApiKey
 from src.models.audit import AuditLogEntry
 from src.models.core import Invitation, Notification
+from src.models.oauth import OAuthAccount
 from src.models.user_profile import UserProfile
 from src.models.workspace import RefreshToken, Role, User, Workspace, WorkspaceMember
 from src.services.profile_helpers import (
@@ -347,6 +348,10 @@ class ProfileService:
         )
         await self._session.execute(delete(Notification).where(Notification.user_id == user_id))
         await self._session.execute(delete(ApiKey).where(ApiKey.created_by_user_id == user_id))
+        # SQLite does not enforce ON DELETE CASCADE, so the FK alone leaves the
+        # (provider, subject) row behind. It then blocks the user's next sign-in
+        # from that IdP on the unique constraint.
+        await self._session.execute(delete(OAuthAccount).where(OAuthAccount.user_id == user_id))
         # Invitations where email matches user email (case-insensitive? email is stored lower)
         if user.email:
             await self._session.execute(
@@ -418,6 +423,9 @@ class ProfileService:
         )
         await self._session.execute(
             delete(ApiKey).where(ApiKey.created_by_user_id == target_user_id)
+        )
+        await self._session.execute(
+            delete(OAuthAccount).where(OAuthAccount.user_id == target_user_id)
         )
         if target.email:
             await self._session.execute(

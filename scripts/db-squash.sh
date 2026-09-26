@@ -1,163 +1,216 @@
 #!/usr/bin/env bash
-# Squash apps/api/alembic/versions/ into a single baseline revision.
+# Squash alembic/versions/ into a single baseline migration, then prove it.
 #
 # Usage:
-#   scripts/db-squash.sh "baseline schema"    # from repo root
+#   make db-squash m="baseline schema"    # from repo root
 #
-# Why: template consumers should not replay 20 migrations to stand up a
-# database, and two PRs branching a migration off the same parent silently
-# collide on revision id — git sees distinct filenames so there is no merge
-# conflict, but `alembic upgrade head` then fails on the duplicate. One
-# baseline revision makes both problems structural instead of procedural.
+# Why a baseline needs an empty database
+# --------------------------------------
+# `alembic revision --autogenerate` diffs the LIVE database against the
+# models, not the migration chain. Diffing a database already migrated to head
+# therefore yields an empty diff by construction — a "baseline" with zero
+# `op.*` calls that creates nothing. And autogenerate refuses to run on a
+# database with no `alembic_version` row ("Target database is not up to date"),
+# because the chain's head exists and the database has never been stamped.
 #
-# Run at release boundaries, not per-PR: every open branch that branched
-# pre-squash must repoint its down_revision to the new baseline.
+# The order that works: `alembic stamp head` writes the version row without
+# executing a single migration, so the up-to-date guard passes while the
+# database is still completely empty. Autogenerate then diffs empty-vs-models
+# and emits the whole schema.
 #
-# How it works:
-#   1. Autogenerate the baseline against an empty DB, stamping it head first
-#      because alembic refuses to autogenerate otherwise.
-#   2. Park the old revisions aside while the baseline is proved correct.
-#   3. Prove the baseline alone reproduces the schema: fresh DB, upgrade
-#      head, autogenerate again, require zero op.* calls.
-#   4. Prove the old chain agreed: replay it on a second scratch DB and
-#      require the same zero-op result, then drop it (git keeps the history).
+# What it does:
+#   1. Generates the baseline against an empty scratch database.
+#   2. Rewrites what autogenerate cannot emit correctly: `down_revision = None`
+#      (it would otherwise point at the head being replaced) and the import of
+#      `src.db.base` (alembic renders custom column types as a dotted path it
+#      never imports). The generated `downgrade()` is kept as-is: it already
+#      drops every table, which is what a baseline should do.
+#   3. Proves the result twice before keeping it, each by autogenerating on a
+#      fresh scratch database and requiring zero `op.*` calls: the baseline
+#      alone must reproduce the schema, and the old chain must still reach it.
+#   4. Replaces versions/ with the baseline.
 #
-# Consumers upgrading across a squash have a deleted revision in
-# alembic_version: `alembic stamp <baseline>` then `alembic upgrade head`.
-# Put that stamp target in the release notes.
+# Every database is a throwaway embedded postgres in a temp dir
+# (EMBEDDED_DB_DIR), so this never touches your dev database.
+#
+# Known limitation: env.py disables compare_type/compare_server_default
+# (legacy VARCHAR-vs-String spellings render as phantom drift), so the two
+# proofs below confirm tables, columns, indexes and constraints — not that
+# every column kept the exact type and server default it had before. Review
+# type changes in the squashed diff by eye.
+#
+# Refuses to run with uncommitted changes under versions/, so a squash always
+# leaves one reviewable diff.
 set -euo pipefail
 
-cd "$(dirname "$0")/../apps/api"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT/apps/api"
+MESSAGE="${m:-baseline schema}"
 
-MESSAGE="${1:-baseline schema}"
-BASELINE_REV="0001"
-VERSIONS="alembic/versions"
-PARKED="$VERSIONS/.squashed-$BASELINE_REV"
-
-if [ -n "$(git status --porcelain -- "$VERSIONS")" ]; then
-  echo "FAIL: uncommitted changes under $VERSIONS — commit or stash first"
-  git status --short -- "$VERSIONS"
+if [ -n "$(git status --porcelain -- alembic/versions)" ]; then
+  echo "FAIL: uncommitted changes under apps/api/alembic/versions"
+  git status --porcelain -- alembic/versions
   exit 1
 fi
 
-OLD_COUNT="$(find "$VERSIONS" -maxdepth 1 -name '*.py' | wc -l | tr -d ' ')"
-if [ "$OLD_COUNT" -le 1 ]; then
-  echo "SKIP: only $OLD_COUNT revision — nothing to squash"
-  exit 0
-fi
-echo "==> squashing $OLD_COUNT revisions into $BASELINE_REV"
+SCRATCH_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/saas-dbsquash-XXXXXX")"
+GENERATED=""
+OLD_CHAIN=""
 
-export EMBEDDED_DB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/saas-dbsquash-XXXXXX")"
-BASELINE="$VERSIONS/${BASELINE_REV}_baseline.py"
-BASELINE_HOLD="$(mktemp "${TMPDIR:-/tmp}/squash-baseline-hold-XXXXXX.py")"
+# The old chain is moved aside partway through so each proof can run with only
+# one chain in versions/. That makes $SCRATCH_ROOT the last copy of it, so any
+# failure has to put it back before the scratch dir is deleted.
 cleanup() {
-  rm -rf "$EMBEDDED_DB_DIR" "$VERSIONS"/_squashcheck_*.py
-  # If we bailed mid-verification the baseline is still on the hold path.
-  [ -s "$BASELINE_HOLD" ] && mv -f "$BASELINE_HOLD" "$BASELINE" 2>/dev/null || true
-  rm -f "$BASELINE_HOLD"
+  local status=$?
+  if [ "$status" -ne 0 ]; then
+    if [ -n "$OLD_CHAIN" ] && [ -d "$OLD_CHAIN" ]; then
+      echo "FAIL: restoring the original chain" >&2
+      rm -f alembic/versions/*.py
+      cp "$OLD_CHAIN"/*.py alembic/versions/
+    elif [ -n "$GENERATED" ]; then
+      rm -f "alembic/versions/$(basename "$GENERATED")"
+    fi
+  fi
+  rm -rf "$SCRATCH_ROOT"
 }
 trap cleanup EXIT
 
-fresh_db() { rm -rf "$EMBEDDED_DB_DIR"; mkdir -p "$EMBEDDED_DB_DIR"; }
+export EMBEDDED_DB_DIR="$SCRATCH_ROOT/pg-generate"
+mkdir -p "$EMBEDDED_DB_DIR"
 
-echo "==> generating baseline against an empty DB"
-# The empty-DB-vs-models diff is what yields the create_table calls. Stamping
-# head on an empty DB only satisfies alembic's up-to-date precondition.
-fresh_db
-uv run alembic stamp head >/dev/null 2>&1
-uv run alembic revision --autogenerate --rev-id "$BASELINE_REV" -m "$MESSAGE" >/dev/null 2>&1
-GENERATED="$VERSIONS/${BASELINE_REV}_$(echo "$MESSAGE" | tr 'A-Z ' 'a-z-').py"
-[ -f "$GENERATED" ] || GENERATED="$(ls -t "$VERSIONS"/*.py | head -1)"
-if ! grep -qE '^[[:space:]]+op\.create_table' "$GENERATED"; then
-  echo "FAIL: baseline has no create_table calls — refusing to squash"
-  rm -f "$GENERATED"
+OLD_COUNT="$(ls alembic/versions/*.py | wc -l | tr -d ' ')"
+if [ "$OLD_COUNT" -lt 1 ]; then
+  echo "FAIL: no migrations in alembic/versions"
   exit 1
 fi
-echo "    ok: $(basename "$GENERATED") ($(grep -cE '^[[:space:]]+op\.create_table' "$GENERATED") tables)"
 
-echo "==> parking old revisions in $(basename "$PARKED")/"
-mkdir -p "$PARKED"
-find "$VERSIONS" -maxdepth 1 -name '*.py' -exec mv {} "$PARKED"/ \;
-mv "$PARKED/$(basename "$GENERATED")" "$BASELINE"
-# --rev-id names the revision but alembic still hangs the new file off the
-# current head, so down_revision needs forcing to None. A baseline also has
-# nothing meaningful to downgrade to; drop the stub so nobody mistakes it for
-# a supported rollback path.
-python3 - "$BASELINE" <<'PY'
-import re, sys
-p = sys.argv[1]
-s = open(p).read()
-s = re.sub(r"^down_revision:.*$", "down_revision: str | None = None", s, count=1, flags=re.M)
-s = re.sub(r"\n\ndef downgrade\(\).*", "\n", s, flags=re.S)
-# Alembic renders custom column types by dotted path but never imports them.
-# StringUUID() takes no args, so the rendered length=36 is dropped too.
-s = re.sub(r"src\.db\.base\.StringUUID\(length=36\)", "StringUUID()", s)
-if "StringUUID()" in s and "from src.db.base import StringUUID" not in s:
-    s = s.replace("import sqlalchemy as sa\n",
-                  "import sqlalchemy as sa\n\nfrom src.db.base import StringUUID\n", 1)
-open(p, "w").write(s)
-PY
-grep -q "^down_revision: str | None = None" "$BASELINE" || {
-  echo "FAIL: could not detach baseline from the old chain"; exit 1; }
-if grep -qE '^[[:space:]]+[^#]*\bsrc\.' "$BASELINE"; then
-  echo "FAIL: baseline still references unimported modules:"
-  grep -nE '^[[:space:]]+[^#]*\bsrc\.' "$BASELINE" | head -3
-  exit 1
-fi
-echo "    ok: $(basename "$BASELINE") installed, down_revision = None"
-
-# Autogenerate and require zero op.* calls: the live schema already equals the
-# models. Prints the stray ops on failure.
-assert_no_drift() {
-  local label="$1"
-  local before new
-  before="$(ls "$VERSIONS"/*.py | sort)"
-  uv run alembic revision --autogenerate --rev-id _squashcheck -m _tmp >/dev/null 2>&1 || {
-    echo "FAIL: $label — could not autogenerate, inspect manually"; return 1; }
-  new="$(comm -23 <(ls "$VERSIONS"/*.py | sort) <(echo "$before") | head -1 || true)"
-  if [ -z "${new:-}" ]; then
-    echo "FAIL: $label — autogenerate produced no file"; return 1
-  fi
-  if grep -qE '^[[:space:]]+op\.' "$new"; then
-    echo "FAIL: $label — schema drift:"
-    grep -E '^[[:space:]]+op\.' "$new"
+# Autogenerate must produce a file; returns its path on stdout.
+autogenerate() {
+  local before after generated
+  before="$(ls alembic/versions/*.py | sort)"
+  uv run alembic revision --autogenerate -m "$1" >/dev/null 2>&1
+  after="$(ls alembic/versions/*.py | sort)"
+  generated="$(comm -13 <(echo "$before") <(echo "$after") | head -1 || true)"
+  if [ -z "${generated:-}" ]; then
+    echo "FAIL: autogenerate produced no file — check alembic output manually" >&2
     return 1
   fi
-  # Must go on the success path too: a leftover _squashcheck revision is a
-  # second head and breaks the next `alembic upgrade head`.
-  rm -f "$new"
-  echo "    ok: $label"
+  echo "$generated"
 }
 
-echo "==> verifying 1/2: baseline alone reproduces the schema"
-fresh_db
-uv run alembic upgrade head >/dev/null 2>&1
-assert_no_drift "baseline matches models" || { echo "       restore: git checkout -- apps/api/alembic"; exit 1; }
+# A schema is reproduced when autogenerating against it yields no op.* calls.
+# Each check gets its own data dir: pgserver keys a running instance to it, so
+# reusing one leaves a postmaster holding the old cluster.
+assert_reproduces_models() {
+  local label="$1" generated ops
+  echo "    upgrading scratch DB to $label"
+  export EMBEDDED_DB_DIR="$SCRATCH_ROOT/pg-$2"
+  mkdir -p "$EMBEDDED_DB_DIR"
+  uv run alembic upgrade head >/dev/null 2>&1
+  generated="$(autogenerate "_squash_verify")"
+  ops="$(grep -cE '^[[:space:]]+op\.' "$generated" || true)"
+  if [ "${ops:-0}" -ne 0 ]; then
+    echo "FAIL: $label does not reproduce the models — $ops op.* calls remain:" >&2
+    grep -E '^[[:space:]]+op\.' "$generated" >&2
+    rm -f "$generated"
+    return 1
+  fi
+  rm -f "$generated"
+}
 
-echo "==> verifying 2/2: the old chain produced the same schema"
-fresh_db
-# The baseline has to step aside entirely: its revision is also "0001" and
-# 0001_initial.py is in versions/ during this replay, so alembic would see a
-# duplicate revision and two heads.
-mv "$BASELINE" "$BASELINE_HOLD"
-mv "$PARKED"/*.py "$VERSIONS"/
-uv run alembic upgrade head >/dev/null 2>&1
-if ! assert_no_drift "old chain matches models"; then
-  echo "       versions/ holds the old chain — restore with:"
-  echo "         git checkout -- apps/api/alembic"
+echo "==> generating baseline against an empty database"
+uv run alembic stamp head >/dev/null 2>&1
+BASELINE="$(autogenerate "$MESSAGE")"
+GENERATED="$BASELINE"
+BASELINE_NAME="$(basename "$BASELINE")"
+CREATE_TABLES="$(grep -cE '^[[:space:]]+op\.create_table\(' "$BASELINE" || true)"
+if [ "${CREATE_TABLES:-0}" -lt 1 ]; then
+  echo "FAIL: baseline has no op.create_table calls — it would create no schema" >&2
+  echo "      (autogenerate diffed a non-empty database; check 'alembic stamp head' above)" >&2
+  rm -f "$BASELINE"
   exit 1
 fi
-# Proven equivalent, so the per-PR chain is dropped. Git keeps the history;
-# only the baseline belongs in the tree.
-rm -f "$VERSIONS"/*.py
-rm -rf "$PARKED"
-mv "$BASELINE_HOLD" "$BASELINE"
+echo "    ok: $BASELINE_NAME ($CREATE_TABLES tables, $(wc -l <"$BASELINE" | tr -d ' ') lines)"
 
-echo "PASS: $(ls "$VERSIONS"/*.py | wc -l | tr -d ' ') revision, schema verified against both chains"
-echo
-echo "Next:"
-echo "  1. git add -A apps/api/alembic && commit"
-echo "  2. Repoint open PR branches' down_revision to '$BASELINE_REV' (or drop"
-echo "     their migration if the change is already in the baseline)."
-echo "  3. Release notes: upgrading consumers must run"
-echo "     \`alembic stamp $BASELINE_REV\` then \`alembic upgrade head\`."
+# Alembic renders a custom column type as the dotted path to its class and
+# never emits the matching import, so the generated file would not import.
+if grep -qE '^[^#]*\bsrc\.db\.base\.' "$BASELINE"; then
+  echo "    rewriting src.db.base.StringUUID(length=36) -> StringUUID() + import"
+  sed -i \
+    -e 's/src\.db\.base\.StringUUID(length=36)/StringUUID()/g' \
+    -e 's/^\(from alembic import op\)$/from alembic import op\n\nfrom src.db.base import StringUUID/' \
+    "$BASELINE"
+  if ! grep -qE '^from src\.db\.base import StringUUID$' "$BASELINE"; then
+    echo "FAIL: could not insert the StringUUID import — inspect $BASELINE_NAME by hand" >&2
+    exit 1
+  fi
+fi
+
+echo "==> marking the baseline as the base revision"
+python3 - "$BASELINE" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+head, sep, body = text.partition("def upgrade() -> None:")
+if not sep:
+    sys.exit("FAIL: no upgrade() in the generated baseline")
+
+header = re.sub(r"^down_revision: .*$", "down_revision: str | None = None", head, count=1, flags=re.M)
+header = re.sub(r"^revision: .*$", 'revision: str = "0001"', header, count=1, flags=re.M)
+header = re.sub(r"^Revision ID: .*$", "Revision ID: 0001", header, count=1, flags=re.M)
+header = re.sub(r"^Revises: .*$", "Revises:", header, count=1, flags=re.M)
+header = header.replace("from typing import Sequence, Union\n", "from collections.abc import Sequence\n")
+header = header.replace(
+    "branch_labels: Union[str, Sequence[str], None] = None",
+    "branch_labels: str | Sequence[str] | None = None",
+)
+header = header.replace(
+    "depends_on: Union[str, Sequence[str], None] = None",
+    "depends_on: str | Sequence[str] | None = None",
+)
+path.write_text(header + sep + body)
+PY
+SLUG="$(echo "$MESSAGE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]\+/_/g; s/_*$//')"
+BASELINE_NAME="0001_${SLUG:-baseline}.py"
+if [ -e "alembic/versions/$BASELINE_NAME" ]; then
+  echo "FAIL: alembic/versions/$BASELINE_NAME already exists — pass a different m= so the" >&2
+  echo "      baseline does not overwrite an existing migration" >&2
+  exit 1
+fi
+mv "$BASELINE" "alembic/versions/$BASELINE_NAME"
+echo "    ok: $BASELINE_NAME (revision 0001, down_revision None)"
+
+# The baseline claims revision 0001, which the old 0001 also declares, so the
+# two chains can never sit in versions/ at once. Each proof below runs with
+# exactly one of them in place.
+OLD_CHAIN="$SCRATCH_ROOT/old-chain"
+mkdir -p "$OLD_CHAIN"
+mv alembic/versions/*.py "$OLD_CHAIN/"
+mv "$OLD_CHAIN/$BASELINE_NAME" "$SCRATCH_ROOT/$BASELINE_NAME"
+BASELINE="alembic/versions/$BASELINE_NAME"
+
+echo "==> check 1/2: the baseline alone must reproduce the schema"
+cp "$SCRATCH_ROOT/$BASELINE_NAME" alembic/versions/
+assert_reproduces_models "the baseline" baseline
+rm -f alembic/versions/*.py
+echo "    ok"
+
+echo "==> check 2/2: the old chain must still reach the same schema"
+cp "$OLD_CHAIN"/*.py alembic/versions/
+assert_reproduces_models "the old chain" old-chain
+rm -f alembic/versions/*.py
+echo "    ok"
+
+echo "==> replacing versions/ with the baseline"
+cp "$SCRATCH_ROOT/$BASELINE_NAME" alembic/versions/
+uv run ruff format "$BASELINE" >/dev/null 2>&1 || true
+uv run ruff check --fix "$BASELINE" >/dev/null 2>&1 || true
+
+echo "PASS: $OLD_COUNT migrations squashed into 1"
+echo "  versions/ now holds $(ls alembic/versions/*.py | wc -l | tr -d ' ') file(s)"
+echo "  review the diff, then repoint any open migration's down_revision to 0001"
+echo "  consumers upgrading past this point: alembic stamp 0001 && alembic upgrade head"

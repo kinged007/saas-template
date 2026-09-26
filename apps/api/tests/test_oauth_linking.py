@@ -6,6 +6,7 @@ import json
 import pytest
 from sqlalchemy import select
 
+import src.api.routes.oauth as oauth_routes
 from src.db.session import SessionFactory
 from src.models.oauth import OAuthAccount
 from src.models.workspace import User
@@ -33,8 +34,21 @@ async def _sign_up(client, email: str) -> tuple[dict, str]:
     return headers, me.json()["id"]
 
 
+def csrf_headers(headers: dict) -> dict:
+    """`require_csrf` guards the link-token mint: an allowed Origin plus the
+    X-Requested-With header, which a cross-site form post cannot send."""
+    return {
+        **headers,
+        "Origin": "http://localhost:5173",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+
+
 def _seed_state(state: str, *, link_user_id: str | None = None) -> None:
-    """Write the state entry /authorize would have written."""
+    """Write the state entry /authorize would have written.
+
+    The browser cookie /authorize sets is a separate thing; callers that go on
+    to call the callback must also set it on the client (see `_link`)."""
     from src.main import app as fastapi_app
 
     saved: dict = {"provider": "testidp", "redirect_uri": "http://test/cb"}
@@ -47,6 +61,7 @@ async def _link(client, monkeypatch, state: str, *, sub: str, email: str, link_u
     """Drive a full link round-trip and return the one-time code."""
     _mock_oauth(monkeypatch, sub=sub, email=email)
     _seed_state(state, link_user_id=link_user_id)
+    client.cookies.set(oauth_routes.STATE_COOKIE, state)
     resp = await client.get(
         f"{LINK}/testidp/callback?code=authcode&state={state}", follow_redirects=False
     )
@@ -105,7 +120,7 @@ async def test_link_creates_no_second_account(app_client, oauth_on, monkeypatch)
 
 async def test_authorize_carries_link_user_id(app_client, oauth_on):
     headers, user_id = await _sign_up(app_client, "owner@example.com")
-    mint = await app_client.post(f"{LINK}/identities/link-token", headers=headers)
+    mint = await app_client.post(f"{LINK}/identities/link-token", headers=csrf_headers(headers))
     assert mint.status_code == 201, mint.text
     link_token = mint.json()["link_token"]
 
@@ -145,6 +160,7 @@ async def test_identity_owned_by_another_user_is_not_stolen(app_client, oauth_on
     _, victim_id = await _sign_up(app_client, "victim@example.com")
     _mock_oauth(monkeypatch, sub="sub-1", email="first@example.com")
     _seed_state("s-steal", link_user_id=victim_id)
+    app_client.cookies.set(oauth_routes.STATE_COOKIE, "s-steal")
     resp = await app_client.get(
         f"{LINK}/testidp/callback?code=authcode&state=s-steal", follow_redirects=False
     )
@@ -235,3 +251,65 @@ async def test_cannot_unlink_another_users_identity(app_client, oauth_on):
     resp = await app_client.delete(f"{LINK}/identities/{stranger_id}", headers=headers)
     assert resp.status_code == 400, resp.text
     assert resp.json()["detail"] == "linked account not found"
+
+
+async def test_callback_rejects_state_from_another_browser(app_client, oauth_on, monkeypatch):
+    """A state the browser never received is login CSRF: the attacker opens
+    their own callback URL in the victim's browser and signs it in as them."""
+    headers, user_id = await _sign_up(app_client, "victim@example.com")
+    _mock_oauth(monkeypatch, sub="sub-attacker", email="attacker@example.com")
+    _seed_state("s-csrf", link_user_id=user_id)
+    # Deliberately no client.cookies.set: this browser never got the state.
+    resp = await app_client.get(
+        f"{LINK}/testidp/callback?code=authcode&state=s-csrf", follow_redirects=False
+    )
+    assert resp.status_code == 302
+    assert "error=" in resp.headers["location"]
+    assert "code=" not in resp.headers["location"]
+
+
+async def test_link_token_mint_requires_csrf_header(app_client, oauth_on):
+    """Refresh-cookie auth sends no CSRF header, so a cross-site POST could mint
+    a link ticket and commit the signed-in user to the attacker's IdP account."""
+    headers, _ = await _sign_up(app_client, "csrf-victim@example.com")
+    resp = await app_client.post(f"{LINK}/identities/link-token", headers=headers)
+    assert resp.status_code == 403, resp.text
+    assert "link_token" not in resp.text
+
+
+async def test_link_token_mint_rejects_foreign_origin(app_client, oauth_on):
+    headers, _ = await _sign_up(app_client, "origin-victim@example.com")
+    resp = await app_client.post(
+        f"{LINK}/identities/link-token",
+        headers={
+            **headers,
+            "Origin": "https://evil.example",
+            "X-Requested-With": "XMLHttpRequest",
+        },
+    )
+    assert resp.status_code == 403, resp.text
+
+
+async def test_delete_account_removes_oauth_links(app_client, oauth_on, monkeypatch):
+    """The (provider, subject) row must go with the user, or the unique
+    constraint locks that IdP out of the address forever."""
+    headers, user_id = await _sign_up(app_client, "gone@example.com")
+    code = await _link(
+        app_client,
+        monkeypatch,
+        state="s1",
+        sub="sub-gone",
+        email="gone@example.com",
+        link_user_id=user_id,
+    )
+    await app_client.post(f"{LINK}/token", json={"code": code})
+    assert len(await _links_for(user_id)) == 1
+
+    resp = await app_client.request(
+        "DELETE",
+        "/api/v1/me",
+        headers=headers,
+        json={"confirm": "DELETE", "password": "Password123!"},
+    )
+    assert resp.status_code == 204, resp.text
+    assert await _links_for(user_id) == []

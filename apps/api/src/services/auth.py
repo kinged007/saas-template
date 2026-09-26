@@ -48,12 +48,6 @@ class AuthService:
     async def get_user(self, user_id: str) -> User | None:
         return await self._session.get(User, user_id)
 
-    async def get_current_link_user(self, session, user_id: str | None) -> User | None:
-        """Resolve the password-session user that started a link flow."""
-        if not user_id:
-            return None
-        return await session.get(User, user_id)
-
     async def get_by_email(self, email: str) -> User | None:
         stmt = select(User).where(User.email == email.lower())
         result = await self._session.execute(stmt)
@@ -277,7 +271,7 @@ class AuthService:
         """
         user = await self._session.get(User, user_id)
         if user is None:
-            raise AuthError("account is disabled")
+            raise AuthError("account not found")
         if not user.is_active:
             raise AuthError("account is disabled")
         stmt = select(OAuthAccount).where(

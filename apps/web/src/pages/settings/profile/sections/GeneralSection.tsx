@@ -137,54 +137,62 @@ function getDetectedTimezone(): string {
 
 function ConnectedAccounts() {
   const config = useAuthConfig();
-  const { data: identities } = useOAuthIdentities();
+  const { data: identities, isLoading, isError } = useOAuthIdentities();
   const { mutate: unlink, isPending } = useUnlinkOAuthIdentity();
   const [error, setError] = useState<string | null>(null);
   const providers = config?.providers ?? [];
-  const linked = new Map((identities ?? []).map((i) => [i.provider, i]));
-
-  const link = async (provider: string) => {
-    setError(null);
-    try {
-      await startLinkProvider(provider);
-    } catch {
-      setError("Could not start linking. Please try again.");
-    }
-  };
+  // A user can hold several subjects for one provider, so key by id and group
+  // per provider — a Map keyed by provider would hide all but the first.
+  const linked = identities ?? [];
 
   if (providers.length === 0) {
     return <p className="text-muted-foreground text-sm">No sign-on providers configured.</p>;
   }
+  if (isError) {
+    return <p className="text-destructive text-sm">Could not load connected accounts.</p>;
+  }
+  if (isLoading) {
+    return <p className="text-muted-foreground text-sm">Loading connected accounts…</p>;
+  }
   return (
     <div className="flex flex-col gap-3">
       {providers.map((p) => {
-        const row = linked.get(p.id);
+        const rows = linked.filter((i) => i.provider === p.id);
         return (
-          <div key={p.id} className="flex items-center justify-between gap-2">
+          <div key={p.id} className="flex flex-col gap-2">
+            <p className="font-medium">{p.display_name}</p>
+            {rows.map((row) => (
+              <div key={row.id} className="flex items-center justify-between gap-2">
+                <p className="text-muted-foreground text-sm">{row.email ?? "Linked"}</p>
+                <Button
+                  variant="outline"
+                  disabled={isPending}
+                  onClick={() =>
+                    unlink(row.id, {
+                      onError: (e) =>
+                        setError(
+                          (e as { message?: string })?.message ?? "Could not unlink this account.",
+                        ),
+                    })
+                  }
+                >
+                  Unlink
+                </Button>
+              </div>
+            ))}
             <div>
-              <p className="font-medium">{p.display_name}</p>
-              {row && <p className="text-muted-foreground text-sm">{row.email ?? "Linked"}</p>}
-            </div>
-            {row ? (
               <Button
                 variant="outline"
-                disabled={isPending}
-                onClick={() =>
-                  unlink(row.id, {
-                    onError: (e) =>
-                      setError(
-                        (e as { message?: string })?.message ?? "Could not unlink this account.",
-                      ),
-                  })
-                }
+                onClick={() => {
+                  setError(null);
+                  startLinkProvider(p.id).catch(() =>
+                    setError("Could not start linking. Please try again."),
+                  );
+                }}
               >
-                Unlink
-              </Button>
-            ) : (
-              <Button variant="outline" onClick={() => link(p.id)}>
                 Link
               </Button>
-            )}
+            </div>
           </div>
         );
       })}

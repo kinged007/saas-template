@@ -109,9 +109,11 @@ def build_authorize_url(
     redirect_uri: str,
     *,
     link_user_id: str | None = None,
-) -> str:
-    """Provider authorize URL. A `link_user_id` rides the state entry, so the
-    callback attaches the identity to that user instead of signing anyone in."""
+) -> tuple[str, str]:
+    """Provider authorize URL, with the state it minted. The caller pins that
+    state to the browser in a cookie. A `link_user_id` rides the state entry,
+    so the callback attaches the identity to that user instead of signing
+    anyone in."""
     endpoint = doc.get("authorization_endpoint") or provider.authorize_url
     if not endpoint:
         raise OAuthError(f"oauth provider '{provider.id}' has no authorize endpoint")
@@ -129,7 +131,7 @@ def build_authorize_url(
             "state": state,
         }
     )
-    return f"{endpoint}?{params}"
+    return state, f"{endpoint}?{params}"
 
 
 def consume_state(cache: TtlCache, state: str) -> dict[str, Any]:
