@@ -164,3 +164,12 @@ export const workspaceStore = {
     storage.remove(LEGACY_WORKSPACE_KEY);
   },
 };
+
+const ONBOARDING_PREFIX = "tf_onboarding_dismissed:";
+
+export const onboardingStore = {
+  isDismissed: (workspaceId: string, userId?: string | null) =>
+    storage.get(ONBOARDING_PREFIX + (userId ?? "legacy") + ":" + workspaceId) === "1",
+  dismiss: (workspaceId: string, userId?: string | null) =>
+    storage.set(ONBOARDING_PREFIX + (userId ?? "legacy") + ":" + workspaceId, "1"),
+};
