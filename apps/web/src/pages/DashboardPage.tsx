@@ -93,11 +93,29 @@ export function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h2 className="text-3xl font-bold tracking-tight">{workspace?.name ?? "Workspace"}</h2>
-        <p className="text-muted-foreground mt-1">
-          Manage your team and collaborate effectively.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">{workspace?.name ?? "Workspace"}</h2>
+          <p className="text-muted-foreground mt-1">
+            Manage your team and collaborate effectively.
+          </p>
+        </div>
+        {/* The card is hidden by three independent reasons (all steps done, the
+            caller's own dismissal, the workspace flag). Restore shows only
+            when the caller's dismissal is the sole reason it is gone. */}
+        {onboardingDismissed && !allDone && !onboardingOffForWorkspace && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="shrink-0"
+            onClick={() => {
+              if (workspace) onboardingStore.clear(workspace.id, identity?.id);
+              force();
+            }}
+          >
+            Show setup checklist again
+          </Button>
+        )}
       </div>
 
       {!allDone && !onboardingDismissed && !onboardingOffForWorkspace && (
