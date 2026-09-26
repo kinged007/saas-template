@@ -29,6 +29,7 @@ NOTIFICATION_UPDATE = "notification:update"
 
 MESSAGE_READ = "message:read"
 MESSAGE_CREATE = "message:create"  # start conversations, send messages, rename
+MESSAGE_UPDATE = "message:update"  # edit a conversation's participants
 
 JOB_READ = "jobs:read"
 JOB_UPDATE = "jobs:update"  # modify or trigger
@@ -63,6 +64,7 @@ PERMISSION_DEFINITIONS: dict[str, dict[str, str]] = {
     APIKEY_DELETE: {"resource": "apikey", "action": "delete"},
     MESSAGE_READ: {"resource": "message", "action": "read"},
     MESSAGE_CREATE: {"resource": "message", "action": "create"},
+    MESSAGE_UPDATE: {"resource": "message", "action": "update"},
     JOB_READ: {"resource": "jobs", "action": "read"},
     JOB_UPDATE: {"resource": "jobs", "action": "update"},
     WEBHOOK_READ: {"resource": "webhook", "action": "read"},
@@ -120,6 +122,7 @@ def permissions_for_role(role_name: str) -> list[str]:
                 APIKEY_DELETE,
                 MESSAGE_READ,
                 MESSAGE_CREATE,
+                MESSAGE_UPDATE,
             ]
         case "viewer":
             return [
