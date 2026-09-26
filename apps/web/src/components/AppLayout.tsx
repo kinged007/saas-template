@@ -32,7 +32,7 @@ import {
 } from "@/components/ui/select";
 import { useGetIdentity, useLogout } from "@refinedev/core";
 import { useWorkspaceCustom } from "../hooks/useWorkspaceQuery";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import {
   Building2,
@@ -44,6 +44,7 @@ import {
   LogOut,
   Mail,
   Plus,
+  Search,
   Settings,
   ShieldCheck,
   Users,
@@ -54,6 +55,7 @@ import { activeWorkspacePermissions } from "../utils/permissions";
 import { ThemeToggle } from "./refine-ui/theme/theme-toggle";
 import { NotificationCenter } from "./NotificationCenter";
 import { PendingInvitationsBadge } from "./PendingInvitations";
+import { WorkspaceSearchDialog } from "./WorkspaceSearchDialog";
 import { cn } from "@/lib/utils";
 import type { Identity } from "../types";
 import { getDisplayName } from "../types";
@@ -64,7 +66,15 @@ const MENU_ITEMS = [
   { key: "/members", label: "Members", icon: Users, permission: "member:read" },
 ];
 
-function SidebarNav() {
+function SearchShortcut() {
+  return (
+    <kbd className="text-muted-foreground ml-auto hidden rounded border px-1.5 py-0.5 font-mono text-[10px] group-data-[collapsible=icon]:hidden">
+      ⌘K
+    </kbd>
+  );
+}
+
+function SidebarNav({ openSearch }: { openSearch: () => void }) {
   const location = useLocation();
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
   const { workspace } = useWorkspace();
@@ -88,6 +98,15 @@ function SidebarNav() {
   return (
     <SidebarGroup>
       <SidebarMenu>
+        {/* Search sits above Dashboard, per the issue; it opens a modal rather
+            than navigating, so it is a real button and not a SidebarMenuButton link. */}
+        <SidebarMenuItem>
+          <SidebarMenuButton onClick={openSearch} tooltip="Search (⌘K)">
+            <Search className="h-4 w-4 shrink-0" />
+            <span>Search</span>
+            <SearchShortcut />
+          </SidebarMenuButton>
+        </SidebarMenuItem>
         {items.map((item) => {
           const Icon = item.icon;
           const active = isActive(item.key);
@@ -285,6 +304,19 @@ function UserMenu() {
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const { workspaces } = useWorkspace();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const openSearch = () => setSearchOpen(true);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === "k" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setSearchOpen((v) => !v);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   return (
     <SidebarProvider>
@@ -319,7 +351,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               </Button>
             </div>
           ) : (
-            <SidebarNav />
+            <SidebarNav openSearch={openSearch} />
           )}
         </SidebarContent>
         <SidebarFooter>
@@ -327,6 +359,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         </SidebarFooter>
         <SidebarRail />
       </Sidebar>
+      <WorkspaceSearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
       <SidebarInset>
         <header
           className={cn(
