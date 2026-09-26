@@ -15,13 +15,13 @@ async def _totp_for(client, headers):
 def test_otpauth_uri_encodes_issuer_and_email():
     uri = otpauth_uri(
         secret_b32="ABC123",
-        issuer="SaaS Template API",
+        issuer="Example Issuer",
         email="user+test@example.com",
     )
 
     assert uri == (
-        "otpauth://totp/SaaS%20Template%20API:user%2Btest%40example.com"
-        "?secret=ABC123&issuer=SaaS+Template+API&algorithm=SHA1&digits=6&period=30"
+        "otpauth://totp/Example%20Issuer:user%2Btest%40example.com"
+        "?secret=ABC123&issuer=Example+Issuer&algorithm=SHA1&digits=6&period=30"
     )
 
 

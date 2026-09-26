@@ -21,12 +21,20 @@ _lock = threading.Lock()
 _started = False
 
 
+def _slug() -> str:
+    # Imported lazily: src.settings resolves the default database URL through
+    # src.db.embedded, so a top-level import here would be circular.
+    from src.settings import settings
+
+    return settings.app_slug
+
+
 def data_dir() -> Path:
     override = os.environ.get("EMBEDDED_DB_DIR")
     if override:
         path = Path(override)
     else:
-        path = Path.home() / ".local" / "share" / "saas-template" / "pgdata"
+        path = Path.home() / ".local" / "share" / _slug() / "pgdata"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

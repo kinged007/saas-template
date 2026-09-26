@@ -31,6 +31,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useGetIdentity, useLogout } from "@refinedev/core";
+
+import { APP_NAME } from "@/config";
 import { useWorkspaceCustom } from "../hooks/useWorkspaceQuery";
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
@@ -293,12 +295,12 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-2 px-2 py-1 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:px-0">
             <img
               src="/logo.svg"
-              alt="SaaS Template"
+              alt={APP_NAME}
               className="mx-auto w-[70%] shrink-0 group-data-[collapsible=icon]:hidden"
             />
             <img
               src="/favicon.svg"
-              alt="SaaS Template"
+              alt={APP_NAME}
               className="hidden w-auto max-w-8 shrink-0 group-data-[collapsible=icon]:block"
             />
           </div>

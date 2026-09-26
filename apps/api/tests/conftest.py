@@ -1,7 +1,7 @@
 import asyncio  # noqa: E402
 import os  # noqa: E402
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_saas_template.db"
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_app.db"
 os.environ["SECRET_KEY"] = "test-secret-key-not-for-production"
 os.environ["FERNET_KEYS"] = "test-fernet-key-value"
 os.environ["EVENT_BUS_DRIVER"] = "inprocess"

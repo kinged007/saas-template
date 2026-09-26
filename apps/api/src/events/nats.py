@@ -20,10 +20,11 @@ from src.events.bus import (
     SubscriptionError,
 )
 from src.events.subjects import TRANSIENT_SUBJECTS, Subjects
+from src.settings import settings
 
 logger = logging.getLogger(__name__)
 
-STREAM_NAME = "SAAS_TEMPLATE"
+STREAM_NAME = settings.app_slug.upper().replace("-", "_")
 STREAM_SUBJECTS = [
     f"{Subjects.WORKSPACES}.>",
     f"{Subjects.APIKEYS}.>",
@@ -38,7 +39,7 @@ ACK_WAIT_SECONDS = 30.0
 class NatsEventBus(EventBus):
     """Production event bus backed by NATS JetStream.
 
-    - One stream (SAAS_TEMPLATE, workqueue retention) with subjects for each
+    - One stream (STREAM_NAME, workqueue retention) with subjects for each
       durable namespace (workspaces.>, apikeys.>, audit.>, jobs.>,
       conversations.>).
     - Each durable subscription is a durable consumer: events survive
@@ -58,9 +59,9 @@ class NatsEventBus(EventBus):
 
     name = "nats"
 
-    def __init__(self, url: str, *, queue_group: str = "saas-template-workers") -> None:
+    def __init__(self, url: str, *, queue_group: str | None = None) -> None:
         self._url = url
-        self._queue_group = queue_group
+        self._queue_group = queue_group or f"{settings.app_slug}-workers"
         self._nc: nats.NATS | None = None
         self._js: JetStreamContext | None = None
         self._subscriptions: dict[str, tuple[SubscriberHandler, object]] = {}

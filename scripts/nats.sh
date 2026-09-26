@@ -11,9 +11,13 @@
 # The docker daemon may be remote (DOCKER_HOST set, e.g. a Tailscale host);
 # in that case the published ports live on the daemon host, not localhost, so
 # the printed client/monitor URLs and the status check use that host.
+#
+# Branding: APP_SLUG renames the container and the NATS server name;
+# NATS_CONTAINER_NAME overrides the container name alone.
 set -euo pipefail
 
-NAME="saas-template-nats"
+NAME="${NATS_CONTAINER_NAME:-${APP_SLUG:-saas-template}-nats}"
+SERVER_NAME="${APP_SLUG:-saas-template}"
 IMAGE="nats:2.10-alpine"
 MONITOR_PORT="${NATS_MONITOR_PORT:-8222}"
 CLIENT_PORT="${NATS_CLIENT_PORT:-4222}"
@@ -48,7 +52,7 @@ start() {
         -p "${CLIENT_PORT}:4222" \
         -p "${MONITOR_PORT}:8222" \
         "$IMAGE" \
-        -js -m 8222 --server_name saas-template
+        -js -m 8222 --server_name "$SERVER_NAME"
     echo "nats started ($NAME)"
     echo "  client : nats://${HOST}:${CLIENT_PORT}"
     echo "  monitor: http://${HOST}:${MONITOR_PORT}"

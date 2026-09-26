@@ -17,7 +17,7 @@ API_PORT ?= 8000
 WEB_PORT ?= 5173
 
 help:
-	@echo "SaaS Template targets (development runs from the terminal — no docker needed):"
+	@echo "Multi-tenant SaaS starter targets (development runs from the terminal — no docker needed):"
 	@echo "  make setup        one-time: install uv + Node.js if missing (fnm -> apt -> nvm)"
 	@echo "  make dev          install deps, migrate, seed, then run api (:$(API_PORT)) + web (:$(WEB_PORT))"
 	@echo "  make dev API_PORT=8010 WEB_PORT=5273   use other ports (e.g. when :8000/:5173 are taken)"

@@ -12,20 +12,24 @@
 #
 # Migrations run automatically before each api start (`alembic upgrade head`).
 # Demo seed data is NOT applied — create the first user via /api/v1/register.
-name: saas-template
+#
+# Rebrand the whole stack from one knob: APP_SLUG (project name, compose project,
+# volumes, postgres identity, NATS --server_name) plus APP_NAME (human-facing
+# name handed to the API and the web build).
+name: ${APP_SLUG:-saas-template}
 
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: saas_template
+      POSTGRES_USER: ${APP_SLUG:-saas-template}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in infra/docker/.env}
-      POSTGRES_DB: saas_template
+      POSTGRES_DB: ${APP_SLUG:-saas-template}
     volumes:
-      - saas_template_pg:/var/lib/postgresql/data
+      - ${APP_SLUG:-saas-template}_pg:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U saas_template -d saas_template"]
+      test: ["CMD-SHELL", "pg_isready -U ${APP_SLUG:-saas-template} -d ${APP_SLUG:-saas-template}"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -33,9 +37,9 @@ services:
   nats:
     image: nats:2.10-alpine
     restart: unless-stopped
-    command: ["-js", "-sd", "/data", "-m", "8222", "--server_name", "saas-template"]
+    command: ["-js", "-sd", "/data", "-m", "8222", "--server_name", "${APP_SLUG:-saas-template}"]
     volumes:
-      - saas_template_nats:/data
+      - ${APP_SLUG:-saas-template}_nats:/data
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz >/dev/null || exit 1"]
       interval: 5s
@@ -50,7 +54,9 @@ services:
     environment:
       ENVIRONMENT: production
       DEBUG: "false"
-      DATABASE_URL: postgresql+asyncpg://saas_template:${POSTGRES_PASSWORD}@postgres:5432/saas_template
+      APP_NAME: ${APP_NAME:-saas-template-api}
+      APP_SLUG: ${APP_SLUG:-saas-template}
+      DATABASE_URL: postgresql+asyncpg://${APP_SLUG:-saas-template}:${POSTGRES_PASSWORD}@postgres:5432/${APP_SLUG:-saas-template}
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in infra/docker/.env}
       FERNET_KEYS: ${FERNET_KEYS:?set FERNET_KEYS in infra/docker/.env}
       SECRET_ENCRYPT_VERSION: ${SECRET_ENCRYPT_VERSION:-1}
@@ -78,6 +84,7 @@ services:
         # Leave unset for same-origin relative URLs (default, recommended).
         VITE_API_URL: ${VITE_API_URL:-}
         VITE_WS_URL: ${VITE_WS_URL:-}
+        VITE_APP_NAME: ${APP_NAME:-}
     restart: unless-stopped
     ports:
       - "${WEB_PORT:-8080}:80"
@@ -86,5 +93,5 @@ services:
         condition: service_healthy
 
 volumes:
-  saas_template_pg:
-  saas_template_nats:
+  ${APP_SLUG:-saas-template}_pg:
+  ${APP_SLUG:-saas-template}_nats:

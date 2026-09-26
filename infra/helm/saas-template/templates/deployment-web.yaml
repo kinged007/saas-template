@@ -3,18 +3,18 @@ kind: Deployment
 metadata:
   name: {{ include "saas-template.fullname" . }}-web
   labels:
-    app.kubernetes.io/name: saas-template
+    app.kubernetes.io/name: {{ include "saas-template.name" . }}
     app.kubernetes.io/component: web
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: saas-template
+      app.kubernetes.io/name: {{ include "saas-template.name" . }}
       app.kubernetes.io/component: web
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: saas-template
+        app.kubernetes.io/name: {{ include "saas-template.name" . }}
         app.kubernetes.io/component: web
     spec:
       containers:

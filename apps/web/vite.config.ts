@@ -7,9 +7,18 @@ export default defineConfig(({ mode }) => {
   // A literal, not a runtime call, so esbuild folds the dev-note branches away
   // and their text never reaches the production bundle.
   const showDevNotes = (env.VITE_ENVIRONMENT ?? mode).toLowerCase().startsWith("dev");
+  const appName = env.VITE_APP_NAME || "SaaS Template";
 
   return {
-    plugins: [react()],
+    plugins: [
+      react(),
+      {
+        // The document title is branding, not a Vite built-in: it needs a
+        // default for the common case where VITE_APP_NAME is unset.
+        name: "app-name",
+        transformIndexHtml: (html: string) => html.replaceAll("%APP_NAME%", appName),
+      },
+    ],
     define: {
       __DEV_NOTES__: JSON.stringify(showDevNotes),
     },

@@ -2,25 +2,25 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: saas_template
-      POSTGRES_PASSWORD: saas_template
-      POSTGRES_DB: saas_template
+      POSTGRES_USER: ${APP_SLUG:-saas-template}
+      POSTGRES_PASSWORD: ${APP_SLUG:-saas-template}
+      POSTGRES_DB: ${APP_SLUG:-saas-template}
     ports:
       - "5432:5432"
     volumes:
-      - saas_template_pg:/var/lib/postgresql/data
+      - ${APP_SLUG:-saas-template}_pg:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U saas_template"]
+      test: ["CMD-SHELL", "pg_isready -U ${APP_SLUG:-saas-template}"]
       interval: 5s
       timeout: 3s
       retries: 10
 
   nats:
     image: nats:2.10-alpine
-    command: ["-js", "-m", "8222", "--server_name", "saas-template"]
+    command: ["-js", "-m", "8222", "--server_name", "${APP_SLUG:-saas-template}"]
     ports:
       - "4222:4222"
       - "8222:8222"
 
 volumes:
-  saas_template_pg:
+  ${APP_SLUG:-saas-template}_pg:

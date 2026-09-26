@@ -1,23 +1,31 @@
-# SaaS template on AWS EKS — reference deployment (same chart works on GKE/AKS).
+# Reference deployment on AWS EKS (same chart works on GKE/AKS).
 #
 # Usage:
 #   terraform init
-#   terraform plan -var="domain=saas-template.example.com" -var="secret_key=..." -var="fernet_keys=..."
+#   terraform plan -var="domain=app.example.com" -var="secret_key=..." -var="fernet_keys=..."
 #   terraform apply
 #
-# Creates: VPC + EKS cluster + node group, then installs the SaaS template Helm
-# chart (API + Web + optional postgres/NATS) behind an ALB ingress.
+# Creates: VPC + EKS cluster + node group, then installs the Helm chart
+# (API + Web + optional postgres/NATS) behind an ALB ingress.
+#
+# `project` is the single branding knob: cluster, namespace, release, image
+# repository, service DNS names and Kubernetes object names all follow it.
 
 variable "region" {
   default = "eu-west-1"
 }
 
+variable "project" {
+  description = "Kebab-case product name, e.g. acme"
+  default     = "saas-template"
+}
+
 variable "cluster_name" {
-  default = "saas-template"
+  default = var.project
 }
 
 variable "domain" {
-  description = "Ingress host, e.g. saas-template.example.com"
+  description = "Ingress host, e.g. app.example.com"
 }
 
 variable "secret_key" {
@@ -83,42 +91,43 @@ module "eks" {
 }
 
 # ----------------------------------------------------------------------------
-# SaaS template Helm release
+# Helm release
 # ----------------------------------------------------------------------------
 
-resource "kubernetes_namespace" "saas_template" {
+resource "kubernetes_namespace" "app" {
   metadata {
-    name = "saas-template"
+    name = var.project
   }
 }
 
-resource "kubernetes_secret" "saas_template_secrets" {
+resource "kubernetes_secret" "app_secrets" {
   metadata {
-    name      = "saas-template-secrets"
-    namespace = kubernetes_namespace.saas_template.metadata[0].name
+    name      = "${var.project}-secrets"
+    namespace = kubernetes_namespace.app.metadata[0].name
   }
 
   data = {
     SECRET_KEY   = var.secret_key
     FERNET_KEYS  = var.fernet_keys
-    DATABASE_URL = "postgresql+asyncpg://saas_template:change-me@saas-template-postgres.saas-template.svc.cluster.local:5432/saas_template"
-    NATS_URL     = "nats://saas-template-nats.saas-template.svc.cluster.local:4222"
+    DATABASE_URL = "postgresql+asyncpg://${var.project}:change-me@${var.project}-postgres.${var.project}.svc.cluster.local:5432/${var.project}"
+    NATS_URL     = "nats://${var.project}-nats.${var.project}.svc.cluster.local:4222"
   }
 }
 
-resource "helm_release" "saas_template" {
-  name       = "saas-template"
-  namespace  = kubernetes_namespace.saas_template.metadata[0].name
+resource "helm_release" "app" {
+  name       = var.project
+  namespace  = kubernetes_namespace.app.metadata[0].name
   chart      = "../../infra/helm/saas-template"
-  depends_on = [kubernetes_secret.saas_template_secrets]
+  depends_on = [kubernetes_secret.app_secrets]
 
   values = [
     <<-EOT
+    nameOverride: ${var.project}
     image:
-      repository: <your-registry>/saas-template
+      repository: <your-registry>/${var.project}
       apiTag: latest
       webTag: latest
-    existingSecret: saas-template-secrets
+    existingSecret: ${var.project}-secrets
     corsOrigins: "https://${var.domain}"
     frontendUrl: "https://${var.domain}"
     ingress:
@@ -164,7 +173,7 @@ module "aws_lb_iam_role" {
   source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
   version = "5.39.0"
 
-  role_name                              = "saas-template-lb-controller"
+  role_name                              = "${var.project}-lb-controller"
   attach_load_balancer_controller_policy = true
 
   oidc_providers = {

@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader } from "@/co
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SsoButtons, fetchAuthConfig, type AuthConfig } from "@/components/AuthConfig";
+import { APP_NAME } from "@/config";
 import { authProvider, seedWorkspace } from "@/providers/authProvider";
 import { API_URL, httpClient } from "@/providers/dataProvider";
 import { identityStore, tokenStore, workspaceStore } from "@/utils/storage";
@@ -110,7 +111,7 @@ export function LoginPage() {
     <div className="bg-background flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <img src="/logo.svg" alt="SaaS Template" className="mx-auto mb-2 w-48" />
+          <img src="/logo.svg" alt={APP_NAME} className="mx-auto mb-2 w-48" />
           <CardDescription>Sign in to your account</CardDescription>
           {passwordChanged && (
             <Badge variant="success" className="mt-2 w-fit self-center bg-green-800 hover:bg-green-900">
