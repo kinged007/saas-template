@@ -53,6 +53,7 @@ import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "../contexts/WorkspaceConte
 import { activeWorkspacePermissions } from "../utils/permissions";
 import { ThemeToggle } from "./refine-ui/theme/theme-toggle";
 import { NotificationCenter } from "./NotificationCenter";
+import { PendingInvitationsBadge } from "./PendingInvitations";
 import { cn } from "@/lib/utils";
 import type { Identity } from "../types";
 import { getDisplayName } from "../types";
@@ -263,6 +264,7 @@ function UserMenu() {
         <DropdownMenuItem onClick={() => navigate("/invitations")}>
           <Mail />
           Invitations
+          <PendingInvitationsBadge />
         </DropdownMenuItem>
         {canViewApiKeys && (
           <DropdownMenuItem onClick={() => navigate("/api-keys")}>

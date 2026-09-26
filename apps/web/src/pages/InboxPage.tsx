@@ -24,6 +24,7 @@ import { TiptapEditor } from "../components/inbox/TiptapEditor";
 import {
   applyConversationRead,
   applyMessageCreated,
+  invalidateUnreadCounts,
   removeThreadMessage,
   upsertThreadMessage,
 } from "../providers/liveCache";
@@ -446,6 +447,11 @@ export function InboxPage() {
         onSuccess: () => {
           if (isUnread) {
             applyConversationRead(conv.id);
+          } else {
+            // Marking unread does not touch the row badge optimistically — the
+            // refetched list carries the new count — but the sidebar badge and
+            // the bell still need their counters refetched.
+            invalidateUnreadCounts();
           }
           convQuery.refetch();
           invalidate({ resource: "conversations", invalidates: ["list"] });

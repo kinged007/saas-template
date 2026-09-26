@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
 import { PageHeader } from "../components/refine-ui/layout/page-header";
+import { PendingInvitationsCard } from "../components/PendingInvitations";
 import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceContext";
 import { identityStore, setActiveWorkspaceId, workspaceStore } from "../utils/storage";
 import type { Identity, Workspace } from "../types";
@@ -96,6 +97,7 @@ export function WorkspaceCreatePage() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader title="Create workspace" />
+      <PendingInvitationsCard />
       <Card className="max-w-lg">
         <CardContent className="pt-6">
         <form onSubmit={submit} className="flex flex-col gap-4">
