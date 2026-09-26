@@ -74,7 +74,12 @@ export function UsersSection() {
         },
         errorNotification: false,
       },
-      { onSuccess: () => void query.refetch() },
+      {
+        onSuccess: () => {
+          void query.refetch();
+          void detailQuery.query.refetch();
+        },
+      },
     );
   };
 
