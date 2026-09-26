@@ -175,8 +175,13 @@ header = header.replace(
 path.write_text(header + sep + body)
 PY
 SLUG="$(echo "$MESSAGE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]\+/_/g; s/_*$//')"
-mv "$BASELINE" "alembic/versions/0001_${SLUG:-baseline}.py"
-BASELINE_NAME="$(ls alembic/versions/0001_*.py | grep -v '0001_initial' | xargs basename)"
+BASELINE_NAME="0001_${SLUG:-baseline}.py"
+if [ -e "alembic/versions/$BASELINE_NAME" ]; then
+  echo "FAIL: alembic/versions/$BASELINE_NAME already exists — pass a different m= so the" >&2
+  echo "      baseline does not overwrite an existing migration" >&2
+  exit 1
+fi
+mv "$BASELINE" "alembic/versions/$BASELINE_NAME"
 echo "    ok: $BASELINE_NAME (revision 0001, down_revision None)"
 
 # The baseline claims revision 0001, which the old 0001 also declares, so the
