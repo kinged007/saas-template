@@ -3,7 +3,15 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field, StrictBool
+from pydantic import (
+    AnyHttpUrl,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    StrictBool,
+    field_validator,
+)
 
 
 class LoginRequest(BaseModel):
@@ -129,6 +137,16 @@ class ApiKeyCreate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     permissions: list[str] = Field(default_factory=list)
     usage_quota: int | None = Field(default=None, ge=0)
+    # Optional hard expiry. Naive input is rejected: without an offset the
+    # instant is ambiguous, and the service compares against UTC.
+    expires_at: datetime | None = Field(default=None, examples=["2027-01-01T00:00:00Z"])
+
+    @field_validator("expires_at")
+    @classmethod
+    def _expires_at_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("expires_at must include a timezone offset (e.g. 2027-01-01T00:00Z)")
+        return value
 
 
 class ApiKeyQuotaUpdate(BaseModel):

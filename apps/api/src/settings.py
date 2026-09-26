@@ -107,6 +107,9 @@ class Settings(BaseSettings):
     jobs_log_retention_days: int = Field(default=90, ge=0)
     notifications_retention_days: int = Field(default=90, ge=0)
     audit_log_retention_days: int = Field(default=0, ge=0)
+    # Days a revoked or expired API key is kept before the apikeys.cleanup job
+    # hard-deletes it. 0 disables deletion.
+    api_key_retention_days: int = Field(default=30, ge=0)
 
     @property
     def database_url_sqlite(self) -> bool:

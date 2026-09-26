@@ -45,6 +45,15 @@ const apiKeySchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
   permissions: z.array(z.string()),
   usage_quota: z.number().int().min(0).nullable().optional(),
+  // datetime-local value ("2027-01-01T09:00"), empty = never expires.
+  expires_at: z
+    .string()
+    .nullable()
+    .optional()
+    .refine(
+      (v) => !v || new Date(v).getTime() > Date.now(),
+      { message: "Expiry must be in the future" },
+    ),
 });
 
 type ApiKeyFormData = z.infer<typeof apiKeySchema>;
@@ -66,7 +75,7 @@ export function ApiKeyCreatePage() {
     ...form
   } = useForm<BaseRecord, HttpError, ApiKeyFormData>({
     resolver: zodResolver(apiKeySchema),
-    defaultValues: { name: "", permissions: [], usage_quota: null },
+    defaultValues: { name: "", permissions: [], usage_quota: null, expires_at: null },
     refineCoreProps: {
       resource: "api-keys",
       action: "create",
@@ -87,7 +96,14 @@ export function ApiKeyCreatePage() {
 
   const onSubmit = async (data: ApiKeyFormData) => {
     try {
-      const response = await onFinish(data);
+      // The datetime-local input carries no offset; the API requires an aware
+      // datetime, so send the browser-local instant as UTC ISO.
+      const response = await onFinish({
+        ...data,
+        expires_at: data.expires_at
+          ? new Date(data.expires_at).toISOString()
+          : null,
+      });
       if (response) {
         setCreated(response.data as ApiKeyCreated);
       }
@@ -189,6 +205,27 @@ export function ApiKeyCreatePage() {
                 </FormControl>
                 <FormDescription>
                   Max authenticated uses before the key is rejected. Leave empty for unlimited.
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="expires_at"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Expires at (optional)</FormLabel>
+                <FormControl>
+                  <Input
+                    type="datetime-local"
+                    value={field.value ?? ""}
+                    onChange={(e) => field.onChange(e.target.value || null)}
+                  />
+                </FormControl>
+                <FormDescription>
+                  The key stops authenticating at this moment. Leave empty for
+                  no expiry.
                 </FormDescription>
                 <FormMessage />
               </FormItem>

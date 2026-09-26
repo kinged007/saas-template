@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.dates import now_utc
+from src.core.dates import ensure_utc, now_utc
 from src.core.permissions import ALL_PERMISSIONS_INCLUDING_KEY_ONLY, KEY_ONLY_PERMISSIONS
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
@@ -77,6 +78,7 @@ class ApiKeyService:
         ip_address: str | None = None,
         minting_key: ApiKey | None = None,
         usage_quota: int | None = None,
+        expires_at: datetime | None = None,
     ) -> tuple[ApiKey, str]:
         """Create a key whose permissions are capped by the actor's own.
 
@@ -106,6 +108,8 @@ class ApiKeyService:
 
         if usage_quota is not None and usage_quota < 0:
             raise ApiKeyError("usage quota cannot be negative")
+        if expires_at is not None and ensure_utc(expires_at) <= now_utc():
+            raise ApiKeyError("expiry must be in the future")
 
         raw = self.generate()
         key = ApiKey(
@@ -116,6 +120,7 @@ class ApiKeyService:
             permissions=sorted(requested),
             created_by_user_id=actor.id,
             usage_quota=usage_quota,
+            expires_at=expires_at,
         )
         self._session.add(key)
         await self._session.commit()
@@ -131,6 +136,7 @@ class ApiKeyService:
                 "permissions": key.permissions,
                 "created_by_user_id": actor.id,
                 "created_by_name": actor.display_name,
+                "expires_at": key.expires_at.isoformat() if key.expires_at else None,
             },
         )
         await publish_audit(
@@ -204,11 +210,17 @@ class ApiKeyService:
         return key
 
     async def authenticate(self, raw: str) -> ApiKey | None:
-        """Resolve a raw bearer secret to an active key, or None."""
+        """Resolve a raw bearer secret to an active key, or None.
+
+        A key past its `expires_at` is rejected here rather than relying on the
+        cleanup job, so expiry takes effect the moment it passes.
+        """
         stmt = select(ApiKey).where(ApiKey.key_hash == self._hash(raw))
         result = await self._session.execute(stmt)
         key = result.scalar_one_or_none()
         if key is None or key.revoked_at is not None:
+            return None
+        if key.expires_at is not None and ensure_utc(key.expires_at) <= now_utc():
             return None
         return key
 

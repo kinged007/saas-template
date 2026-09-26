@@ -15,6 +15,7 @@ from sqlalchemy import delete, select
 
 from src.core.dates import ensure_utc, now_utc
 from src.jobs.registry import JobContext, JobSpec, job_registry
+from src.models.api_key import ApiKey
 from src.models.core import Invitation, Notification, NotificationPreference
 
 logger = logging.getLogger(__name__)
@@ -263,6 +264,58 @@ async def retention_cleanup(ctx: JobContext) -> None:
         f"retention cleanup — {runs_removed} run(s), "
         f"{notifs_removed} notification(s), {audit_removed} audit entr(ies) removed"
     )
+
+
+@job_registry.register(
+    JobSpec(
+        key="apikeys.cleanup",
+        name="API key expiry cleanup",
+        description=(
+            "Revokes API keys whose expires_at has passed and hard-deletes keys "
+            "revoked or expired more than the retention window ago. Expired keys "
+            "already fail authentication immediately, so revoking them here keeps "
+            "the stored state honest rather than gating access."
+        ),
+        scope="global",
+        schedule="0 5 * * *",
+        params_schema={},
+        default_enabled=True,
+        missed_policy="single",
+        timeout_seconds=300,
+    )
+)
+async def api_key_cleanup(ctx: JobContext) -> None:
+    from datetime import timedelta
+
+    from src.settings import settings
+
+    now = now_utc()
+    async with ctx.session() as session:
+        rows = list((await session.execute(select(ApiKey))).scalars().all())
+        expired = [
+            k
+            for k in rows
+            if k.revoked_at is None and k.expires_at is not None and ensure_utc(k.expires_at) <= now
+        ]
+        for key in expired:
+            key.revoked_at = now
+
+        removed = 0
+        if settings.api_key_retention_days > 0:
+            cutoff = now - timedelta(days=settings.api_key_retention_days)
+            stale = [
+                k for k in rows if k.revoked_at is not None and ensure_utc(k.revoked_at) <= cutoff
+            ]
+            for key in stale:
+                await session.delete(key)
+            removed = len(stale)
+        await session.commit()
+    logger.info(
+        "api key cleanup — %d key(s) revoked as expired, %d key(s) deleted",
+        len(expired),
+        removed,
+    )
+    print(f"api key cleanup — {len(expired)} key(s) revoked as expired, {removed} key(s) deleted")
 
 
 @job_registry.register(
