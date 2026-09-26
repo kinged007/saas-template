@@ -171,3 +171,38 @@ async def test_list_rejects_bad_pagination(app_client):
     headers = ws_headers(tokens, ws["id"])
     resp = await app_client.get("/api/v1/files?limit=abc", headers=headers)
     assert resp.status_code == 422, resp.text
+
+
+async def test_oversize_upload_is_rejected_without_buffering_whole_body(app_client, monkeypatch):
+    """413 must fire while reading, not after the entire body is buffered."""
+    from starlette.datastructures import UploadFile
+
+    from src.api.routes import files as files_route
+    from tests.conftest import create_workspace, login, register_user, ws_headers
+
+    await register_user(app_client, email="files-big@example.com")
+    tokens = await login(app_client, email="files-big@example.com")
+    ws = await create_workspace(app_client, tokens, name="Big WS")
+    headers = ws_headers(tokens, ws["id"])
+
+    limit = files_route.settings.storage_max_upload_bytes
+    pulled = 0
+    real_read = UploadFile.read
+
+    async def counting_read(self, size=-1):
+        nonlocal pulled
+        data = await real_read(self, size)
+        pulled += len(data)
+        return data
+
+    monkeypatch.setattr(UploadFile, "read", counting_read)
+
+    body = PNG_BYTES + b"\x00" * (limit + 4 * 1024 * 1024)
+    resp = await app_client.post(
+        "/api/v1/files",
+        files={"file": ("big.png", io.BytesIO(body), "image/png")},
+        headers=headers,
+    )
+    assert resp.status_code == 413, resp.text
+    # Bounded read stops one chunk past the cap instead of consuming the body.
+    assert pulled <= limit + 1024 * 1024, f"route buffered {pulled} bytes"

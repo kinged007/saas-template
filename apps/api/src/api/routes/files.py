@@ -44,12 +44,23 @@ async def upload_file(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    content = await file.read()
-    if len(content) > settings.storage_max_upload_bytes:
-        raise HTTPException(
-            status.HTTP_413_CONTENT_TOO_LARGE,
-            f"file exceeds {settings.storage_max_upload_bytes} bytes",
-        ) from None
+    limit = settings.storage_max_upload_bytes
+    # Read in bounded chunks so an oversize body is rejected without ever
+    # buffering all of it; the worst case is the cap plus one chunk.
+    chunk_size = 1024 * 1024
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(
+                status.HTTP_413_CONTENT_TOO_LARGE, f"file exceeds {limit} bytes"
+            ) from None
+        chunks.append(chunk)
+    content = b"".join(chunks)
     try:
         return await _service(db, container).upload(
             workspace_id=workspace_id,
