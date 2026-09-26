@@ -66,10 +66,16 @@ const MENU_ITEMS = [
   { key: "/members", label: "Members", icon: Users, permission: "member:read" },
 ];
 
+// GET /workspaces/search is gated by workspace:read, same as the Dashboard entry.
+const SEARCH_PERMISSION = "workspace:read";
+
+// ⌘K on Apple hardware, Ctrl+K elsewhere.
+const SEARCH_HOTKEY = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl+K";
+
 function SearchShortcut() {
   return (
-    <kbd className="text-muted-foreground ml-auto hidden rounded border px-1.5 py-0.5 font-mono text-[10px] group-data-[collapsible=icon]:hidden">
-      ⌘K
+    <kbd className="text-muted-foreground ml-auto rounded border px-1.5 py-0.5 font-mono text-[10px] group-data-[collapsible=icon]:hidden">
+      {SEARCH_HOTKEY}
     </kbd>
   );
 }
@@ -100,13 +106,15 @@ function SidebarNav({ openSearch }: { openSearch: () => void }) {
       <SidebarMenu>
         {/* Search sits above Dashboard, per the issue; it opens a modal rather
             than navigating, so it is a real button and not a SidebarMenuButton link. */}
-        <SidebarMenuItem>
-          <SidebarMenuButton onClick={openSearch} tooltip="Search (⌘K)">
-            <Search className="h-4 w-4 shrink-0" />
-            <span>Search</span>
-            <SearchShortcut />
-          </SidebarMenuButton>
-        </SidebarMenuItem>
+        {can(SEARCH_PERMISSION) && (
+          <SidebarMenuItem>
+            <SidebarMenuButton onClick={openSearch} tooltip={`Search (${SEARCH_HOTKEY})`}>
+              <Search className="h-4 w-4 shrink-0" />
+              <span>Search</span>
+              <SearchShortcut />
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        )}
         {items.map((item) => {
           const Icon = item.icon;
           const active = isActive(item.key);
@@ -309,10 +317,12 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() === "k" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        setSearchOpen((v) => !v);
-      }
+      if (e.defaultPrevented || e.key.toLowerCase() !== "k" || !(e.metaKey || e.ctrlKey)) return;
+      // Skip editable targets (Ctrl+K is kill-line in most editors) and any open
+      // dialog, so the palette never hijacks typing nor stacks over a modal.
+      if ((e.target as HTMLElement | null)?.closest("input, textarea, select, [contenteditable], [role=dialog]")) return;
+      e.preventDefault();
+      setSearchOpen(true);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);

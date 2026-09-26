@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useCustom } from "@refinedev/core";
 import { useNavigate } from "react-router";
 
 import {
@@ -11,7 +10,11 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { useWorkspaceCustom } from "@/hooks/useWorkspaceQuery";
 import type { WorkspaceSearchResponse, WorkspaceSearchResult } from "@/types";
+
+/** The endpoint rejects q outside 2-200 characters, so cap before sending. */
+const MAX_QUERY_LENGTH = 200;
 
 function resultLink(r: WorkspaceSearchResult): string {
   switch (r.type) {
@@ -56,13 +59,13 @@ export function WorkspaceSearchDialog({
   }, [open]);
 
   useEffect(() => {
-    const t = window.setTimeout(() => setQ(input.trim()), 300);
+    const t = window.setTimeout(() => setQ(input.trim().slice(0, MAX_QUERY_LENGTH)), 300);
     return () => window.clearTimeout(t);
   }, [input]);
 
   // The dataProvider attaches X-Workspace-ID from the active workspace, so the
   // search is workspace-scoped without the dialog knowing which one is active.
-  const { result, query } = useCustom<WorkspaceSearchResponse>({
+  const { result, query } = useWorkspaceCustom<WorkspaceSearchResponse>({
     url: "workspaces/search",
     method: "get",
     config: { query: { q } },
@@ -98,11 +101,15 @@ export function WorkspaceSearchDialog({
               </p>
             ) : query.isPending ? (
               <p className="text-muted-foreground p-4 text-center text-sm">Searching…</p>
+            ) : query.isError ? (
+              <p className="text-destructive p-4 text-center text-sm">
+                Search failed: {query.error?.message ?? "please try again."}
+              </p>
             ) : (
               <CommandEmpty>No results for “{q}”.</CommandEmpty>
             )}
             {Object.entries(grouped).map(([type, rows]) => (
-              <CommandGroup key={type} heading={type}>
+              <CommandGroup key={type} heading={type.charAt(0).toUpperCase() + type.slice(1)}>
                 {rows.map((r) => (
                   <CommandItem
                     key={`${r.type}-${r.id}`}
