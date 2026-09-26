@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from datetime import UTC, datetime
 
 from sqlalchemy import or_, select
@@ -49,6 +50,21 @@ _EXPORT_NOTIFICATIONS_CAP = 5000
 _EXPORT_AUDIT_CAP = 5000
 
 
+# Profile fields mirrored into the members CSV. Prefixed because the profile
+# projection also carries display_name/email/avatar_url, which would otherwise
+# shadow the user columns. phone_number and date_of_birth are left out: the
+# projection redacts both, and a permanently empty column reads as data loss.
+_MEMBER_PROFILE_COLUMNS = [
+    "first_name",
+    "last_name",
+    "bio",
+    "timezone",
+    "locale",
+    "website_url",
+    "location",
+    "custom_data",
+]
+
 # resource -> tabular CSV columns for ?format=csv&resource=<name>
 # Single source of truth: GET /workspaces/export/resources serves these keys so
 # the frontend selector never carries its own copy of the list.
@@ -62,7 +78,8 @@ CSV_RESOURCES: dict[str, list[str]] = {
         "role",
         "status",
         "joined_at",
-    ],
+    ]
+    + [f"profile_{c}" for c in _MEMBER_PROFILE_COLUMNS],
     "invitations": ["email", "status", "expires_at", "created_at"],
     "api_keys": ["name", "key_prefix", "permissions", "revoked_at", "created_at"],
     "jobs": ["key", "name", "enabled", "cron_schedule", "next_run_at"],
@@ -105,6 +122,11 @@ async def _ensure_membership(session: AsyncSession, workspace_id: str, user_id: 
     )
     if result.scalar_one_or_none() is None:
         raise ConversationForbidden("you are not a member of this workspace")
+
+
+def _csv_cell(value: object) -> object:
+    """JSON-encode structured values so a CSV cell stays valid JSON, not repr."""
+    return json.dumps(value) if isinstance(value, (dict, list)) else value
 
 
 class SearchExportService:
@@ -534,6 +556,13 @@ class SearchExportService:
                     "role": r.get("role"),
                     "status": r.get("status"),
                     "joined_at": r.get("joined_at"),
+                    # Read back from the bundle, so the CSV carries exactly what
+                    # the JSON export carries: the redacted public projection,
+                    # and empty cells when the member has no profile row.
+                    **{
+                        f"profile_{c}": _csv_cell((r.get("profile") or {}).get(c))
+                        for c in _MEMBER_PROFILE_COLUMNS
+                    },
                 }
                 for r in rows
             ]

@@ -236,15 +236,72 @@ async def test_export_json_and_csv(app_client):
     )
     assert csv_resp.status_code == 200, csv_resp.text
     assert csv_resp.headers["content-type"].startswith("text/csv")
-    assert csv_resp.text.splitlines()[0] == (
-        "id,email,display_name,avatar_url,email_verified,role,status,joined_at"
-    )
+    member_rows = list(csv.DictReader(io.StringIO(csv_resp.text)))
+    assert member_rows, "expected member rows"
+    from src.services.search_export import CSV_RESOURCES
+
+    assert list(member_rows[0]) == CSV_RESOURCES["members"]
+    searcher = next(r for r in member_rows if r["email"] == "searcher@example.com")
+    # The profile table must be exported, not just the user row: the seeded
+    # member's name lives only in user_profiles, and issue #167 asks for those
+    # fields "even if empty".
+    assert searcher["profile_first_name"] == "Test"
+    assert searcher["profile_last_name"] == "User"
+    # Unset profile fields are empty cells, not dropped columns.
+    assert searcher["profile_bio"] == ""
+    assert searcher["profile_timezone"] == ""
+    # Redacted by the public projection, so they stay out of the column set
+    # rather than shipping as permanently empty.
+    assert "profile_phone_number" not in searcher
+    assert "profile_date_of_birth" not in searcher
+    # structured profile values stay valid JSON, not Python repr
+    assert json.loads(searcher["profile_custom_data"]) == {}
     bad = await client.get(
         "/api/v1/workspaces/export",
         params={"format": "csv", "resource": "nope"},
         headers=h,
     )
     assert bad.status_code == 422
+
+
+async def test_export_members_csv_keeps_columns_for_members_without_profile(app_client):
+    """A member with no profile row still gets every profile column, empty."""
+    from src.services.search_export import CSV_RESOURCES
+
+    client, h, ws, conv = await _setup(app_client)
+    # register_user always creates a profile, so delete the row to get a member
+    # without one — the columns must survive the missing row, not vanish with it.
+    from sqlalchemy import delete, select
+
+    from src.db.session import SessionFactory
+    from src.models.user_profile import UserProfile
+    from src.models.workspace import User
+
+    email = "teammate@example.com"
+    async with SessionFactory() as session:
+        user_id = (
+            (await session.execute(select(User).where(User.email == email).limit(1)))
+            .scalar_one()
+            .id
+        )
+        await session.execute(delete(UserProfile).where(UserProfile.user_id == user_id))
+        await session.commit()
+        assert await session.get(UserProfile, user_id) is None
+
+    resp = await client.get(
+        "/api/v1/workspaces/export", params={"format": "csv", "resource": "members"}, headers=h
+    )
+    assert resp.status_code == 200, resp.text
+    rows = {r["email"]: r for r in csv.DictReader(io.StringIO(resp.text))}
+    assert email in rows
+    bare = rows[email]
+    assert set(bare) == set(CSV_RESOURCES["members"])
+    for col in CSV_RESOURCES["members"]:
+        if col.startswith("profile_"):
+            assert bare[col] == "", col
+    # The rest of the row is unaffected by the missing profile.
+    assert bare["email"] == email
+    assert bare["role"]
 
 
 async def test_export_audit_csv(app_client):
