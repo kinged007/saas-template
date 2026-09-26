@@ -43,6 +43,31 @@ type MentionListRef = {
   onKeyDown: (props: SuggestionKeyDownProps) => boolean;
 };
 
+/** Rows the picker renders; a longer match set is scrolled, not paginated. */
+const MENTION_PICKER_LIMIT = 8;
+
+/**
+ * Rank candidates for the `@` query: exact match, then a label starting with
+ * the query, then any other label containing it. Each bucket keeps the order
+ * the editor was handed, so equally-ranked names stay in that order. The
+ * result is capped, so the list stays usable as the mentionable set grows.
+ */
+export function rankMentionTargets(targets: MentionTarget[], query: string): MentionTarget[] {
+  const q = query.trim().toLowerCase();
+  // An empty query lists everyone, so it needs the cap just as much.
+  if (!q) return targets.slice(0, MENTION_PICKER_LIMIT);
+  const exact: MentionTarget[] = [];
+  const wordPrefix: MentionTarget[] = [];
+  const other: MentionTarget[] = [];
+  for (const target of targets) {
+    const label = target.label.toLowerCase();
+    if (label === q) exact.push(target);
+    else if (label.startsWith(q)) wordPrefix.push(target);
+    else if (label.includes(q)) other.push(target);
+  }
+  return [...exact, ...wordPrefix, ...other].slice(0, MENTION_PICKER_LIMIT);
+}
+
 const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(function MentionList(
   props,
   ref,
@@ -54,6 +79,12 @@ const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(f
     const item = items[i];
     if (item) props.command({ id: item.id, label: item.label, type: item.type });
   };
+
+  // Narrowing the query shortens the list, which can leave the highlight past
+  // the end. Clamp it so Enter still picks a row.
+  useEffect(() => {
+    setIndex((i) => (items.length === 0 ? 0 : Math.min(i, items.length - 1)));
+  }, [items]);
 
   useImperativeHandle(ref, () => ({
     onKeyDown: ({ event }) => {
@@ -162,12 +193,7 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           ],
           suggestion: {
             char: "@",
-            // ponytail: naive substring match, so "an" also matches "Ann". Swap in a
-            // fuzzy matcher if the workspace member list ever gets large.
-            items: ({ query }) => {
-              const q = query.toLowerCase();
-              return (mentionsRef.current ?? []).filter((m) => m.label.toLowerCase().includes(q));
-            },
+            items: ({ query }) => rankMentionTargets(mentionsRef.current ?? [], query),
             render: () => {
               let component: ReactRenderer<MentionListRef> | null = null;
               let unmount: (() => void) | null = null;
