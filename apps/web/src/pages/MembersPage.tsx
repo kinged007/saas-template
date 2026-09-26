@@ -242,7 +242,9 @@ export function MembersPage() {
               <Label>Role</Label>
               <Select value={inviteRoleId} onValueChange={setInviteRoleId}>
                 <SelectTrigger className="w-40">
-                  <SelectValue placeholder="Role">{roleName(inviteRoleId)}</SelectValue>
+                  <SelectValue placeholder="Role">
+                    {roleName(inviteRoleId) ?? inviteRoleId}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {assignableRoles.map((r) => (
