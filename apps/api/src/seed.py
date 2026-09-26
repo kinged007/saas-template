@@ -212,6 +212,7 @@ async def main() -> None:
                     owner=users["admin@example.com"],
                 )
                 logger.info("created demo workspace %s", spec["slug"])
+                workspaces[WORKSPACES[0]["slug"]] = workspace
             else:
                 owner = await session.scalar(
                     select(WorkspaceMember).where(

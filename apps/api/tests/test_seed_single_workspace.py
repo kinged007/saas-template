@@ -33,6 +33,17 @@ async def test_seed_creates_only_first_workspace_in_single_mode(single_workspace
     assert list((await _workspaces()).values()) == ["acme-corp"]
 
 
+async def test_seed_creates_demo_data_in_clean_single_mode(single_workspace_on):
+    """A clean single-workspace seed still attaches the full demo fixture set."""
+    await seed_main()
+
+    async with SessionFactory() as session:
+        keys = await session.execute(select(ApiKey.id))
+        invites = await session.execute(select(Invitation.id))
+        assert keys.scalars().all() != []
+        assert invites.scalars().all() != []
+
+
 async def test_seed_reuses_oldest_workspace_in_single_mode(single_workspace_on, monkeypatch):
     # Create both fixtures with the flag off: in single mode the second
     # create_workspace() is rejected by design.
