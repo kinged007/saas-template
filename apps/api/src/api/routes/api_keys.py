@@ -55,6 +55,8 @@ def _key_dict(k: ApiKey) -> dict:
         "created_by_user_id": k.created_by_user_id,
         "usage_count": k.usage_count,
         "usage_quota": k.usage_quota,
+"usage_window_count": k.usage_window_count,
+        "usage_window_start": _iso(k.usage_window_start),
         "last_used_at": _iso(k.last_used_at),
         "expires_at": _iso(k.expires_at),
         "revoked_at": _iso(k.revoked_at),

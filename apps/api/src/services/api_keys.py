@@ -29,6 +29,27 @@ class ApiKeyNotFound(ApiKeyError):
     pass
 
 
+def roll_window(key: ApiKey, now: datetime | None = None) -> None:
+    """Start a new quota window when `now` falls in a later calendar month.
+
+    The window is month-aligned in UTC rather than anchored to the first use:
+    any request landing in a new calendar month opens a fresh window, so the
+    stored start is the first instant of that month. `usage_count` is the
+    lifetime total and is never reset.
+
+    Mutates in place; the caller commits. A window start read back from SQLite
+    is naive, hence ensure_utc.
+    """
+    now = ensure_utc(now or now_utc())
+    start = key.usage_window_start
+    if start is not None:
+        start = ensure_utc(start)
+        if (start.year, start.month) == (now.year, now.month):
+            return
+    key.usage_window_count = 0
+    key.usage_window_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
 class ApiKeyService:
     """Workspace-scoped API key management.
 
@@ -238,34 +259,14 @@ class ApiKeyService:
             return None
         return key
 
-    async def touch(self, key: ApiKey) -> bool:
-        # ponytail: lifetime counter, never reset (usage_quota is a lifetime
-        # cap); add a window start column + rollover here when true monthly
-        # quotas are needed.
-        """Record a successful use: bump the usage counter + last_used_at.
-
-        Returns False and leaves the row alone when the quota is already
-        spent. The counter bump and the quota test are one conditional
-        UPDATE, so two requests that read usage_count before either writes
-        race on this statement alone and only the first can spend the last
-        unit. `refresh` keeps the caller's key in step with the row (the
-        session does not expire on commit), so quota headers read
-        post-increment values and a later flush cannot write the old count
-        back."""
-        result = await self._session.execute(
-            update(ApiKey)
-            .where(
-                ApiKey.id == key.id,
-                or_(ApiKey.usage_quota.is_(None), ApiKey.usage_count < ApiKey.usage_quota),
-            )
-            .values(usage_count=ApiKey.usage_count + 1, last_used_at=now_utc())
-            .execution_options(synchronize_session=False)
-        )
-        if result.rowcount == 0:
-            return False
+    async def touch(self, key: ApiKey) -> None:
+        """Record a successful use: bump the lifetime + in-window counters."""
+        roll_window(key)
+        key.usage_count += 1
+        key.usage_window_count += 1
+        key.last_used_at = now_utc()
         await self._session.commit()
         await self._session.refresh(key)
-        return True
 
     async def set_quota(
         self,

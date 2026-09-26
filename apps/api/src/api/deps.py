@@ -12,7 +12,7 @@ from src.core.security.tokens import decode_access_token
 from src.db.session import get_db
 from src.models.api_key import ApiKey
 from src.models.workspace import User, Workspace
-from src.services.api_keys import ApiKeyService
+from src.services.api_keys import ApiKeyService, roll_window
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
 
@@ -148,28 +148,35 @@ async def get_optional_workspace_id(
     return x_workspace_id
 
 
+def _check_key_quota(api_key: ApiKey) -> None:
+    """Reject keys that exhausted this month's quota (None = unlimited)."""
+    if api_key.usage_quota is not None and api_key.usage_window_count >= api_key.usage_quota:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "api key quota exceeded")
+
+
 def _quota_headers(api_key: ApiKey) -> dict[str, str]:
-    """Quota/remaining headers for key-authenticated responses (empty = unlimited)."""
+    """Quota/remaining headers for key-authenticated responses (empty = unlimited).
+
+    Both are per calendar month: Remaining counts the uses left in the current
+    window, not the lifetime total."""
     if api_key.usage_quota is None:
         return {}
     return {
         "X-API-Key-Quota": str(api_key.usage_quota),
-        "X-API-Key-Remaining": str(max(0, api_key.usage_quota - api_key.usage_count)),
+        "X-API-Key-Remaining": str(max(0, api_key.usage_quota - api_key.usage_window_count)),
     }
 
 
 async def record_key_use(api_key: ApiKey, db: AsyncSession, response: Response) -> None:
     """Charge one unit of the key's quota and publish the quota headers.
 
-    Invariant: every branch that authorizes an API key must charge through
-    this function, or the key is unmetered — a hand-rolled `api_key is not
-    None` branch that skips it is the bug this guards against. The 403 comes
-    from the conditional UPDATE's rowcount, never from a pre-read, so two
-    concurrent requests cannot both spend the last unit. `response` is what
-    makes the charge observable (the quota headers); a caller that omits it
-    still charges, but cannot see the balance it just spent."""
-    if not await ApiKeyService(db).touch(api_key):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "api key quota exceeded")
+Shared by require_key_permission and require_permission so the two
+    branches cannot drift."""
+    # Roll the window before the check: a key that ran out last month must be
+    # usable on the first request of the new month, not one request later.
+    roll_window(api_key)
+    _check_key_quota(api_key)
+    await ApiKeyService(db).touch(api_key)
     for k, v in _quota_headers(api_key).items():
         response.headers[k] = v
 

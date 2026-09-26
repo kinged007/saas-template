@@ -192,7 +192,7 @@ export function ApiKeyCreatePage() {
             name="usage_quota"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Usage quota (optional)</FormLabel>
+                <FormLabel>Monthly usage quota (optional)</FormLabel>
                 <FormControl>
                   <Input
                     type="number"
@@ -205,7 +205,7 @@ export function ApiKeyCreatePage() {
                   />
                 </FormControl>
                 <FormDescription>
-                  Max authenticated uses before the key is rejected. Leave empty for unlimited.
+                  Max authenticated uses per calendar month (UTC). Leave empty for unlimited.
                 </FormDescription>
                 <FormMessage />
               </FormItem>

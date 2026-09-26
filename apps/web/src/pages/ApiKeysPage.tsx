@@ -39,7 +39,7 @@ export function ApiKeysPage() {
             <TableRow>
               <TableHead>Name</TableHead>
               <TableHead>Permissions</TableHead>
-              <TableHead>Usage</TableHead>
+              <TableHead>Usage (this month)</TableHead>
               <TableHead>Expires</TableHead>
               <TableHead>Last used</TableHead>
               <TableHead>Created</TableHead>
@@ -72,8 +72,9 @@ export function ApiKeysPage() {
                   </div>
                 </TableCell>
                 <TableCell className="text-muted-foreground">
-                  {key.usage_count ?? 0}
+                  {key.usage_window_count ?? 0}
                   {key.usage_quota != null ? ` / ${key.usage_quota}` : ""}
+                  <p className="text-xs">{key.usage_count ?? 0} total</p>
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {formatDate(key.expires_at)}
