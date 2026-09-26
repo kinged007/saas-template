@@ -121,7 +121,9 @@ async def test_startup_provisions_workspace_and_global_jobs(app_client):
     assert resp.status_code == 200
     keys = {j["key"] for j in resp.json()}
     assert "test.echo" in keys
-    assert "invitations.expire_stale" in keys
+    assert "demo.workspace_report" in keys
+    # the expiry job is global now, so it is not in the workspace list
+    assert "invitations.expire_stale" not in keys
     # workspace list never contains global jobs
     assert "system.heartbeat" not in keys
     assert all(j["scope"] == "workspace" for j in resp.json())
@@ -155,6 +157,9 @@ async def test_global_jobs_require_superuser(app_client):
     keys = {j["key"] for j in resp.json()}
     assert "system.heartbeat" in keys
     assert "test.boom" in keys
+    # enabled by default so a deployment expires invitations without setup
+    expire = _by_key(resp.json(), "invitations.expire_stale")
+    assert expire["scope"] == "global" and expire["enabled"] is True
     assert all(j["workspace_id"] is None for j in resp.json())
 
     # non-superusers are rejected
@@ -659,3 +664,69 @@ async def test_scheduled_tick_with_bus_executes_via_worker(app_client):
     assert logs.status_code == 200
     messages = [e["message"] for e in logs.json()]
     assert any("echo: hello" in m for m in messages), messages
+
+
+async def test_expire_invitations_purges_only_invitations_expired_over_30_days(app_client):
+    """The global expiry job marks stale pending invites, then purges aged ones.
+
+    The purge window is measured from expires_at, not from when the job marked
+    the row: there is no "marked at" column, and an invitation that is 31 days
+    past its expiry has been expired for 31 days.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from src.core.dates import now_utc
+    from src.db.session import SessionFactory
+    from src.jobs.builtin import INVITATION_EXPIRED_RETENTION_DAYS, expire_stale_invitations
+    from src.jobs.registry import JobContext
+    from src.models.core import Invitation
+
+    owner, ws, _headers, roles = await setup_workspace(app_client, "purge@example.com")
+    now = now_utc()
+    aged = timedelta(days=INVITATION_EXPIRED_RETENTION_DAYS + 10)
+    me = (await app_client.get("/api/v1/auth/me", headers=auth_headers(owner))).json()
+    role_id, inviter = next(iter(roles.values())), me["id"]
+
+    def invitation(email: str, token: str, status: str, expires_at):
+        return Invitation(
+            workspace_id=ws["id"],
+            email=email,
+            role_id=role_id,
+            invited_by_user_id=inviter,
+            token=token,
+            status=status,
+            expires_at=expires_at,
+        )
+
+    async with SessionFactory() as session:
+        session.add_all(
+            [
+                # pending and long past expiry: marked, and aged past the window
+                # so the same run purges it
+                invitation("aged@example.com", "purge-aged", "pending", now - aged),
+                # pending but only just past expiry: marked, kept
+                invitation("fresh@example.com", "purge-fresh", "pending", now - timedelta(days=2)),
+                # marked on an earlier run, expiry inside the window: kept
+                invitation(
+                    "recent@example.com", "purge-recent", "expired", now - timedelta(days=1)
+                ),
+            ]
+        )
+        await session.commit()
+
+    await expire_stale_invitations(
+        JobContext(
+            run_id="purge-run", job_key="invitations.expire_stale", workspace_id=None, params={}
+        )
+    )
+
+    async with SessionFactory() as session:
+        remaining = {
+            i.email: i.status for i in (await session.execute(select(Invitation))).scalars()
+        }
+    assert remaining == {
+        "fresh@example.com": "expired",
+        "recent@example.com": "expired",
+    }

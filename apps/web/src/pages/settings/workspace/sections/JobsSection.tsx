@@ -98,6 +98,27 @@ function JobTable({
   );
 }
 
+export function GlobalJobsTable() {
+  // Only mounted where the viewer is a superuser: the workspace settings tab
+  // behind `isSuperuser`, and the admin tab behind AdminLayout's own guard.
+  const { result } = useCustom<ScheduledJob[]>({ url: "jobs/global", method: "get" });
+  const globalList = Array.isArray(result?.data) ? result.data : [];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Global jobs</CardTitle>
+        <CardDescription>Deployment-wide jobs — only superadmins can view and modify these.</CardDescription>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <JobTable jobs={globalList} urlPrefix="global/" canExecute emptyText="No global jobs." />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function JobsSection() {
   const { data: identity } = useGetIdentity<Identity>();
   const isSuperuser = !!identity?.is_superuser;
@@ -105,13 +126,7 @@ export function JobsSection() {
   const canEditWorkspaceJobs = canEdit?.can ?? false;
 
   const { result: workspaceJobs } = useWorkspaceList<ScheduledJob>({ resource: "jobs" });
-  const { result: globalResult } = useCustom<ScheduledJob[]>({
-    url: "jobs/global",
-    method: "get",
-    queryOptions: { enabled: isSuperuser },
-  });
   const workspaceList = Array.isArray(workspaceJobs?.data) ? workspaceJobs.data : [];
-  const globalList = Array.isArray(globalResult?.data) ? globalResult.data : [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -135,19 +150,7 @@ export function JobsSection() {
         </CardContent>
       </Card>
 
-      {isSuperuser && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Global jobs</CardTitle>
-            <CardDescription>Deployment-wide jobs — only superadmins can view and modify these.</CardDescription>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <JobTable jobs={globalList} urlPrefix="global/" canExecute emptyText="No global jobs." />
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {isSuperuser && <GlobalJobsTable />}
     </div>
   );
 }
