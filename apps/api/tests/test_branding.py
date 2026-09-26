@@ -37,11 +37,11 @@ def test_slugs_stay_usable_as_identifiers():
 async def test_routes_report_the_configured_name(app_client):
     client = app_client
     assert (await client.get("/")).json()["service"] == settings.app_name
-    assert (await client.get("/healthz")).json()["service"] == settings.app_name
+    assert (await client.get("/api/v1/healthz")).json()["service"] == settings.app_name
 
 
-def test_openapi_title_is_the_configured_name(app_client):
-    assert app_client.app.title == settings.app_name
+def test_openapi_title_is_the_configured_name(app):
+    assert app.title == settings.app_name
 
 
 def test_nats_queue_group_defaults_to_the_slug():
