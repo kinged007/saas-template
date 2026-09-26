@@ -84,6 +84,20 @@ async def get_current_user(
 ) -> User:
     return principal.user
 
+async def require_session_user(
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
+) -> User:
+    """Reject API-key principals.
+
+    An API key carries its creator's role into the service layer, so a route
+    whose real authority check is a *role* check (not a permission) would let a
+    narrowly scoped key exercise owner-level powers. Owner-level operations
+    (ownership transfer) therefore require an interactive session.
+    """
+    if principal.api_key is not None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "api keys cannot perform this action")
+    return principal.user
+
 
 async def require_superuser(
     user: Annotated[User, Depends(get_current_user)],

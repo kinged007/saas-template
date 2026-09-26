@@ -238,6 +238,9 @@ def build_workflows(
         from src.email.templates import invitation as invitation_template
         from src.settings import settings
 
+        # The token stays out of the published payload: `invitation.created` is
+        # a public webhook event, so a token here would be delivered to every
+        # workspace webhook subscriber. It is re-read from the committed row.
         token = ""
         invitation_id = payload.get("invitation_id")
         if invitation_id:
@@ -248,7 +251,7 @@ def build_workflows(
                 if invite is not None:
                     token = invite.token
         invite_url = (
-            f"{settings.frontend_url.rstrip('/')}/invitations?token={token}"
+            f"{settings.frontend_url.rstrip('/')}/invitations/accept?token={token}"
             if token
             else f"{settings.frontend_url.rstrip('/')}/invitations"
         )

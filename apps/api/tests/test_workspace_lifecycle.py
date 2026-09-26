@@ -1,3 +1,6 @@
+import pytest
+from sqlalchemy.exc import IntegrityError
+
 from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
 
 
@@ -171,6 +174,85 @@ async def test_resend_expired_invitation(app_client):
     )
     assert joined.status_code == 200, joined.text
 
+
+async def test_api_key_cannot_transfer_ownership(app_client):
+    """A key holding only workspace:update must not be able to demote the owner."""
+    client = app_client
+    owner = await register_user(client, "own6@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+    heir = await _invite_and_join(client, owner, ws, "heir6@example.com", "admin")
+    target = await _member_by_email(client, owner_headers, "heir6@example.com")
+    key = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "narrow", "permissions": ["workspace:update"]},
+        headers=ws_headers(owner, ws["id"]),
+    )
+    assert key.status_code == 201, key.text
+    key_headers = {
+        "Authorization": f"Bearer {key.json()['key']}",
+        "X-Workspace-ID": ws["id"],
+    }
+
+    resp = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/transfer",
+        json={"new_owner_membership_id": target["membership_id"]},
+        headers=key_headers,
+    )
+    assert resp.status_code == 403, resp.text
+    members = (await client.get("/api/v1/members", headers=ws_headers(heir, ws["id"]))).json()
+    assert next(m for m in members if m["email"] == "own6@example.com")["role"] == "owner"
+
+async def test_resend_rejects_accepted_invitation(app_client):
+    client = app_client
+    owner = await register_user(client, "own7@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+    invite = await client.post(
+        "/api/v1/invitations",
+        json={
+            "email": "joined@example.com",
+            "role_id": await _role_id(client, owner_headers, "viewer"),
+        },
+        headers=owner_headers,
+    )
+    assert invite.status_code == 201, invite.text
+    user = await register_user(client, "joined@example.com")
+    joined = await client.post(
+        "/api/v1/invitations/accept",
+        params={"token": invite.json()["token"]},
+        headers=auth_headers(user),
+    )
+    assert joined.status_code == 200, joined.text
+
+    resp = await client.post(
+        f"/api/v1/invitations/{invite.json()['id']}/resend", headers=owner_headers
+    )
+    assert resp.status_code == 409, resp.text
+
+async def test_member_status_constraint_rejects_unknown_value(app_client):
+    client = app_client
+    owner = await register_user(client, "own8@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+    member = await _member_by_email(client, owner_headers, "own8@example.com")
+
+    from src.db.session import SessionFactory
+    from src.models.workspace import WorkspaceMember
+
+    async with SessionFactory() as session:
+        session.add(
+            WorkspaceMember(
+                workspace_id=ws["id"],
+                user_id=member["id"],
+                role_id=member["role_id"],
+                status="banished",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            await session.commit()
+        # Release the failed transaction so the teardown can drop the table.
+        await session.rollback()
 
 async def test_safe_delete_cascades_but_keeps_audit(app_client):
     client = app_client

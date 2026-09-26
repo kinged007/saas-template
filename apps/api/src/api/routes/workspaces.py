@@ -16,6 +16,7 @@ from src.api.deps import (
     require_existing_workspace,
     require_key_permission,
     require_permission,
+    require_session_user,
     resolve_auth_principal,
 )
 from src.core.permissions import AUDIT_READ, WORKSPACE_DELETE, WORKSPACE_READ, WORKSPACE_UPDATE
@@ -25,7 +26,12 @@ from src.schemas.api import OwnershipTransfer, WorkspaceCreate, WorkspaceUpdate
 from src.services.conversations import ConversationForbidden
 from src.services.search_export import CSV_RESOURCES, SearchExportService
 from src.services.serializers import workspace_to_dict
-from src.services.workspaces import WorkspaceError, WorkspaceForbidden, WorkspaceService
+from src.services.workspaces import (
+    WorkspaceConflict,
+    WorkspaceError,
+    WorkspaceForbidden,
+    WorkspaceService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -235,8 +241,9 @@ async def transfer_ownership(
     workspace_id: str,
     body: OwnershipTransfer,
     request: Request,
-    user=Depends(get_current_user),
-    _=Depends(require_permission(WORKSPACE_UPDATE)),
+    # Session-only: the authority here is the owner *role*, which an API key
+    # would inherit from its creator and could use to demote the real owner.
+    user=Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -249,10 +256,10 @@ async def transfer_ownership(
         )
     except WorkspaceForbidden as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    except WorkspaceConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
     except WorkspaceError as exc:
-        msg = str(exc)
-        code = status.HTTP_404_NOT_FOUND if "not found" in msg else status.HTTP_409_CONFLICT
-        raise HTTPException(code, msg) from None
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     return {"id": member.id, "user_id": member.user_id, "role_id": member.role_id}
 
 

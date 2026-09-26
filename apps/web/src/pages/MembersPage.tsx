@@ -29,7 +29,6 @@ import { UserAvatar } from "@/components/ui/user-avatar";
 import { UserProfileDialog } from "@/components/UserProfileDialog";
 
 import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceContext";
-import { queryClient } from "../providers/queryClient";
 import type { Identity, Invitation, Member, Role } from "../types";
 import { getMemberDisplayName } from "../types";
 
@@ -83,9 +82,7 @@ export function MembersPage() {
 
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
   const canManageRoles = !!canManage?.can && MANAGER_ROLES.includes(myRole ?? "");
-  const isOwner = myRole === "owner";
   const { mutate: memberAction } = useCustomMutation();
-  const [transferId, setTransferId] = useState("");
 
   const suspend = (m: Member, suspendIt: boolean) => {
     memberAction(
@@ -99,29 +96,6 @@ export function MembersPage() {
     );
   };
 
-  const transfer = () => {
-    if (!transferId || !workspace) return;
-    memberAction(
-      {
-        url: `workspaces/${workspace.id}/transfer`,
-        method: "post",
-        values: { new_owner_membership_id: transferId },
-        successNotification: { message: "Ownership transferred", type: "success" },
-        errorNotification: false,
-      },
-      {
-        onSuccess: () => {
-          setTransferId("");
-          invalidate({ resource: "members", invalidates: ["list"] });
-          invalidate({ resource: "workspaces", invalidates: ["list"] });
-          void queryClient.invalidateQueries({ queryKey: ["getIdentity"] });
-        },
-        onError: (err: unknown) => {
-          toast.error(String((err as { message?: string })?.message ?? err));
-        },
-      },
-    );
-  };
   const roleName = (roleId: string) => roleOptions.find((r) => r.id === roleId)?.name;
 
   const submit = (e: React.FormEvent) => {
@@ -276,40 +250,6 @@ export function MembersPage() {
       </div>
       )}
 
-      {isOwner && (
-        <section className="border-border flex flex-col gap-3 rounded-lg border p-4">
-          <div className="flex flex-col gap-1">
-            <h3 className="text-lg font-semibold">Transfer ownership</h3>
-            <p className="text-muted-foreground text-sm">
-              The new owner must be an active member. You are demoted to admin — the workspace is
-              never left without an owner.
-            </p>
-          </div>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-            <div className="flex flex-1 flex-col gap-2">
-              <Label>New owner</Label>
-              <Select value={transferId} onValueChange={setTransferId}>
-                <SelectTrigger className="w-full sm:w-64">
-                  <SelectValue placeholder="Select member" />
-                </SelectTrigger>
-                <SelectContent>
-                  {rows
-                    .filter((m) => m.role !== "owner" && m.status === "active")
-                    .map((m) => (
-                      <SelectItem key={m.membership_id} value={m.membership_id}>
-                        {getMemberDisplayName(m)} ({m.email})
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <Button onClick={transfer} disabled={!transferId}>
-              Transfer ownership
-            </Button>
-          </div>
-        </section>
-      )}
-
       {canInvite?.can && (
         <section className="flex flex-col gap-4">
           <div className="flex flex-col gap-1">
@@ -381,7 +321,7 @@ export function MembersPage() {
                           size="sm"
                         />
                       )}
-                      {(i.status !== "pending" || i.expired) && (
+                      {(i.status !== "pending" || i.expired) && i.status !== "accepted" && (
                         <Button
                           variant="ghost"
                           size="sm"

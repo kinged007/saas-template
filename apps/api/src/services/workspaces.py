@@ -649,9 +649,15 @@ class WorkspaceService:
         expires_in_hours: int = 72,
         ip_address: str | None = None,
     ) -> Invitation:
+        if actor is not None and await self.get_membership(
+            workspace_id, actor.id, active_only=True
+        ) is None:
+            raise WorkspaceForbidden("you are not a member of this workspace")
         invite = await self._session.get(Invitation, invitation_id)
         if invite is None or invite.workspace_id != workspace_id:
             raise WorkspaceError("invitation not found")
+        if invite.status == "accepted":
+            raise WorkspaceConflict("invitation has already been accepted")
         if invite.status == "pending" and ensure_utc(invite.expires_at) >= now_utc():
             return invite
         invite.status = "pending"
