@@ -198,17 +198,23 @@ class ProfileService:
 
         return profile
 
-    async def get_public_projection(self, target_user_id: str, viewer: User) -> dict | None:
+    async def get_public_projection(
+        self, target_user_id: str, viewer: User, *, is_superuser: bool
+    ) -> dict | None:
         """
         Returns redacted projection if viewer is co-member or superuser, else None.
         Caller should return 404 when None (to avoid enumeration).
+
+        `is_superuser` is passed in rather than read off `viewer`: the viewer
+        may be an API key's creator, and a key never carries superuser power.
+        The route derives it from `principal.is_deployment_admin`.
         """
         # Check target exists
         target_user = await self._session.get(User, target_user_id)
         if target_user is None:
             return None
         # Superuser bypass
-        if viewer.is_superuser:
+        if is_superuser:
             pass
         else:
             if viewer.id == target_user_id:

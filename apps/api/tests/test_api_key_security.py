@@ -17,7 +17,7 @@ Covers, end to end over the HTTP API:
     and proof that key permissions never inherit the creator's role
 """
 
-from src.core.permissions import ALL_PERMISSIONS, permissions_for_role
+from src.core.permissions import ALL_PERMISSIONS, JOB_VIEW, permissions_for_role
 from src.db.session import SessionFactory
 from src.services.notifications import NotificationService
 from tests.conftest import (
@@ -68,6 +68,30 @@ async def _user_id(client, tokens) -> str:
     me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
     assert me.status_code == 200, me.text
     return me.json()["id"]
+
+
+async def _seed_runs(workspace_id: str) -> dict[str, str]:
+    """A global run plus a workspace run, inserted directly so the tests do
+    not depend on job provisioning."""
+    import uuid
+
+    from src.core.dates import now_utc
+    from src.models.jobs import JobRun
+
+    ids: dict[str, str] = {}
+    async with SessionFactory() as session:
+        for name, ws_id in (("global", None), ("workspace", workspace_id)):
+            run = JobRun(
+                id=str(uuid.uuid4()),
+                definition_id=str(uuid.uuid4()),
+                workspace_id=ws_id,
+                status="success",
+                scheduled_at=now_utc(),
+            )
+            session.add(run)
+            ids[name] = run.id
+        await session.commit()
+    return ids
 
 
 async def _membership_id(client, headers, ws_id, email) -> str:
@@ -716,11 +740,14 @@ async def test_effective_permissions_requires_apikey_read(app_client):
 
 # --------------------------------------------- deployment-wide power
 
+
 async def test_superuser_key_cannot_reach_superuser_routes(app_client):
     """Keys never inherit deployment-wide power, even from a superuser.
 
-    Regression test for #93: `require_superuser` 403s key-authenticated
-    requests while the superuser's own session token still passes."""
+    Regression test for #93. It enumerates every deployment-wide surface,
+    not just the routes a given diff touched, because the invariant is
+    "a key never carries deployment-wide power" — asserting it only where
+    the fix landed would pass while the leak survives elsewhere."""
     client = app_client
     root = await register_user(client, "root@example.com")  # SUPERADMIN_EMAIL
     me = await client.get("/api/v1/auth/me", headers=auth_headers(root))
@@ -728,15 +755,81 @@ async def test_superuser_key_cannot_reach_superuser_routes(app_client):
     ws = await create_workspace(client, root)
     key = await _create_key(client, ws_headers(root, ws["id"]), "root-key", ["*"])
     key_headers = _key_headers(key["key"], ws["id"])
+    victim_id = await _user_id(client, await register_user(client, "victim@example.com"))
+    runs = await _seed_runs(ws["id"])
+
     for method, url in [
         ("get", "/api/v1/admin/users"),
         ("get", "/api/v1/admin/workspaces"),
         ("get", "/api/v1/jobs/global"),
+        # The same rule, reached through routes that resolve their own
+        # superuser check rather than through `require_superuser`.
+        ("get", f"/api/v1/users/{victim_id}/export"),
+        ("delete", f"/api/v1/users/{victim_id}"),
+        ("get", f"/api/v1/jobs/runs/{runs['global']}"),
+        ("get", f"/api/v1/jobs/runs/{runs['global']}/logs"),
     ]:
         resp = await client.request(method, url, headers=key_headers)
-        assert resp.status_code == 403, (method, url, resp.text)
+        assert resp.status_code == 403, (method, url, resp.status_code, resp.text)
+
+    # The profile projection's superuser bypass is off for a key, so it
+    # falls back to co-membership and finds none (404, not a 403 leak).
+    resp = await client.get(f"/api/v1/users/{victim_id}/profile", headers=key_headers)
+    assert resp.status_code == 404, resp.text
+
+    # The superuser's own session still reaches all of them.
     session = await client.get("/api/v1/admin/users", headers=auth_headers(root))
     assert session.status_code == 200, session.text
+    export = await client.get(f"/api/v1/users/{victim_id}/export", headers=auth_headers(root))
+    assert export.status_code == 200, export.text
+    profile = await client.get(f"/api/v1/users/{victim_id}/profile", headers=auth_headers(root))
+    assert profile.status_code == 200, profile.text
+
+
+async def test_job_run_access_uses_the_keys_own_permissions(app_client):
+    """A run is authorized against the key's own permission list and its own
+    workspace — never the creator's role, and never deployment-wide."""
+    client = app_client
+    owner = await register_user(client, "run-owner@example.com")
+    ws = await create_workspace(client, owner, "Run Owner Inc")
+    headers = ws_headers(owner, ws["id"])
+    runs = await _seed_runs(ws["id"])
+    other = await register_user(client, "run-other@example.com")
+    foreign_ws = await create_workspace(client, other, "Run Other Inc")
+    foreign = (await _seed_runs(foreign_ws["id"]))["workspace"]
+
+    # A key without jobs:view is refused even though its creator holds the
+    # permission through the workspace owner role.
+    narrow = await _create_key(client, headers, "no-jobs", ["member:read"])
+    resp = await client.get(
+        f"/api/v1/jobs/runs/{runs['workspace']}", headers=_key_headers(narrow["key"], ws["id"])
+    )
+    assert resp.status_code == 403, resp.text
+    assert JOB_VIEW in resp.json()["detail"]
+
+    # A foreign X-Workspace-ID header does not widen the key's own scope.
+    resp = await client.get(
+        f"/api/v1/jobs/runs/{foreign}", headers=_key_headers(narrow["key"], foreign_ws["id"])
+    )
+    assert resp.status_code == 404, resp.text
+
+    viewer = await _create_key(client, headers, "jobs-view", ["jobs:view"])
+    viewer_headers = _key_headers(viewer["key"], ws["id"])
+    ok = await client.get(f"/api/v1/jobs/runs/{runs['workspace']}", headers=viewer_headers)
+    assert ok.status_code == 200, ok.text
+    logs = await client.get(f"/api/v1/jobs/runs/{runs['workspace']}/logs", headers=viewer_headers)
+    assert logs.status_code == 200, logs.text
+
+    # ... but the same key never reaches a global run or another workspace.
+    for url in [
+        f"/api/v1/jobs/runs/{runs['global']}",
+        f"/api/v1/jobs/runs/{runs['global']}/logs",
+    ]:
+        resp = await client.get(url, headers=viewer_headers)
+        assert resp.status_code == 403, (url, resp.text)
+    resp = await client.get(f"/api/v1/jobs/runs/{foreign}", headers=viewer_headers)
+    assert resp.status_code == 404, resp.text
+
 
 # ------------------------------------------------------------------- seed
 

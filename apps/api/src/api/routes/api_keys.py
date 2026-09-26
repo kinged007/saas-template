@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.crud import InvalidQuery, parse_query
+from src.api.crud import InvalidQuery, apply_query, parse_query
 from src.api.deps import (
     get_container,
     get_current_user,
@@ -58,20 +58,24 @@ async def list_api_keys(
     _=Depends(require_permission(APIKEY_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    # Personal scope is owned by the service — the route only handles HTTP.
+    # Query parsing is the HTTP layer's job; the service owns the personal
+    # scope predicate, so no filter or sort can widen it.
+    service = ApiKeyService(db)
     try:
         spec = parse_query(request)
-        keys, total = await ApiKeyService(db).list_for_user(
-            workspace_id,
-            user.id,
-            spec=spec,
+        stmt = apply_query(
+            service.owner_scope(workspace_id, user.id),
+            ApiKey,
+            spec,
             sortable=_APIKEY_SORTABLE,
             filterable=_APIKEY_FILTERABLE,
         )
+        total = await service.count_for_user(stmt)
+        rows = await service.list_for_user(stmt.offset(spec.offset).limit(spec.limit))
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     response.headers["X-Total-Count"] = str(total)
-    return [_key_dict(k) for k in keys]
+    return [_key_dict(k) for k in rows]
 
 
 @router.get("/effective-permissions")
