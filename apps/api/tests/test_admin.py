@@ -181,19 +181,44 @@ async def test_admin_audit_cross_workspace(app_client):
     assert resp.headers["X-Total-Count"]
 
 
-async def test_admin_user_lookup_malformed_id_404(app_client):
+async def test_admin_malformed_id_404(app_client):
     client, tokens = await _superuser_client(app_client)
-    for method, kwargs in [
-        ("get", {}),
-        ("patch", {"json": {"is_active": False}}),
+    for method, url, kwargs in [
+        ("get", "/api/v1/admin/users/not-a-uuid", {}),
+        ("patch", "/api/v1/admin/users/not-a-uuid", {"json": {"is_active": False}}),
+        ("patch", "/api/v1/admin/workspaces/not-a-uuid/flags", {"json": {"flags": {}}}),
     ]:
-        resp = await client.request(
-            method,
-            "/api/v1/admin/users/not-a-uuid",
-            headers=auth_headers(tokens),
-            **kwargs,
-        )
-        assert resp.status_code == 404, (method, resp.text)
+        resp = await client.request(method, url, headers=auth_headers(tokens), **kwargs)
+        assert resp.status_code == 404, (method, url, resp.text)
+
+
+async def test_admin_lists_default_created_desc_with_tiebreaker(app_client):
+    client, tokens = await _superuser_client(app_client)
+    for email in ("aaa@example.com", "zzz@example.com"):
+        await register_user(client, email)
+    await create_workspace(client, tokens, "Acme")
+    await create_workspace(client, tokens, "Globex")
+
+    # No sort param => created_at DESC, id DESC. Users and workspaces seeded in
+    # the same second share created_at, so without the id tiebreaker their
+    # relative order is whatever the engine happens to emit.
+    for path in ("/api/v1/admin/users", "/api/v1/admin/workspaces"):
+        first = await client.get(path, headers=auth_headers(tokens))
+        assert first.status_code == 200, first.text
+        rows = first.json()
+        assert len(rows) > 1, path
+        assert len({r["created_at"] for r in rows}) < len(rows), f"{path}: no created_at tie"
+        expected = sorted(rows, key=lambda r: (r["created_at"], r["id"]), reverse=True)
+        assert [r["id"] for r in rows] == [r["id"] for r in expected], path
+
+    # An explicit sort still overrides the server default.
+    resp = await client.get(
+        "/api/v1/admin/users?sort[]=email&order[]=asc", headers=auth_headers(tokens)
+    )
+    assert resp.status_code == 200, resp.text
+    emails = [u["email"] for u in resp.json()]
+    assert emails == sorted(emails), emails
+    assert "aaa@example.com" in emails and "zzz@example.com" in emails
 
 
 async def test_admin_self_reenable_200(app_client):
