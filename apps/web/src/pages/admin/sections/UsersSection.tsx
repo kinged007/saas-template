@@ -51,7 +51,7 @@ export function UsersSection() {
     method: "get",
     queryOptions: { enabled: isSuperuser && selectedId !== null },
   });
-  const { mutate: setActive, mutation } = useCustomMutation<AdminUserDetail>();
+  const { mutate: setActive, mutation } = useCustomMutation<AdminUser>();
 
   const rows = result?.data ?? [];
   const total = result?.total ?? 0;
