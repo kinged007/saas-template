@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useCan, useCreate, useUpdate } from "@refinedev/core";
 import { useWorkspaceCustom, useWorkspaceList } from "../../../../hooks/useWorkspaceQuery";
 
@@ -29,6 +29,25 @@ import { Check, ChevronDown, Pencil, Plus } from "lucide-react";
 import type { Role } from "@/types";
 
 type CatalogResponse = { catalog: string[]; permissions: string[] };
+
+/**
+ * Display order of the seeded system roles. Custom roles sort after these,
+ * keeping the order the API returned them in.
+ *
+ * Keyed on name rather than the `system` flag: editing a system role demotes
+ * it to `system: false` while keeping the name, so the flag is not a synonym
+ * for "is one of the four".
+ */
+const SYSTEM_ROLE_ORDER = ["owner", "admin", "editor", "viewer"];
+
+function roleRank(name: string): number {
+  const i = SYSTEM_ROLE_ORDER.indexOf(name.toLowerCase());
+  return i < 0 ? SYSTEM_ROLE_ORDER.length : i;
+}
+
+function sortRoles(roles: Role[]): Role[] {
+  return [...roles].sort((a, b) => roleRank(a.name) - roleRank(b.name));
+}
 
 function splitPermission(p: string): [string, string] {
   const i = p.indexOf(":");
@@ -163,7 +182,7 @@ export function RolesSection() {
   const { data: canManage } = useCan({ resource: "roles", action: "create" });
   const { data: canEdit } = useCan({ resource: "roles", action: "edit" });
 
-  const rows = result?.data ?? [];
+  const rows = useMemo(() => sortRoles(result?.data ?? []), [result?.data]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");

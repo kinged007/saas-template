@@ -26,7 +26,8 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
     extensions: [
       StarterKit.configure({
         heading: false,
-        // StarterKit includes codeBlock/bulletList/orderedList/blockquote/code etc.
+        // StarterKit v3 bundles link; keep the configured extension below.
+        link: false,
       }),
       Placeholder.configure({ placeholder }),
       Link.configure({
