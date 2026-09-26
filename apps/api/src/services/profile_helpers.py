@@ -11,6 +11,11 @@ MAX_CUSTOM_DATA_KEYS = 50
 MAX_CUSTOM_DATA_BYTES = 16 * 1024  # 16 KiB
 
 
+def escape_like(q: str) -> str:
+    """Escape LIKE wildcards so user input matches literally."""
+    return q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def format_display_name(
     first_name: str | None, last_name: str | None, fallback: str | None = None
 ) -> str:

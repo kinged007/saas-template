@@ -13,6 +13,115 @@ async def test_create_and_list_workspace(app_client):
     assert len(listed.json()) == 1
 
 
+async def _invite(client, owner_tokens, ws, email: str, role_name: str) -> str:
+    roles = await client.get("/api/v1/roles", headers=ws_headers(owner_tokens, ws["id"]))
+    role_id = next(r["id"] for r in roles.json() if r["name"] == role_name)
+    created = await client.post(
+        "/api/v1/invitations",
+        json={"email": email, "role_id": role_id},
+        headers=ws_headers(owner_tokens, ws["id"]),
+    )
+    assert created.status_code == 201, created.text
+    return created.json()["token"]
+
+
+async def test_onboarding_flag_defaults_on_and_toggles(app_client):
+    client = app_client
+    tokens = await register_user(client, "onb1@example.com")
+    ws = await create_workspace(client, tokens)
+
+    # Default-on: an absent flag means the card is shown.
+    assert ws["onboarding_enabled"] is True
+
+    off = await client.patch(
+        f"/api/v1/workspaces/{ws['id']}",
+        json={"onboarding_enabled": False},
+        headers=ws_headers(tokens, ws["id"]),
+    )
+    assert off.status_code == 200
+    assert off.json()["onboarding_enabled"] is False
+
+    reread = await client.get(
+        f"/api/v1/workspaces/{ws['id']}", headers=ws_headers(tokens, ws["id"])
+    )
+    assert reread.json()["onboarding_enabled"] is False
+
+    # Re-enabling drops the stored False instead of leaving a no-op key.
+    on = await client.patch(
+        f"/api/v1/workspaces/{ws['id']}",
+        json={"onboarding_enabled": True},
+        headers=ws_headers(tokens, ws["id"]),
+    )
+    assert on.json()["onboarding_enabled"] is True
+
+
+async def test_onboarding_flag_omitted_leaves_flag_untouched(app_client):
+    client = app_client
+    tokens = await register_user(client, "onb2@example.com")
+    ws = await create_workspace(client, tokens)
+    await client.patch(
+        f"/api/v1/workspaces/{ws['id']}",
+        json={"onboarding_enabled": False},
+        headers=ws_headers(tokens, ws["id"]),
+    )
+
+    # A name-only patch must not silently re-enable onboarding.
+    resp = await client.patch(
+        f"/api/v1/workspaces/{ws['id']}",
+        json={"name": "Renamed"},
+        headers=ws_headers(tokens, ws["id"]),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Renamed"
+    assert resp.json()["onboarding_enabled"] is False
+
+
+async def test_onboarding_flag_rejects_non_bool(app_client):
+    client = app_client
+    tokens = await register_user(client, "onb3@example.com")
+    ws = await create_workspace(client, tokens)
+
+    for bad in ("false", 0, 1, "no"):
+        resp = await client.patch(
+            f"/api/v1/workspaces/{ws['id']}",
+            json={"onboarding_enabled": bad},
+            headers=ws_headers(tokens, ws["id"]),
+        )
+        assert resp.status_code == 422, bad
+
+
+async def test_onboarding_flag_gated_on_workspace_update(app_client):
+    client = app_client
+    owner = await register_user(client, "onb4@example.com")
+    ws = await create_workspace(client, owner)
+
+    # An admin holds workspace:update, so the toggle is allowed for them too.
+    admin = await register_user(client, "onb5@example.com")
+    token = await _invite(client, owner, ws, "onb5@example.com", "admin")
+    accepted = await client.post(
+        f"/api/v1/invitations/accept?token={token}", headers=auth_headers(admin)
+    )
+    assert accepted.status_code == 200, accepted.text
+    allowed = await client.patch(
+        f"/api/v1/workspaces/{ws['id']}",
+        json={"onboarding_enabled": False},
+        headers=ws_headers(admin, ws["id"]),
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["onboarding_enabled"] is False
+
+    # A viewer has no workspace:update and must be refused.
+    viewer = await register_user(client, "onb6@example.com")
+    vtoken = await _invite(client, owner, ws, "onb6@example.com", "viewer")
+    await client.post(f"/api/v1/invitations/accept?token={vtoken}", headers=auth_headers(viewer))
+    denied = await client.patch(
+        f"/api/v1/workspaces/{ws['id']}",
+        json={"onboarding_enabled": True},
+        headers=ws_headers(viewer, ws["id"]),
+    )
+    assert denied.status_code == 403
+
+
 async def test_workspace_roles_seeded(app_client):
     client = app_client
     tokens = await register_user(client, "erin@example.com")
@@ -54,7 +163,7 @@ async def test_permission_denied_without_privilege(app_client):
         headers=auth_headers(other),
     )
 
-    # Try to manage members as viewer (missing member:manage permission)
+    # Try to manage members as viewer (missing member:update permission)
     resp = await client.get(
         "/api/v1/members",
         headers=ws_headers(other, ws["id"]),
@@ -62,7 +171,7 @@ async def test_permission_denied_without_privilege(app_client):
     # members:list is allowed for all members, so check 200
     assert resp.status_code == 200
 
-    # Try to manage roles as viewer (missing role:manage permission)
+    # Try to manage roles as viewer (missing role:create permission)
     resp = await client.post(
         "/api/v1/roles",
         json={"name": "custom", "permissions": ["workspace:read"]},

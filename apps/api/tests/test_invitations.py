@@ -52,6 +52,9 @@ async def test_invite_creates_notification_for_existing_user(app_client):
     assert items[0]["workspace_id"] == ws["id"]
     assert items[0]["workspace_name"] == "Acme Corp"
     assert items[0]["payload"]["workspace_name"] == "Acme Corp"
+    # NotificationCenter renders the "Open" button off payload.url; without it
+    # the invite is a dead end in the bell.
+    assert items[0]["payload"]["url"] == "/invitations"
 
     # invitee accepts → becomes member with editor role
     accepted = await client.post(
@@ -391,6 +394,12 @@ async def test_list_invitations_pagination(app_client):
     assert len(resp.json()) == 2
 
     resp = await client.get("/api/v1/invitations?limit=2&offset=2", headers=owner_headers)
+    assert resp.status_code == 200
+    assert resp.headers["X-Total-Count"] == "3"
+    assert len(resp.json()) == 1
+    assert resp.json()[0]["email"] == "inv_page_2@example.com"
+
+    resp = await client.get("/api/v1/invitations?_start=2&_end=4", headers=owner_headers)
     assert resp.status_code == 200
     assert resp.headers["X-Total-Count"] == "3"
     assert len(resp.json()) == 1

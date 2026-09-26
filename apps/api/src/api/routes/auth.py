@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import (
@@ -12,12 +12,20 @@ from src.api.deps import (
     resolve_auth_principal,
 )
 from src.core.dates import ensure_utc, now_utc
+from src.core.security.cookies import (
+    browser_flow,
+    clear_refresh_cookie,
+    get_refresh_token,
+    require_csrf,
+    set_refresh_cookie,
+)
 from src.core.security.ratelimit import get_auth_limiter
 from src.core.security.tokens import OpaqueToken
 from src.db.session import get_db
 from src.email import factory as email_factory
 from src.email import templates
 from src.schemas.api import (
+    ChangePasswordRequest,
     ForgotPasswordRequest,
     LoginRequest,
     RefreshRequest,
@@ -78,10 +86,29 @@ async def _maybe_join_single_workspace(db: AsyncSession, container, user) -> Non
     await WorkspaceService(db, container.bus).join_single_workspace(user)
 
 
+@router.get("/config")
+async def auth_config() -> dict:
+    """Public auth capabilities for the login UI (no secrets)."""
+    return {
+        "registration_enabled": settings.auth_allow_registration,
+        "password_enabled": settings.auth_password_enabled,
+        "oauth_enabled": bool(settings.oauth_provider_list),
+        "providers": [
+            {
+                "id": p.get("id"),
+                "display_name": p.get("display_name") or p.get("id"),
+            }
+            for p in settings.oauth_provider_list
+            if p.get("id")
+        ],
+    }
+
+
 @router.post("/register", response_model=TokenResponse, status_code=201)
 async def register(
     body: RegisterRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> TokenResponse:
@@ -93,6 +120,8 @@ async def register(
             "first_name and last_name are required (or display_name deprecated)",
         )
     # If only one of first/last provided without the other, still allow but derive
+    if not settings.auth_allow_registration:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "registration is disabled")
     try:
         user = await service.register(
             email=body.email,
@@ -104,6 +133,8 @@ async def register(
         )
     except AuthError as exc:
         msg = str(exc)
+        if msg == "registration is disabled":
+            raise HTTPException(status.HTTP_403_FORBIDDEN, msg) from None
         # Map missing names to 422, else 409
         if "first_name and last_name" in msg:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, msg) from None
@@ -119,6 +150,14 @@ async def register(
         await _send_verification(service, user)
     except Exception:
         logger.exception("failed to send verification email for user %s", user.id)
+    if browser_flow(request, body):
+        set_refresh_cookie(response, pair.refresh_token)
+        return TokenResponse(
+            access_token=pair.access_token,
+            refresh_token=None,
+            token_type=pair.token_type,
+            expires_in=pair.expires_in,
+        )
     return TokenResponse(**pair.__dict__)
 
 
@@ -130,6 +169,8 @@ async def forgot_password(
     container=Depends(get_container),
 ) -> dict:
     # Always 202 — never reveal whether the email is registered.
+    if not settings.auth_password_enabled:
+        return {"detail": "if an account exists for this email, a reset link was sent"}
     raw = await AuthService(db, container.bus).request_password_reset(
         str(body.email), ip_address=_client_ip(request)
     )
@@ -153,11 +194,16 @@ async def reset_password(
     container=Depends(get_container),
 ) -> dict:
     try:
+        if not settings.auth_password_enabled:
+            raise AuthError("password login is disabled")
         await AuthService(db, container.bus).reset_password(
             body.token, body.new_password, ip_address=_client_ip(request)
         )
     except AuthError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+        msg = str(exc)
+        if msg == "password login is disabled":
+            raise HTTPException(status.HTTP_403_FORBIDDEN, msg) from None
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, msg) from None
     return {"detail": "password updated"}
 
 
@@ -195,11 +241,14 @@ async def resend_verification(
 async def login(
     body: LoginRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> TokenResponse:
     key = _limit_key(request, body.email)
     get_auth_limiter().check(key)
+    if not settings.auth_password_enabled:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "password login is disabled")
     service = AuthService(db, container.bus)
     try:
         user = await service.login_password(
@@ -207,7 +256,10 @@ async def login(
         )
     except AuthError as exc:
         get_auth_limiter().fail(key)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+        msg = str(exc)
+        if msg in ("password login is disabled",):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, msg) from None
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, msg) from None
     get_auth_limiter().reset(key)
     try:
         await _maybe_join_single_workspace(db, container, user)
@@ -223,6 +275,14 @@ async def login(
     pair = await service.issue_tokens(
         user, ip_address=_client_ip(request), user_agent=_user_agent(request)
     )
+    if browser_flow(request, body):
+        set_refresh_cookie(response, pair.refresh_token)
+        return TokenResponse(
+            access_token=pair.access_token,
+            refresh_token=None,
+            token_type=pair.token_type,
+            expires_in=pair.expires_in,
+        )
     return TokenResponse(**pair.__dict__)
 
 
@@ -230,15 +290,22 @@ async def login(
 async def refresh(
     body: RefreshRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> TokenResponse:
-    key = _limit_key(request, OpaqueToken.hash(body.refresh_token))
+    cookie_token = get_refresh_token(request)
+    raw = cookie_token or body.refresh_token
+    if raw is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing refresh token")
+    if cookie_token is not None:
+        require_csrf(request)
+    key = _limit_key(request, OpaqueToken.hash(raw))
     get_auth_limiter().check(key)
     service = AuthService(db, container.bus)
     try:
         pair = await service.rotate_refresh(
-            body.refresh_token,
+            raw,
             ip_address=_client_ip(request),
             user_agent=_user_agent(request),
         )
@@ -255,6 +322,14 @@ async def refresh(
         except Exception:
             await db.rollback()
             logger.exception("failed to join single workspace on refresh")
+    if cookie_token is not None or browser_flow(request, body):
+        set_refresh_cookie(response, pair.refresh_token)
+        return TokenResponse(
+            access_token=pair.access_token,
+            refresh_token=None,
+            token_type=pair.token_type,
+            expires_in=pair.expires_in,
+        )
     return TokenResponse(**pair.__dict__)
 
 
@@ -276,6 +351,51 @@ def _session_to_dict(row, *, current: bool) -> dict:
         "user_agent": row.user_agent,
         "current": current,
     }
+
+
+@router.post("/change-password", status_code=204)
+async def change_password(
+    body: ChangePasswordRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+) -> None:
+    """Change password: current password always, 2FA code when TOTP is on.
+
+    Revokes every session (including the current one) — the client must
+    re-login with the new password. Mirrors the totp_disable password
+    check and the 2fa/login code verification.
+
+    The session stays valid when the submitted credentials are wrong, so a bad
+    current password or 2FA code answers 400 — 401 is reserved for a dead
+    session and would sign the caller out."""
+    _require_session_user(principal)
+    key = _limit_key(request, user.email)
+    get_auth_limiter().check(key)
+    service = AuthService(db, container.bus)
+    try:
+        await service.login_password(
+            user.email, body.current_password, ip_address=_client_ip(request)
+        )
+    except AuthError as exc:
+        get_auth_limiter().fail(key)
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+    get_auth_limiter().reset(key)
+    if user.totp_enabled:
+        if not body.code:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "two-factor code required")
+        try:
+            ok = await TwoFactorService(db, container.cipher, container.bus).verify_login_code(
+                user, code=body.code
+            )
+        except TwoFactorError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+        if not ok:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid code")
+    fresh = await db.get(type(user), user.id)
+    await service.change_password(fresh or user, body.new_password, ip_address=_client_ip(request))
 
 
 @router.get("/2fa/status")
@@ -365,6 +485,7 @@ async def totp_backup_codes(
 async def totp_login(
     body: TwoFactorLogin,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> TokenResponse:
@@ -389,6 +510,14 @@ async def totp_login(
     pair = await AuthService(db, container.bus).issue_tokens(
         user, ip_address=_client_ip(request), user_agent=_user_agent(request)
     )
+    if browser_flow(request, body):
+        set_refresh_cookie(response, pair.refresh_token)
+        return TokenResponse(
+            access_token=pair.access_token,
+            refresh_token=None,
+            token_type=pair.token_type,
+            expires_in=pair.expires_in,
+        )
     return TokenResponse(**pair.__dict__)
 
 
@@ -426,14 +555,24 @@ async def revoke_all_sessions(
 
 @router.post("/logout", status_code=204)
 async def logout(
-    body: RefreshRequest,
     request: Request,
+    response: Response,
+    body: RefreshRequest = RefreshRequest(),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> None:
-    await AuthService(db, container.bus).revoke_refresh(
-        body.refresh_token, ip_address=_client_ip(request)
-    )
+    """Revoke one refresh session. Cookie callers send an empty body (the
+    refresh comes from the HttpOnly cookie); JSON clients must send
+    ``{"refresh_token": ...}`` explicitly — an empty body 401s."""
+    cookie_token = get_refresh_token(request)
+    raw = cookie_token or body.refresh_token
+    if raw is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing refresh token")
+    if cookie_token is not None:
+        require_csrf(request)
+    await AuthService(db, container.bus).revoke_refresh(raw, ip_address=_client_ip(request))
+    if cookie_token is not None:
+        clear_refresh_cookie(response)
 
 
 @router.delete("/sessions/{session_id}", status_code=204)
@@ -475,8 +614,10 @@ async def me(
         if single is not None:
             memberships = [m for m in memberships if m[0].id == single.id]
     data["workspaces"] = [
-        workspace_to_dict(w, role=role.name, permissions=role.permissions)
-        for w, role, _ in memberships
+        workspace_to_dict(
+            w, role=role.name, permissions=role.permissions, joined_at=member.created_at
+        )
+        for w, role, member in memberships
     ]
     data["permissions"] = sorted({p for _, role, _ in memberships for p in role.permissions})
     data["single_workspace"] = settings.single_workspace

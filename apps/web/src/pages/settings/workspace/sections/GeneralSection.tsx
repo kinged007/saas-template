@@ -49,6 +49,10 @@ export function GeneralSection() {
   const { mutate, mutation } = useCustomMutation();
   const isSaving = mutation.isPending;
   const { data: canDelete } = useCan({ resource: "workspaces", action: "delete" });
+  // workspace:update is held by owners and admins, so both can run this toggle.
+  // "edit" is the mapped action for that permission; an unmapped action makes
+  // accessControlProvider fall through to `{ can: true }` for everyone.
+  const { data: canUpdate } = useCan({ resource: "workspaces", action: "edit" });
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
   // SINGLE_WORKSPACE: the one shared workspace can never be deleted.
   const singleWorkspace = identity?.single_workspace === true;
@@ -91,6 +95,30 @@ export function GeneralSection() {
         },
         onError: (err: unknown) => {
           const msg = (err as { message?: string })?.message || "Failed to update workspace";
+          toast.error(msg);
+        },
+      },
+    );
+  };
+
+  // Toggles immediately on change so the switch never waits on a Save click.
+  const setOnboardingEnabled = (enabled: boolean) => {
+    if (!workspace) return;
+    mutate(
+      {
+        url: `workspaces/${workspace.id}`,
+        method: "patch",
+        values: { onboarding_enabled: enabled },
+        successNotification: false,
+        errorNotification: false,
+      },
+      {
+        onSuccess: () => {
+          toast.success(enabled ? "Onboarding card shown" : "Onboarding card hidden");
+          refresh();
+        },
+        onError: (err: unknown) => {
+          const msg = (err as { message?: string })?.message || "Failed to update onboarding setting";
           toast.error(msg);
         },
       },
@@ -145,6 +173,30 @@ export function GeneralSection() {
               </div>
             </form>
           </Form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Onboarding</CardTitle>
+          <CardDescription>
+            Show the “Get set up” card on the dashboard for this workspace.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex items-center justify-between gap-4">
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 accent-primary"
+              checked={workspace.onboarding_enabled !== false}
+              disabled={isSaving || !canUpdate?.can}
+              onChange={(e) => setOnboardingEnabled(e.target.checked)}
+            />
+            Show onboarding card
+          </label>
+          {!canUpdate?.can && (
+            <p className="text-muted-foreground text-xs">You need owner or admin permission.</p>
+          )}
         </CardContent>
       </Card>
 

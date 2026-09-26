@@ -2,11 +2,13 @@
 
 > **Navigation aid.** Route list and file locations extracted via AST. Read the source files listed below before implementing or modifying this subsystem.
 
-The Roles subsystem handles **2 routes**.
+The Roles subsystem handles **3 routes**.
 
 ## Routes
 
 - `GET` `/permission-catalog`
+  `apps/api/src/api/routes/roles.py`
+- `PATCH` `/{role_id}` params(role_id)
   `apps/api/src/api/routes/roles.py`
 - `GET` `/{role_id}` params(role_id)
   `apps/api/src/api/routes/roles.py`

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useCan, useCreate, useGetIdentity, useUpdate } from "@refinedev/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
@@ -70,6 +70,13 @@ export function MembersPage() {
   const invitesTotalPages = Math.max(1, Math.ceil(invitesTotal / PAGE_SIZE));
   const assignableRoles = roleOptions.filter((r) => r.name !== "owner");
 
+  useEffect(() => {
+    if (membersPage > membersTotalPages) setMembersPage(membersTotalPages);
+  }, [membersPage, membersTotalPages]);
+  useEffect(() => {
+    if (invitesPage > invitesTotalPages) setInvitesPage(invitesTotalPages);
+  }, [invitesPage, invitesTotalPages]);
+
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
   const canManageRoles = !!canManage?.can && MANAGER_ROLES.includes(myRole ?? "");
   const roleName = (roleId: string) => roleOptions.find((r) => r.id === roleId)?.name;
@@ -87,6 +94,7 @@ export function MembersPage() {
         onSuccess: () => {
           setEmail("");
           setInviteRoleId("");
+          setInvitesPage(1);
         },
       },
     );
@@ -144,7 +152,9 @@ export function MembersPage() {
                       }
                     >
                       <SelectTrigger className="w-36">
-                        <SelectValue />
+                        <SelectValue>
+                          {assignableRoles.find((r) => r.id === m.role_id)?.name ?? m.role}
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {assignableRoles.map((r) => (
@@ -176,9 +186,10 @@ export function MembersPage() {
           </TableBody>
         </Table>
       </div>
+      {membersTotal > PAGE_SIZE && (
       <div className="flex items-center justify-between gap-2">
         <p className="text-muted-foreground text-sm">
-          Showing {membersTotal === 0 ? 0 : (membersPage - 1) * PAGE_SIZE + 1}–{Math.min(membersPage * PAGE_SIZE, membersTotal)} of {membersTotal}
+          Showing {(membersPage - 1) * PAGE_SIZE + 1}–{Math.min(membersPage * PAGE_SIZE, membersTotal)} of {membersTotal}
         </p>
         <div className="flex items-center gap-1">
           <Button
@@ -204,6 +215,7 @@ export function MembersPage() {
           </Button>
         </div>
       </div>
+      )}
 
       {canInvite?.can && (
         <section className="flex flex-col gap-4">
@@ -230,7 +242,7 @@ export function MembersPage() {
               <Label>Role</Label>
               <Select value={inviteRoleId} onValueChange={setInviteRoleId}>
                 <SelectTrigger className="w-40">
-                  <SelectValue placeholder="Role" />
+                  <SelectValue placeholder="Role">{roleName(inviteRoleId)}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {assignableRoles.map((r) => (
@@ -283,9 +295,10 @@ export function MembersPage() {
               </TableBody>
             </Table>
           </div>
+          {invitesTotal > PAGE_SIZE && (
           <div className="flex items-center justify-between gap-2">
             <p className="text-muted-foreground text-sm">
-              Showing {invitesTotal === 0 ? 0 : (invitesPage - 1) * PAGE_SIZE + 1}–{Math.min(invitesPage * PAGE_SIZE, invitesTotal)} of {invitesTotal}
+              Showing {(invitesPage - 1) * PAGE_SIZE + 1}–{Math.min(invitesPage * PAGE_SIZE, invitesTotal)} of {invitesTotal}
             </p>
             <div className="flex items-center gap-1">
               <Button
@@ -311,6 +324,7 @@ export function MembersPage() {
               </Button>
             </div>
           </div>
+          )}
         </section>
       )}
       <UserProfileDialog

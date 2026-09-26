@@ -22,7 +22,7 @@ from src.models.audit import AuditLogEntry
 from src.models.user_profile import UserProfile
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.schemas.api import AdminUserUpdate, AdminWorkspaceFlags
-from src.services.profile_helpers import format_display_name
+from src.services.profile_helpers import escape_like, format_display_name
 from src.services.serializers import user_to_dict, workspace_to_dict
 
 logger = logging.getLogger(__name__)
@@ -37,12 +37,14 @@ _AUDIT_SORTABLE = {"created_at", "action", "resource_type"}
 _AUDIT_FILTERABLE = {"action", "resource_type", "actor_user_id", "workspace_id"}
 
 
-def _user_id_or_404(user_id: str) -> str:
+def _uuid_or_404(value: str, not_found: str) -> str:
+    # StringUUID.process_bind_param runs uuid.UUID() during bind-param
+    # processing, so a malformed id would surface as a 500 rather than a 404.
     try:
-        uuid.UUID(user_id)
+        uuid.UUID(value)
     except ValueError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found") from None
-    return user_id
+        raise HTTPException(status.HTTP_404_NOT_FOUND, not_found) from None
+    return value
 
 
 def _admin_user_dict(u: User) -> dict:
@@ -77,12 +79,19 @@ async def list_users(
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     for term in searches:
-        like = f"%{term}%"
-        stmt = stmt.where(or_(User.email.ilike(like), User.display_name.ilike(like)))
+        like = f"%{escape_like(term)}%"
+        stmt = stmt.where(
+            or_(
+                User.email.ilike(like, escape="\\"),
+                User.display_name.ilike(like, escape="\\"),
+            )
+        )
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
     if not spec.sort_by:
-        stmt = stmt.order_by(User.created_at.desc())
+        # id tiebreaker: created_at has second precision on SQLite, so
+        # created_at alone leaves same-second rows in arbitrary page order.
+        stmt = stmt.order_by(User.created_at.desc(), User.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
@@ -95,7 +104,7 @@ async def get_user(
     _=Depends(require_superuser),
     db: AsyncSession = Depends(get_db),
 ):
-    user = await db.get(User, _user_id_or_404(user_id))
+    user = await db.get(User, _uuid_or_404(user_id, "user not found"))
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     stmt = (
@@ -121,7 +130,7 @@ async def update_user(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    user = await db.get(User, _user_id_or_404(user_id))
+    user = await db.get(User, _uuid_or_404(user_id, "user not found"))
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     if user.id == admin.id and body.is_active is False:
@@ -160,11 +169,20 @@ async def list_all_workspaces(
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
     if not spec.sort_by:
-        stmt = stmt.order_by(Workspace.created_at.desc())
+        stmt = stmt.order_by(Workspace.created_at.desc(), Workspace.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
+    workspaces = rows.scalars().all()
+    counts = {}
+    if workspaces:
+        count_rows = await db.execute(
+            select(WorkspaceMember.workspace_id, func.count())
+            .where(WorkspaceMember.workspace_id.in_([w.id for w in workspaces]))
+            .group_by(WorkspaceMember.workspace_id)
+        )
+        counts = dict(count_rows.all())
     response.headers["X-Total-Count"] = str(total)
-    return [_workspace_dict(w) for w in rows.scalars().all()]
+    return [{**_workspace_dict(w), "member_count": counts.get(w.id, 0)} for w in workspaces]
 
 
 @router.patch("/workspaces/{workspace_id}/flags")
@@ -176,7 +194,7 @@ async def update_workspace_flags(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    workspace = await db.get(Workspace, workspace_id)
+    workspace = await db.get(Workspace, _uuid_or_404(workspace_id, "workspace not found"))
     if workspace is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
     merged = {**(workspace.flags or {}), **body.flags}
@@ -203,15 +221,42 @@ async def list_all_audit_logs(
     db: AsyncSession = Depends(get_db),
 ):
     stmt = (
-        select(AuditLogEntry, User, UserProfile)
+        select(AuditLogEntry, User, UserProfile, Workspace)
         .outerjoin(User, User.id == AuditLogEntry.actor_user_id)
         .outerjoin(UserProfile, UserProfile.user_id == User.id)
+        .outerjoin(Workspace, Workspace.id == AuditLogEntry.workspace_id)
     )
     try:
         spec = parse_query(request)
+        q = (request.query_params.get("q") or "").strip()
         stmt = apply_query(
             stmt, AuditLogEntry, spec, sortable=_AUDIT_SORTABLE, filterable=_AUDIT_FILTERABLE
         )
+        if q:
+            # Single cross-field search: substring match on workspace name,
+            # user name/email, or action, plus exact match on any id column
+            # (guarded: non-UUID terms must not reach UUID comparisons).
+            like = f"%{q}%"
+            clauses = [
+                AuditLogEntry.action.ilike(like),
+                Workspace.name.ilike(like),
+                User.display_name.ilike(like),
+                User.email.ilike(like),
+            ]
+            try:
+                uuid.UUID(q)
+            except ValueError:
+                pass
+            else:
+                clauses.extend(
+                    (
+                        AuditLogEntry.id == q,
+                        AuditLogEntry.workspace_id == q,
+                        AuditLogEntry.actor_user_id == q,
+                        AuditLogEntry.resource_id == q,
+                    )
+                )
+            stmt = stmt.where(or_(*clauses))
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
@@ -222,7 +267,7 @@ async def list_all_audit_logs(
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
     out = []
-    for entry, actor, profile in rows.all():
+    for entry, actor, profile, ws in rows.all():
         actor_name = None
         if actor is not None:
             if profile is not None and (profile.first_name or profile.last_name):
@@ -235,8 +280,10 @@ async def list_all_audit_logs(
             {
                 "id": entry.id,
                 "workspace_id": entry.workspace_id,
+                "workspace_name": ws.name if ws is not None else None,
                 "actor_user_id": entry.actor_user_id,
                 "actor_display_name": actor_name,
+                "actor_email": actor.email if actor is not None else None,
                 "resource_type": entry.resource_type,
                 "resource_id": entry.resource_id,
                 "action": entry.action,

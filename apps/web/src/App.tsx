@@ -14,11 +14,15 @@ import { WorkspaceProvider } from "./contexts/WorkspaceContext";
 import { AppLayout } from "./components/AppLayout";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
+import { OAuthCallbackPage } from "./components/AuthConfig";
 import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
 import { ResetPasswordPage } from "./pages/ResetPasswordPage";
 import { VerifyEmailPage } from "./pages/VerifyEmailPage";
 import { DashboardPage } from "./pages/DashboardPage";
-import { AdminPage } from "./pages/AdminPage";
+import { AdminIndex, AdminLayout } from "./pages/admin/sections/AdminLayout";
+import { UsersSection as AdminUsersSection } from "./pages/admin/sections/UsersSection";
+import { WorkspacesSection as AdminWorkspacesSection } from "./pages/admin/sections/WorkspacesSection";
+import { AuditSection as AdminAuditSection } from "./pages/admin/sections/AuditSection";
 import { WorkspaceCreatePage } from "./pages/WorkspaceCreatePage";
 import { MembersPage } from "./pages/MembersPage";
 import { ReceivedInvitationsPage } from "./pages/ReceivedInvitationsPage";
@@ -33,6 +37,7 @@ import { ProfileSettingsLayout } from "./pages/settings/profile/ProfileSettingsL
 import { GeneralSection as ProfileGeneralSection } from "./pages/settings/profile/sections/GeneralSection";
 import { NotificationsSection as ProfileNotificationsSection } from "./pages/settings/profile/sections/NotificationsSection";
 import { SecuritySection } from "./pages/settings/profile/sections/SecuritySection";
+import { WorkspacesSection } from "./pages/settings/profile/sections/WorkspacesSection";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { WorkspaceSettingsLayout } from "./pages/settings/workspace/WorkspaceSettingsLayout";
 import { GeneralSection } from "./pages/settings/workspace/sections/GeneralSection";
@@ -76,7 +81,9 @@ export function App() {
             meta: { label: "Scheduled Jobs" },
           },
           { name: "audit", list: "/audit", meta: { hide: true } },
-          { name: "admin-users", list: "/admin", meta: { hide: true } },
+          { name: "admin-users", list: "/admin/users", meta: { hide: true } },
+          { name: "admin-workspaces", list: "/admin/workspaces", meta: { hide: true } },
+          { name: "admin-audit", list: "/admin/audit", meta: { hide: true } },
         ]}
       >
         <WorkspaceProvider>
@@ -92,7 +99,12 @@ export function App() {
               }
             >
               <Route index element={<DashboardPage />} />
-              <Route path="admin" element={<AdminPage />} />
+              <Route path="admin" element={<AdminLayout />}>
+                <Route index element={<AdminIndex />} />
+                <Route path="users" element={<AdminUsersSection />} />
+                <Route path="workspaces" element={<AdminWorkspacesSection />} />
+                <Route path="audit" element={<AdminAuditSection />} />
+              </Route>
               <Route path="workspaces/create" element={<WorkspaceCreatePage />} />
               <Route path="members" element={<MembersPage />} />
               <Route path="invitations" element={<ReceivedInvitationsPage />} />
@@ -109,6 +121,7 @@ export function App() {
                 <Route path="general" element={<ProfileGeneralSection />} />
                 <Route path="notifications" element={<ProfileNotificationsSection />} />
                 <Route path="security" element={<SecuritySection />} />
+                <Route path="workspaces" element={<WorkspacesSection />} />
                 <Route path="*" element={<Navigate to="/settings/profile/general" replace />} />
               </Route>
               <Route path="settings/workspace" element={<WorkspaceSettingsLayout />}>
@@ -143,6 +156,7 @@ export function App() {
             />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
             <Route path="/verify-email" element={<VerifyEmailPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
