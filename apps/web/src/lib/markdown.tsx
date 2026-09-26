@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { Components } from "react-markdown";
+import { defaultUrlTransform, type Components } from "react-markdown";
 import { cn } from "./utils";
 
 /**
@@ -84,6 +84,17 @@ function LinkBase({
 
 /** Protocol marker `highlightMentions` emits; `a` overrides turn it into a span. */
 const MENTION_SCHEME = "mention:";
+
+/**
+ * react-markdown's default `urlTransform` drops any href without a known
+ * scheme, which turns the mention marker into an empty `href` before the `a`
+ * override sees it. Keep the marker and defer every other decision to the
+ * default transform so javascript:/data: links stay blocked.
+ */
+export function mentionUrlTransform(url: string): string {
+  if (url.startsWith(MENTION_SCHEME)) return url;
+  return defaultUrlTransform(url);
+}
 
 /**
  * Rewrite `@Name` occurrences of known people into a marker link so the `a`

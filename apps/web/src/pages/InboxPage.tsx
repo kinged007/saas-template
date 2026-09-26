@@ -5,7 +5,7 @@ import Markdown from "react-markdown";
 import { ArrowLeft, Inbox, Mail, MailOpen, ExternalLink, SendHorizontal, Pencil, Archive, ArchiveRestore, Search, MessageSquare, PanelLeftClose, PanelLeftOpen, X, Check, UserPlus } from "lucide-react";
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
-import { markdownComponents, markdownComponentsInverted, highlightMentions, stripMarkdown, truncate as truncatePreview } from "@/lib/markdown";
+import { markdownComponents, markdownComponentsInverted, highlightMentions, mentionUrlTransform, stripMarkdown, truncate as truncatePreview } from "@/lib/markdown";
 import { activeWorkspacePermissions } from "../utils/permissions";
 
 import { Badge } from "@/components/ui/badge";
@@ -963,7 +963,10 @@ export function InboxPage() {
                             <div className={cn("max-w-[75%] rounded-lg px-3 py-2", isSelf ? "bg-primary text-primary-foreground" : "bg-muted")}>
                               {!isSelf && <p className="mb-1 text-xs font-medium opacity-70">{m.sender_name}</p>}
                               <div className={cn("prose prose-sm dark:prose-invert max-w-none break-words", isSelf ? "prose-invert" : "")}>
-                                <Markdown components={isSelf ? markdownComponentsInverted : markdownComponents}>
+                                <Markdown
+                                  components={isSelf ? markdownComponentsInverted : markdownComponents}
+                                  urlTransform={mentionUrlTransform}
+                                >
                                   {highlightMentions(m.body, participantNames)}
                                 </Markdown>
                               </div>
