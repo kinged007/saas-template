@@ -246,3 +246,53 @@ async def test_admin_self_reenable_200(app_client):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["is_active"] is True
+
+
+async def test_admin_user_list_default_created_desc_and_explicit_sort_wins(app_client):
+    client, tokens = await _superuser_client(app_client)  # root + plain users exist
+    for email in ("aaa@example.com", "zzz@example.com"):
+        await register_user(client, email)
+
+    # No sort param => server default created_at DESC, deterministic across calls
+    # (stable id tiebreaker, so repeated calls agree).
+    first = await client.get("/api/v1/admin/users", headers=auth_headers(tokens))
+    assert first.status_code == 200, first.text
+    rows = first.json()
+    assert {u["email"] for u in rows} == {
+        "root@example.com",
+        "plain@example.com",
+        "aaa@example.com",
+        "zzz@example.com",
+    }
+    second = await client.get("/api/v1/admin/users", headers=auth_headers(tokens))
+    assert [u["id"] for u in second.json()] == [u["id"] for u in rows]
+
+    # Every pair is in non-increasing created_at order (the created_at DESC
+    # contract). Equal-timestamp rows are ordered by the id tiebreaker.
+    stamps = [u["created_at"] for u in rows]
+    assert stamps == sorted(stamps, reverse=True)
+
+    # An explicit sort[] still wins and is not stacked with the server default.
+    by_email = await client.get(
+        "/api/v1/admin/users",
+        params={"sort[]": "email", "order[]": "asc"},
+        headers=auth_headers(tokens),
+    )
+    assert by_email.status_code == 200, by_email.text
+    assert [u["email"] for u in by_email.json()] == [
+        "aaa@example.com",
+        "plain@example.com",
+        "root@example.com",
+        "zzz@example.com",
+    ]
+
+
+async def test_admin_workspace_flags_malformed_id_404(app_client):
+    client, tokens = await _superuser_client(app_client)
+    resp = await client.patch(
+        "/api/v1/admin/workspaces/not-a-uuid/flags",
+        json={"flags": {"invites_enabled": False}},
+        headers=auth_headers(tokens),
+    )
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == "workspace not found"
