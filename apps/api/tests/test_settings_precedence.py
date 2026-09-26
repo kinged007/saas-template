@@ -14,9 +14,11 @@ def _clean_db_env(monkeypatch):
 def test_single_workspace_default_role_defaults_to_viewer():
     assert Settings().single_workspace_default_role == "viewer"
 
+
 def test_single_workspace_default_role_reads_env(monkeypatch):
     monkeypatch.setenv("SINGLE_WORKSPACE_DEFAULT_ROLE", "editor")
     assert Settings().single_workspace_default_role == "editor"
+
 
 def test_explicit_database_url_wins_over_use_sqlite():
     s = Settings(database_url="x", use_sqlite=True)

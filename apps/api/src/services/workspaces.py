@@ -791,9 +791,7 @@ class WorkspaceService:
         was renamed or removed, instead of bricking every later login."""
         from src.settings import settings
 
-        result = await self._session.execute(
-            select(Role).where(Role.workspace_id == workspace_id)
-        )
+        result = await self._session.execute(select(Role).where(Role.workspace_id == workspace_id))
         roles = {role.name: role for role in result.scalars() if role.name != "owner"}
         names = (settings.single_workspace_default_role.strip(), self.SINGLE_WORKSPACE_ROLE)
         for name in (*names, "editor", "admin"):
