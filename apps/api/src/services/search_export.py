@@ -86,6 +86,7 @@ CSV_RESOURCES: dict[str, list[str]] = {
     "conversations": ["title", "last_message_preview", "last_message_at", "created_at"],
     "notifications": ["type", "title", "acknowledged_at", "created_at"],
     "audit": [
+        "id",
         "created_at",
         "actor_email",
         "action",
@@ -124,9 +125,18 @@ async def _ensure_membership(session: AsyncSession, workspace_id: str, user_id: 
         raise ConversationForbidden("you are not a member of this workspace")
 
 
+# Excel and LibreOffice evaluate a cell starting with one of these as a formula
+# on open, so an exported name or email would run on whoever opens the file.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@")
+
+
 def _csv_cell(value: object) -> object:
-    """JSON-encode structured values so a CSV cell stays valid JSON, not repr."""
-    return json.dumps(value) if isinstance(value, (dict, list)) else value
+    """Encode one CSV cell: structured values as JSON, formulas defused."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + value
+    return value
 
 
 class SearchExportService:
@@ -611,6 +621,7 @@ class SearchExportService:
         elif resource == "audit":
             flat = [
                 {
+                    "id": r.get("id"),
                     "created_at": r.get("created_at"),
                     "actor_email": r.get("actor_email"),
                     "action": r.get("action"),
@@ -633,5 +644,8 @@ class SearchExportService:
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=columns)
         writer.writeheader()
-        writer.writerows(flat)
+        # One choke point, so every resource is covered: branches that need a
+        # derived value (JSON arrays, joined permissions) map through
+        # _csv_cell themselves, and the rest land here as plain values.
+        writer.writerows({k: _csv_cell(v) for k, v in row.items()} for row in flat)
         return buf.getvalue()

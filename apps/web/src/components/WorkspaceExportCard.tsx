@@ -34,6 +34,7 @@ export function WorkspaceExportCard() {
     method: "get",
     queryOptions: { enabled: !!workspace && canExport?.can === true, retry: false },
   });
+  const resourcesFailed = resourcesQuery.isError;
   const resources = resourcesResult?.data?.resources ?? [];
   const [resource, setResource] = useState<string>("members");
   const [busy, setBusy] = useState<"json" | "csv" | null>(null);
@@ -58,7 +59,7 @@ export function WorkspaceExportCard() {
     }
   };
 
-  if (!workspace || isLoading || resourcesQuery.isPending) return null;
+  if (!workspace || isLoading || resourcesQuery.isLoading) return null;
   if (canExport && !canExport.can) return null;
 
   return (
@@ -72,8 +73,14 @@ export function WorkspaceExportCard() {
         </CardDescription>
       </CardHeader>
       <CardContent>
+        {resourcesFailed && (
+          <p className="mb-2 text-sm text-destructive">
+            Could not load the exportable resources. CSV export is unavailable; the JSON export below still
+            works.
+          </p>
+        )}
         <div className="flex flex-wrap items-center gap-2">
-          <Select value={resource} onValueChange={setResource}>
+          <Select value={resource} onValueChange={setResource} disabled={resourcesFailed}>
             <SelectTrigger className="w-48">
               <SelectValue placeholder="Resource" />
             </SelectTrigger>
@@ -85,7 +92,11 @@ export function WorkspaceExportCard() {
               ))}
             </SelectContent>
           </Select>
-          <Button variant="outline" disabled={busy !== null} onClick={() => download("csv")}>
+          <Button
+            variant="outline"
+            disabled={resourcesFailed || busy !== null}
+            onClick={() => download("csv")}
+          >
             {busy === "csv" ? "Exporting…" : "Export CSV"}
           </Button>
           <Button variant="outline" disabled={busy !== null} onClick={() => download("json")}>
