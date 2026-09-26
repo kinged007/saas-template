@@ -7,7 +7,7 @@ from src.core.dates import now_utc
 from src.db.session import SessionFactory
 from src.models.api_key import ApiKey
 from src.models.core import Invitation, Notification
-from src.models.workspace import Workspace
+from src.models.workspace import Role, Workspace, WorkspaceMember
 from src.seed import DEMO_PASSWORD
 from src.seed import main as seed_main
 from src.services.auth import AuthService
@@ -100,6 +100,75 @@ async def test_seed_skips_demo_data_for_foreign_single_workspace(single_workspac
         for model in (ApiKey, Invitation, Notification):
             result = await session.execute(select(model.id))
             assert result.scalars().all() == [], f"unexpected {model.__name__} rows"
+
+
+async def test_seed_registers_fixture_when_canonical_workspace_has_no_owner_member(
+    single_workspace_on, monkeypatch
+):
+    """A canonical workspace with nobody in its owner role still gets the fixture.
+
+    The owner was demoted to viewer, so no membership holds the owner role and
+    the guard's `owner is None` arm is what admits the workspace. It is
+    reachable without the app: a workspace whose owner left keeps its owner
+    role row but no membership pointing at it. The demo admin is not a member
+    here, so the fixture attaches on registration and the seed adds it the
+    membership, invitations, API keys and notifications.
+    """
+    monkeypatch.setattr(settings, "single_workspace", False)
+    async with SessionFactory() as session:
+        other = await AuthService(session).register(
+            email="other@dev.example",
+            password=DEMO_PASSWORD,
+            first_name="Other",
+            last_name="Dev",
+        )
+        service = WorkspaceService(session)
+        workspace = await service.create_workspace(
+            name="First", slug="first", description=None, owner=other
+        )
+        viewer = next(
+            role for role in await service.list_roles(workspace.id) if role.name == "viewer"
+        )
+        membership = await session.execute(
+            select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == workspace.id,
+                WorkspaceMember.user_id == other.id,
+            )
+        )
+        membership.scalar_one().role_id = viewer.id
+        await session.commit()
+        workspace_id = workspace.id
+
+    monkeypatch.setattr(settings, "single_workspace", True)
+    await seed_main()
+
+    assert await _workspaces() == {workspace_id: "first"}
+    async with SessionFactory() as session:
+        for model in (ApiKey, Invitation, Notification):
+            result = await session.execute(
+                select(model.id).where(model.workspace_id == workspace_id)
+            )
+            assert result.scalars().all() != [], f"no {model.__name__} rows in {workspace_id}"
+
+
+async def test_seed_fails_with_a_clear_error_when_owner_role_is_missing(single_workspace_on):
+    """No owner role at all is a hard failure, not a silent skip of the workspace."""
+    async with SessionFactory() as session:
+        real = await AuthService(session).register(
+            email="real@dev.example",
+            password=DEMO_PASSWORD,
+            first_name="Real",
+            last_name="Dev",
+        )
+        workspace = await WorkspaceService(session).join_single_workspace(real)
+        result = await session.execute(
+            select(Role).where(Role.workspace_id == workspace.id, Role.name == "owner")
+        )
+        await session.delete(result.scalar_one())
+        await session.commit()
+
+    with pytest.raises(RuntimeError, match="role owner not found"):
+        await seed_main()
 
 
 async def test_seed_keeps_both_workspaces_when_single_mode_is_off(monkeypatch):
