@@ -2,8 +2,9 @@
 
 First login/register creates the workspace (owned by whoever arrives first,
 normally the superadmin); every later login/register auto-joins the oldest
-workspace with the viewer role. Extra workspace creation and workspace
-deletion are rejected while the flag is on.
+workspace with the role named by SINGLE_WORKSPACE_DEFAULT_ROLE (viewer by
+default). Extra workspace creation and workspace deletion are rejected while
+the flag is on.
 """
 
 import pytest
@@ -68,6 +69,53 @@ async def test_delete_workspace_rejected(app_client, single_workspace_on):
     )
     assert resp.status_code == 403
 
+
+async def _first_workspace(app_client) -> tuple[dict, str]:
+    tokens = await register_user(app_client, "first@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    ws = me.json()["workspaces"][0]
+    return tokens, ws["id"]
+
+async def test_configured_system_role_is_granted(app_client, single_workspace_on, monkeypatch):
+    monkeypatch.setattr(settings, "single_workspace_default_role", "editor")
+    _, ws_id = await _first_workspace(app_client)
+    tokens = await register_user(app_client, "second@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert [(w["id"], w["role"]) for w in me.json()["workspaces"]] == [(ws_id, "editor")]
+
+async def test_configured_custom_role_is_granted(app_client, single_workspace_on, monkeypatch):
+    tokens, ws_id = await _first_workspace(app_client)
+    headers = {**auth_headers(tokens), "X-Workspace-ID": ws_id}
+    resp = await app_client.post(
+        "/api/v1/roles", json={"name": "ops", "permissions": []}, headers=headers
+    )
+    assert resp.status_code in (200, 201), resp.text
+    monkeypatch.setattr(settings, "single_workspace_default_role", "ops")
+
+    joined = await register_user(app_client, "second@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(joined))
+    assert [(w["id"], w["role"]) for w in me.json()["workspaces"]] == [(ws_id, "ops")]
+
+async def test_unknown_role_name_falls_back_to_viewer(app_client, single_workspace_on, monkeypatch):
+    await _first_workspace(app_client)
+    for i, value in enumerate(["", "   ", "nope", "owner"]):
+        monkeypatch.setattr(settings, "single_workspace_default_role", value)
+        tokens = await register_user(app_client, f"newcomer{i}@example.com")
+        me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+        assert me.json()["workspaces"][0]["role"] == "viewer", value
+
+async def test_relogin_keeps_existing_member_role(app_client, single_workspace_on, monkeypatch):
+    await _first_workspace(app_client)
+    second = await register_user(app_client, "second@example.com")
+    monkeypatch.setattr(settings, "single_workspace_default_role", "editor")
+    resp = await app_client.post(
+        "/api/v1/auth/login",
+        json={"email": "second@example.com", "password": "Password123!"},
+    )
+    assert resp.status_code == 200, resp.text
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(resp.json()))
+    assert me.json()["workspaces"][0]["role"] == "viewer"
+    assert second["access_token"]
 
 async def test_flag_off_keeps_current_behavior(app_client):
     assert settings.single_workspace is False
