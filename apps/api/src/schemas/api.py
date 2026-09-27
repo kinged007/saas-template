@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field, StrictBool
 
@@ -109,11 +110,14 @@ class WorkspaceUpdate(BaseModel):
 
 class InvitationCreate(BaseModel):
     email: EmailStr
-    role_id: str
+    # UUID, not str: a malformed role_id is a request error (422), and the 400
+    # "unknown role for this workspace" stays reserved for a role that does not
+    # exist. One status per field, so the response reveals nothing about which.
+    role_id: UUID
 
 
 class MemberRoleUpdate(BaseModel):
-    role_id: str
+    role_id: UUID
 
 
 class RoleCreate(BaseModel):

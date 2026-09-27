@@ -373,7 +373,7 @@ class WorkspaceService:
         self,
         workspace_id: str,
         member_id: str,
-        role_id: str,
+        role_id: str | uuid.UUID,
         *,
         actor: User,
         ip_address: str | None = None,
