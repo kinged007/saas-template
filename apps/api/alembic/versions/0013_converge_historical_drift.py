@@ -131,15 +131,24 @@ def downgrade() -> None:
     if pg and "ix_stored_secrets_secret_key" in indexes:
         op.drop_index("ix_stored_secrets_secret_key", table_name="stored_secrets")
 
-    # Intentional divergence: the recreated UQs restore the pre-0013 schema but
-    # models no longer declare them (unique+index renders as unique index only),
-    # so autogenerate reports drift until re-upgrade.
+    # Intentional divergence, the six below: the recreated UQs restore the
+    # pre-0013 schema but models no longer declare them (unique+index renders
+    # as unique index only), so autogenerate reports drift until re-upgrade.
     for table, (col, _unique_index) in _REDUNDANT_UQ.items():
         uq_name = f"uq_{table}_{col}"
         names = {u["name"] for u in insp.get_unique_constraints(table)}
         if pg and uq_name not in names:
             op.create_unique_constraint(uq_name, table, [col])
 
+    # Different case from the six above: no migration ever created this UQ
+    # (0009 declared unsubscribe_token as a plain column with a non-unique
+    # index) and the model does not declare it either, so recreating it
+    # restores a shape that never existed rather than a pre-0013 one. The
+    # round-trip stays net-neutral because the matching drop in upgrade()
+    # removes it again on re-upgrade; the guard below is what makes that drop
+    # land on a clean downgrade-then-upgrade cycle instead of failing on an
+    # already-constrained table, and why the create fires unconditionally on a
+    # freshly downgraded postgres.
     uq_names = {u["name"] for u in insp.get_unique_constraints("notification_preferences")}
     if pg and "uq_notification_preferences_unsubscribe_token" not in uq_names:
         op.create_unique_constraint(
