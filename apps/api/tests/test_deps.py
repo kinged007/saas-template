@@ -79,6 +79,17 @@ async def test_missing_workspace_header_still_400(app_client):
     assert resp.status_code == 400
 
 
+async def test_empty_workspace_header_is_422(app_client):
+    """An empty header is present but unusable: 422, a third outcome after 400 and 403."""
+    client = app_client
+    user = await register_user(client)
+    await create_workspace(client, user)
+
+    resp = await client.get("/api/v1/roles", headers=ws_headers(user, ""))
+
+    _assert_uuid_rejected(resp, ["header", "X-Workspace-ID"])
+
+
 async def test_well_formed_unknown_workspace_header_reaches_membership_check(app_client):
     """Validation must not swallow the membership check for a valid-but-absent id."""
     client = app_client

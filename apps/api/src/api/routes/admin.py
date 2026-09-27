@@ -171,7 +171,7 @@ async def list_all_workspaces(
 
 @router.patch("/workspaces/{workspace_id}/flags")
 async def update_workspace_flags(
-    workspace_id: str,
+    workspace_id: uuid.UUID,
     body: AdminWorkspaceFlags,
     request: Request,
     admin=Depends(require_superuser),
@@ -186,9 +186,9 @@ async def update_workspace_flags(
     await db.commit()
     await publish_audit(
         container.bus,
-        workspace_id=workspace_id,
+        workspace_id=str(workspace_id),
         resource_type="workspace",
-        resource_id=workspace_id,
+        resource_id=str(workspace_id),
         action="workspace.flags_updated",
         actor_user_id=admin.id,
         details={"flags": body.flags},

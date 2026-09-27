@@ -219,6 +219,22 @@ async def test_key_reads_within_its_permission_scope(app_client):
     assert [w["id"] for w in resp.json()] == [ws["id"]]
 
 
+async def test_non_canonical_workspace_header_still_authorises_a_key(app_client):
+    """The header is parsed as a UUID, so an uppercase spelling matches the stored
+    lowercase id. Before the UUID annotation the string comparison 403'd."""
+    client = app_client
+    owner = await register_user(client, "umi@example.com")
+    ws = await create_workspace(client, owner)
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "upper", ["workspace:read"])
+
+    resp = await client.get(
+        "/api/v1/workspaces", headers=_key_headers(key["key"], ws["id"].upper())
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert [w["id"] for w in resp.json()] == [ws["id"]]
+
+
 async def test_key_cannot_read_outside_its_permission_scope(app_client):
     client = app_client
     owner = await register_user(client, "leo@example.com")

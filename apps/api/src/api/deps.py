@@ -98,10 +98,13 @@ async def require_superuser(
 async def get_current_workspace_id(
     x_workspace_id: Annotated[UUID | None, Header(alias="X-Workspace-ID")] = None,
 ) -> str:
-    # The UUID annotation makes FastAPI reject a malformed header as 422. The return
-    # type stays str deliberately: StringUUID round-trips UUID columns back to str, so
-    # widening it to UUID would silently break the api_key.workspace_id equality
-    # checks in require_key_permission/require_permission.
+    """Required X-Workspace-ID header, canonicalised to str.
+
+    The UUID annotation makes FastAPI reject a malformed header as 422. The return
+    type stays str deliberately: StringUUID round-trips UUID columns back to str, so
+    widening it to UUID would silently break the api_key.workspace_id equality
+    checks in require_key_permission/require_permission.
+    """
     if not x_workspace_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "X-Workspace-ID header is required")
     return str(x_workspace_id)

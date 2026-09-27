@@ -168,6 +168,22 @@ async def test_admin_flags_reject_non_bool(app_client):
     assert "invites_enabled" not in row["flags"]
 
 
+async def test_admin_flags_reject_malformed_workspace_id(app_client):
+    """The path param reaches db.get(Workspace, ...) — a bad id must be a 422, not a 500."""
+    client, tokens = await _superuser_client(app_client)
+
+    resp = await client.patch(
+        "/api/v1/admin/workspaces/not-a-uuid/flags",
+        json={"flags": {"invites_enabled": False}},
+        headers=auth_headers(tokens),
+    )
+
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"][0]
+    assert detail["type"] == "uuid_parsing", resp.text
+    assert detail["loc"] == ["path", "workspace_id"], resp.text
+
+
 async def test_admin_audit_cross_workspace(app_client):
     import asyncio
 
