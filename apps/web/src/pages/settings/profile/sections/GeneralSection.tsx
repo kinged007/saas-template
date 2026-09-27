@@ -135,7 +135,9 @@ export function GeneralSection() {
   // profile:update editing someone else); null on the self-service page.
   const targetId = useTargetUserId();
   const profileHook = useProfile(targetId);
-  const profile = (profileHook.data as UserProfile | undefined) ?? identity?.profile;
+  // For a target, never fall back to identity.profile: that is the signed-in
+  // user, and showing their fields in the member editor is a data leak.
+  const profile = (profileHook.data as UserProfile | undefined) ?? (targetId ? undefined : identity?.profile);
   const { mutate, mutation: updateMutation } = useUpdateProfile(targetId);
   const isSaving = updateMutation.isPending;
   const { exportMyData } = useExportProfile();
@@ -144,6 +146,8 @@ export function GeneralSection() {
   const { list } = useNavigation();
 
   const [initialized, setInitialized] = useState(false);
+  // A new target means new values: re-initialize the form for them.
+  useEffect(() => setInitialized(false), [targetId]);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [deletePassword, setDeletePassword] = useState("");
@@ -170,8 +174,11 @@ export function GeneralSection() {
   });
 
   // Initialize form when profile loads — preselect detected timezone when empty.
+  // Wait for the query to settle: the first render already carries a truthy
+  // empty result object, and initializing on that would blank the form and
+  // never fill it when the real profile lands.
   useEffect(() => {
-    if (profile && !initialized) {
+    if (profile && !initialized && !profileHook.isLoading) {
       const tzFromProfile = (getProfileField(profile, "timezone", "") as string) || "";
       const localeFromProfile = (getProfileField(profile, "locale", "") as string) || "";
       form.reset({
@@ -191,7 +198,7 @@ export function GeneralSection() {
       });
       setInitialized(true);
     }
-  }, [profile, identity, initialized, form, detectedTimezone]);
+  }, [profile, identity, initialized, form, detectedTimezone, profileHook.isLoading, targetId]);
 
   const onSubmit = (data: ProfileFormData) => {
     const payload: Record<string, unknown> = {};

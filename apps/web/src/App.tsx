@@ -84,6 +84,9 @@ export function App() {
             meta: { label: "Scheduled Jobs" },
           },
           { name: "audit", list: "/audit", meta: { hide: true } },
+          // Member editor. Registered so useGo() can resolve the path; the tabs
+          // themselves are the routes in the <Routes> block below.
+          { name: "member-profiles", show: "/users/:id/settings", meta: { hide: true } },
           { name: "admin-users", list: "/admin/users", meta: { hide: true } },
           { name: "admin-workspaces", list: "/admin/workspaces", meta: { hide: true } },
           { name: "admin-audit", list: "/admin/audit", meta: { hide: true } },
