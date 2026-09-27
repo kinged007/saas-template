@@ -198,7 +198,9 @@ async def _require_run_access(db: AsyncSession, user, run: JobRun) -> None:
         if not user.is_superuser:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "superuser access required")
         return
-    membership = await WorkspaceService(db).get_membership(run.workspace_id, user.id)
+    membership = await WorkspaceService(db).get_membership(
+        run.workspace_id, user.id, active_only=True
+    )
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership
@@ -228,7 +230,7 @@ async def _require_job_access(
             return
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"missing permission: {required}") from None
     membership = await WorkspaceService(db).get_membership(
-        definition.workspace_id, principal.user.id
+        definition.workspace_id, principal.user.id, active_only=True
     )
     if membership is None:
         # Hide cross-workspace existence (isolation test expects 404, not 403)

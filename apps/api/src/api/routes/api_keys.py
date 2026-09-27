@@ -91,7 +91,7 @@ async def effective_permissions(
 
     Key-only scopes (notification:*) are always offerable: any member may hold
     them on a key (notifications are personal), mirroring ApiKeyService."""
-    membership = await WorkspaceService(db).get_membership(workspace_id, user.id)
+    membership = await WorkspaceService(db).get_membership(workspace_id, user.id, active_only=True)
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership

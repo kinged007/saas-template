@@ -85,6 +85,21 @@ async def get_current_user(
     return principal.user
 
 
+async def require_session_user(
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
+) -> User:
+    """Reject API-key principals.
+
+    An API key carries its creator's role into the service layer, so a route
+    whose real authority check is a *role* check (not a permission) would let a
+    narrowly scoped key exercise owner-level powers. Owner-level operations
+    (ownership transfer) therefore require an interactive session.
+    """
+    if principal.api_key is not None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "api keys cannot perform this action")
+    return principal.user
+
+
 async def require_superuser(
     user: Annotated[User, Depends(get_current_user)],
 ) -> User:
@@ -165,6 +180,11 @@ def require_key_permission(permission: str):
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, "api key is not scoped to this workspace"
             )
+        membership = await WorkspaceService(db).get_membership(
+            workspace_id, principal.user.id, active_only=True
+        )
+        if membership is None:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
         if "*" in api_key.permissions or permission in api_key.permissions:
             await record_key_use(api_key, db, response)
             return None
@@ -180,7 +200,7 @@ async def resolve_membership(
     user=Depends(get_current_user),
     workspace_id: str = Depends(get_current_workspace_id),
 ):
-    membership = await WorkspaceService(db).get_membership(workspace_id, user.id)
+    membership = await WorkspaceService(db).get_membership(workspace_id, user.id, active_only=True)
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     return membership
@@ -202,6 +222,13 @@ def require_permission(permission: str):
                 raise HTTPException(
                     status.HTTP_403_FORBIDDEN, "api key is not scoped to this workspace"
                 )
+            membership = await WorkspaceService(db).get_membership(
+                workspace_id, principal.user.id, active_only=True
+            )
+            if membership is None:
+                raise HTTPException(
+                    status.HTTP_403_FORBIDDEN, "you are not a member of this workspace"
+                )
             if "*" in api_key.permissions or permission in api_key.permissions:
                 await record_key_use(api_key, db, response)
                 return None
@@ -209,7 +236,7 @@ def require_permission(permission: str):
                 status.HTTP_403_FORBIDDEN, f"missing permission: {permission}"
             ) from None
         service = WorkspaceService(db)
-        membership = await service.get_membership(workspace_id, principal.user.id)
+        membership = await service.get_membership(workspace_id, principal.user.id, active_only=True)
         if membership is None:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
         _, role = membership

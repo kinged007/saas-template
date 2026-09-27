@@ -26,6 +26,7 @@ import { AuditSection as AdminAuditSection } from "./pages/admin/sections/AuditS
 import { WorkspaceCreatePage } from "./pages/WorkspaceCreatePage";
 import { MembersPage } from "./pages/MembersPage";
 import { ReceivedInvitationsPage } from "./pages/ReceivedInvitationsPage";
+import { InvitationAcceptPage } from "./pages/InvitationAcceptPage";
 import { ApiKeyCreatePage } from "./pages/ApiKeyCreatePage";
 import { ApiKeysPage } from "./pages/ApiKeysPage";
 import { WebhookCreatePage } from "./pages/WebhookCreatePage";
@@ -158,6 +159,15 @@ export function App() {
             <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
             <Route path="/verify-email" element={<VerifyEmailPage />} />
+            {/* Emailed invite link — public: the recipient may not have an account yet. */}
+            <Route
+              path="/invitations/accept"
+              element={
+                <div className="bg-background flex min-h-screen items-center justify-center p-4">
+                  <InvitationAcceptPage />
+                </div>
+              }
+            />
             {/* Deliberate: signed-out typos land on / (which redirects to /login); signed-in unknown paths render NotFoundPage above. */}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
