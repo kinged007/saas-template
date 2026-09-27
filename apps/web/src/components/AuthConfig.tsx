@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -79,6 +80,7 @@ export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: str
 
 export function OAuthCallbackPage() {
   const [status, setStatus] = useState("Signing you in…");
+  const navigate = useNavigate();
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
@@ -97,7 +99,9 @@ export function OAuthCallbackPage() {
           window.location.assign(`/login?challenge=${encodeURIComponent(res.twoFactor)}`);
           return;
         }
-        window.location.assign("/");
+        // Client-side: the exchanged access token lives only in memory, so a
+        // hard load would drop it and force a /auth/refresh round trip.
+        navigate("/");
       })
       .catch(() => setStatus("Sign-in failed. The code may have expired."));
   }, []);

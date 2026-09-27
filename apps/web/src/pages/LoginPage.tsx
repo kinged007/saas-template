@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,10 @@ export function LoginPage() {
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const [passwordChanged, setPasswordChanged] = useState(false);
   const codeRef = useRef<HTMLInputElement>(null);
+  // Client-side on purpose: the access token exists only in module memory
+  // (tokenStore), so a hard load would drop it and make the new document
+  // re-authenticate through /auth/refresh.
+  const navigate = useNavigate();
 
   useEffect(() => {
     fetchAuthConfig().then(setConfig);
@@ -71,7 +75,7 @@ export function LoginPage() {
           use_cookies: true,
         });
         await storeTokens(data);
-        window.location.assign("/");
+        navigate("/");
       } catch {
         setChallenge(null);
         setCode("");
@@ -85,7 +89,7 @@ export function LoginPage() {
     try {
       const res = await authProvider.login({ email, password });
       if (res.success) {
-        window.location.assign(res.redirectTo ?? "/");
+        navigate(res.redirectTo ?? "/");
         return;
       }
       // 2FA challenge arrives as "2fa_required:<token>" (see authProvider).
