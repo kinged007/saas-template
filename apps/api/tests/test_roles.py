@@ -356,6 +356,56 @@ async def test_update_role_noop_body_keeps_system_flag(app_client):
         assert resp.json()["system"] is True, body
 
 
+# ------------------------------------------------------------------- listing
+
+# 4 system roles + 8 custom = 12, past the default page size of 10.
+_CUSTOM_ROLE_NAMES = ["zulu", "alpha", "mike", "bravo", "yankee", "delta", "echo", "foxtrot"]
+
+
+async def _roles_past_ten(client, prefix: str):
+    owner = await register_user(client, f"{prefix}@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    for name in _CUSTOM_ROLE_NAMES:
+        resp = await client.post(
+            "/api/v1/roles", json={"name": name, "permissions": []}, headers=headers
+        )
+        assert resp.status_code == 201, resp.text
+    return headers
+
+
+async def test_roles_list_is_not_capped_at_ten(app_client):
+    """#258: the full set is retrievable, and the count says how big it is."""
+    client = app_client
+    headers = await _roles_past_ten(client, "list-cap")
+    resp = await client.get("/api/v1/roles", params={"_start": 0, "_end": 100}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["X-Total-Count"] == "12"
+    assert len(resp.json()) == 12
+
+
+async def test_roles_default_order_is_system_first(app_client):
+    client = app_client
+    headers = await _roles_past_ten(client, "list-order")
+    resp = await client.get("/api/v1/roles", params={"_start": 0, "_end": 100}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    names = [r["name"] for r in resp.json()]
+    assert names[:4] == ["owner", "admin", "editor", "viewer"]
+    assert names[4:] == sorted(_CUSTOM_ROLE_NAMES)
+
+
+async def test_roles_client_sort_does_not_split_the_system_block(app_client):
+    client = app_client
+    headers = await _roles_past_ten(client, "list-sorted")
+    resp = await client.get(
+        "/api/v1/roles",
+        params={"_start": 0, "_end": 100, "sort[]": "name", "order[]": "asc"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert [r["name"] for r in resp.json()][:4] == ["owner", "admin", "editor", "viewer"]
+
+
 async def test_update_role_duplicate_name_conflicts(app_client):
     client = app_client
     owner = await register_user(client, "up7@example.com")

@@ -34,6 +34,9 @@ import { getMemberDisplayName } from "../types";
 const MANAGER_ROLES = ["owner", "admin"];
 
 const PAGE_SIZE = 10;
+// The role pickers need every role, ordered by the endpoint; the list is a
+// settings surface, so a workspace past this is not worth a pager.
+const ROLES_PAGE_SIZE = 100;
 
 export function MembersPage() {
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
@@ -46,7 +49,10 @@ export function MembersPage() {
     pagination: { currentPage: membersPage, pageSize: PAGE_SIZE },
     sorters: [{ field: "created_at", order: "desc" }],
   });
-  const { result: rolesResult } = useWorkspaceList<Role>({ resource: "roles" });
+  const { result: rolesResult } = useWorkspaceList<Role>({
+    resource: "roles",
+    pagination: { currentPage: 1, pageSize: ROLES_PAGE_SIZE },
+  });
   const { data: canManage } = useCan({ resource: "members", action: "edit" });
   const { data: canDelete } = useCan({ resource: "members", action: "delete" });
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });

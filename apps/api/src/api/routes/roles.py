@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, apply_query, parse_query
@@ -32,6 +32,15 @@ router = APIRouter(prefix="/roles", tags=["roles"])
 _ROLE_FILTERABLE = {"name", "system"}
 _ROLE_SORTABLE = {"name", "created_at"}
 
+# System roles first in DEFAULT_ROLES order, custom roles after. Ordering here
+# rather than on the client so it holds over the whole set: a page boundary
+# cannot split the system block, and every role surface agrees by construction.
+_ROLE_RANK = case(
+    {name: i for i, name in enumerate(WorkspaceService.DEFAULT_ROLES)},
+    value=func.lower(Role.name),
+    else_=len(WorkspaceService.DEFAULT_ROLES),
+)
+
 
 def _role_dict(r: Role) -> dict:
     return {
@@ -53,7 +62,7 @@ async def list_roles(
     _=Depends(require_permission(ROLE_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(Role).where(Role.workspace_id == workspace_id)
+    stmt = select(Role).where(Role.workspace_id == workspace_id).order_by(_ROLE_RANK)
     try:
         spec = parse_query(request)
         stmt = apply_query(stmt, Role, spec, sortable=_ROLE_SORTABLE, filterable=_ROLE_FILTERABLE)
@@ -61,7 +70,10 @@ async def list_roles(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
-    stmt = stmt.offset(spec.offset).limit(spec.limit)
+    # A client sorter is a tiebreak within the rank groups, not an override:
+    # it is appended after _ROLE_RANK. Name last keeps the order total, so
+    # paging cannot repeat or drop a row.
+    stmt = stmt.order_by(Role.name).offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
     return [_role_dict(r) for r in rows.scalars().all()]
