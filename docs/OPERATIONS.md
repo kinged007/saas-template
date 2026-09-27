@@ -14,6 +14,27 @@ rid=abc123 GET /api/v1/workspaces/{id} -> 200 12ms
 Path labels use route templates, never raw ids. `GET /healthz` and `GET
 /readyz` stay unauthenticated for load-balancer probes.
 
+## Client IP attribution
+
+The API never parses `X-Forwarded-For` itself. It records `scope["client"]`,
+which uvicorn's `ProxyHeadersMiddleware` overwrites from `X-Forwarded-For` —
+but only when the connecting peer matches `--forwarded-allow-ips`. Everything
+recorded from that address (session rows, audit log entries, webhook deliveries)
+is correct as long as that flag names your proxy. The shipped
+`infra/docker/docker-compose.prod.yml` defaults it to `172.16.0.0/12` (Docker's
+private bridge pool — the api service publishes no ports, so nginx is its only
+peer) and `FORWARDED_ALLOW_IPS` overrides it.
+
+Keep the list narrow. Under `'*'`, uvicorn takes the leftmost `X-Forwarded-For`
+entry verbatim, so any peer that can reach the API port picks the address
+recorded against it. Set the flag to your proxy's IP, CIDR, or a
+comma-separated list — on a custom `ipam` subnet, set `FORWARDED_ALLOW_IPS` in
+`infra/docker/.env` to the network Docker actually assigned.
+
+Only `X-Forwarded-For` is honoured. `X-Real-IP` and `CF-Connecting-IP` are read
+by neither uvicorn nor this code, so a proxy configured to send only
+`X-Real-IP` records the proxy's address.
+
 ## Metrics
 
 `GET /metrics` exposes Prometheus text exposition (no auth, same as

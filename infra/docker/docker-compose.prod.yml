@@ -12,6 +12,17 @@
 #
 # Migrations run automatically before each api start (`alembic upgrade head`).
 # Demo seed data is NOT applied — create the first user via /api/v1/register.
+#
+# FORWARDED_ALLOW_IPS (optional, set in infra/docker/.env) tells uvicorn which
+# peers may set X-Forwarded-For. The default covers Docker's private bridge pool
+# (172.16.0.0/12), which is where the only peer of the api service lives — it
+# publishes no ports, so nginx is the sole client. uvicorn's ProxyHeadersMiddleware
+# rewrites the client address from X-Forwarded-For for those peers only, which is
+# what puts the end user's IP in audit rows. If you put the api behind another
+# proxy (or a custom `ipam` subnet), set this to that proxy's address: an IP
+# literal, a CIDR, or a comma-separated list. Keep the list as narrow as possible
+# — a peer you trust can choose the IP recorded for every session row, audit
+# entry and rate-limit bucket.
 name: saas-template
 
 services:
@@ -68,7 +79,7 @@ services:
     command: >
       sh -c "alembic upgrade head &&
              exec uvicorn src.main:app --host 0.0.0.0 --port 8000
-                  --proxy-headers --forwarded-allow-ips='*'"
+                  --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-172.16.0.0/12}"
 
   web:
     build:
