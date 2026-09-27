@@ -41,7 +41,3 @@ def build_storage() -> FileStorage:
     raise ValueError(
         f"unsupported STORAGE_DRIVER: {driver!r} (available: {sorted(_STORAGE_DRIVERS)})"
     )
-
-
-def storage_public_path(file_id: str) -> str:
-    return f"/api/v1/files/{file_id}"

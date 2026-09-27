@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
+from src.api.prefix import API
 from src.api.routes import (
     admin,
     api_keys,
@@ -85,6 +86,7 @@ async def lifespan(app: FastAPI):
         await scheduler.stop()
         uninstall_run_capture()
         await registry.stop()
+        await container.storage.aclose()
 
 
 app = FastAPI(
@@ -140,7 +142,6 @@ async def root() -> dict:
     }
 
 
-API = "/api/v1"
 app.include_router(meta.router, prefix=API)
 app.include_router(admin.router, prefix=API)
 app.include_router(auth.router, prefix=API)

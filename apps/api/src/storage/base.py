@@ -24,7 +24,6 @@ class StorageError(RuntimeError):
 class StoredObject:
     key: str
     content: bytes
-    content_type: str | None = None
 
 
 class FileStorage(ABC):
@@ -44,6 +43,6 @@ class FileStorage(ABC):
     async def delete(self, *, key: str) -> None:
         """Remove one object; missing keys are a no-op."""
 
-    @abstractmethod
-    async def exists(self, *, key: str) -> bool:
-        """True when `key` is stored."""
+    async def aclose(self) -> None:
+        """Release driver-held resources. No-op unless the driver holds any."""
+        return None

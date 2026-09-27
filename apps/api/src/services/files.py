@@ -10,12 +10,13 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.api.prefix import API
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
 from src.models.file_object import FileObject
 from src.models.workspace import WorkspaceMember
+from src.settings import settings
 from src.storage.base import FileStorage, StorageError
-from src.storage.factory import storage_public_path
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,8 @@ class FileService:
             "filename": row.filename,
             "content_type": row.content_type,
             "size_bytes": row.size_bytes,
-            "url": storage_public_path(row.id),
+            # Absolute so a browser can load it whatever origin serves the UI.
+            "url": f"{settings.frontend_url.rstrip('/')}{API}/files/{row.id}",
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         }
@@ -144,7 +146,7 @@ class FileService:
         return self.to_dict(row)
 
     async def download(
-        self, *, workspace_id: str, file_id: str, user_id: str
+        self, *, workspace_id: str, file_id: str, user_id: str, ip_address: str | None = None
     ) -> tuple[FileObject, bytes]:
         await self._ensure_membership(workspace_id, user_id)
         row = await self._session.get(FileObject, file_id)
@@ -156,6 +158,16 @@ class FileService:
             raise FileError(str(exc)) from exc
         if stored is None:
             raise FileNotFound("file not found")
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="file",
+            resource_id=row.id,
+            action="file.downloaded",
+            actor_user_id=user_id,
+            details={"filename": row.filename, "size_bytes": row.size_bytes},
+            ip_address=ip_address,
+        )
         return row, stored.content
 
     async def list_files(

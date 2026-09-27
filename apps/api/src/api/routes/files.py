@@ -12,7 +12,7 @@ from src.api.deps import (
     require_permission,
     resolve_auth_principal,
 )
-from src.core.permissions import MESSAGE_READ, MESSAGE_SEND
+from src.core.permissions import FILE_CREATE, FILE_READ
 from src.db.session import get_db
 from src.services.files import (
     FileError,
@@ -23,14 +23,12 @@ from src.services.files import (
     FileTypeRejected,
 )
 from src.settings import settings
-from src.storage.factory import build_storage
 
 router = APIRouter(prefix="/files", tags=["files"])
 
 
 def _service(db: AsyncSession, container) -> FileService:
-    storage = getattr(container, "storage", None) or build_storage()
-    return FileService(db, storage, settings.storage_max_upload_bytes, container.bus)
+    return FileService(db, container.storage, settings.storage_max_upload_bytes, container.bus)
 
 
 @router.post("", status_code=201)
@@ -40,7 +38,7 @@ async def upload_file(
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
-    _=Depends(require_permission(MESSAGE_SEND)),
+    _=Depends(require_permission(FILE_CREATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -87,14 +85,14 @@ async def list_files(
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
-    _key: None = Depends(require_key_permission(MESSAGE_READ)),
+    _key: None = Depends(require_key_permission(FILE_READ)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
     try:
         spec = parse_query(request)
     except InvalidQuery as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
     try:
         items, total = await _service(db, container).list_files(
             workspace_id=workspace_id, user_id=user.id, offset=spec.offset, limit=spec.limit
@@ -108,16 +106,20 @@ async def list_files(
 @router.get("/{file_id}")
 async def download_file(
     file_id: str,
+    request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
-    _key: None = Depends(require_key_permission(MESSAGE_READ)),
+    _key: None = Depends(require_key_permission(FILE_READ)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
     try:
         row, content = await _service(db, container).download(
-            workspace_id=workspace_id, file_id=file_id, user_id=user.id
+            workspace_id=workspace_id,
+            file_id=file_id,
+            user_id=user.id,
+            ip_address=request.client.host if request.client else None,
         )
     except FileForbidden as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None

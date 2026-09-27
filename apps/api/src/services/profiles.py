@@ -15,6 +15,7 @@ from src.events.publisher import publish_audit
 from src.models.api_key import ApiKey
 from src.models.audit import AuditLogEntry
 from src.models.core import Invitation, Notification
+from src.models.file_object import FileObject
 from src.models.user_profile import UserProfile
 from src.models.workspace import RefreshToken, Role, User, Workspace, WorkspaceMember
 from src.services.profile_helpers import (
@@ -434,6 +435,9 @@ class ProfileService:
             )
         await self._session.execute(
             delete(UserProfile).where(UserProfile.user_id == target_user_id)
+        )
+        await self._session.execute(
+            delete(FileObject).where(FileObject.owner_user_id == target_user_id)
         )
         from src.models.conversation import ConversationParticipant
 

@@ -6,9 +6,14 @@ limits + workspace isolation.
 
 from __future__ import annotations
 
+import asyncio
 import io
 
+import pytest
+
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+# sha256(b"img-bytes") — the payload hash the S3 driver signs in the golden vector.
+IMG_PAYLOAD_HASH = "94caee2d6a72b4c18ef8bd2d5d2723f2b1be8c4f25fc2f6dbcc98dbcc9187888"
 
 
 async def _setup(app_client):
@@ -32,7 +37,9 @@ async def test_upload_store_download_roundtrip(app_client):
     resp = await app_client.post("/api/v1/files", files=_png(), headers=owner)
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["url"] == f"/api/v1/files/{body['id']}"
+    from src.settings import settings
+
+    assert body["url"] == f"{settings.frontend_url}/api/v1/files/{body['id']}"
     assert body["size_bytes"] == len(PNG)
 
     got = await app_client.get(f"/api/v1/files/{body['id']}", headers=owner)
@@ -85,21 +92,23 @@ async def test_cross_workspace_download_forbidden(app_client):
     assert up.status_code == 201, up.text
     # Other workspace member: same file id under their workspace → 404 (no leak).
     got = await app_client.get(f"/api/v1/files/{up.json()['id']}", headers=other)
-    assert got.status_code in (403, 404), got.text
+    assert got.status_code == 404, got.text
     # Unauthenticated (bad token, valid workspace header) → 401.
     bad = {"Authorization": "Bearer bogus", "X-Workspace-ID": owner["X-Workspace-ID"]}
     anon = await app_client.get(f"/api/v1/files/{up.json()['id']}", headers=bad)
     assert anon.status_code == 401, anon.text
 
 
-async def test_local_driver_traversal_rejected():
+async def test_local_driver_traversal_rejected(tmp_path):
     from src.storage.local import LocalFileStorage
 
-    store = LocalFileStorage("/tmp/saas-template-storage-test")
+    store = LocalFileStorage(tmp_path)
     await store.put(key="ws1/a.png", content=b"x")
-    assert await store.exists(key="ws1/a.png")
-    assert not await store.exists(key="../evil.png")
+    assert (await store.get(key="ws1/a.png")).content == b"x"
     assert await store.get(key="../evil.png") is None
+    # A rejected key must not touch anything outside the root.
+    await store.delete(key="../evil.png")
+    assert list(tmp_path.rglob("*.png")) == [tmp_path / "ws1" / "a.png"]
 
 
 async def test_s3_driver_roundtrip_stubbed():
@@ -114,9 +123,9 @@ async def test_s3_driver_roundtrip_stubbed():
         if request.method == "PUT":
             return httpx.Response(200)
         if request.method == "GET":
+            if request.url.path.endswith("missing.png"):
+                return httpx.Response(404)
             return httpx.Response(200, content=b"img-bytes", headers={"content-type": "image/png"})
-        if request.method == "HEAD":
-            return httpx.Response(200)
         if request.method == "DELETE":
             return httpx.Response(204)
         return httpx.Response(500)
@@ -125,17 +134,88 @@ async def test_s3_driver_roundtrip_stubbed():
         S3Config(endpoint="https://s3.example.com", bucket="b", access_key="ak", secret_key="sk"),
         transport=httpx.MockTransport(handler),
     )
-    await store.put(key="ws/f.png", content=b"img-bytes", content_type="image/png")
-    assert seen["PUT"] == b"img-bytes"
-    obj = await store.get(key="ws/f.png")
-    assert obj is not None and obj.content == b"img-bytes"
-    assert await store.exists(key="ws/f.png")
-    await store.delete(key="ws/f.png")
+    try:
+        await store.put(key="ws/f.png", content=b"img-bytes", content_type="image/png")
+        assert seen["PUT"] == b"img-bytes"
+        obj = await store.get(key="ws/f.png")
+        assert obj is not None and obj.content == b"img-bytes"
+        assert await store.get(key="ws/missing.png") is None
+        await store.delete(key="ws/f.png")
+    finally:
+        await store.aclose()
+
+
+async def test_s3_sigv4_signature_matches_golden_vector(monkeypatch):
+    """Frozen date and credentials: a wrong canonical request or key derivation
+    still signs, but a real S3 rejects the signature."""
+    from datetime import UTC, datetime
+
+    import httpx
+
+    from src.storage import s3 as s3_module
+    from src.storage.s3 import S3Config, S3FileStorage
+
+    frozen = datetime(2026, 9, 17, 12, 0, 0, tzinfo=UTC)
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen
+
+    monkeypatch.setattr(s3_module, "datetime", _FrozenDatetime)
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["auth"] = request.headers["authorization"]
+        seen["date"] = request.headers["x-amz-date"]
+        seen["payload"] = request.headers["x-amz-content-sha256"]
+        return httpx.Response(200)
+
+    store = S3FileStorage(
+        S3Config(endpoint="https://s3.example.com", bucket="b", access_key="ak", secret_key="sk"),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        await store.put(key="ws/f.png", content=b"img-bytes", content_type="image/png")
+    finally:
+        await store.aclose()
+    assert seen["date"] == "20260917T120000Z"
+    assert seen["payload"] == IMG_PAYLOAD_HASH
+    assert seen["auth"] == (
+        "AWS4-HMAC-SHA256 Credential=ak/20260917/us-east-1/s3/aws4_request, "
+        "SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date, "
+        "Signature=3420069f689c2ebbb185b5c8064a280226a4796ee90142c9d09c0b40d64fd551"
+    )
+
+
+async def test_s3_rejects_plaintext_endpoint():
+    from src.storage.base import StorageError
+    from src.storage.s3 import S3Config, S3FileStorage
+
+    with pytest.raises(StorageError):
+        S3FileStorage(S3Config(endpoint="http://s3.example.com", bucket="b"))
+    loopback = S3FileStorage(S3Config(endpoint="http://localhost:9000", bucket="b"))
+    await loopback.aclose()
+
+
+async def test_s3_error_status_raises_storage_error():
+    import httpx
+
+    from src.storage.base import StorageError
+    from src.storage.s3 import S3Config, S3FileStorage
+
+    store = S3FileStorage(
+        S3Config(endpoint="https://s3.example.com", bucket="b", access_key="ak", secret_key="sk"),
+        transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+    )
+    try:
+        with pytest.raises(StorageError):
+            await store.put(key="ws/f.png", content=b"img-bytes", content_type="image/png")
+    finally:
+        await store.aclose()
 
 
 async def test_factories_reject_unknown_drivers(monkeypatch):
-    import pytest
-
     from src import settings as settings_module
     from src.storage.factory import build_storage
 
@@ -206,3 +286,92 @@ async def test_oversize_upload_is_rejected_without_buffering_whole_body(app_clie
     assert resp.status_code == 413, resp.text
     # Bounded read stops one chunk past the cap instead of consuming the body.
     assert pulled <= limit + 1024 * 1024, f"route buffered {pulled} bytes"
+
+
+async def test_empty_upload_rejected(app_client):
+    owner, _ = await _setup(app_client)
+    resp = await app_client.post(
+        "/api/v1/files",
+        files={"file": ("empty.png", io.BytesIO(b""), "image/png")},
+        headers=owner,
+    )
+    assert resp.status_code == 400, resp.text
+
+
+async def test_upload_at_size_limit_accepted(app_client, monkeypatch):
+    from src import settings as settings_module
+    from tests.conftest import create_workspace, login, register_user, ws_headers
+
+    await register_user(app_client, email="files-edge@example.com")
+    tokens = await login(app_client, email="files-edge@example.com")
+    ws = await create_workspace(app_client, tokens, name="Edge WS")
+    headers = ws_headers(tokens, ws["id"])
+    monkeypatch.setattr(settings_module.settings, "storage_max_upload_bytes", len(PNG))
+    resp = await app_client.post("/api/v1/files", files=_png(), headers=headers)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["size_bytes"] == len(PNG)
+
+
+async def test_upload_forbidden_for_non_member(app_client):
+    owner, other = await _setup(app_client)
+    resp = await app_client.post(
+        "/api/v1/files",
+        files=_png(),
+        headers={**other, "X-Workspace-ID": owner["X-Workspace-ID"]},
+    )
+    assert resp.status_code == 403, resp.text
+
+
+async def test_orphan_bytes_removed_when_metadata_insert_fails(tmp_path):
+    """A failed insert must not leave the stored object behind."""
+    from src.services.files import FileService
+    from src.storage.local import LocalFileStorage
+
+    class _FailingSession:
+        def add(self, row) -> None:
+            self.row = row
+
+        async def execute(self, *args, **kwargs):
+            class _Result:
+                def scalar_one_or_none(self):
+                    return object()
+
+            return _Result()
+
+        async def commit(self) -> None:
+            raise RuntimeError("db down")
+
+    service = FileService(_FailingSession(), LocalFileStorage(tmp_path), len(PNG))
+    with pytest.raises(RuntimeError, match="db down"):
+        await service.upload(
+            workspace_id="ws1",
+            owner_user_id="user1",
+            filename="avatar.png",
+            content_type="image/png",
+            content=PNG,
+        )
+    assert [p for p in tmp_path.rglob("*") if p.is_file()] == []
+
+
+async def test_download_publishes_audit_event(app_client):
+    from sqlalchemy import select
+
+    from src.db.session import SessionFactory
+    from src.models.audit import AuditLogEntry
+
+    owner, _ = await _setup(app_client)
+    up = await app_client.post("/api/v1/files", files=_png(), headers=owner)
+    assert up.status_code == 201, up.text
+    got = await app_client.get(f"/api/v1/files/{up.json()['id']}", headers=owner)
+    assert got.status_code == 200, got.text
+
+    async def _actions() -> list[str]:
+        async with SessionFactory() as session:
+            rows = await session.execute(select(AuditLogEntry.action))
+            return list(rows.scalars())
+
+    for _ in range(100):
+        if "file.downloaded" in await _actions():
+            break
+        await asyncio.sleep(0.05)
+    assert "file.downloaded" in await _actions()

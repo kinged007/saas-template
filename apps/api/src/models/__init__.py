@@ -5,12 +5,12 @@ from src.models.conversation import (
     ConversationParticipant,
     Message,
 )
-from src.models.file_object import FileObject
 from src.models.core import (
     Invitation,
     Notification,
     NotificationPreference,
 )
+from src.models.file_object import FileObject
 from src.models.jobs import (
     JobDefinition,
     JobLogEntry,
@@ -36,6 +36,7 @@ __all__ = [
     "Conversation",
     "ConversationParticipant",
     "AuthToken",
+    "FileObject",
     "Invitation",
     "JobDefinition",
     "JobLogEntry",

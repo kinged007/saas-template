@@ -54,10 +54,3 @@ class LocalFileStorage(FileStorage):
         except StorageError:
             return
         await asyncio.to_thread(lambda: dest.unlink(missing_ok=True))
-
-    async def exists(self, *, key: str) -> bool:
-        try:
-            dest = _resolve(self._root, key)
-        except StorageError:
-            return False
-        return await asyncio.to_thread(dest.is_file)

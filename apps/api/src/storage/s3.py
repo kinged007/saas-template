@@ -11,7 +11,7 @@ import hashlib
 import hmac
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -28,12 +28,14 @@ class S3Config:
     timeout_s: float = 10.0
 
 
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
 def _sign_v4(
     *,
     secret_key: str,
     region: str,
     service: str,
-    amz_date: str,
     date_stamp: str,
     string_to_sign: str,
 ) -> str:
@@ -51,8 +53,19 @@ class S3FileStorage(FileStorage):
     name = "s3"
 
     def __init__(self, config: S3Config, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        # SigV4 headers and payload hashes must not go out in cleartext.
+        # ponytail: only loopback may use http; allow other private-network hosts
+        # (e.g. MinIO on a docker network) when one is actually needed.
+        host = urlsplit(config.endpoint).hostname or ""
+        if not config.endpoint.startswith("https://") and host not in LOOPBACK_HOSTS:
+            raise StorageError(f"S3_ENDPOINT must be https or localhost: {config.endpoint!r}")
         self.config = config
-        self._transport = transport
+        # One client for the driver's lifetime: a per-request client would pay a
+        # TCP+TLS handshake on every object read.
+        self._client = httpx.AsyncClient(transport=transport, timeout=config.timeout_s)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     def _url(self, key: str) -> str:
         return f"{self.config.endpoint.rstrip('/')}/{self.config.bucket}/{quote(key, safe='/')}"
@@ -85,7 +98,6 @@ class S3FileStorage(FileStorage):
             secret_key=self.config.secret_key,
             region=self.config.region,
             service="s3",
-            amz_date=amz_date,
             date_stamp=date_stamp,
             string_to_sign=to_sign,
         )
@@ -97,10 +109,7 @@ class S3FileStorage(FileStorage):
 
     async def _request(self, method: str, key: str, **kwargs) -> httpx.Response:
         try:
-            async with httpx.AsyncClient(
-                transport=self._transport, timeout=self.config.timeout_s
-            ) as client:
-                return await client.request(method, self._url(key), **kwargs)
+            return await self._client.request(method, self._url(key), **kwargs)
         except StorageError:
             raise
         except Exception as exc:
@@ -124,9 +133,7 @@ class S3FileStorage(FileStorage):
             return None
         if resp.status_code != 200:
             raise StorageError(f"s3 get failed: HTTP {resp.status_code}")
-        return StoredObject(
-            key=key, content=resp.content, content_type=resp.headers.get("content-type")
-        )
+        return StoredObject(key=key, content=resp.content)
 
     async def delete(self, *, key: str) -> None:
         headers = self._auth_headers(
@@ -135,14 +142,3 @@ class S3FileStorage(FileStorage):
         resp = await self._request("DELETE", key, headers=headers)
         if resp.status_code not in (200, 202, 204, 404):
             raise StorageError(f"s3 delete failed: HTTP {resp.status_code}")
-
-    async def exists(self, *, key: str) -> bool:
-        headers = self._auth_headers(
-            method="HEAD", key=key, payload_hash="UNSIGNED-PAYLOAD", content_type=None
-        )
-        resp = await self._request("HEAD", key, headers=headers)
-        if resp.status_code == 200:
-            return True
-        if resp.status_code == 404:
-            return False
-        raise StorageError(f"s3 head failed: HTTP {resp.status_code}")
