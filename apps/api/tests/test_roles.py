@@ -87,6 +87,8 @@ async def test_permission_catalog_filtered_to_assignable(app_client):
     ).json()
     assert set(owner_catalog["catalog"]) == set(perms.ALL_PERMISSIONS)
     assert set(owner_catalog["permissions"]) == set(perms.ALL_PERMISSIONS)
+    assert not (set(owner_catalog["catalog"]) & set(perms.KEY_ONLY_PERMISSIONS))
+    assert not (set(owner_catalog["permissions"]) & set(perms.KEY_ONLY_PERMISSIONS))
 
     viewer_catalog = (
         await client.get("/api/v1/roles/permission-catalog", headers=ws_headers(viewer, ws["id"]))
@@ -124,6 +126,44 @@ async def test_create_role_rejects_duplicate_name(app_client):
         "/api/v1/roles", json={"name": "ops", "permissions": []}, headers=headers
     )
     assert resp.status_code == 409
+
+
+async def test_permission_catalog_excludes_legacy_key_only_scope(app_client):
+    # A stale role row holding a legacy key-only scope must not resurface it.
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    client = app_client
+    owner = await register_user(client, "cat-legacy@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    editor_id = await _role_id(client, headers, "editor")
+    async with SessionFactory() as session:
+        role = await session.get(Role, editor_id)
+        role.permissions = [*role.permissions, "notification:read"]
+        await session.commit()
+    catalog = (await client.get("/api/v1/roles/permission-catalog", headers=headers)).json()
+    assert "notification:read" not in catalog["permissions"]
+    assert "notification:read" not in catalog["catalog"]
+
+
+async def test_create_role_rejects_key_only_permissions(app_client):
+    client = app_client
+    owner = await register_user(client, "cr-keyonly@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    resp = await client.post(
+        "/api/v1/roles",
+        json={"name": "ops", "permissions": ["notification:read"]},
+        headers=headers,
+    )
+    assert resp.status_code == 422, resp.text
+    resp = await client.post(
+        "/api/v1/roles",
+        json={"name": "ops", "permissions": ["member:read", "notification:update"]},
+        headers=headers,
+    )
+    assert resp.status_code == 422, resp.text
 
 
 async def test_create_role_rejects_star(app_client):
@@ -217,6 +257,20 @@ async def test_update_role_cross_workspace_is_404(app_client):
         headers=ws_headers(owner, ws2["id"]),
     )
     assert resp.status_code == 404
+
+
+async def test_update_role_rejects_key_only_permissions(app_client):
+    client = app_client
+    owner = await register_user(client, "up-keyonly@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    editor_id = await _role_id(client, headers, "editor")
+    resp = await client.patch(
+        f"/api/v1/roles/{editor_id}",
+        json={"permissions": ["member:read", "notification:read"]},
+        headers=headers,
+    )
+    assert resp.status_code == 422, resp.text
 
 
 async def test_update_role_rejects_unknown_permission_and_star(app_client):

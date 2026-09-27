@@ -4,11 +4,13 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarSeparator,
   SidebarTrigger,
   SidebarRail,
 } from "@/components/ui/sidebar";
@@ -38,9 +40,11 @@ import {
   Building2,
   ChevronsUpDown,
   CircleUser,
+  FileText,
   Inbox,
   KeyRound,
   LayoutDashboard,
+  LifeBuoy,
   LogOut,
   Mail,
   Plus,
@@ -48,6 +52,7 @@ import {
   ShieldCheck,
   Users,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "../contexts/WorkspaceContext";
 import { activeWorkspacePermissions } from "../utils/permissions";
@@ -58,10 +63,41 @@ import { cn } from "@/lib/utils";
 import type { Identity } from "../types";
 import { getDisplayName } from "../types";
 
-const MENU_ITEMS = [
-  { key: "/", label: "Dashboard", icon: LayoutDashboard, permission: "workspace:read" },
-  { key: "/inbox", label: "Inbox", icon: Inbox, permission: null },
-  { key: "/members", label: "Members", icon: Users, permission: "member:read" },
+type MenuItem = {
+  key: string;
+  label: string;
+  icon: LucideIcon;
+  permission: string | null;
+};
+
+/**
+ * Sidebar groups, rendered in `position` order with a separator between the
+ * two sides. Omit `title` for an unlabelled group. Adding a group is a data
+ * change only; `SidebarNav` does not need to know about it.
+ */
+const SIDEBAR_GROUPS: { id: string; title?: string; position: "top" | "bottom"; items: MenuItem[] }[] = [
+  {
+    id: "main",
+    position: "top",
+    items: [
+      { key: "/", label: "Dashboard", icon: LayoutDashboard, permission: "workspace:read" },
+      { key: "/inbox", label: "Inbox", icon: Inbox, permission: null },
+    ],
+  },
+  {
+    id: "demo",
+    title: "Demo",
+    position: "top",
+    items: [
+      { key: "#", label: "Sample page", icon: FileText, permission: null },
+      { key: "#", label: "Support", icon: LifeBuoy, permission: null },
+    ],
+  },
+  {
+    id: "workspace",
+    position: "bottom",
+    items: [{ key: "/members", label: "Members", icon: Users, permission: "member:read" }],
+  },
 ];
 
 function SidebarNav() {
@@ -71,7 +107,6 @@ function SidebarNav() {
   const permissions = activeWorkspacePermissions(identity);
   const can = (p: string | null) =>
     p === null || permissions.includes("*") || permissions.includes(p);
-  const items = MENU_ITEMS.filter((i) => can(i.permission));
   const activeKey = `/${location.pathname.split("/")[1] || ""}`;
   const isActive = (key: string) => (key === "/" ? location.pathname === "/" : activeKey === key);
 
@@ -85,16 +120,24 @@ function SidebarNav() {
   const convUnreadCount =
     (convUnreadResult?.data as { count?: number } | undefined)?.count ?? 0;
 
-  return (
-    <SidebarGroup>
+  // A group whose items are all filtered out by permissions renders nothing,
+  // so a missing permission cannot leave an empty group or a dangling rule.
+  const visibleGroups = SIDEBAR_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((i) => can(i.permission)),
+  })).filter((group) => group.items.length > 0);
+
+  const renderGroup = (group: (typeof visibleGroups)[number]) => (
+    <SidebarGroup key={group.id}>
+      {group.title && <SidebarGroupLabel>{group.title}</SidebarGroupLabel>}
       <SidebarMenu>
-        {items.map((item) => {
+        {group.items.map((item, index) => {
           const Icon = item.icon;
           const active = isActive(item.key);
           const isInbox = item.key === "/inbox";
           const badgeCount = isInbox ? convUnreadCount : 0;
           return (
-            <SidebarMenuItem key={item.key}>
+            <SidebarMenuItem key={`${group.id}-${item.key}-${index}`}>
               <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
                 <Link to={item.key}>
                   <span className="relative">
@@ -118,6 +161,17 @@ function SidebarNav() {
         })}
       </SidebarMenu>
     </SidebarGroup>
+  );
+
+  const topGroups = visibleGroups.filter((g) => g.position === "top");
+  const bottomGroups = visibleGroups.filter((g) => g.position === "bottom");
+
+  return (
+    <>
+      {topGroups.map(renderGroup)}
+      {topGroups.length > 0 && bottomGroups.length > 0 && <SidebarSeparator />}
+      {bottomGroups.map(renderGroup)}
+    </>
   );
 }
 

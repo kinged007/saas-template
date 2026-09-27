@@ -40,6 +40,9 @@ def user_to_dict(u: User) -> dict:
     }
 
 
+ONBOARDING_ENABLED_FLAG = "onboarding_enabled"
+
+
 def workspace_to_dict(
     w: Workspace,
     *,
@@ -54,6 +57,8 @@ def workspace_to_dict(
         "description": w.description,
         "created_by_user_id": w.created_by_user_id,
         "created_at": _to_iso(w.created_at),
+        # Default-on: only an explicit False disables it (FEATURE_FLAGS.md).
+        ONBOARDING_ENABLED_FLAG: (w.flags or {}).get(ONBOARDING_ENABLED_FLAG) is not False,
     }
     if role:
         data["role"] = role

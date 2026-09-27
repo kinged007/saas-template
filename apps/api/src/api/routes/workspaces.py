@@ -51,6 +51,18 @@ async def search_workspace(
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
 
 
+@router.get("/export/resources")
+async def export_resources(
+    _=Depends(require_permission(AUDIT_READ)),
+):
+    """Exportable resource names for the workspace export selector.
+
+    Served from CSV_RESOURCES so adding a resource is a one-line backend
+    change instead of an edit in two places.
+    """
+    return {"resources": list(CSV_RESOURCES)}
+
+
 @router.get("/export")
 async def export_workspace(
     user=Depends(get_current_user),
@@ -207,6 +219,7 @@ async def update_workspace(
             workspace_id,
             name=body.name,
             description=body.description,
+            onboarding_enabled=body.onboarding_enabled,
             actor=user,
             ip_address=request.client.host if request.client else None,
         )

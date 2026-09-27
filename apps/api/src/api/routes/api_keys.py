@@ -15,7 +15,12 @@ from src.api.deps import (
     resolve_auth_principal,
 )
 from src.core.dates import ensure_utc
-from src.core.permissions import APIKEY_CREATE, APIKEY_DELETE, APIKEY_READ
+from src.core.permissions import (
+    APIKEY_CREATE,
+    APIKEY_DELETE,
+    APIKEY_READ,
+    KEY_ONLY_PERMISSIONS,
+)
 from src.db.session import get_db
 from src.models.api_key import ApiKey
 from src.schemas.api import ApiKeyCreate, ApiKeyQuotaUpdate
@@ -84,12 +89,15 @@ async def effective_permissions(
     _=Depends(require_permission(APIKEY_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    """Permissions this user can assign to an API key in the active workspace."""
+    """Permissions this user can assign to an API key in the active workspace.
+
+    Key-only scopes (notification:*) are always offerable: any member may hold
+    them on a key (notifications are personal), mirroring ApiKeyService."""
     membership = await WorkspaceService(db).get_membership(workspace_id, user.id)
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership
-    return {"permissions": sorted(role.permissions)}
+    return {"permissions": sorted(set(role.permissions) | set(KEY_ONLY_PERMISSIONS))}
 
 
 @router.post("", status_code=201)
@@ -124,6 +132,7 @@ async def create_api_key(
     return {**_key_dict(key), "key": raw}
 
 
+# APIKEY_DELETE is the key-lifecycle guard: it covers quota changes and revoke.
 @router.patch("/{api_key_id}")
 async def set_api_key_quota(
     api_key_id: str,

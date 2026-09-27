@@ -82,6 +82,7 @@ export function ApiKeyCreatePage() {
       // Stay on the page so the created key can be shown in the dialog below —
       // otherwise refine redirects to the list and the raw key is lost.
       redirect: false,
+      errorNotification: false,
       successNotification: {
         message: "API key created",
         description: "Copy the key now — it won't be shown again.",

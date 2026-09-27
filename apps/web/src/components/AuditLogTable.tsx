@@ -80,7 +80,7 @@ export function AuditLogTable({
   const total = result?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const isLoading = query.isPending;
-  const colSpan = showWorkspace ? 7 : 6;
+  const colSpan = showWorkspace ? 6 : 5;
 
   return (
     <>
@@ -110,7 +110,6 @@ export function AuditLogTable({
               <TableHead className="w-36">Actor</TableHead>
               <TableHead className="w-44">Action</TableHead>
               <TableHead className="w-36">Resource</TableHead>
-              <TableHead>Details</TableHead>
               <TableHead className="w-28">IP</TableHead>
             </TableRow>
           </TableHeader>
@@ -160,16 +159,6 @@ export function AuditLogTable({
                   </TableCell>
                   <TableCell className="truncate font-mono text-xs" title={entry.resource_id}>
                     {entry.resource_type} / {entry.resource_id.slice(0, 8)}
-                  </TableCell>
-                  <TableCell className="max-w-0">
-                    <span
-                      className="text-muted-foreground block truncate text-xs"
-                      title={JSON.stringify(entry.details)}
-                    >
-                      {entry.details && Object.keys(entry.details).length > 0
-                        ? JSON.stringify(entry.details)
-                        : "—"}
-                    </span>
                   </TableCell>
                   <TableCell className="text-muted-foreground truncate font-mono text-xs">
                     {entry.ip_address ?? "—"}
