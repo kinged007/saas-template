@@ -712,6 +712,8 @@ async def test_expire_invitations_purges_only_invitations_expired_over_30_days(a
                 invitation(
                     "recent@example.com", "purge-recent", "expired", now - timedelta(days=1)
                 ),
+                # pending, not yet expired: untouched
+                invitation("valid@example.com", "purge-valid", "pending", now + timedelta(days=3)),
             ]
         )
         await session.commit()
@@ -729,4 +731,5 @@ async def test_expire_invitations_purges_only_invitations_expired_over_30_days(a
     assert remaining == {
         "fresh@example.com": "expired",
         "recent@example.com": "expired",
+        "valid@example.com": "pending",
     }

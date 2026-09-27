@@ -36,38 +36,29 @@ JOB_KEY = "invitations.expire_stale"
 
 def upgrade() -> None:
     bind = op.get_bind()
-    definition_ids = [
-        row[0]
-        for row in bind.execute(
-            sa.text("SELECT id FROM job_definitions WHERE key = :key AND workspace_id IS NOT NULL"),
-            {"key": JOB_KEY},
-        )
-    ]
-    if not definition_ids:
-        return
-    run_ids = [
-        row[0]
-        for row in bind.execute(
-            sa.text("SELECT id FROM job_runs WHERE definition_id IN :ids").bindparams(
-                sa.bindparam("ids", value=definition_ids, expanding=True)
-            )
-        )
-    ]
-    if run_ids:
-        bind.execute(
-            sa.text("DELETE FROM job_logs WHERE run_id IN :ids").bindparams(
-                sa.bindparam("ids", value=run_ids, expanding=True)
-            )
-        )
-        bind.execute(
-            sa.text("DELETE FROM job_runs WHERE id IN :ids").bindparams(
-                sa.bindparam("ids", value=run_ids, expanding=True)
-            )
-        )
+    # Correlated subqueries rather than IN (:ids) lists: an expanding bindparam
+    # sends one parameter per row, which exceeds SQLITE_MAX_VARIABLE_NUMBER and
+    # PostgreSQL's 65535-parameter limit on a deployment with many workspaces.
     bind.execute(
-        sa.text("DELETE FROM job_definitions WHERE id IN :ids").bindparams(
-            sa.bindparam("ids", value=definition_ids, expanding=True)
-        )
+        sa.text(
+            "DELETE FROM job_logs WHERE run_id IN ("
+            "  SELECT id FROM job_runs WHERE definition_id IN ("
+            "    SELECT id FROM job_definitions"
+            "    WHERE key = :key AND workspace_id IS NOT NULL))"
+        ),
+        {"key": JOB_KEY},
+    )
+    bind.execute(
+        sa.text(
+            "DELETE FROM job_runs WHERE definition_id IN ("
+            "  SELECT id FROM job_definitions"
+            "  WHERE key = :key AND workspace_id IS NOT NULL)"
+        ),
+        {"key": JOB_KEY},
+    )
+    bind.execute(
+        sa.text("DELETE FROM job_definitions WHERE key = :key AND workspace_id IS NOT NULL"),
+        {"key": JOB_KEY},
     )
 
 

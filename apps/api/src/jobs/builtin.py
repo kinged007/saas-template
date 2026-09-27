@@ -14,7 +14,7 @@ from datetime import timedelta
 
 from sqlalchemy import delete, select
 
-from src.core.dates import ensure_utc, now_utc
+from src.core.dates import now_utc
 from src.jobs.registry import JobContext, JobSpec, job_registry
 from src.models.core import Invitation, Notification, NotificationPreference
 
@@ -77,10 +77,11 @@ async def expire_stale_invitations(ctx: JobContext) -> None:
     logger.info("Starting job '%s' (run %s)", ctx.job_key, ctx.run_id[:8])
     now = now_utc()
     async with ctx.session() as session:
-        result = await session.execute(select(Invitation).where(Invitation.status == "pending"))
-        pending = list(result.scalars().all())
-        stale = [i for i in pending if ensure_utc(i.expires_at) < now]
-        logger.info("Found %d pending invitations, %d stale", len(pending), len(stale))
+        result = await session.execute(
+            select(Invitation).where(Invitation.status == "pending", Invitation.expires_at < now)
+        )
+        stale = list(result.scalars().all())
+        logger.info("Expiring %d stale invitation(s)", len(stale))
         for invitation in stale:
             logger.info(
                 "Expiring invitation %s (%s) — expired at %s",
@@ -92,6 +93,9 @@ async def expire_stale_invitations(ctx: JobContext) -> None:
         await session.commit()
 
         purge_cutoff = now - timedelta(days=INVITATION_EXPIRED_RETENTION_DAYS)
+        # The window is measured from expires_at, not from the moment the row was
+        # marked expired, so a first run after a long outage purges rows this job
+        # never saw in the "expired" state.
         # synchronize_session=False: the rows above are already in this session's
         # identity map, and the default ORM evaluator re-checks the WHERE clause
         # in Python — where SQLite's naive timestamps cannot be compared against
