@@ -168,7 +168,10 @@ export function App() {
                 </div>
               }
             />
-            {/* Deliberate: signed-out typos land on / (which redirects to /login); signed-in unknown paths render NotFoundPage above. */}
+            {/* Unreachable guard: react-router ranks a splat nested in a layout above a
+                top-level splat, so the "/" layout's nested path="*" (NotFoundPage) wins
+                every path and this wildcard never matches. Authenticated's fallback is
+                what sends a signed-out visitor to /login. */}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
           <Toaster />
