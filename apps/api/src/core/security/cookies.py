@@ -8,6 +8,9 @@ reuse these helpers instead of reimplementing flags.
 
 from __future__ import annotations
 
+import re
+from urllib.parse import urlsplit
+
 from fastapi import HTTPException, Request, Response, status
 
 from src.settings import settings
@@ -94,20 +97,32 @@ def browser_flow(request: Request, body: object | None = None) -> bool:
     return request.headers.get("X-Session-Flow") == "cookie"
 
 
+def _origin_allowed(url: str) -> bool:
+    """True when an Origin (or Referer) URL is covered by CORS_ORIGINS.
+
+    Same rules as the CORS middleware: the exact entries plus the regex built
+    from the `*` entries, so a wildcard origin is not rejected as cross-site."""
+    parts = urlsplit(url)
+    if not parts.scheme or not parts.netloc:
+        return False
+    origin = f"{parts.scheme}://{parts.netloc}"
+    if origin in {o.rstrip("/") for o in settings.cors_origin_list}:
+        return True
+    pattern = settings.cors_origin_regex
+    return bool(pattern) and re.fullmatch(pattern, origin) is not None
+
+
 def require_csrf(request: Request) -> None:
     """Reject cross-site forged cookie requests on cookie-authenticated endpoints."""
     origin = request.headers.get("origin")
     referer = request.headers.get("referer")
-    allowed = set(settings.cors_origin_list)
     if origin is not None:
-        if origin.rstrip("/") not in {o.rstrip("/") for o in allowed}:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "cross-origin request rejected")
+        allowed = _origin_allowed(origin)
     elif referer is not None:
-        allowed_ref = any(
-            referer.startswith(o.rstrip("/") + "/") or referer.rstrip("/") == o.rstrip("/")
-            for o in allowed
-        )
-        if not allowed_ref:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "cross-origin request rejected")
+        allowed = _origin_allowed(referer)
+    else:
+        allowed = True
+    if not allowed:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "cross-origin request rejected")
     if request.headers.get(CSRF_HEADER) != CSRF_HEADER_VALUE:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "missing CSRF header")
