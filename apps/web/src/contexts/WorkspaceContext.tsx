@@ -250,10 +250,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       // permissions/role may have changed after a role update
       JSON.stringify(selected.permissions) !== JSON.stringify(next.permissions) ||
       selected.role !== next.role ||
-      // onboarding_enabled is a PATCH-able field too: a flag-only patch
-      // changes nothing else, so without this the selected workspace would
-      // keep the pre-patch value and the toggle would look like it did nothing.
-      selected.onboarding_enabled !== next.onboarding_enabled
+      // onboarding_enabled / require_2fa are PATCH-able fields too: a flag-only
+      // patch changes nothing else, so without this the selected workspace
+      // would keep the pre-patch value and the toggle would look like it did
+      // nothing. two_factor_verified rides along: it changes when this session
+      // clears a 2FA challenge, and the guard reads it off the selection.
+      selected.onboarding_enabled !== next.onboarding_enabled ||
+      selected.require_2fa !== next.require_2fa ||
+      selected.two_factor_verified !== next.two_factor_verified
     ) {
       setSelected(next);
     }

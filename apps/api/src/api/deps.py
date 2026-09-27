@@ -271,9 +271,13 @@ def require_permission(permission: str):
         membership = await service.get_membership(workspace_id, principal.user.id)
         if membership is None:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
-        await enforce_workspace_security(principal, workspace_id, db, request)
         _, role = membership
         if "*" in role.permissions or permission in role.permissions:
+            # After the permission check: a member who cannot do this at all
+            # still gets the existing "missing permission" 403 rather than the
+            # 2FA code, and the gate's lookup is skipped for requests that were
+            # refused anyway.
+            await enforce_workspace_security(principal, workspace_id, db, request)
             return None
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, f"missing permission: {permission}"

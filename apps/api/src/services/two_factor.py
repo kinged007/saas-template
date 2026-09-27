@@ -4,7 +4,7 @@ import logging
 import secrets
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dates import now_utc
@@ -112,6 +112,18 @@ class TwoFactorService:
         if cred is not None:
             await self._session.delete(cred)
         user.totp_enabled = False
+        # Every session of a user without 2FA loses its verdict: the stamp
+        # means "this session cleared a challenge", and there is no challenge
+        # left to clear. Without this a verified session keeps passing the
+        # workspace `require_2fa` gate after 2FA is gone.
+        await self._session.execute(
+            update(RefreshToken)
+            .where(
+                RefreshToken.user_id == user.id,
+                RefreshToken.two_factor_verified_at.is_not(None),
+            )
+            .values(two_factor_verified_at=None)
+        )
         await self._session.commit()
         await publish_audit(
             self._bus,

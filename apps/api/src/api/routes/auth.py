@@ -618,10 +618,11 @@ async def revoke_session(
 
 @router.get("/me")
 async def me(
-    user=Depends(get_current_user),
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    user = principal.user
     service = WorkspaceService(db)
     data = user_to_dict(user)
     memberships = await service.list_workspaces(user.id)
@@ -631,16 +632,22 @@ async def me(
         single = await service.get_single_workspace()
         if single is not None:
             memberships = [m for m in memberships if m[0].id == single.id]
+    # The gate keys off the session row, so /me reports the session verdict
+    # and not `user.totp_enabled`: a user who enrolled on another device has
+    # TOTP on but a session that predates it, and a per-user flag there would
+    # leave the client showing a working app while every request 403s.
+    session_verified = principal.session_id is not None and await AuthService(
+        db
+    ).is_session_two_factor_verified(principal.session_id, user.id)
     data["workspaces"] = [
         {
             **workspace_to_dict(
                 w, role=role.name, permissions=role.permissions, joined_at=member.created_at
             ),
             # The client needs both to decide whether to send this user to the
-            # 2FA setup flow: the workspace demands it, and this user has not
-            # satisfied it. Whether the current session already proved 2FA is
-            # the server's check, not something /me needs to restate.
-            "two_factor_enabled": bool(user.totp_enabled),
+            # 2FA setup flow: the workspace demands it, and this session has
+            # not satisfied it.
+            "two_factor_verified": session_verified,
         }
         for w, role, member in memberships
     ]

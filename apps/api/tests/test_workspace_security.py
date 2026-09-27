@@ -243,6 +243,11 @@ async def test_api_key_is_exempt(app_client):
 
 
 async def test_turning_requirement_off_reopens_workspace(app_client):
+    """The gate keys off the flag alone and clears with it.
+
+    Driven through the service rather than the escape-hatch route, which
+    test_admin_can_turn_the_requirement_back_off covers end to end.
+    """
     client = app_client
     owner = await register_user(client, "sec-reopen@example.com")
     ws = await create_workspace(client, owner, name="sec-ws-11")
@@ -251,9 +256,6 @@ async def test_turning_requirement_off_reopens_workspace(app_client):
         await client.get("/api/v1/roles", headers=ws_headers(owner, ws["id"]))
     ).status_code == 403
 
-    # The owner cannot flip the flag off through the API from the blocked
-    # session, so drive the service directly: this asserts the gate keys off
-    # the flag alone and clears with it.
     from src.db.session import SessionFactory
     from src.services.workspaces import WorkspaceService
 
@@ -349,13 +351,74 @@ async def test_me_reports_2fa_state(app_client):
     assert resp.status_code == 200, resp.text
     entry = next(w for w in resp.json()["workspaces"] if w["id"] == ws["id"])
     assert entry["require_2fa"] is True
-    assert entry["two_factor_enabled"] is False
+    assert entry["two_factor_verified"] is False
 
-    # Enabling 2FA flips only the per-user half; the workspace half is unchanged.
+    # Enabling 2FA stamps the session that did it; the workspace half is unchanged.
     owner = await login(client, "sec-me@example.com")
     await _enable_2fa(client, auth_headers(owner))
     resp = await client.get("/api/v1/auth/me", headers=auth_headers(owner))
     assert resp.status_code == 200, resp.text
     entry = next(w for w in resp.json()["workspaces"] if w["id"] == ws["id"])
-    assert entry["two_factor_enabled"] is True
+    assert entry["two_factor_verified"] is True
     assert entry["require_2fa"] is True
+
+async def test_me_verdict_agrees_with_the_gate_for_a_pre_enrolment_session(app_client):
+    """/me must report the session verdict, not the user's 2FA state.
+
+    A user who enrolled on one device still has other sessions that predate
+    it. Those are password-only and the gate refuses them, so /me reporting
+    "verified" there would leave the client showing a working app while every
+    request 403s.
+    """
+    client = app_client
+    early = await register_user(client, "sec-pre-enrol@example.com")
+    ws = await create_workspace(client, early, name="sec-pre-enrol")
+    # A second session, created before any enrolment; the enrolment below
+    # stamps only the session that performs it.
+    other = await login(client, "sec-pre-enrol@example.com")
+    await _enable_2fa(client, auth_headers(other))
+    await _set_require_2fa(client, ws_headers(other, ws["id"]), ws["id"], True)
+
+    # TOTP is on for the user now, so a per-user flag would call this session
+    # fine. The gate disagrees, and so must /me.
+    resp = await client.get("/api/v1/auth/me", headers=auth_headers(early))
+    entry = next(w for w in resp.json()["workspaces"] if w["id"] == ws["id"])
+    assert entry["two_factor_verified"] is False
+    resp = await client.get("/api/v1/roles", headers=ws_headers(early, ws["id"]))
+    assert resp.status_code == 403
+
+    # The session that enrolled is verified, and the two agree again.
+    resp = await client.get("/api/v1/auth/me", headers=auth_headers(other))
+    entry = next(w for w in resp.json()["workspaces"] if w["id"] == ws["id"])
+    assert entry["two_factor_verified"] is True
+    resp = await client.get("/api/v1/roles", headers=ws_headers(other, ws["id"]))
+    assert resp.status_code == 200
+
+async def test_disabling_2fa_clears_the_session_verdict(app_client):
+    """The verdict means "this session cleared a challenge".
+
+    With 2FA gone there is no challenge left to clear, so a session that
+    proved 2FA earlier must not keep passing the gate — and /me must stop
+    calling it verified, so client and server agree in both directions.
+    """
+    client = app_client
+    owner = await register_user(client, "sec-disable@example.com")
+    ws = await create_workspace(client, owner, name="sec-disable")
+    await _enable_2fa(client, auth_headers(owner))
+    await _set_require_2fa(client, ws_headers(owner, ws["id"]), ws["id"], True)
+    assert (
+        await client.get("/api/v1/roles", headers=ws_headers(owner, ws["id"]))
+    ).status_code == 200
+
+    resp = await client.post(
+        "/api/v1/auth/2fa/disable",
+        json={"password": "Password123!"},
+        headers=auth_headers(owner),
+    )
+    assert resp.status_code == 204, resp.text
+    assert (
+        await client.get("/api/v1/roles", headers=ws_headers(owner, ws["id"]))
+    ).status_code == 403
+    resp = await client.get("/api/v1/auth/me", headers=auth_headers(owner))
+    entry = next(w for w in resp.json()["workspaces"] if w["id"] == ws["id"])
+    assert entry["two_factor_verified"] is False

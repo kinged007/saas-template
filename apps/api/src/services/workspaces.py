@@ -239,7 +239,10 @@ class WorkspaceService:
         Separate from update_workspace so the audit trail distinguishes a
         security-posture change from a name/description edit.
         """
-        workspace = await self._session.get(Workspace, workspace_id)
+        # Row lock: flags is a JSON blob, so the merge below is a
+        # read-modify-write that must not race a concurrent flag edit (e.g. a
+        # superuser's PATCH /admin/workspaces/{id}/flags) and silently drop it.
+        workspace = await self._session.get(Workspace, workspace_id, with_for_update=True)
         if workspace is None:
             raise WorkspaceError("workspace not found")
         flags = {**(workspace.flags or {})}
