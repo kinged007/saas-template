@@ -3,6 +3,10 @@
 Unlike workspace-scoped routes, these are gated on `require_superuser`,
 not on workspace RBAC — a superuser does not need membership in a
 workspace to inspect it here.
+
+Session-only: `require_superuser` rejects API keys, so every route here
+requires a superuser's session token. The same applies to the
+`/jobs/global*` family and the `/users/{id}` administration routes.
 """
 
 from __future__ import annotations

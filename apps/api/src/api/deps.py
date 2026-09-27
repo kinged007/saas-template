@@ -38,6 +38,16 @@ class AuthPrincipal:
     api_key: ApiKey | None = None
     session_id: str | None = None
 
+    @property
+    def is_deployment_admin(self) -> bool:
+        """Superuser power, and only session auth ever has it.
+
+        Every deployment-wide check reads this property rather than
+        `user.is_superuser`: an API key resolves to its creator's `User`,
+        so testing that field would hand a leaked key admin power. Keys are
+        workspace-scoped credentials, never deployment admins."""
+        return self.api_key is None and self.user.is_superuser
+
 
 async def resolve_auth_principal(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
@@ -101,12 +111,21 @@ async def require_session_user(
 
 
 async def require_superuser(
-    user: Annotated[User, Depends(get_current_user)],
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
 ) -> User:
-    """Gate deployment-wide administration (e.g. global scheduled jobs)."""
-    if not user.is_superuser:
+    """Gate deployment-wide administration (e.g. global scheduled jobs).
+
+    Session-only: API keys never carry deployment-wide power, even when
+    minted by a superuser, so key-authenticated requests always 403 here.
+    Use this dependency for every deployment-wide route — `/admin/*` and
+    the `/jobs/global*` family are session superuser only.
+
+    Routes that mix superuser and co-member access pass
+    `principal.is_deployment_admin` to their service instead, so the
+    service never sees the bare `user.is_superuser` flag."""
+    if not principal.is_deployment_admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "superuser access required")
-    return user
+    return principal.user
 
 
 async def get_current_workspace_id(

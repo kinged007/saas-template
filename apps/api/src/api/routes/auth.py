@@ -407,12 +407,15 @@ async def totp_status(
 
 @router.post("/2fa/setup")
 async def totp_setup(
-    user=Depends(get_current_user),
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    _require_session_user(principal)
     try:
-        return await TwoFactorService(db, container.cipher, container.bus).start_setup(user)
+        return await TwoFactorService(db, container.cipher, container.bus).start_setup(
+            principal.user
+        )
     except TwoFactorError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
 
@@ -420,13 +423,14 @@ async def totp_setup(
 @router.post("/2fa/enable")
 async def totp_enable(
     body: TwoFactorSetupConfirm,
-    user=Depends(get_current_user),
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    _require_session_user(principal)
     try:
         codes = await TwoFactorService(db, container.cipher, container.bus).confirm_setup(
-            user, setup_token=body.setup_token, code=body.code
+            principal.user, setup_token=body.setup_token, code=body.code
         )
     except TwoFactorError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
