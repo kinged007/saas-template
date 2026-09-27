@@ -284,7 +284,24 @@ async def can_target_profile_update(
     workspace. Without the header there is no workspace to evaluate the
     permission against, so only self and deployment admins pass — the redacted
     cross-user read keeps working for plain co-members.
+
+    Never raises: the read path falls back to the redacted projection on any
+    failure. `require_target_profile_update` is the strict variant.
     """
+    try:
+        return await _target_profile_update(user_id, response, db, principal, workspace_id)
+    except HTTPException:
+        return False
+
+
+async def _target_profile_update(
+    user_id: str,
+    response: Response,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    principal: Annotated[AuthPrincipal, Depends(resolve_auth_principal)],
+    workspace_id: Annotated[str | None, Depends(get_optional_workspace_id)],
+) -> bool:
+    """The strict check behind both entry points; raises 403/404 on refusal."""
     if principal.is_deployment_admin or principal.user.id == user_id:
         return True
     if workspace_id is None:
@@ -309,7 +326,7 @@ async def require_target_profile_update(
     authorization contract; a missing target membership is a 404 so the route
     never confirms whether a user exists outside the caller's workspace.
     """
-    await can_target_profile_update(user_id, response, db, principal, workspace_id)
+    await _target_profile_update(user_id, response, db, principal, workspace_id)
     return user_id
 
 

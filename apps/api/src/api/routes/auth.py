@@ -40,7 +40,12 @@ from src.schemas.api import (
 )
 from src.services.auth import AuthError, AuthService
 from src.services.profiles import ProfileService
-from src.services.serializers import profile_to_dict, session_to_dict, user_to_dict, workspace_to_dict
+from src.services.serializers import (
+    profile_to_dict,
+    session_to_dict,
+    user_to_dict,
+    workspace_to_dict,
+)
 from src.services.two_factor import TwoFactorError, TwoFactorService
 from src.services.workspaces import WorkspaceService
 from src.settings import settings

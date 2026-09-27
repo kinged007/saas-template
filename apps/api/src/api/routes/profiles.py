@@ -40,6 +40,7 @@ router = APIRouter(tags=["profiles"])
 def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
+
 def _profile_payload(body: ProfileUpdate) -> dict:
     """Validated fields, with AnyHttpUrl values flattened to str for the column."""
     data = body.model_dump(exclude_unset=True, mode="python")
@@ -70,8 +71,11 @@ async def put_my_profile(
 ):
     service = ProfileService(db, container.bus)
     profile = await service.update(
-        user.id, _profile_payload(body), is_put=True,
-        ip_address=_client_ip(request), actor_user_id=user.id,
+        user.id,
+        _profile_payload(body),
+        is_put=True,
+        ip_address=_client_ip(request),
+        actor_user_id=user.id,
     )
     return profile_to_dict(profile)
 
@@ -86,8 +90,11 @@ async def patch_my_profile(
 ):
     service = ProfileService(db, container.bus)
     profile = await service.update(
-        user.id, _profile_payload(body), is_put=False,
-        ip_address=_client_ip(request), actor_user_id=user.id,
+        user.id,
+        _profile_payload(body),
+        is_put=False,
+        ip_address=_client_ip(request),
+        actor_user_id=user.id,
     )
     return profile_to_dict(profile)
 
@@ -118,6 +125,7 @@ async def get_user_profile(
         raise HTTPException(status_code=404, detail="user or profile not found")
     return proj
 
+
 @router.patch("/users/{user_id}/profile")
 async def update_user_profile(
     user_id: str,
@@ -129,16 +137,21 @@ async def update_user_profile(
     container=Depends(get_container),
 ):
     profile = await ProfileService(db, container.bus).update(
-        target_id, _profile_payload(body), is_put=False,
-        ip_address=_client_ip(request), actor_user_id=principal.user.id,
+        target_id,
+        _profile_payload(body),
+        is_put=False,
+        ip_address=_client_ip(request),
+        actor_user_id=principal.user.id,
     )
     return profile_to_dict(profile)
+
 
 def _preferences_response(prefs) -> dict:
     return {
         "channels": {p.type: p.channel for p in prefs if p.type != DIGEST_TYPE},
         "digest_enabled": next((p.digest_enabled for p in prefs if p.type == DIGEST_TYPE), False),
     }
+
 
 @router.get("/users/{user_id}/notification-preferences")
 async def get_user_notification_preferences(
@@ -147,6 +160,7 @@ async def get_user_notification_preferences(
     db: AsyncSession = Depends(get_db),
 ):
     return _preferences_response(await NotificationService(db).get_preferences(target_id))
+
 
 @router.put("/users/{user_id}/notification-preferences")
 async def update_user_notification_preferences(
@@ -169,6 +183,7 @@ async def update_user_notification_preferences(
         await service.set_digest(target_id, body.digest_enabled)
     return _preferences_response(await service.get_preferences(target_id))
 
+
 @router.get("/users/{user_id}/sessions", response_model=list[SessionRead])
 async def list_user_sessions(
     user_id: str,
@@ -185,6 +200,7 @@ async def list_user_sessions(
         if r.revoked_at is None and ensure_utc(r.expires_at) >= now
     ]
 
+
 @router.delete("/users/{user_id}/sessions", status_code=204)
 async def revoke_all_user_sessions(
     request: Request,
@@ -199,6 +215,7 @@ async def revoke_all_user_sessions(
         ip_address=_client_ip(request),
         actor_user_id=principal.user.id,
     )
+
 
 @router.delete("/users/{user_id}/sessions/{session_id}", status_code=204)
 async def revoke_user_session(
@@ -222,6 +239,7 @@ async def revoke_user_session(
         if str(exc) == "cannot revoke the current session":
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+
 
 @router.post("/users/{user_id}/password", status_code=204)
 async def set_user_password(
@@ -255,8 +273,10 @@ async def set_user_password(
             status.HTTP_403_FORBIDDEN, "cannot change the workspace owner's password"
         )
     await AuthService(db, container.bus).change_password(
-        target, body.new_password,
-        ip_address=_client_ip(request), actor_user_id=principal.user.id,
+        target,
+        body.new_password,
+        ip_address=_client_ip(request),
+        actor_user_id=principal.user.id,
     )
 
 

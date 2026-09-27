@@ -94,19 +94,33 @@ async def test_admin_gets_unredacted_target_profile(app_client):
 
 
 async def test_co_member_without_the_scope_keeps_the_redacted_projection(app_client):
+    """A viewer (no profile:update) reads the same redacted shape as before."""
     client = app_client
     owner = await register_user(client, "ada@example.com")
     ws = await create_workspace(client, owner)
     target = await _add_member(client, owner, ws, "bob@example.com", "viewer")
-    await _add_member(client, owner, ws, "eve@example.com", "viewer")
+    viewer = await _add_member(client, owner, ws, "eve@example.com", "viewer")
+
+    # Give the target fields the redacted projection must hide.
+    await client.patch(
+        f"/api/v1/users/{target['id']}/profile",
+        json={"phone_number": "+49 555", "date_of_birth": "1990-04-01"},
+        headers=ws_headers(owner, ws["id"]),
+    )
 
     resp = await client.get(
-        f"/api/v1/users/{target['id']}/profile", headers=ws_headers(owner, ws["id"])
+        f"/api/v1/users/{target['id']}/profile", headers=ws_headers(viewer, ws["id"])
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["phone_number"] is None
     assert body["date_of_birth"] is None
+    # The owner holds profile:update and sees them.
+    full = await client.get(
+        f"/api/v1/users/{target['id']}/profile", headers=ws_headers(owner, ws["id"])
+    )
+    assert full.json()["phone_number"] == "+49 555"
+    assert full.json()["date_of_birth"] == "1990-04-01"
 
 
 async def test_admin_updates_target_profile_fields(app_client):
@@ -147,12 +161,19 @@ async def test_editor_cannot_update_target_profile(app_client):
 
 
 async def test_target_outside_the_callers_workspace_is_404(app_client):
+    """Writes to a non-member 404. The read falls back to the redacted
+    projection, so it never confirms more than any co-member already sees."""
     client = app_client
     owner = await register_user(client, "ada@example.com")
     acme = await create_workspace(client, owner, "Acme")
     globex = await create_workspace(client, owner, "Globex")
     admin = await _add_member(client, owner, acme, "abby@example.com", "admin")
     stranger = await _user_id(client, await register_user(client, "mallory@example.com"))
+    await client.patch(
+        f"/api/v1/users/{admin['id']}/profile",
+        json={"phone_number": "+49 555"},
+        headers=ws_headers(owner, acme["id"]),
+    )
 
     resp = await client.patch(
         f"/api/v1/users/{stranger}/profile",
@@ -161,12 +182,18 @@ async def test_target_outside_the_callers_workspace_is_404(app_client):
     )
     assert resp.status_code == 404, resp.text
 
-    # The owner holds every permission in Globex but the admin is not a member
-    # of it, so the target membership check still refuses the read.
+    # The owner holds every permission in Globex, but the admin is not a member
+    # of it, so the read stays redacted there.
     resp = await client.get(
         f"/api/v1/users/{admin['id']}/profile", headers=ws_headers(owner, globex["id"])
     )
-    assert resp.status_code == 404, resp.text
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["phone_number"] is None
+    # ... while the same caller inside Acme sees the full profile.
+    full = await client.get(
+        f"/api/v1/users/{admin['id']}/profile", headers=ws_headers(owner, acme["id"])
+    )
+    assert full.json()["phone_number"] == "+49 555"
 
 
 async def test_self_profile_routes_are_unchanged(app_client):
@@ -207,9 +234,7 @@ async def test_admin_updates_target_notification_preferences(app_client):
     assert resp.json()["channels"]["member_joined"] == "email"
     assert resp.json()["digest_enabled"] is True
 
-    own = await client.get(
-        "/api/v1/notifications/preferences", headers=auth_headers(target)
-    )
+    own = await client.get("/api/v1/notifications/preferences", headers=auth_headers(target))
     assert own.json()["channels"]["member_joined"] == "email"
     assert own.json()["digest_enabled"] is True
 
@@ -262,17 +287,19 @@ async def test_admin_sets_target_password_and_kills_target_sessions(app_client):
     assert resp.status_code == 204, resp.text
 
     # Old password stops working, the new one works.
-    assert (await client.post(
-        "/api/v1/auth/login", json={"email": "bob@example.com", "password": "Password123!"}
-    )).status_code == 401
-    assert (await client.post(
-        "/api/v1/auth/login", json={"email": "bob@example.com", "password": "BrandNewPass1!"}
-    )).status_code == 200
+    assert (
+        await client.post(
+            "/api/v1/auth/login", json={"email": "bob@example.com", "password": "Password123!"}
+        )
+    ).status_code == 401
+    assert (
+        await client.post(
+            "/api/v1/auth/login", json={"email": "bob@example.com", "password": "BrandNewPass1!"}
+        )
+    ).status_code == 200
 
     # The session the admin did not touch is still the admin's.
-    assert (
-        await client.get("/api/v1/me/profile", headers=auth_headers(admin))
-    ).status_code == 200
+    assert (await client.get("/api/v1/me/profile", headers=auth_headers(admin))).status_code == 200
 
 
 async def test_admin_cannot_set_a_password_without_proof_of_ownership(app_client):
@@ -297,12 +324,16 @@ async def test_admin_cannot_set_a_password_without_proof_of_ownership(app_client
         assert resp.status_code == 403, f"target {subject}: {resp.text}"
 
     # Nobody's password actually changed.
-    assert (await client.post(
-        "/api/v1/auth/login", json={"email": "ada@example.com", "password": "Password123!"}
-    )).status_code == 200
-    assert (await client.post(
-        "/api/v1/auth/login", json={"email": "abby@example.com", "password": "Password123!"}
-    )).status_code == 200
+    assert (
+        await client.post(
+            "/api/v1/auth/login", json={"email": "ada@example.com", "password": "Password123!"}
+        )
+    ).status_code == 200
+    assert (
+        await client.post(
+            "/api/v1/auth/login", json={"email": "abby@example.com", "password": "Password123!"}
+        )
+    ).status_code == 200
 
 
 async def test_admin_lists_and_revokes_target_sessions(app_client):
@@ -379,3 +410,57 @@ async def test_editor_cannot_list_target_sessions(app_client):
         f"/api/v1/users/{target['id']}/sessions", headers=ws_headers(editor, ws["id"])
     )
     assert resp.status_code == 403, resp.text
+
+
+# ------------------------------------------------------------- api keys
+
+
+async def test_api_key_holding_profile_update_can_edit_a_member(app_client):
+    """The scope works for API keys, scoped to the workspace they name."""
+    client = app_client
+    owner = await register_user(client, "ada@example.com")
+    ws = await create_workspace(client, owner)
+    target = await _add_member(client, owner, ws, "bob@example.com", "viewer")
+
+    key = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "script", "permissions": [PROFILE_UPDATE, "member:read"]},
+        headers=ws_headers(owner, ws["id"]),
+    )
+    key_headers = {
+        "Authorization": f"Bearer {key.json()['key']}",
+        "X-Workspace-ID": ws["id"],
+    }
+
+    resp = await client.patch(
+        f"/api/v1/users/{target['id']}/profile",
+        json={"first_name": "Via API key"},
+        headers=key_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["first_name"] == "Via API key"
+
+
+async def test_api_key_without_profile_update_cannot_edit_a_member(app_client):
+    client = app_client
+    owner = await register_user(client, "ada@example.com")
+    ws = await create_workspace(client, owner)
+    target = await _add_member(client, owner, ws, "bob@example.com", "viewer")
+
+    key = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "reader", "permissions": ["member:read"]},
+        headers=ws_headers(owner, ws["id"]),
+    )
+    key_headers = {
+        "Authorization": f"Bearer {key.json()['key']}",
+        "X-Workspace-ID": ws["id"],
+    }
+
+    resp = await client.patch(
+        f"/api/v1/users/{target['id']}/profile",
+        json={"first_name": "Nope"},
+        headers=key_headers,
+    )
+    assert resp.status_code == 403, resp.text
+    assert PROFILE_UPDATE in resp.json()["detail"]

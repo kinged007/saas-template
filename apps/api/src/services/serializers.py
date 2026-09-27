@@ -99,6 +99,7 @@ def session_to_dict(row, *, current: bool) -> dict:
         "current": current,
     }
 
+
 def public_projection(p: UserProfile, user: User | None = None) -> dict:
     """
     Redacted projection for cross-user reads: strips phone_number, date_of_birth,
