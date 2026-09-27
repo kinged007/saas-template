@@ -17,7 +17,7 @@ Covers, end to end over the HTTP API:
     and proof that key permissions never inherit the creator's role
 """
 
-from src.core.permissions import ALL_PERMISSIONS, JOB_VIEW, permissions_for_role
+from src.core.permissions import ALL_PERMISSIONS, JOB_READ, permissions_for_role
 from src.db.session import SessionFactory
 from src.services.notifications import NotificationService
 from tests.conftest import (
@@ -798,14 +798,14 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     foreign_ws = await create_workspace(client, other, "Run Other Inc")
     foreign = (await _seed_runs(foreign_ws["id"]))["workspace"]
 
-    # A key without jobs:view is refused even though its creator holds the
+    # A key without jobs:read is refused even though its creator holds the
     # permission through the workspace owner role.
     narrow = await _create_key(client, headers, "no-jobs", ["member:read"])
     resp = await client.get(
         f"/api/v1/jobs/runs/{runs['workspace']}", headers=_key_headers(narrow["key"], ws["id"])
     )
     assert resp.status_code == 403, resp.text
-    assert JOB_VIEW in resp.json()["detail"]
+    assert JOB_READ in resp.json()["detail"]
 
     # A foreign X-Workspace-ID header does not widen the key's own scope.
     resp = await client.get(
@@ -813,7 +813,7 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     )
     assert resp.status_code == 404, resp.text
 
-    viewer = await _create_key(client, headers, "jobs-view", ["jobs:view"])
+    viewer = await _create_key(client, headers, "jobs-read", ["jobs:read"])
     viewer_headers = _key_headers(viewer["key"], ws["id"])
     ok = await client.get(f"/api/v1/jobs/runs/{runs['workspace']}", headers=viewer_headers)
     assert ok.status_code == 200, ok.text
@@ -829,6 +829,31 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
         assert resp.status_code == 403, (url, resp.text)
     resp = await client.get(f"/api/v1/jobs/runs/{foreign}", headers=viewer_headers)
     assert resp.status_code == 404, resp.text
+
+
+async def test_key_cannot_enroll_two_factor(app_client):
+    """A key holder must not mint TOTP codes that outlive the key.
+
+    2FA enrolment is a session capability: the backup codes it returns stay
+    valid logins for the account, and no permission list covers them."""
+    client = app_client
+    owner = await register_user(client, "totp-owner@example.com")
+    ws = await create_workspace(client, owner, "Totp Owner Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "no-2fa", ["member:read"])
+    key_headers = _key_headers(key["key"], ws["id"])
+
+    for url, body in [
+        ("/api/v1/auth/2fa/setup", None),
+        ("/api/v1/auth/2fa/enable", {"setup_token": "x", "code": "000000"}),
+    ]:
+        resp = await client.post(url, json=body, headers=key_headers)
+        assert resp.status_code == 403, (url, resp.status_code, resp.text)
+
+    # The owner's own session can still enrol; the refusals left 2FA off.
+    resp = await client.post("/api/v1/auth/2fa/setup", headers=auth_headers(owner))
+    assert resp.status_code == 200, resp.text
+    state = await client.get("/api/v1/auth/2fa/status", headers=auth_headers(owner))
+    assert state.json() == {"enabled": False}, state.text
 
 
 # ------------------------------------------------------------------- seed
