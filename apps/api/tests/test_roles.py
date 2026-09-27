@@ -368,3 +368,72 @@ async def test_update_role_duplicate_name_conflicts(app_client):
         f"/api/v1/roles/{created['id']}", json={"name": "editor"}, headers=headers
     )
     assert resp.status_code == 409
+
+
+# ------------------------------------------------------ case-insensitive names
+# #259: a name that only differs in case from an existing one (system or custom)
+# would render as a second, indistinguishable row in listings and selects.
+
+
+async def test_create_role_rejects_case_variant_of_existing_name(app_client):
+    client = app_client
+    owner = await register_user(client, "ci1@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    before = len(await _roles(client, headers))
+    for name in ("Admin", "ADMIN", "owner", "Owner", "Editor", "viewer"):
+        resp = await client.post(
+            "/api/v1/roles", json={"name": name, "permissions": []}, headers=headers
+        )
+        assert resp.status_code == 409, (name, resp.text)
+    assert len(await _roles(client, headers)) == before
+
+
+async def test_create_role_rejects_duplicate_name_ignoring_case(app_client):
+    client = app_client
+    owner = await register_user(client, "ci2@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    resp = await client.post(
+        "/api/v1/roles", json={"name": "Billing", "permissions": []}, headers=headers
+    )
+    assert resp.status_code == 201, resp.text
+    for name in ("billing", "BILLING", "EDITOR"):
+        resp = await client.post(
+            "/api/v1/roles", json={"name": name, "permissions": []}, headers=headers
+        )
+        assert resp.status_code == 409, (name, resp.text)
+
+
+async def test_create_role_allows_similar_name(app_client):
+    """Only whole-name case variants conflict — a prefix or substring stays free."""
+    client = app_client
+    owner = await register_user(client, "ci3@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    for name in ("administrator", "Admin Team", "Owner Ops"):
+        resp = await client.post(
+            "/api/v1/roles", json={"name": name, "permissions": []}, headers=headers
+        )
+        assert resp.status_code == 201, (name, resp.text)
+
+
+async def test_update_role_rejects_case_variant_of_existing_name(app_client):
+    client = app_client
+    owner = await register_user(client, "ci4@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    created = (
+        await client.post("/api/v1/roles", json={"name": "ops", "permissions": []}, headers=headers)
+    ).json()
+    for name in ("Editor", "OWNER"):
+        resp = await client.patch(
+            f"/api/v1/roles/{created['id']}", json={"name": name}, headers=headers
+        )
+        assert resp.status_code == 409, (name, resp.text)
+    # A change of case on the role's own name is not a conflict.
+    resp = await client.patch(
+        f"/api/v1/roles/{created['id']}", json={"name": "OPS"}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["name"] == "OPS"
