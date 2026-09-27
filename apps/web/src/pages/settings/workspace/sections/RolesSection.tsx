@@ -30,6 +30,11 @@ import type { Role } from "@/types";
 
 type CatalogResponse = { catalog: string[]; permissions: string[] };
 
+const SYSTEM_RANK: Record<string, number> = { owner: 0, admin: 1, editor: 2, viewer: 3 };
+
+/** Custom roles keep their own order, always after the system block. */
+const rank = (r: Role) => (r.system ? (SYSTEM_RANK[r.name.toLowerCase()] ?? 4) : 5);
+
 function splitPermission(p: string): [string, string] {
   const i = p.indexOf(":");
   return i < 0 ? [p, ""] : [p.slice(0, i), p.slice(i + 1)];
@@ -163,11 +168,9 @@ export function RolesSection() {
   const { data: canManage } = useCan({ resource: "roles", action: "create" });
   const { data: canEdit } = useCan({ resource: "roles", action: "edit" });
 
-  const rows = [...(result?.data ?? [])].sort((a, b) => {
-    const rank = (name: string) =>
-      ({ owner: 0, admin: 1, editor: 2, viewer: 3 })[name.toLowerCase()] ?? 4;
-    return rank(a.name) - rank(b.name) || a.name.localeCompare(b.name);
-  });
+  const rows = [...(result?.data ?? [])].sort(
+    (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name),
+  );
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
