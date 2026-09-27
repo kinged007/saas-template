@@ -6,6 +6,7 @@ import {
   type CrudFilters,
 } from "@refinedev/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -57,6 +58,9 @@ export function UsersSection() {
       onSuccess: () => {
         void query.refetch();
         void detailQuery.query.refetch();
+      },
+      onError: (e) => {
+        toast.error(String((e as { message?: string })?.message ?? e));
       },
     });
   };

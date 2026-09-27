@@ -55,9 +55,11 @@ test("pageRange clamps the visible window and never reports zero pages", () => {
   assert.deepEqual(pageRange(2, 25), { from: 21, to: 25, totalPages: 2 });
   assert.deepEqual(pageRange(1, 40), { from: 1, to: 20, totalPages: 2 });
   assert.deepEqual(pageRange(1, 41), { from: 1, to: 20, totalPages: 3 });
+  // A page that empties out after a refetch must not invert the range.
+  assert.deepEqual(pageRange(3, 5), { from: 5, to: 5, totalPages: 1 });
 });
 
-test("an untyped patch payload still satisfies the list item type", () => {
+test("adminUserPatch's url is built from a row typed as the list item, not the detail", () => {
   const row: AdminUser = { ...detail(), workspaces: undefined };
   assert.equal(adminUserPatch(row, false).url, "admin/users/u-1");
 });
