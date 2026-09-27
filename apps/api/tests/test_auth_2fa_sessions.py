@@ -39,7 +39,7 @@ async def test_sessions_list_and_revoke(app_client):
     assert resp.status_code == 200
     sessions = resp.json()
     assert len(sessions) == 1
-    assert sessions[0]["ip_address"] is not None or True  # test client may lack IP
+    assert sessions[0]["ip_address"] == "127.0.0.1"  # httpx ASGI test client
     assert sessions[0]["user_agent"] == "rotated-session-agent"
     assert sessions[0]["revoked_at"] is None
 
@@ -175,6 +175,62 @@ async def test_totp_enrol_login_disable(app_client):
     )
     assert resp.status_code == 204, resp.text
     await login(client, "totp@example.com")
+
+
+async def test_wrong_password_disabling_2fa_keeps_session(app_client):
+    """Issue #189: a wrong password answers 400, not 401.
+
+    The web client reads 401 as a dead session and force-logs out, so the
+    status code has to be the one that leaves the session alone."""
+    client = app_client
+    tokens = await register_user(client, "totp-wrong@example.com")
+    headers = auth_headers(tokens)
+    setup_token, code = await _totp_for(client, headers)
+    resp = await client.post(
+        "/api/v1/auth/2fa/enable", json={"setup_token": setup_token, "code": code}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = await client.post(
+        "/api/v1/auth/2fa/disable", json={"password": "Wrongpass1!"}, headers=headers
+    )
+    assert resp.status_code == 400, resp.text
+
+    # TOTP is still on — the rejected attempt did not disable it.
+    resp = await client.get("/api/v1/auth/2fa/status", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["enabled"] is True
+
+    # Same access token still authenticates, and a correct password works.
+    resp = await client.post(
+        "/api/v1/auth/2fa/disable", json={"password": "Password123!"}, headers=headers
+    )
+    assert resp.status_code == 204, resp.text
+
+
+async def test_wrong_password_regenerating_backup_codes_keeps_session(app_client):
+    client = app_client
+    tokens = await register_user(client, "totp-bak@example.com")
+    headers = auth_headers(tokens)
+    setup_token, code = await _totp_for(client, headers)
+    resp = await client.post(
+        "/api/v1/auth/2fa/enable", json={"setup_token": setup_token, "code": code}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = await client.post(
+        "/api/v1/auth/2fa/backup-codes", json={"password": "Wrongpass1!"}, headers=headers
+    )
+    assert resp.status_code == 400, resp.text
+
+    resp = await client.get("/api/v1/auth/2fa/status", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["enabled"] is True
+
+    resp = await client.post(
+        "/api/v1/auth/2fa/backup-codes", json={"password": "Password123!"}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
 
 
 async def test_login_rate_limited(app_client, monkeypatch):

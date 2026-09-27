@@ -343,7 +343,7 @@ class WorkspaceService:
         return await self._session.get(Workspace, workspace_id)
 
     async def get_membership(
-        self, workspace_id: str, user_id: str
+        self, workspace_id: str, user_id: str, *, active_only: bool = False
     ) -> tuple[WorkspaceMember, Role] | None:
         stmt = (
             select(WorkspaceMember, Role)
@@ -353,6 +353,8 @@ class WorkspaceService:
                 WorkspaceMember.user_id == user_id,
             )
         )
+        if active_only:
+            stmt = stmt.where(WorkspaceMember.status == "active")
         result = await self._session.execute(stmt)
         return result.first()
 
@@ -378,7 +380,7 @@ class WorkspaceService:
         actor: User,
         ip_address: str | None = None,
     ) -> WorkspaceMember:
-        membership = await self.get_membership(workspace_id, actor.id)
+        membership = await self.get_membership(workspace_id, actor.id, active_only=True)
         if membership is None:
             raise WorkspaceForbidden("you are not a member of this workspace")
         _, actor_role = membership
@@ -518,6 +520,185 @@ class WorkspaceService:
             details={"workspace_name": workspace_name},
             ip_address=ip_address,
         )
+
+    async def _require_manager(
+        self, workspace_id: str, actor: User
+    ) -> tuple[WorkspaceMember, Role]:
+        membership = await self.get_membership(workspace_id, actor.id, active_only=True)
+        if membership is None:
+            raise WorkspaceForbidden("you are not a member of this workspace")
+        if membership[1].name not in ("owner", "admin"):
+            raise WorkspaceForbidden("only the workspace owner or an admin can manage members")
+        return membership
+
+    async def suspend_member(
+        self,
+        workspace_id: str,
+        member_id: str,
+        *,
+        actor: User,
+        ip_address: str | None = None,
+    ) -> WorkspaceMember:
+        await self._require_manager(workspace_id, actor)
+        member = await self._session.get(WorkspaceMember, member_id)
+        if member is None or member.workspace_id != workspace_id:
+            raise WorkspaceError("member not found in workspace")
+        if member.user_id == actor.id:
+            raise WorkspaceConflict("cannot suspend yourself")
+        role = await self._session.get(Role, member.role_id)
+        if role is not None and role.name == "owner":
+            raise WorkspaceConflict("cannot suspend the workspace owner")
+        if member.status == "suspended":
+            return member
+        member.status = "suspended"
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="member",
+            resource_id=member.id,
+            action="member.suspended",
+            actor_user_id=actor.id,
+            details={"user_id": member.user_id},
+            ip_address=ip_address,
+        )
+        return member
+
+    async def reactivate_member(
+        self,
+        workspace_id: str,
+        member_id: str,
+        *,
+        actor: User,
+        ip_address: str | None = None,
+    ) -> WorkspaceMember:
+        await self._require_manager(workspace_id, actor)
+        member = await self._session.get(WorkspaceMember, member_id)
+        if member is None or member.workspace_id != workspace_id:
+            raise WorkspaceError("member not found in workspace")
+        if member.status != "suspended":
+            raise WorkspaceConflict("member is not suspended")
+        member.status = "active"
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="member",
+            resource_id=member.id,
+            action="member.reactivated",
+            actor_user_id=actor.id,
+            details={"user_id": member.user_id},
+            ip_address=ip_address,
+        )
+        return member
+
+    async def transfer_ownership(
+        self,
+        workspace_id: str,
+        new_owner_membership_id: str,
+        *,
+        actor: User,
+        ip_address: str | None = None,
+    ) -> WorkspaceMember:
+        membership = await self.get_membership(workspace_id, actor.id, active_only=True)
+        if membership is None or membership[1].name != "owner":
+            raise WorkspaceForbidden("only the workspace owner can transfer ownership")
+        actor_member, _ = membership
+        target = await self._session.get(WorkspaceMember, new_owner_membership_id)
+        if target is None or target.workspace_id != workspace_id:
+            raise WorkspaceError("member not found in workspace")
+        if target.status != "active":
+            raise WorkspaceConflict("new owner must be an active member")
+        if target.user_id == actor.id:
+            raise WorkspaceConflict("you already own this workspace")
+        owner_role = await self._role_by_name(workspace_id, "owner")
+        admin_role = await self._role_by_name(workspace_id, "admin")
+        target.role_id = owner_role.id
+        actor_member.role_id = admin_role.id
+        await self._session.commit()
+
+        workspace = await self._session.get(Workspace, workspace_id)
+        workspace_name = workspace.name if workspace else "workspace"
+        await publish_event(
+            self._bus,
+            Subjects.WORKSPACE_MEMBER_ROLE_CHANGED,
+            {
+                "workspace_id": workspace_id,
+                "workspace_name": workspace_name,
+                "user_id": target.user_id,
+                "from_role": None,
+                "to_role": "owner",
+                "changed_by_user_id": actor.id,
+                "changed_by_name": actor.display_name,
+            },
+        )
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="workspace",
+            resource_id=workspace_id,
+            action="workspace.ownership_transferred",
+            actor_user_id=actor.id,
+            details={"new_owner_user_id": target.user_id},
+            ip_address=ip_address,
+        )
+        return target
+
+    async def resend_invitation(
+        self,
+        workspace_id: str,
+        invitation_id: str,
+        *,
+        actor: User | None = None,
+        expires_in_hours: int = 72,
+        ip_address: str | None = None,
+    ) -> Invitation:
+        if (
+            actor is not None
+            and await self.get_membership(workspace_id, actor.id, active_only=True) is None
+        ):
+            raise WorkspaceForbidden("you are not a member of this workspace")
+        invite = await self._session.get(Invitation, invitation_id)
+        if invite is None or invite.workspace_id != workspace_id:
+            raise WorkspaceError("invitation not found")
+        if invite.status == "accepted":
+            raise WorkspaceConflict("invitation has already been accepted")
+        if invite.status == "pending" and ensure_utc(invite.expires_at) >= now_utc():
+            return invite
+        invite.status = "pending"
+        invite.token = secrets.token_urlsafe(32)
+        invite.expires_at = now_utc() + timedelta(hours=expires_in_hours)
+        invite.accepted_at = None
+        await self._session.commit()
+        workspace = await self._session.get(Workspace, workspace_id)
+        role = await self._session.get(Role, invite.role_id)
+        invited_by = await self._session.get(User, invite.invited_by_user_id)
+        existing = await AuthService(self._session).get_by_email(invite.email)
+        await publish_event(
+            self._bus,
+            Subjects.WORKSPACE_INVITATION_CREATED,
+            {
+                "invitation_id": invite.id,
+                "workspace_id": workspace_id,
+                "workspace_name": workspace.name if workspace else "workspace",
+                "email": invite.email,
+                "role": role.name if role else None,
+                "invited_by_user_id": invite.invited_by_user_id,
+                "invited_by_name": invited_by.display_name if invited_by else "",
+                "is_registered": existing is not None,
+            },
+        )
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="invitation",
+            resource_id=invite.id,
+            action="invitation.resent",
+            actor_user_id=actor.id if actor else None,
+            details={"email": invite.email},
+            ip_address=ip_address,
+        )
+        return invite
 
     # ------------------------------------------------------------- invitations
 
@@ -818,6 +999,11 @@ class WorkspaceService:
         )
         if unknown:
             raise WorkspaceError(f"unknown permissions: {', '.join(unknown)}")
+        key_only = sorted(set(permissions) & set(KEY_ONLY_PERMISSIONS))
+        if key_only:
+            raise WorkspaceError(
+                f"API-key-only permissions cannot be granted to roles: {', '.join(key_only)}"
+            )
         if "*" in permissions:
             # Reserved for owner — minting it would clone owner minus the name.
             raise WorkspaceError('"*" is reserved for the owner role')

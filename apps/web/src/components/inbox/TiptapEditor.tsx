@@ -141,6 +141,8 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
       extensions: [
         StarterKit.configure({
           heading: false,
+          // StarterKit bundles Link; the explicitly configured Link below wins.
+          link: false,
           // StarterKit includes codeBlock/bulletList/orderedList/blockquote/code etc.
         }),
         Placeholder.configure({ placeholder }),

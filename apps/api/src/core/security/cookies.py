@@ -8,6 +8,9 @@ reuse these helpers instead of reimplementing flags.
 
 from __future__ import annotations
 
+import re
+from urllib.parse import urlsplit
+
 from fastapi import HTTPException, Request, Response, status
 
 from src.settings import settings
@@ -16,12 +19,44 @@ CSRF_HEADER = "X-Requested-With"
 CSRF_HEADER_VALUE = "XMLHttpRequest"
 
 
-def set_refresh_cookie(response: Response, token: str) -> None:
+def _is_https_request(request: Request | None) -> bool:
+    """True when the request arrived over TLS (proxy-aware).
+
+    Uvicorn runs with --proxy-headers in prod, so request.url.scheme already
+    honors X-Forwarded-Proto; the explicit header check covers test clients
+    and servers without proxy-header handling. Port suffix (:443) covers
+    X-Forwarded-Host forms that carry no scheme."""
+    if request is None:
+        return False
+    if request.url.scheme == "https":
+        return True
+    proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    if proto == "https":
+        return True
+    host = request.headers.get("x-forwarded-host", "") or request.headers.get("host", "")
+    return host.strip().lower().endswith(":443")
+
+
+def cookie_secure_for(request: Request | None = None) -> bool:
+    """Secure flag for the refresh cookie.
+
+    Explicit REFRESH_COOKIE_SECURE wins; otherwise https requests get Secure
+    even when ENVIRONMENT says development (e.g. prod misconfig serving TLS
+    behind a plain-http app server), and plain-http requests skip it so the
+    cookie still stores."""
+    if settings.refresh_cookie_secure is not None:
+        return settings.refresh_cookie_secure
+    if _is_https_request(request):
+        return True
+    return settings.refresh_cookie_secure_effective
+
+
+def set_refresh_cookie(response: Response, token: str, request: Request | None = None) -> None:
     kwargs: dict = {
         "key": settings.refresh_cookie_name,
         "value": token,
         "httponly": True,
-        "secure": settings.refresh_cookie_secure_effective,
+        "secure": cookie_secure_for(request),
         "samesite": "lax",
         "path": settings.refresh_cookie_path,
         "max_age": settings.refresh_token_expire_days * 24 * 3600,
@@ -62,20 +97,32 @@ def browser_flow(request: Request, body: object | None = None) -> bool:
     return request.headers.get("X-Session-Flow") == "cookie"
 
 
+def _origin_allowed(url: str) -> bool:
+    """True when an Origin (or Referer) URL is covered by CORS_ORIGINS.
+
+    Same rules as the CORS middleware: the exact entries plus the regex built
+    from the `*` entries, so a wildcard origin is not rejected as cross-site."""
+    parts = urlsplit(url)
+    if not parts.scheme or not parts.netloc:
+        return False
+    origin = f"{parts.scheme}://{parts.netloc}"
+    if origin in {o.rstrip("/") for o in settings.cors_origin_list}:
+        return True
+    pattern = settings.cors_origin_regex
+    return bool(pattern) and re.fullmatch(pattern, origin) is not None
+
+
 def require_csrf(request: Request) -> None:
     """Reject cross-site forged cookie requests on cookie-authenticated endpoints."""
     origin = request.headers.get("origin")
     referer = request.headers.get("referer")
-    allowed = set(settings.cors_origin_list)
     if origin is not None:
-        if origin.rstrip("/") not in {o.rstrip("/") for o in allowed}:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "cross-origin request rejected")
+        allowed = _origin_allowed(origin)
     elif referer is not None:
-        allowed_ref = any(
-            referer.startswith(o.rstrip("/") + "/") or referer.rstrip("/") == o.rstrip("/")
-            for o in allowed
-        )
-        if not allowed_ref:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "cross-origin request rejected")
+        allowed = _origin_allowed(referer)
+    else:
+        allowed = True
+    if not allowed:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "cross-origin request rejected")
     if request.headers.get(CSRF_HEADER) != CSRF_HEADER_VALUE:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "missing CSRF header")

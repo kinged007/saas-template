@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
+from src.db.session import SessionFactory
+from src.models.workspace import User, Workspace
 from tests.conftest import auth_headers, create_workspace, login, register_user, ws_headers
 
 
@@ -235,3 +239,84 @@ async def test_admin_audit_cross_workspace(app_client):
     assert found.json()[0]["actor_email"] == "root@example.com"
     empty = await client.get("/api/v1/audit", params={"q": "zzz-no-such-thing"}, headers=wsh)
     assert empty.json() == [] and empty.headers["x-total-count"] == "0"
+
+
+async def test_admin_malformed_id_404(app_client):
+    client, tokens = await _superuser_client(app_client)
+    for method, url, kwargs in [
+        ("get", "/api/v1/admin/users/not-a-uuid", {}),
+        ("patch", "/api/v1/admin/users/not-a-uuid", {"json": {"is_active": False}}),
+        ("patch", "/api/v1/admin/workspaces/not-a-uuid/flags", {"json": {"flags": {}}}),
+    ]:
+        resp = await client.request(method, url, headers=auth_headers(tokens), **kwargs)
+        assert resp.status_code == 404, (method, url, resp.text)
+
+
+async def test_admin_lists_default_created_desc_with_tiebreaker(app_client):
+    client, tokens = await _superuser_client(app_client)
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+
+    # Arrange the tie instead of hoping for it: registration and workspace
+    # creation run provisioning workflows, so their rows can land seconds apart
+    # and the id tiebreaker would never fire. Ids ascend in insertion order, so
+    # a created_at DESC sort without the tiebreaker returns this pair as-is
+    # rather than reversed.
+    stamp = datetime(2026, 1, 1, tzinfo=UTC)
+    tied: dict[str, list] = {
+        "/api/v1/admin/users": [
+            User(
+                id=f"00000000-0000-4000-8000-00000000000{i}",
+                email=email,
+                display_name=email,
+                created_at=stamp,
+                updated_at=stamp,
+            )
+            for i, email in enumerate(("aaa@example.com", "zzz@example.com"), start=1)
+        ],
+        "/api/v1/admin/workspaces": [
+            Workspace(
+                id=f"00000000-0000-4000-8000-00000000000{i}",
+                name=name,
+                slug=f"tied-{i}",
+                created_by_user_id=me.json()["id"],
+                created_at=stamp,
+                updated_at=stamp,
+            )
+            for i, name in enumerate(("Acme", "Globex"), start=1)
+        ],
+    }
+    async with SessionFactory() as session:
+        session.add_all(tied["/api/v1/admin/users"] + tied["/api/v1/admin/workspaces"])
+        await session.commit()
+
+    # No sort param => created_at DESC, id DESC. The tied rows share created_at,
+    # so only the id term decides their order.
+    for path, rows in tied.items():
+        resp = await client.get(path, headers=auth_headers(tokens))
+        assert resp.status_code == 200, resp.text
+        ids = {r.id for r in rows}
+        listed = [r for r in resp.json() if r["id"] in ids]
+        assert len(listed) == len(rows), path
+        assert len({r["created_at"] for r in listed}) == 1, f"{path}: no created_at tie"
+        assert [r["id"] for r in listed] == sorted(ids, reverse=True), path
+
+    # An explicit sort still overrides the server default.
+    resp = await client.get(
+        "/api/v1/admin/users?sort[]=email&order[]=asc", headers=auth_headers(tokens)
+    )
+    assert resp.status_code == 200, resp.text
+    emails = [u["email"] for u in resp.json()]
+    assert emails == sorted(emails), emails
+    assert "aaa@example.com" in emails and "zzz@example.com" in emails
+
+
+async def test_admin_self_reenable_200(app_client):
+    client, tokens = await _superuser_client(app_client)
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    resp = await client.patch(
+        f"/api/v1/admin/users/{me.json()['id']}",
+        json={"is_active": True},
+        headers=auth_headers(tokens),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["is_active"] is True

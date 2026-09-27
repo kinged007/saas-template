@@ -81,12 +81,14 @@ ALL_PERMISSIONS = [p for p in PERMISSION_DEFINITIONS if p not in KEY_ONLY_PERMIS
 # Full registry including key-only scopes (for API-key validation).
 ALL_PERMISSIONS_INCLUDING_KEY_ONLY = [*ALL_PERMISSIONS, NOTIFICATION_READ, NOTIFICATION_UPDATE]
 
-NOTIFICATION_PERMISSIONS = {NOTIFICATION_READ, NOTIFICATION_UPDATE}
-
 
 def register_permission(permission: str, *, resource: str, action: str) -> str:
     """Register a permission a new service needs, e.g. `register_permission(
     "billing:read", resource="billing", action="read")` at import time.
+
+    New permissions land in the role-assignable registry. If a future scope
+    must be API-key-only, add it to KEY_ONLY_PERMISSIONS explicitly and gate
+    roles against it — registration alone does not make that decision.
 
     The single catalog endpoint serves the result, so the roles UI picks the
     new permission up without a frontend change. Re-registering the same

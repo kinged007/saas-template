@@ -151,7 +151,7 @@ async def register(
     except Exception:
         logger.exception("failed to send verification email for user %s", user.id)
     if browser_flow(request, body):
-        set_refresh_cookie(response, pair.refresh_token)
+        set_refresh_cookie(response, pair.refresh_token, request=request)
         return TokenResponse(
             access_token=pair.access_token,
             refresh_token=None,
@@ -276,7 +276,7 @@ async def login(
         user, ip_address=_client_ip(request), user_agent=_user_agent(request)
     )
     if browser_flow(request, body):
-        set_refresh_cookie(response, pair.refresh_token)
+        set_refresh_cookie(response, pair.refresh_token, request=request)
         return TokenResponse(
             access_token=pair.access_token,
             refresh_token=None,
@@ -323,7 +323,7 @@ async def refresh(
             await db.rollback()
             logger.exception("failed to join single workspace on refresh")
     if cookie_token is not None or browser_flow(request, body):
-        set_refresh_cookie(response, pair.refresh_token)
+        set_refresh_cookie(response, pair.refresh_token, request=request)
         return TokenResponse(
             access_token=pair.access_token,
             refresh_token=None,
@@ -407,12 +407,15 @@ async def totp_status(
 
 @router.post("/2fa/setup")
 async def totp_setup(
-    user=Depends(get_current_user),
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    _require_session_user(principal)
     try:
-        return await TwoFactorService(db, container.cipher, container.bus).start_setup(user)
+        return await TwoFactorService(db, container.cipher, container.bus).start_setup(
+            principal.user
+        )
     except TwoFactorError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
 
@@ -420,13 +423,14 @@ async def totp_setup(
 @router.post("/2fa/enable")
 async def totp_enable(
     body: TwoFactorSetupConfirm,
-    user=Depends(get_current_user),
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    _require_session_user(principal)
     try:
         codes = await TwoFactorService(db, container.cipher, container.bus).confirm_setup(
-            user, setup_token=body.setup_token, code=body.code
+            principal.user, setup_token=body.setup_token, code=body.code
         )
     except TwoFactorError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
@@ -441,6 +445,11 @@ async def totp_disable(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> None:
+    """Disable TOTP after confirming the current password.
+
+    A wrong password answers 400, not 401: the session is alive, only the
+    submitted password was wrong. 401 is reserved for a dead session and the
+    web client would read it as one, force a logout, and lose the form."""
     key = _limit_key(request, user.email)
     get_auth_limiter().check(key)
     try:
@@ -449,7 +458,7 @@ async def totp_disable(
         )
     except AuthError as exc:
         get_auth_limiter().fail(key)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
     get_auth_limiter().reset(key)
     await TwoFactorService(db, container.cipher, container.bus).disable(user)
 
@@ -470,7 +479,8 @@ async def totp_backup_codes(
         )
     except AuthError as exc:
         get_auth_limiter().fail(key)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
+        # 400, not 401 — same reason as totp_disable: the session is alive.
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
     get_auth_limiter().reset(key)
     try:
         codes = await TwoFactorService(db, container.cipher, container.bus).regenerate_backup_codes(
@@ -511,7 +521,7 @@ async def totp_login(
         user, ip_address=_client_ip(request), user_agent=_user_agent(request)
     )
     if browser_flow(request, body):
-        set_refresh_cookie(response, pair.refresh_token)
+        set_refresh_cookie(response, pair.refresh_token, request=request)
         return TokenResponse(
             access_token=pair.access_token,
             refresh_token=None,

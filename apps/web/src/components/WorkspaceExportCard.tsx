@@ -75,7 +75,7 @@ export function WorkspaceExportCard() {
         <div className="flex flex-wrap items-center gap-2">
           <Select value={resource} onValueChange={setResource}>
             <SelectTrigger className="w-48">
-              <SelectValue placeholder="Resource" />
+              <SelectValue placeholder="Resource">{resource}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               {resources.map((r) => (

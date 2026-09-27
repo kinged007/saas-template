@@ -205,24 +205,7 @@ async def oauth_token(
         # The callback parked a minted refresh token in the cache entry; move
         # it into the HttpOnly cookie so JS only ever sees the access token.
         if entry.get("refresh_token"):
-            try:
-                service = AuthService(db, container.bus)
-                old = entry.get("refresh_token")
-                user = await service.get_user_by_refresh_token(old)
-                if user is not None:
-                    await service.revoke_refresh(old)
-                    pair = await service.issue_tokens(
-                        user,
-                        ip_address=_client_ip(request),
-                        user_agent=_user_agent(request),
-                    )
-                    set_refresh_cookie(response, pair.refresh_token)
-                    return {
-                        "access_token": pair.access_token,
-                        "token_type": "Bearer",
-                    }
-            except Exception:
-                logger.exception("oauth cookie reissue failed")
+            set_refresh_cookie(response, entry["refresh_token"], request=request)
         return {
             "access_token": entry.get("access_token"),
             "token_type": "Bearer",

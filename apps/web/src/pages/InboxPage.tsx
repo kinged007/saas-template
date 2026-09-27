@@ -626,7 +626,9 @@ export function InboxPage() {
                   </Button>
                   <Select value={archivedFilter} onValueChange={(v) => setArchivedFilter(v as ArchivedFilter)}>
                     <SelectTrigger className="w-28">
-                      <SelectValue />
+                      <SelectValue>
+                        {archivedFilter === "archived" ? "Archived" : "Active"}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="active">Active</SelectItem>
@@ -1056,7 +1058,9 @@ export function InboxPage() {
               <span className="shrink-0 text-sm font-medium">Notifications</span>
               <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
                 <SelectTrigger className="h-9 w-28">
-                  <SelectValue />
+                  <SelectValue>
+                    {STATUS_OPTIONS.find((o) => o.value === statusFilter)?.label}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {STATUS_OPTIONS.map((o) => (

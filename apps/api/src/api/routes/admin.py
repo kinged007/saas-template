@@ -3,6 +3,10 @@
 Unlike workspace-scoped routes, these are gated on `require_superuser`,
 not on workspace RBAC — a superuser does not need membership in a
 workspace to inspect it here.
+
+Session-only: `require_superuser` rejects API keys, so every route here
+requires a superuser's session token. The same applies to the
+`/jobs/global*` family and the `/users/{id}` administration routes.
 """
 
 from __future__ import annotations
@@ -35,6 +39,16 @@ _WORKSPACE_SORTABLE = {"created_at", "name", "slug"}
 _WORKSPACE_FILTERABLE = {"name", "slug"}
 _AUDIT_SORTABLE = {"created_at", "action", "resource_type"}
 _AUDIT_FILTERABLE = {"action", "resource_type", "actor_user_id", "workspace_id"}
+
+
+def _uuid_or_404(value: str, label: str) -> str:
+    # StringUUID's bind processor raises ValueError (-> 500) on a malformed id,
+    # so validate before it reaches the query.
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{label} not found") from None
+    return value
 
 
 def _admin_user_dict(u: User) -> dict:
@@ -78,6 +92,8 @@ async def list_users(
         )
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(User.created_at.desc(), User.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
@@ -90,7 +106,7 @@ async def get_user(
     _=Depends(require_superuser),
     db: AsyncSession = Depends(get_db),
 ):
-    user = await db.get(User, user_id)
+    user = await db.get(User, _uuid_or_404(user_id, "user"))
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     stmt = (
@@ -116,7 +132,7 @@ async def update_user(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    user = await db.get(User, user_id)
+    user = await db.get(User, _uuid_or_404(user_id, "user"))
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     if user.id == admin.id and body.is_active is False:
@@ -154,6 +170,8 @@ async def list_all_workspaces(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(Workspace.created_at.desc(), Workspace.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     workspaces = rows.scalars().all()
@@ -178,7 +196,7 @@ async def update_workspace_flags(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    workspace = await db.get(Workspace, workspace_id)
+    workspace = await db.get(Workspace, _uuid_or_404(workspace_id, "workspace"))
     if workspace is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
     merged = {**(workspace.flags or {}), **body.flags}
