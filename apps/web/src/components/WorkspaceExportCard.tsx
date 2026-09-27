@@ -33,6 +33,9 @@ export function WorkspaceExportCard() {
     url: "workspaces/export/resources",
     method: "get",
     queryOptions: { enabled: !!workspace && canExport?.can === true, retry: false },
+    // The card reports this failure inline; refine's generic toast would
+    // report the same failure a second time.
+    errorNotification: false,
   });
   const resourcesFailed = resourcesQuery.isError;
   const resources = resourcesResult?.data?.resources ?? [];
@@ -74,7 +77,7 @@ export function WorkspaceExportCard() {
       </CardHeader>
       <CardContent>
         {resourcesFailed && (
-          <p className="mb-2 text-sm text-destructive">
+          <p role="alert" className="mb-2 text-sm text-destructive">
             Could not load the exportable resources. CSV export is unavailable; the JSON export below still
             works.
           </p>

@@ -338,15 +338,12 @@ async def test_export_audit_csv(app_client):
 
 
 def test_export_csv_sanitises_formula_cells_for_every_resource():
-    """A cell starting with = + - @ must not execute when the file is opened.
+    """A cell starting with = + - @ or a control character must not execute.
 
     Covers every resource in one place: export_csv is the only writer of
     tabular output, so a bug in the choke point reaches all of them.
     """
     from src.services.search_export import SearchExportService
-
-    def _export_csv(bundle, resource):
-        return SearchExportService.__new__(SearchExportService).export_csv(bundle, resource)
 
     injections = {
         "members": {"email": "=cmd|' /C calc'!A0", "display_name": "+1+1", "avatar_url": None},
@@ -355,10 +352,10 @@ def test_export_csv_sanitises_formula_cells_for_every_resource():
         "jobs": {"key": "=1", "name": "@x"},
         "conversations": {"title": "-cmd", "last_message_preview": None},
         "notifications": {"title": "=1", "type": None},
-        "audit": {"actor_email": "+1", "id": None},
+        "audit": {"actor_email": "+1", "id": "=1"},
     }
     for resource, payload in injections.items():
-        text = _export_csv({resource: [payload]}, resource)
+        text = SearchExportService.export_csv({resource: [payload]}, resource)
         row = next(csv.DictReader(io.StringIO(text)))
         for key, value in payload.items():
             if value is None:
@@ -371,13 +368,17 @@ def test_export_csv_sanitises_formula_cells_for_every_resource():
                 raw = ";".join(value)
             assert cell == f"'{raw}", (resource, key, cell)
 
+    # Excel discards a leading control character and evaluates what follows, so
+    # a tab, CR or LF in front of a formula is the same payload.
+    for control in ("\t", "\r", "\n"):
+        payload = f"{control}=1+1"
+        text = SearchExportService.export_csv({"members": [{"display_name": payload}]}, "members")
+        assert next(csv.DictReader(io.StringIO(text)))["display_name"] == f"'{payload}", control
+
 
 def test_export_csv_leaves_safe_values_untouched():
     """Sanitising must not rewrite ordinary cells, non-strings, or empty ones."""
     from src.services.search_export import SearchExportService
-
-    def _export_csv(bundle, resource):
-        return SearchExportService.__new__(SearchExportService).export_csv(bundle, resource)
 
     payload = {
         "id": "abc-123",
@@ -386,7 +387,8 @@ def test_export_csv_leaves_safe_values_untouched():
         "email_verified": True,
         "avatar_url": None,
     }
-    row = next(csv.DictReader(io.StringIO(_export_csv({"members": [payload]}, "members"))))
+    text = SearchExportService.export_csv({"members": [payload]}, "members")
+    row = next(csv.DictReader(io.StringIO(text)))
     assert row["id"] == "abc-123"
     assert row["email"] == "person@example.com"
     assert row["display_name"] == "Ada Lovelace"

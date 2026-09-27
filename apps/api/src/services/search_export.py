@@ -126,8 +126,11 @@ async def _ensure_membership(session: AsyncSession, workspace_id: str, user_id: 
 
 
 # Excel and LibreOffice evaluate a cell starting with one of these as a formula
-# on open, so an exported name or email would run on whoever opens the file.
-_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@")
+# on open, so an exported name or email runs on whoever opens the file. TAB, CR
+# and LF start a formula too: the spreadsheet drops the control character and
+# reads the formula behind it. The "'" prefix is a convention, not a guarantee —
+# Excel can strip it on save-and-reopen, so an edited file can reactivate.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 
 def _csv_cell(value: object) -> object:
@@ -548,7 +551,8 @@ class SearchExportService:
         )
         return bundle
 
-    def export_csv(self, bundle: dict, resource: str) -> str:
+    @staticmethod
+    def export_csv(bundle: dict, resource: str) -> str:
         columns = CSV_RESOURCES.get(resource)
         if columns is None:
             raise ValueError(
@@ -570,7 +574,7 @@ class SearchExportService:
                     # the JSON export carries: the redacted public projection,
                     # and empty cells when the member has no profile row.
                     **{
-                        f"profile_{c}": _csv_cell((r.get("profile") or {}).get(c))
+                        f"profile_{c}": (r.get("profile") or {}).get(c)
                         for c in _MEMBER_PROFILE_COLUMNS
                     },
                 }
@@ -644,8 +648,6 @@ class SearchExportService:
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=columns)
         writer.writeheader()
-        # One choke point, so every resource is covered: branches that need a
-        # derived value (JSON arrays, joined permissions) map through
-        # _csv_cell themselves, and the rest land here as plain values.
+        # One choke point, so a new resource is covered by construction.
         writer.writerows({k: _csv_cell(v) for k, v in row.items()} for row in flat)
         return buf.getvalue()
