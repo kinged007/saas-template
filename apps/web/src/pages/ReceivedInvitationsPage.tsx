@@ -137,6 +137,10 @@ export function ReceivedInvitationsPage() {
                           Decline
                         </Button>
                       </div>
+                    ) : inv.expired ? (
+                      <span className="text-muted-foreground text-xs">
+                        Expired — ask the workspace owner to re-send.
+                      </span>
                     ) : (
                       <span className="text-muted-foreground">—</span>
                     )}

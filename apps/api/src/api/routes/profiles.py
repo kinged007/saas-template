@@ -5,7 +5,13 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_container, get_current_user
+from src.api.deps import (
+    AuthPrincipal,
+    get_container,
+    get_current_user,
+    require_superuser,
+    resolve_auth_principal,
+)
 from src.db.session import get_db
 from src.models.workspace import User
 from src.schemas.api import DeleteMeRequest, ProfileUpdate
@@ -77,12 +83,14 @@ async def patch_my_profile(
 @router.get("/users/{user_id}/profile")
 async def get_user_profile(
     user_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
     service = ProfileService(db, container.bus)
-    proj = await service.get_public_projection(user_id, viewer=user)
+    proj = await service.get_public_projection(
+        user_id, viewer=principal.user, is_superuser=principal.is_deployment_admin
+    )
     if proj is None:
         raise HTTPException(status_code=404, detail="user or profile not found")
     return proj
@@ -110,12 +118,10 @@ async def export_my_data(
 @router.get("/users/{user_id}/export")
 async def export_user_data(
     user_id: str,
-    user: User = Depends(get_current_user),
+    _: User = Depends(require_superuser),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    if not user.is_superuser:
-        raise HTTPException(status_code=403, detail="superuser access required")
     service = ProfileService(db, container.bus)
     bundle = await service.export_bundle(user_id)
     import json
@@ -149,10 +155,10 @@ async def delete_me(
 async def delete_user(
     user_id: str,
     request: Request,
-    user: User = Depends(get_current_user),
+    actor: User = Depends(require_superuser),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
     service = ProfileService(db, container.bus)
-    await service.delete_account_superuser(user_id, actor=user, ip_address=_client_ip(request))
+    await service.delete_account_superuser(user_id, actor=actor, ip_address=_client_ip(request))
     return None

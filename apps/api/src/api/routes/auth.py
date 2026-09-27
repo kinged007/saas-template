@@ -407,12 +407,15 @@ async def totp_status(
 
 @router.post("/2fa/setup")
 async def totp_setup(
-    user=Depends(get_current_user),
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    _require_session_user(principal)
     try:
-        return await TwoFactorService(db, container.cipher, container.bus).start_setup(user)
+        return await TwoFactorService(db, container.cipher, container.bus).start_setup(
+            principal.user
+        )
     except TwoFactorError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
 
@@ -424,10 +427,10 @@ async def totp_enable(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    user = principal.user
+    _require_session_user(principal)
     try:
         codes = await TwoFactorService(db, container.cipher, container.bus).confirm_setup(
-            user, setup_token=body.setup_token, code=body.code
+            principal.user, setup_token=body.setup_token, code=body.code
         )
     except TwoFactorError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
@@ -436,7 +439,9 @@ async def totp_enable(
     # it, enabling 2FA mid-session would bounce the user back to this same
     # page forever on a workspace that requires 2FA.
     if principal.session_id is not None:
-        await AuthService(db).mark_session_two_factor_verified(principal.session_id, user.id)
+        await AuthService(db).mark_session_two_factor_verified(
+            principal.session_id, principal.user.id
+        )
     return {"backup_codes": codes}
 
 

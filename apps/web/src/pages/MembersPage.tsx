@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useCan, useCreate, useGetIdentity, useUpdate } from "@refinedev/core";
+import { useCan, useCreate, useCustomMutation, useGetIdentity, useInvalidate, useUpdate } from "@refinedev/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 
@@ -58,6 +58,8 @@ export function MembersPage() {
   });
   const { mutate: changeRole } = useUpdate();
   const { mutate: invite, mutation } = useCreate();
+  const { mutate: resend } = useCustomMutation();
+  const invalidate = useInvalidate();
   const [email, setEmail] = useState("");
   const [inviteRoleId, setInviteRoleId] = useState("");
 
@@ -79,6 +81,20 @@ export function MembersPage() {
 
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
   const canManageRoles = !!canManage?.can && MANAGER_ROLES.includes(myRole ?? "");
+  const { mutate: memberAction } = useCustomMutation();
+
+  const suspend = (m: Member, suspendIt: boolean) => {
+    memberAction(
+      {
+        url: `members/${m.membership_id}/${suspendIt ? "suspend" : "reactivate"}`,
+        method: "post",
+        values: {},
+        successNotification: { message: suspendIt ? "Member suspended" : "Member reactivated", type: "success" },
+      },
+      { onSuccess: () => invalidate({ resource: "members", invalidates: ["list"] }) },
+    );
+  };
+
   const roleName = (roleId: string) => roleOptions.find((r) => r.id === roleId)?.name;
 
   const submit = (e: React.FormEvent) => {
@@ -110,6 +126,7 @@ export function MembersPage() {
               <TableHead>Name</TableHead>
               <TableHead>Role</TableHead>
               <TableHead>Change role</TableHead>
+              <TableHead>Status</TableHead>
               <TableHead>Joined</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -168,21 +185,36 @@ export function MembersPage() {
                     <span className="text-muted-foreground">—</span>
                   )}
                 </TableCell>
+                <TableCell>
+                  <StatusBadge status={m.status} />
+                </TableCell>
                 <TableCell className="text-muted-foreground">{formatDate(m.joined_at)}</TableCell>
                 <TableCell className="text-right">
-                  {canDelete?.can && m.role !== "owner" && (
-                    <DeleteButton
-                      resource="members"
-                      recordItemId={m.membership_id}
-                      variant="ghost"
-                      size="sm"
-                    />
-                  )}
+                  <div className="flex justify-end gap-1">
+                    {canManageRoles && m.role !== "owner" && m.status !== "suspended" && (
+                      <Button variant="ghost" size="sm" onClick={() => suspend(m, true)}>
+                        Suspend
+                      </Button>
+                    )}
+                    {canManageRoles && m.status === "suspended" && (
+                      <Button variant="ghost" size="sm" onClick={() => suspend(m, false)}>
+                        Reactivate
+                      </Button>
+                    )}
+                    {canDelete?.can && m.role !== "owner" && (
+                      <DeleteButton
+                        resource="members"
+                        recordItemId={m.membership_id}
+                        variant="ghost"
+                        size="sm"
+                      />
+                    )}
+                  </div>
                 </TableCell>
               </TableRow>
               );
             })}
-            {rows.length === 0 && <EmptyRow colSpan={5}>No members yet.</EmptyRow>}
+            {rows.length === 0 && <EmptyRow colSpan={6}>No members yet.</EmptyRow>}
           </TableBody>
         </Table>
       </div>
@@ -280,13 +312,32 @@ export function MembersPage() {
                     <TableCell className="text-muted-foreground">{formatDate(i.expires_at)}</TableCell>
                     <TableCell className="text-muted-foreground">{formatDate(i.created_at)}</TableCell>
                     <TableCell className="text-right">
-                      {i.status === "pending" && (
+                      {i.status === "pending" && !i.expired && (
                         <DeleteButton
                           resource="invitations"
                           recordItemId={i.id}
                           variant="ghost"
                           size="sm"
                         />
+                      )}
+                      {(i.status !== "pending" || i.expired) && i.status !== "accepted" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            resend(
+                              {
+                                url: `invitations/${i.id}/resend`,
+                                method: "post",
+                                values: {},
+                                successNotification: { message: "Invitation re-sent", type: "success" },
+                              },
+                              { onSuccess: () => invalidate({ resource: "invitations", invalidates: ["list"] }) },
+                            )
+                          }
+                        >
+                          Re-send
+                        </Button>
                       )}
                     </TableCell>
                   </TableRow>

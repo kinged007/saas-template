@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import JSON, Boolean, DateTime, String
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.base import Base, StringUUID, TimestampMixin
@@ -112,6 +112,15 @@ class Role(Base, TimestampMixin):
 class WorkspaceMember(Base, TimestampMixin):
     __tablename__ = "workspace_members"
 
+    # Same constraint the 0017 migration creates; kept on the model so
+    # `create_all` (tests, fresh installs) and the ORM agree on the domain.
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'invited', 'suspended')",
+            name="ck_workspace_members_status",
+        ),
+    )
+
     id: Mapped[str] = mapped_column(
         StringUUID(), primary_key=True, default=lambda: str(uuid.uuid4())
     )
@@ -120,4 +129,4 @@ class WorkspaceMember(Base, TimestampMixin):
     role_id: Mapped[str] = mapped_column(StringUUID(), index=True, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), default="active", nullable=False
-    )  # active | invited
+    )  # active | invited | suspended

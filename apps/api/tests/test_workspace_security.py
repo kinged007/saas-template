@@ -362,6 +362,7 @@ async def test_me_reports_2fa_state(app_client):
     assert entry["two_factor_verified"] is True
     assert entry["require_2fa"] is True
 
+
 async def test_me_verdict_agrees_with_the_gate_for_a_pre_enrolment_session(app_client):
     """/me must report the session verdict, not the user's 2FA state.
 
@@ -393,6 +394,7 @@ async def test_me_verdict_agrees_with_the_gate_for_a_pre_enrolment_session(app_c
     assert entry["two_factor_verified"] is True
     resp = await client.get("/api/v1/roles", headers=ws_headers(other, ws["id"]))
     assert resp.status_code == 200
+
 
 async def test_disabling_2fa_clears_the_session_verdict(app_client):
     """The verdict means "this session cleared a challenge".
