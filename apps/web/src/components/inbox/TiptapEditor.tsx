@@ -252,6 +252,8 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           variant={editor.isActive("bold") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
+          title="Bold"
+          aria-label="Bold"
           onMouseDown={(e) => {
             e.preventDefault();
             editor.chain().focus().toggleBold().run();
@@ -264,6 +266,8 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           variant={editor.isActive("italic") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
+          title="Italic"
+          aria-label="Italic"
           onMouseDown={(e) => {
             e.preventDefault();
             editor.chain().focus().toggleItalic().run();
@@ -318,6 +322,8 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           variant={editor.isActive("orderedList") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
+          title="Ordered list"
+          aria-label="Ordered list"
           onMouseDown={(e) => {
             e.preventDefault();
             editor.chain().focus().toggleOrderedList().run();
@@ -330,6 +336,8 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           variant={editor.isActive("blockquote") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
+          title="Quote"
+          aria-label="Quote"
           onMouseDown={(e) => {
             e.preventDefault();
             editor.chain().focus().toggleBlockquote().run();
@@ -342,6 +350,8 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           variant={editor.isActive("link") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
+          title="Link"
+          aria-label="Link"
           onMouseDown={(e) => {
             e.preventDefault();
             const prev = editor.getAttributes("link").href as string | undefined;
