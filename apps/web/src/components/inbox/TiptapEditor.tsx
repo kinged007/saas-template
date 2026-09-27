@@ -43,7 +43,7 @@ type MentionListRef = {
   onKeyDown: (props: SuggestionKeyDownProps) => boolean;
 };
 
-/** Rows the picker renders; a longer match set is scrolled, not paginated. */
+/** Rows the picker renders; the list box is sized to show exactly this many. */
 const MENTION_PICKER_LIMIT = 8;
 
 /**
@@ -72,28 +72,29 @@ const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(f
   props,
   ref,
 ) {
-  const [index, setIndex] = useState(0);
+  const [cursor, setCursor] = useState(-1);
   const items = props.items;
+  // `cursor` stays -1 until the user arrows into the list, so an empty query
+  // — which lists everyone — has no selected row and a bare Enter cannot
+  // insert whoever happens to be first. Narrowing the query shortens the
+  // list, so the highlight is clamped during render rather than in an effect,
+  // which would leave one unhighlighted frame.
+  const selectable = cursor >= 0 || props.query.trim() !== "";
+  const index = selectable && items.length ? Math.min(Math.max(cursor, 0), items.length - 1) : -1;
 
   const select = (i: number) => {
     const item = items[i];
     if (item) props.command({ id: item.id, label: item.label, type: item.type });
   };
 
-  // Narrowing the query shortens the list, which can leave the highlight past
-  // the end. Clamp it so Enter still picks a row.
-  useEffect(() => {
-    setIndex((i) => (items.length === 0 ? 0 : Math.min(i, items.length - 1)));
-  }, [items]);
-
   useImperativeHandle(ref, () => ({
     onKeyDown: ({ event }) => {
       if (event.key === "ArrowUp") {
-        setIndex((i) => (i + items.length - 1) % items.length);
+        setCursor(index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length);
         return true;
       }
       if (event.key === "ArrowDown") {
-        setIndex((i) => (i + 1) % items.length);
+        setCursor(index < 0 ? 0 : (index + 1) % items.length);
         return true;
       }
       if (event.key === "Enter" || event.key === "Tab") {
@@ -114,7 +115,7 @@ const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(f
 
   return (
     <div className="bg-popover text-popover-foreground overflow-hidden rounded-md border shadow-md">
-      <ul className="max-h-60 overflow-y-auto p-1">
+      <ul className="max-h-72 overflow-y-auto p-1">
         {items.map((item, i) => (
           <li key={item.id}>
             <button

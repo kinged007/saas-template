@@ -105,10 +105,11 @@ type TreeNode = { type: string; value?: string; url?: string; children?: TreeNod
  * stays plain markdown — other clients read the raw text.
  *
  * It runs on the parsed tree, so only `text` nodes are considered: a name
- * inside a fenced block, an inline code span or a URL is left alone. A
- * trailing `\p{L}\p{N}_` boundary keeps `@Ann` from matching `@Annabelle`, and
- * a leading lookbehind keeps it from matching the `@` inside an address
- * (`bob@Ann.com`) or a URL path (`/u/@Ann`).
+ * inside a fenced block, an inline code span or a URL is left alone. Both
+ * boundaries are Unicode-aware: a trailing `\p{L}\p{N}_` keeps `@Ann` from
+ * matching `@Annabelle`, and a leading lookbehind keeps it from matching the
+ * `@` inside an address (`bob@Ann.com`, `bobé@Ann.com`) or a URL path
+ * (`/u/@Ann`).
  *
  * Markdown `link` nodes are skipped as well: a mention inside a link label
  * would nest one anchor inside another.
@@ -119,7 +120,9 @@ export function mentionRemarkPlugin(names: string[]) {
   if (unique.length === 0) return function noopPlugin() { return function noop() {}; };
   // Longest first so "Ann Lee" wins over "Ann" at the same position.
   const alternation = unique.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  const re = new RegExp(`(?<![\\w.~%+\\-/])@(${alternation})(?![\\p{L}\\p{N}_])`, "gu");
+  // ponytail: the lookbehind needs Safari 16.4+ (Mar 2023). If that floor is
+  // too high, rewrite the leading guard as a captured-prefix check.
+  const re = new RegExp(`(?<![\\p{L}\\p{N}_.~%+\\-/])@(${alternation})(?![\\p{L}\\p{N}_])`, "gu");
   return function attacher() {
     return function transformer(tree: TreeNode) {
       const children = tree.children;

@@ -248,6 +248,9 @@ export function InboxPage() {
     [selectedConversation],
   );
 
+  // Built once per participant list, not once per message bubble.
+  const mentionPlugins = useMemo(() => [mentionRemarkPlugin(participantNames)], [participantNames]);
+
   const { mutate: updateConv } = useUpdate();
   const { mutate: customMutate } = useCustomMutation();
   const { mutateAsync: customMutateAsync } = useCustomMutation();
@@ -973,7 +976,7 @@ export function InboxPage() {
                               <div className={cn("prose prose-sm dark:prose-invert max-w-none break-words", isSelf ? "prose-invert" : "")}>
                                 <Markdown
                                   components={isSelf ? markdownComponentsInverted : markdownComponents}
-                                  remarkPlugins={[mentionRemarkPlugin(participantNames)]}
+                                  remarkPlugins={mentionPlugins}
                                   urlTransform={mentionUrlTransform}
                                 >
                                   {m.body}
@@ -1173,7 +1176,9 @@ export function InboxPage() {
                   </div>
                 </div>
                 <div className="prose prose-sm dark:prose-invert max-w-none flex-1">
-                  <Markdown components={markdownComponents}>{selectedNotif.body || ""}</Markdown>
+                  <Markdown components={markdownComponents} remarkPlugins={mentionPlugins}>
+                    {selectedNotif.body || ""}
+                  </Markdown>
                 </div>
                 <div className="border-border mt-6 flex items-center gap-2 border-t pt-4">
                   {linkUrl(selectedNotif) && (
