@@ -43,10 +43,17 @@ export function humanizeType(type: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/** Fetch + update notification delivery preferences. Shared by Inbox and profile settings. */
-export function useNotificationPreferences(extraTypes: string[] = [], enabled = true) {
+/** Fetch + update notification delivery preferences. Shared by Inbox and profile settings.
+ *
+ * `baseUrl` targets another member's preferences for callers holding
+ * `profile:update`; it defaults to the signed-in user's own. */
+export function useNotificationPreferences(
+  extraTypes: string[] = [],
+  enabled = true,
+  baseUrl = "notifications/preferences"
+) {
   const { result: prefsResult, query: prefsQuery } = useCustom<NotificationPreferences>({
-    url: "notifications/preferences",
+    url: baseUrl,
     method: "get",
     queryOptions: { enabled },
   });
@@ -67,7 +74,7 @@ export function useNotificationPreferences(extraTypes: string[] = [], enabled = 
     try {
       await savePrefsAsync(
         {
-          url: "notifications/preferences",
+          url: baseUrl,
           method: "put",
           values: { channels: { [type]: channel } },
           successNotification: false,
@@ -84,7 +91,7 @@ export function useNotificationPreferences(extraTypes: string[] = [], enabled = 
     try {
       await savePrefsAsync(
         {
-          url: "notifications/preferences",
+          url: baseUrl,
           method: "put",
           values: { digest_enabled: enabled },
           successNotification: {

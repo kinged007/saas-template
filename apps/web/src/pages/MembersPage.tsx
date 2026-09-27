@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useCan, useCreate, useCustomMutation, useGetIdentity, useInvalidate, useUpdate } from "@refinedev/core";
+import { useCan, useCreate, useCustomMutation, useGetIdentity, useGo, useInvalidate, useUpdate } from "@refinedev/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 
@@ -50,6 +50,9 @@ export function MembersPage() {
   const { data: canManage } = useCan({ resource: "members", action: "edit" });
   const { data: canDelete } = useCan({ resource: "members", action: "delete" });
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
+  // Profile editing is a distinct scope from role management (member:update).
+  const { data: canEditProfiles } = useCan({ resource: "member-profiles", action: "edit" });
+  const go = useGo();
   const { result: invitationsResult } = useWorkspaceList<Invitation>({
     resource: "invitations",
     pagination: { currentPage: invitesPage, pageSize: PAGE_SIZE },
@@ -191,6 +194,15 @@ export function MembersPage() {
                 <TableCell className="text-muted-foreground">{formatDate(m.joined_at)}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-1">
+                    {canEditProfiles?.can && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => go({ to: `/users/${m.id}/settings` })}
+                      >
+                        Edit
+                      </Button>
+                    )}
                     {canManageRoles && m.role !== "owner" && m.status !== "suspended" && (
                       <Button variant="ghost" size="sm" onClick={() => suspend(m, true)}>
                         Suspend

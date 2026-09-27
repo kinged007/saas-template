@@ -39,6 +39,8 @@ import { GeneralSection as ProfileGeneralSection } from "./pages/settings/profil
 import { NotificationsSection as ProfileNotificationsSection } from "./pages/settings/profile/sections/NotificationsSection";
 import { SecuritySection } from "./pages/settings/profile/sections/SecuritySection";
 import { WorkspacesSection } from "./pages/settings/profile/sections/WorkspacesSection";
+import { UserSettingsLayout } from "./pages/settings/user/UserSettingsLayout";
+import { userSettings } from "./pages/settings/user/registry";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { WorkspaceSettingsLayout } from "./pages/settings/workspace/WorkspaceSettingsLayout";
 import { GeneralSection } from "./pages/settings/workspace/sections/GeneralSection";
@@ -124,6 +126,15 @@ export function App() {
                 <Route path="security" element={<SecuritySection />} />
                 <Route path="workspaces" element={<WorkspacesSection />} />
                 <Route path="*" element={<Navigate to="/settings/profile/general" replace />} />
+              </Route>
+              {/* Member editor: same sections, target-aware. New tabs come from
+                  `userSettings`; keep this map in sync with that registry. */}
+              <Route path="users/:id/settings" element={<UserSettingsLayout />}>
+                <Route index element={<Navigate to="general" replace />} />
+                {userSettings.sections.map((s) => (
+                  <Route key={s.key} path={s.key} element={<s.component />} />
+                ))}
+                <Route path="*" element={<Navigate to="general" replace />} />
               </Route>
               <Route path="settings/workspace" element={<WorkspaceSettingsLayout />}>
                 <Route index element={<Navigate to="general" replace />} />

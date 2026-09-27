@@ -34,7 +34,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useDeleteAccount, useExportProfile, useProfile, useUpdateProfile } from "@/hooks/useProfile";
+import { useDeleteAccount, useExportProfile, useProfile, useTargetUserId, useUpdateProfile } from "@/hooks/useProfile";
 import type { Identity, UserProfile } from "@/types";
 import { getProfileField } from "@/types";
 
@@ -131,9 +131,12 @@ function getDetectedTimezone(): string {
 
 export function GeneralSection() {
   const { data: identity } = useGetIdentity<Identity>();
-  const profileHook = useProfile();
+  // Set when routed as `users/:id/settings/general` (a caller holding
+  // profile:update editing someone else); null on the self-service page.
+  const targetId = useTargetUserId();
+  const profileHook = useProfile(targetId);
   const profile = (profileHook.data as UserProfile | undefined) ?? identity?.profile;
-  const { mutate, mutation: updateMutation } = useUpdateProfile();
+  const { mutate, mutation: updateMutation } = useUpdateProfile(targetId);
   const isSaving = updateMutation.isPending;
   const { exportMyData } = useExportProfile();
   const { mutate: deleteAccount, mutation: deleteMutation } = useDeleteAccount();
@@ -181,7 +184,10 @@ export function GeneralSection() {
         date_of_birth: (getProfileField(profile, "date_of_birth", "") as string) || "",
         website_url: (getProfileField(profile, "website_url", "") as string) || "",
         location: (getProfileField(profile, "location", "") as string) || "",
-        avatar_url: (identity?.avatar_url as string) || "",
+        avatar_url:
+          (getProfileField(profile, "avatar_url", "") as string) ||
+          (identity?.avatar_url as string) ||
+          "",
       });
       setInitialized(true);
     }
@@ -262,7 +268,7 @@ export function GeneralSection() {
     <div className="flex flex-col gap-6">
       <Card>
         <CardHeader>
-          <CardTitle>Personal Information</CardTitle>
+          <CardTitle>{targetId ? "Member Information" : "Personal Information"}</CardTitle>
           <CardDescription>Common profile fields and avatar URL.</CardDescription>
         </CardHeader>
         <CardContent>
@@ -438,7 +444,7 @@ export function GeneralSection() {
               />
 
               <div className="flex justify-end gap-2 pt-4">
-                <Button type="button" variant="outline" onClick={() => list("workspaces")}>
+                <Button type="button" variant="outline" onClick={() => list(targetId ? "members" : "workspaces")}>
                   Cancel
                 </Button>
                 <Button type="submit" disabled={isSaving}>
@@ -450,6 +456,8 @@ export function GeneralSection() {
         </CardContent>
       </Card>
 
+      {/* Export and account deletion act on the signed-in user only. */}
+      {!targetId && (
       <Card>
         <CardHeader>
           <CardTitle>Data &amp; Account</CardTitle>
@@ -477,6 +485,7 @@ export function GeneralSection() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent>
