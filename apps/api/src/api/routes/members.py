@@ -119,6 +119,58 @@ async def set_member_role(
     return {"id": member.id, "role_id": member.role_id}
 
 
+@router.post("/{membership_id}/suspend")
+async def suspend_member(
+    membership_id: str,
+    request: Request,
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    _=Depends(require_permission(MEMBER_UPDATE)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    try:
+        member = await WorkspaceService(db, container.bus).suspend_member(
+            workspace_id,
+            membership_id,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    except WorkspaceConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    except WorkspaceError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    return {"id": member.id, "status": member.status}
+
+
+@router.post("/{membership_id}/reactivate")
+async def reactivate_member(
+    membership_id: str,
+    request: Request,
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    _=Depends(require_permission(MEMBER_UPDATE)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    try:
+        member = await WorkspaceService(db, container.bus).reactivate_member(
+            workspace_id,
+            membership_id,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    except WorkspaceConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    except WorkspaceError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    return {"id": member.id, "status": member.status}
+
+
 @router.delete("/{membership_id}", status_code=204)
 async def remove_member(
     membership_id: str,

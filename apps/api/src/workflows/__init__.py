@@ -10,7 +10,7 @@ Registered subscriptions (subject → handler, fanout flag):
     workspaces.member.joined        → notify inviter + other active members
     workspaces.member.role_changed  → notify the member whose role changed
     workspaces.member.removed       → notify the removed member
-    workspaces.invitation.created   → email hook for unregistered invites (TODO)
+    workspaces.invitation.created   → email invite to unregistered recipients
     workspaces.created              → provisioning/analytics hook (TODO)
     audit.entry.created             → persist AuditLogEntry row
     apikeys.created                 → security/monitoring hook (TODO)
@@ -228,19 +228,44 @@ def build_workflows(
             )
 
     async def on_invitation_created(payload: dict, metadata) -> None:
-        """Hook for inviting users who do not have an account yet.
+        """Email unregistered recipients their invite link (fail-closed)."""
+        if payload.get("is_registered"):
+            return
+        email = payload.get("email")
+        if not email:
+            return
+        from src.email.factory import send_email
+        from src.email.templates import invitation as invitation_template
+        from src.settings import settings
 
-        TODO(events): email delivery for invitations is not implemented yet.
-        When it is, send an invite link to `payload["email"]` (build the URL
-        from the invitation token + FRONTEND_URL) for unregistered recipients.
-        Registered recipients are handled in-app via workspaces.member.invited.
-        """
-        if not payload.get("is_registered"):
-            logger.info(
-                "TODO(email): send invitation to %s for workspace %s (not implemented)",
-                payload.get("email"),
-                payload.get("workspace_id"),
+        # The token stays out of the published payload: `invitation.created` is
+        # a public webhook event, so a token here would be delivered to every
+        # workspace webhook subscriber. It is re-read from the committed row.
+        token = ""
+        invitation_id = payload.get("invitation_id")
+        if invitation_id:
+            async with SessionFactory() as session:
+                from src.models.core import Invitation
+
+                invite = await session.get(Invitation, invitation_id)
+                if invite is not None:
+                    token = invite.token
+        invite_url = (
+            f"{settings.frontend_url.rstrip('/')}/invitations/accept?token={token}"
+            if token
+            else f"{settings.frontend_url.rstrip('/')}/invitations"
+        )
+        try:
+            await send_email(
+                invitation_template(
+                    email,
+                    workspace_name=payload.get("workspace_name", "workspace"),
+                    invite_url=invite_url,
+                    invited_by=payload.get("invited_by_name", ""),
+                )
             )
+        except Exception:
+            logger.exception("invitation email failed for %s", email)
 
     async def on_workspace_created(payload: dict, metadata) -> None:
         """Provision workspace-scoped scheduled jobs for the new workspace.

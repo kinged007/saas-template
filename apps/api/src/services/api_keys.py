@@ -4,7 +4,7 @@ import hashlib
 import secrets
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dates import ensure_utc, now_utc
@@ -87,7 +87,9 @@ class ApiKeyService:
         own permission list. Returns (key, raw_secret); the raw secret is
         only ever returned once.
         """
-        membership = await WorkspaceService(self._session).get_membership(workspace_id, actor.id)
+        membership = await WorkspaceService(self._session).get_membership(
+            workspace_id, actor.id, active_only=True
+        )
         if membership is None:
             raise ApiKeyForbidden("you are not a member of this workspace")
         _, role = membership
@@ -157,16 +159,26 @@ class ApiKeyService:
         )
         return key, raw
 
-    async def list_api_keys(self, workspace_id: str, created_by_user_id: str) -> list[ApiKey]:
-        """Keys owned by one user in one workspace — never anyone else's."""
-        stmt = (
-            select(ApiKey)
-            .where(
-                ApiKey.workspace_id == workspace_id,
-                ApiKey.created_by_user_id == created_by_user_id,
-            )
-            .order_by(ApiKey.created_at.desc())
+    def owner_scope(self, workspace_id: str, created_by_user_id: str) -> Select[tuple[ApiKey]]:
+        """Base statement restricted to one user's keys in one workspace.
+
+        The personal-scope predicate lives here (not in the route) so every
+        key read shares one owner. Callers apply their own filters, counting
+        and pagination on top — the scope can only ever narrow."""
+        return select(ApiKey).where(
+            ApiKey.workspace_id == workspace_id,
+            ApiKey.created_by_user_id == created_by_user_id,
         )
+
+    async def count_for_user(self, stmt: Select[tuple[ApiKey]]) -> int:
+        """Rows the scoped statement matches, ignoring its ORDER BY."""
+        count = await self._session.execute(
+            select(func.count()).select_from(stmt.order_by(None).subquery())
+        )
+        return count.scalar_one()
+
+    async def list_for_user(self, stmt: Select[tuple[ApiKey]]) -> list[ApiKey]:
+        """Run an owner-scoped statement and return the page."""
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 

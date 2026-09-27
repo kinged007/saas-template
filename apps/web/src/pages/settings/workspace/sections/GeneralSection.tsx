@@ -3,7 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { toast } from "sonner";
-import { useCan, useCustomMutation, useDelete, useGetIdentity } from "@refinedev/core";
+import { useCan, useCustomMutation, useDelete, useGetIdentity, useInvalidate } from "@refinedev/core";
 import { useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -32,7 +39,9 @@ import {
 } from "@/components/ui/form";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { IDENTITY_QUERY_OPTIONS } from "@/contexts/WorkspaceContext";
-import type { Identity } from "@/types";
+import { useWorkspaceList } from "@/hooks/useWorkspaceQuery";
+import type { Identity, Member } from "@/types";
+import { getMemberDisplayName } from "@/types";
 import { WorkspaceExportCard } from "@/components/WorkspaceExportCard";
 import { workspaceStore } from "@/utils/storage";
 
@@ -60,6 +69,48 @@ export function GeneralSection() {
   const isDeleting = deleteMutation.isPending;
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [confirmName, setConfirmName] = useState("");
+
+  const { mutate: transfer, mutation: transferMutation } = useCustomMutation();
+  const { result: membersResult } = useWorkspaceList<Member>({
+    resource: "members",
+    pagination: { pageSize: 100 },
+  });
+  const invalidate = useInvalidate();
+  const [transferId, setTransferId] = useState("");
+  const isOwner = workspace?.role === "owner";
+  const transferCandidates = (membersResult?.data ?? []).filter(
+    (m) => m.role !== "owner" && m.status === "active",
+  );
+
+  const transferOwnership = () => {
+    if (!workspace || !transferId) return;
+    transfer(
+      {
+        url: `workspaces/${workspace.id}/transfer`,
+        method: "post",
+        values: { new_owner_membership_id: transferId },
+        successNotification: false,
+        errorNotification: false,
+      },
+      {
+        onSuccess: () => {
+          toast.success("Ownership transferred", {
+            description: "You are now an admin of this workspace.",
+          });
+          setTransferId("");
+          // Identity carries the role and permissions the UI gates on, and the
+          // shared identity query is stale for 30s — refetch it explicitly.
+          refresh();
+          void invalidate({ resource: "members", invalidates: ["list"] });
+        },
+        onError: (err: unknown) => {
+          toast.error(
+            (err as { message?: string })?.message || "Failed to transfer ownership",
+          );
+        },
+      },
+    );
+  };
 
   const form = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -243,6 +294,43 @@ export function GeneralSection() {
                 delete workspaces.
               </p>
             </div>
+
+            {isOwner && (
+              <div className="flex flex-col gap-3 border-b border-destructive/30 pb-4">
+                <div>
+                  <h4 className="font-semibold text-destructive">Transfer ownership</h4>
+                  <p className="text-muted-foreground mt-1 text-sm">
+                    Hand this workspace to another active member. You are demoted to admin — the workspace
+                    is never left without an owner. Requires an interactive session: API keys cannot
+                    transfer ownership.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                  <div className="flex flex-1 flex-col gap-2">
+                    <Label>New owner</Label>
+                    <Select value={transferId} onValueChange={setTransferId}>
+                      <SelectTrigger className="w-full sm:w-72">
+                        <SelectValue placeholder="Select member" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {transferCandidates.map((m) => (
+                          <SelectItem key={m.membership_id} value={m.membership_id}>
+                            {getMemberDisplayName(m)} ({m.email})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button
+                    variant="destructive"
+                    onClick={transferOwnership}
+                    disabled={!transferId || transferMutation.isPending}
+                  >
+                    {transferMutation.isPending ? "Transferring…" : "Transfer ownership"}
+                  </Button>
+                </div>
+              </div>
+            )}
 
             <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
               <DialogTrigger asChild>

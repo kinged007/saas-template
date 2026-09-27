@@ -3,6 +3,7 @@ const IDENTITY_KEY = "tf_identity";
 // their next login. The shared key is the pre-upgrade fallback, adopted once.
 const WORKSPACE_PREFIX = "tf_workspace_id:";
 const LEGACY_WORKSPACE_KEY = "tf_workspace_id";
+const PENDING_INVITATION_KEY = "tf_pending_invitation";
 
 /**
  * Storage wrapper resilient to blocked/partitioned storage (e.g. sandboxed
@@ -94,6 +95,7 @@ export const tokenStore = {
     // per-user entry belongs to whoever logs in next and is restored then.
     storage.remove(WORKSPACE_PREFIX + "legacy");
     storage.remove(LEGACY_WORKSPACE_KEY);
+    storage.remove(PENDING_INVITATION_KEY);
     tokensListeners.forEach((listener) => listener());
   },
   /** Logout variant: also drops the signing-out user's workspace selection. */
@@ -101,6 +103,7 @@ export const tokenStore = {
     accessToken = null;
     storage.remove(IDENTITY_KEY);
     sessionHint.clear();
+    storage.remove(PENDING_INVITATION_KEY);
     workspaceStore.clear(userId);
     tokensListeners.forEach((listener) => listener());
   },
@@ -172,4 +175,14 @@ export const onboardingStore = {
     storage.get(ONBOARDING_PREFIX + (userId ?? "legacy") + ":" + workspaceId) === "1",
   dismiss: (workspaceId: string, userId?: string | null) =>
     storage.set(ONBOARDING_PREFIX + (userId ?? "legacy") + ":" + workspaceId, "1"),
+};
+
+/**
+ * Invitation token from an emailed link, kept across the sign in / register
+ * round trip so the auth provider can return the user to the accept page.
+ */
+export const pendingInvitationStore = {
+  get: () => storage.get(PENDING_INVITATION_KEY),
+  set: (token: string) => storage.set(PENDING_INVITATION_KEY, token),
+  clear: () => storage.remove(PENDING_INVITATION_KEY),
 };

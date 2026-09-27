@@ -38,6 +38,16 @@ class AuthPrincipal:
     api_key: ApiKey | None = None
     session_id: str | None = None
 
+    @property
+    def is_deployment_admin(self) -> bool:
+        """Superuser power, and only session auth ever has it.
+
+        Every deployment-wide check reads this property rather than
+        `user.is_superuser`: an API key resolves to its creator's `User`,
+        so testing that field would hand a leaked key admin power. Keys are
+        workspace-scoped credentials, never deployment admins."""
+        return self.api_key is None and self.user.is_superuser
+
 
 async def resolve_auth_principal(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
@@ -85,13 +95,37 @@ async def get_current_user(
     return principal.user
 
 
-async def require_superuser(
-    user: Annotated[User, Depends(get_current_user)],
+async def require_session_user(
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
 ) -> User:
-    """Gate deployment-wide administration (e.g. global scheduled jobs)."""
-    if not user.is_superuser:
+    """Reject API-key principals.
+
+    An API key carries its creator's role into the service layer, so a route
+    whose real authority check is a *role* check (not a permission) would let a
+    narrowly scoped key exercise owner-level powers. Owner-level operations
+    (ownership transfer) therefore require an interactive session.
+    """
+    if principal.api_key is not None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "api keys cannot perform this action")
+    return principal.user
+
+
+async def require_superuser(
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
+) -> User:
+    """Gate deployment-wide administration (e.g. global scheduled jobs).
+
+    Session-only: API keys never carry deployment-wide power, even when
+    minted by a superuser, so key-authenticated requests always 403 here.
+    Use this dependency for every deployment-wide route — `/admin/*` and
+    the `/jobs/global*` family are session superuser only.
+
+    Routes that mix superuser and co-member access pass
+    `principal.is_deployment_admin` to their service instead, so the
+    service never sees the bare `user.is_superuser` flag."""
+    if not principal.is_deployment_admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "superuser access required")
-    return user
+    return principal.user
 
 
 async def get_current_workspace_id(
@@ -165,6 +199,11 @@ def require_key_permission(permission: str):
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, "api key is not scoped to this workspace"
             )
+        membership = await WorkspaceService(db).get_membership(
+            workspace_id, principal.user.id, active_only=True
+        )
+        if membership is None:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
         if "*" in api_key.permissions or permission in api_key.permissions:
             await record_key_use(api_key, db, response)
             return None
@@ -180,7 +219,7 @@ async def resolve_membership(
     user=Depends(get_current_user),
     workspace_id: str = Depends(get_current_workspace_id),
 ):
-    membership = await WorkspaceService(db).get_membership(workspace_id, user.id)
+    membership = await WorkspaceService(db).get_membership(workspace_id, user.id, active_only=True)
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     return membership
@@ -202,6 +241,13 @@ def require_permission(permission: str):
                 raise HTTPException(
                     status.HTTP_403_FORBIDDEN, "api key is not scoped to this workspace"
                 )
+            membership = await WorkspaceService(db).get_membership(
+                workspace_id, principal.user.id, active_only=True
+            )
+            if membership is None:
+                raise HTTPException(
+                    status.HTTP_403_FORBIDDEN, "you are not a member of this workspace"
+                )
             if "*" in api_key.permissions or permission in api_key.permissions:
                 await record_key_use(api_key, db, response)
                 return None
@@ -209,7 +255,7 @@ def require_permission(permission: str):
                 status.HTTP_403_FORBIDDEN, f"missing permission: {permission}"
             ) from None
         service = WorkspaceService(db)
-        membership = await service.get_membership(workspace_id, principal.user.id)
+        membership = await service.get_membership(workspace_id, principal.user.id, active_only=True)
         if membership is None:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
         _, role = membership

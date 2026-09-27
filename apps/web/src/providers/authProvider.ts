@@ -4,6 +4,7 @@ import { activeWorkspacePermissions } from "../utils/permissions";
 import { API_URL, cancelPendingRefresh, ensureSession, httpClient } from "./dataProvider";
 import {
   identityStore,
+  pendingInvitationStore,
   tokenStore,
   workspaceStore,
   setActiveWorkspaceId,
@@ -50,6 +51,15 @@ export async function seedWorkspace(identity: Identity): Promise<void> {
   }
 }
 
+/**
+ * Where a freshly authenticated user lands: the pending invitation accept
+ * page when they arrived from an invite link, the dashboard otherwise.
+ */
+const afterAuthRedirect = () => {
+  const token = pendingInvitationStore.get();
+  return token ? `/invitations/accept?token=${encodeURIComponent(token)}` : "/";
+};
+
 export const authProvider: AuthProvider = {
   login: async ({ email, password }) => {
     try {
@@ -95,7 +105,7 @@ export const authProvider: AuthProvider = {
       } catch {
         identityStore.set(null);
       }
-      return { success: true, redirectTo: "/" };
+      return { success: true, redirectTo: afterAuthRedirect() };
     } catch (error) {
       return { success: false, error: error as Error };
     }
@@ -131,7 +141,7 @@ export const authProvider: AuthProvider = {
       } catch {
         identityStore.set(null);
       }
-      return { success: true, redirectTo: "/" };
+      return { success: true, redirectTo: afterAuthRedirect() };
     } catch (error) {
       return { success: false, error: error as Error };
     }
