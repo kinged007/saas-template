@@ -305,14 +305,29 @@ async def test_cookie_secure_follows_forwarded_proto(app_client):
     assert "Secure" not in plain.headers.get("set-cookie", "")
 
 
-def test_cookie_secure_explicit_override_wins():
-    from src.core.security.cookies import cookie_secure_for
+async def test_cookie_secure_explicit_override_wins(monkeypatch, app_client):
+    """Explicit REFRESH_COOKIE_SECURE short-circuits the request-scheme check.
 
-    original = settings.refresh_cookie_secure
-    try:
-        settings.refresh_cookie_secure = False
-        assert cookie_secure_for(None) is False
-        settings.refresh_cookie_secure = True
-        assert cookie_secure_for(None) is True
-    finally:
-        settings.refresh_cookie_secure = original
+    Operators behind a TLS-terminating proxy set it to false on a plain-http
+    app server, so the override has to win over an https request; the reverse
+    direction forces Secure on plain http. Both go through a real login so the
+    scheme is part of the input, not a request-less helper call.
+    """
+    await register_user(app_client, "override@example.com")
+    body = {"email": "override@example.com", "password": "Password123!", "use_cookies": True}
+
+    monkeypatch.setattr(settings, "refresh_cookie_secure", False)
+    resp = await app_client.post(
+        "/api/v1/auth/login", json=body, headers={"X-Forwarded-Proto": "https"}
+    )
+    assert resp.status_code == 200, resp.text
+    raw = resp.headers.get("set-cookie", "")
+    # A login without use_cookies sets no cookie at all — pin that one is set,
+    # otherwise the "not Secure" assertion below passes on an empty header.
+    assert _cookie_name() in raw, raw
+    assert "Secure" not in raw, raw
+
+    monkeypatch.setattr(settings, "refresh_cookie_secure", True)
+    plain = await app_client.post("/api/v1/auth/login", json=body)
+    assert plain.status_code == 200, plain.text
+    assert "Secure" in plain.headers.get("set-cookie", ""), plain.headers.get("set-cookie")

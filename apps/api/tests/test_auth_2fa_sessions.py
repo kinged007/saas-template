@@ -39,7 +39,9 @@ async def test_sessions_list_and_revoke(app_client):
     assert resp.status_code == 200
     sessions = resp.json()
     assert len(sessions) == 1
-    assert sessions[0]["ip_address"] == "127.0.0.1"  # httpx ASGI test client
+    # httpx.ASGITransport defaults its client to ("127.0.0.1", 123): a transport
+    # default, not a peer address this code observed.
+    assert sessions[0]["ip_address"] == "127.0.0.1"
     assert sessions[0]["user_agent"] == "rotated-session-agent"
     assert sessions[0]["revoked_at"] is None
 
