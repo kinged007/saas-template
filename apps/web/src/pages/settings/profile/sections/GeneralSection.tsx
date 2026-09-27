@@ -335,7 +335,7 @@ export function GeneralSection() {
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue placeholder="Select timezone">
-                              {field.value || undefined}
+                              {field.value ?? ""}
                             </SelectValue>
                           </SelectTrigger>
                         </FormControl>
@@ -364,7 +364,7 @@ export function GeneralSection() {
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue placeholder="Select locale">
-                              {LOCALE_OPTIONS.find((o) => o.value === field.value)?.label}
+                              {LOCALE_OPTIONS.find((o) => o.value === field.value)?.label ?? field.value ?? ""}
                             </SelectValue>
                           </SelectTrigger>
                         </FormControl>

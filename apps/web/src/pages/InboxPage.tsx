@@ -1059,7 +1059,7 @@ export function InboxPage() {
               <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
                 <SelectTrigger className="h-9 w-28">
                   <SelectValue>
-                    {STATUS_OPTIONS.find((o) => o.value === statusFilter)?.label}
+                    {STATUS_OPTIONS.find((o) => o.value === statusFilter)?.label ?? statusFilter}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>

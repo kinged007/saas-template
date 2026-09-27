@@ -79,15 +79,22 @@ export function MembersPage() {
 
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
   const canManageRoles = !!canManage?.can && MANAGER_ROLES.includes(myRole ?? "");
-  const roleName = (roleId: string) => roleOptions.find((r) => r.id === roleId)?.name;
+  const roleName = (roleId: string, fallback = "") =>
+    roleOptions.find((r) => r.id === roleId)?.name ?? fallback;
+  // A refetched roles response can drop the selected id, so the select value is
+  // derived: a stale selection falls back to the placeholder and the submit
+  // guard blocks instead of inviting with a role the workspace no longer has.
+  const inviteRoleValue = roleOptions.some((r) => r.id === inviteRoleId)
+    ? inviteRoleId
+    : "";
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim() || !inviteRoleId) return;
+    if (!email.trim() || !inviteRoleValue) return;
     invite(
       {
         resource: "invitations",
-        values: { email, role_id: inviteRoleId },
+        values: { email, role_id: inviteRoleValue },
         successNotification: { message: "Invitation sent", type: "success" },
       },
       {
@@ -153,7 +160,7 @@ export function MembersPage() {
                     >
                       <SelectTrigger className="w-36">
                         <SelectValue>
-                          {assignableRoles.find((r) => r.id === m.role_id)?.name ?? m.role}
+                          {roleName(m.role_id, m.role)}
                         </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
@@ -240,10 +247,10 @@ export function MembersPage() {
             </div>
             <div className="flex flex-col gap-2">
               <Label>Role</Label>
-              <Select value={inviteRoleId} onValueChange={setInviteRoleId}>
+              <Select value={inviteRoleValue} onValueChange={setInviteRoleId}>
                 <SelectTrigger className="w-40">
                   <SelectValue placeholder="Role">
-                    {roleName(inviteRoleId) ?? inviteRoleId}
+                    {roleName(inviteRoleValue)}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
@@ -255,7 +262,7 @@ export function MembersPage() {
                 </SelectContent>
               </Select>
             </div>
-            <Button type="submit" disabled={mutation.isPending || !email.trim() || !inviteRoleId}>
+            <Button type="submit" disabled={mutation.isPending || !email.trim() || !inviteRoleValue}>
               {mutation.isPending ? "Sending…" : "Invite"}
             </Button>
           </form>
@@ -275,7 +282,7 @@ export function MembersPage() {
                 {invitations.map((i) => (
                   <TableRow key={i.id}>
                     <TableCell>{i.email}</TableCell>
-                    <TableCell>{roleName(i.role_id) ?? "—"}</TableCell>
+                    <TableCell>{roleName(i.role_id, "—")}</TableCell>
                     <TableCell>
                       <StatusBadge status={i.status} />
                     </TableCell>
