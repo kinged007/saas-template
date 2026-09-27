@@ -1,14 +1,9 @@
 const IDENTITY_KEY = "tf_identity";
-<<<<<<< HEAD
 // Per-user selection: the last workspace each user had open is restored on
 // their next login. The shared key is the pre-upgrade fallback, adopted once.
 const WORKSPACE_PREFIX = "tf_workspace_id:";
 const LEGACY_WORKSPACE_KEY = "tf_workspace_id";
 const PENDING_INVITATION_KEY = "tf_pending_invitation";
-=======
-const WORKSPACE_KEY = "tf_workspace_id";
-const PENDING_INVITATION_KEY = "tf_pending_invitation";
->>>>>>> 499e68e (fix(workspaces): close review findings on transfer, resend and invite links)
 
 /**
  * Storage wrapper resilient to blocked/partitioned storage (e.g. sandboxed

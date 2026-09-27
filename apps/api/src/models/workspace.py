@@ -105,7 +105,7 @@ class Role(Base, TimestampMixin):
 class WorkspaceMember(Base, TimestampMixin):
     __tablename__ = "workspace_members"
 
-    # Same constraint the 0011 migration creates; kept on the model so
+    # Same constraint the 0017 migration creates; kept on the model so
     # `create_all` (tests, fresh installs) and the ORM agree on the domain.
     __table_args__ = (
         CheckConstraint(
