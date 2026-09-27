@@ -44,15 +44,42 @@ Don't enforce the full dev sequence on template consumers. At release
 boundaries (or ~10 migrations), squash `versions/` to one baseline:
 
 ```bash
-cd apps/api
-uv run alembic upgrade head                    # scratch DB at head
-uv run alembic revision --autogenerate -m "baseline schema"
-# move old versions aside, set baseline down_revision = None,
-# upgrade an empty DB, pg_dump both schemas and diff — must match
+make db-squash m="baseline schema"
 ```
 
-Open PRs that branched pre-squash repoint `down_revision` to the new
-baseline (or delete their file if the change is already in it). Consumers
+The order matters, and getting it wrong is silent. `alembic revision
+--autogenerate` diffs the **live database** against the models, not the
+migration chain, so migrating the database to head first makes the diff
+empty by construction — a "baseline" with zero `op.*` calls that creates no
+schema at all. And on a genuinely empty database autogenerate refuses to run
+(`Target database is not up to date`), because `alembic_version` is absent
+while the chain's head exists. `make db-squash` therefore stamps `head` onto
+the empty database first, which writes the version row without running any
+migration, so the guard passes while the database is still empty.
+
+`db-squash` then proves the result instead of trusting it, on throwaway
+embedded postgres instances (`EMBEDDED_DB_DIR` in a temp dir — your dev
+database is never touched):
+
+1. the baseline alone must reproduce the schema,
+2. the old chain must still reach the same schema,
+
+each checked by autogenerating against it and requiring zero `op.*` calls.
+Either failure leaves `versions/` untouched. It also rewrites what
+autogenerate cannot emit correctly: `down_revision = None` on `0001` (it
+would otherwise point at the head being replaced), and the import of
+`src.db.base` (alembic renders a custom column type as the dotted path to its
+class and never emits the matching import, so the file would not import as
+generated). The generated `downgrade()` is kept as-is — it already drops
+every table, which is what a baseline should do.
+
+Known limitation: `env.py` disables `compare_type` / `compare_server_default`,
+so both proofs confirm tables, columns, indexes and constraints — not that
+every column kept its exact type and server default. Review type changes in
+the squashed diff by eye, as with any migration.
+
+Open PRs that branched pre-squash repoint `down_revision` to `0001` (or
+delete their file if the change is already in the baseline). Consumers
 upgrading past a squash: their `alembic_version` names a deleted revision —
 `stamp` to the baseline, then `upgrade head`. Document the stamp target in
 the release notes.

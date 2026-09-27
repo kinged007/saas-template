@@ -230,6 +230,18 @@ export function applyNotificationCreated(frame: unknown): void {
 }
 
 /**
+ * Refresh the aggregate unread counters. Both directions of the read/unread
+ * toggle need this: the sidebar badge reads `conversations/unread-count` and
+ * the notification bell reads `notifications/unread-count` plus it.
+ */
+export function invalidateUnreadCounts(): void {
+  void queryClient.invalidateQueries({
+    predicate: (query: Query) =>
+      JSON.stringify(query.queryKey).includes("unread-count"),
+  });
+}
+
+/**
  * The user read a conversation: zero its unread badge locally and refresh the
  * aggregate counters (cheap SQL counts; they also account for the notification
  * pointers the backend acknowledges on read).
@@ -239,9 +251,6 @@ export function applyConversationRead(conversationId: string): void {
     ...conversation,
     unread_count: 0,
   }));
-  void queryClient.invalidateQueries({
-    predicate: (query: Query) =>
-      JSON.stringify(query.queryKey).includes("unread-count"),
-  });
+  invalidateUnreadCounts();
 }
 

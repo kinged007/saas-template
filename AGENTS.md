@@ -22,7 +22,7 @@
 taken (e.g. another checkout's dev server), override them for that run:
 
 ```bash
-make dev API_PORT=8010 WEB_PORT=5273   # open http://localhost:5273
+USE_SQLITE=1 make dev API_PORT=8010 WEB_PORT=5273   # open http://localhost:5273
 ```
 
 `API_PORT` / `WEB_PORT` also work on `make api` and `make web`. `scripts/dev.py`

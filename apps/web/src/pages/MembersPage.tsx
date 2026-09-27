@@ -152,7 +152,9 @@ export function MembersPage() {
                       }
                     >
                       <SelectTrigger className="w-36">
-                        <SelectValue />
+                        <SelectValue>
+                          {assignableRoles.find((r) => r.id === m.role_id)?.name ?? m.role}
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {assignableRoles.map((r) => (
@@ -240,7 +242,7 @@ export function MembersPage() {
               <Label>Role</Label>
               <Select value={inviteRoleId} onValueChange={setInviteRoleId}>
                 <SelectTrigger className="w-40">
-                  <SelectValue placeholder="Role" />
+                  <SelectValue placeholder="Role">{roleName(inviteRoleId)}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {assignableRoles.map((r) => (

@@ -11,13 +11,15 @@ from src.api.deps import (
     get_current_user,
     get_current_workspace_id,
     require_key_permission,
+    require_permission,
     resolve_auth_principal,
 )
-from src.core.permissions import MESSAGE_CREATE, MESSAGE_READ
+from src.core.permissions import MESSAGE_CREATE, MESSAGE_READ, MESSAGE_UPDATE
 from src.db.session import get_db
 from src.schemas.api import (
     ConversationArchive,
     ConversationCreate,
+    ConversationParticipantsUpdate,
     ConversationRead,
     ConversationUpdate,
     MessageCreate,
@@ -215,6 +217,36 @@ async def update_conversation(
     return data
 
 
+@router.patch("/{conversation_id}/participants")
+async def update_participants(
+    conversation_id: str,
+    body: ConversationParticipantsUpdate,
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
+    # Role-gated, unlike the other conversation routes: require_permission is
+    # the guard that checks the caller's role for session users.
+    _=Depends(require_permission(MESSAGE_UPDATE)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    service = ConversationService(db, container.bus)
+    try:
+        data = await service.set_participants(
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            actor_user_id=user.id,
+            participant_user_ids=body.participant_user_ids,
+        )
+    except ConversationForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    except ConversationNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    except ConversationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+    return data
+
+
 @router.patch("/{conversation_id}/read")
 async def mark_read(
     conversation_id: str,
@@ -358,6 +390,7 @@ async def send_message(
             conversation_id=conversation_id,
             sender=user,
             body=body.body,
+            mentioned_user_ids=body.mentioned_user_ids,
             ip_address=request.client.host if request.client else None,
         )
     except ConversationForbidden as exc:

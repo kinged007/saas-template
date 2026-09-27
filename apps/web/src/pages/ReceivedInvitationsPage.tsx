@@ -36,7 +36,12 @@ export function ReceivedInvitationsPage() {
   const accept = (inv: Invitation) => {
     setBusyId(inv.id);
     action(
-      { url: `invitations/accept?token=${encodeURIComponent(inv.token)}`, method: "post", values: {} },
+      {
+        url: `invitations/accept?token=${encodeURIComponent(inv.token)}`,
+        method: "post",
+        values: {},
+        errorNotification: false,
+      },
       {
         onSuccess: () => {
           toast.success("Invitation accepted", {
@@ -60,7 +65,12 @@ export function ReceivedInvitationsPage() {
   const decline = (inv: Invitation) => {
     setBusyId(inv.id);
     action(
-      { url: `invitations/${inv.id}/decline`, method: "post", values: {} },
+      {
+        url: `invitations/${inv.id}/decline`,
+        method: "post",
+        values: {},
+        errorNotification: false,
+      },
       {
         onSuccess: () => {
           toast.success("Invitation declined", {

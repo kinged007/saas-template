@@ -42,7 +42,9 @@ export function NotificationsSection() {
                   onValueChange={(v) => setChannel(t, v as NotificationChannel)}
                 >
                   <SelectTrigger className="h-8 w-32 text-sm">
-                    <SelectValue />
+                    <SelectValue>
+                      {CHANNEL_OPTIONS.find((o) => o.value === (channels[t] ?? "in-app"))?.label}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {CHANNEL_OPTIONS.map((o) => (

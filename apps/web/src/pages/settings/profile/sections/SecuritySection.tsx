@@ -138,13 +138,10 @@ export function SecuritySection() {
         new_password: newPw,
         ...(enabled && changeCode ? { code: changeCode } : {}),
       });
-      toast.success("Password changed — sign in again");
-      setCurrentPw("");
-      setNewPw("");
-      setConfirmPw("");
-      setChangeCode("");
       // All sessions are revoked server-side; the access token is dead.
-      window.location.assign("/login");
+      // The query flag is read by LoginPage — a toast here is torn down by
+      // the navigation below, so the confirmation has to live on /login.
+      window.location.assign("/login?password_changed=1");
     } catch (e) {
       toast.error((e as Error)?.message ?? "Change failed");
     }

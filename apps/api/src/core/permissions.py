@@ -29,6 +29,7 @@ NOTIFICATION_UPDATE = "notification:update"
 
 MESSAGE_READ = "message:read"
 MESSAGE_CREATE = "message:create"  # start conversations, send messages, rename
+MESSAGE_UPDATE = "message:update"  # edit a conversation's participants
 
 JOB_READ = "jobs:read"
 JOB_UPDATE = "jobs:update"  # modify or trigger
@@ -63,6 +64,7 @@ PERMISSION_DEFINITIONS: dict[str, dict[str, str]] = {
     APIKEY_DELETE: {"resource": "apikey", "action": "delete"},
     MESSAGE_READ: {"resource": "message", "action": "read"},
     MESSAGE_CREATE: {"resource": "message", "action": "create"},
+    MESSAGE_UPDATE: {"resource": "message", "action": "update"},
     JOB_READ: {"resource": "jobs", "action": "read"},
     JOB_UPDATE: {"resource": "jobs", "action": "update"},
     WEBHOOK_READ: {"resource": "webhook", "action": "read"},
@@ -79,12 +81,14 @@ ALL_PERMISSIONS = [p for p in PERMISSION_DEFINITIONS if p not in KEY_ONLY_PERMIS
 # Full registry including key-only scopes (for API-key validation).
 ALL_PERMISSIONS_INCLUDING_KEY_ONLY = [*ALL_PERMISSIONS, NOTIFICATION_READ, NOTIFICATION_UPDATE]
 
-NOTIFICATION_PERMISSIONS = {NOTIFICATION_READ, NOTIFICATION_UPDATE}
-
 
 def register_permission(permission: str, *, resource: str, action: str) -> str:
     """Register a permission a new service needs, e.g. `register_permission(
     "billing:read", resource="billing", action="read")` at import time.
+
+    New permissions land in the role-assignable registry. If a future scope
+    must be API-key-only, add it to KEY_ONLY_PERMISSIONS explicitly and gate
+    roles against it — registration alone does not make that decision.
 
     The single catalog endpoint serves the result, so the roles UI picks the
     new permission up without a frontend change. Re-registering the same
@@ -120,6 +124,7 @@ def permissions_for_role(role_name: str) -> list[str]:
                 APIKEY_DELETE,
                 MESSAGE_READ,
                 MESSAGE_CREATE,
+                MESSAGE_UPDATE,
             ]
         case "viewer":
             return [

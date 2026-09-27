@@ -19,9 +19,14 @@ export function UsersSection() {
         <CardHeader>
           <CardTitle>Users</CardTitle>
           <CardDescription>
-            General user settings for this workspace. Manage defaults and view membership. This section is intentionally
-            minimal — extend it in <code>apps/web/src/pages/settings/workspace/sections/UsersSection.tsx</code> or add new
-            sections via the settings registry.
+            General user settings for this workspace. Manage defaults and view membership.
+            {__DEV_NOTES__ && (
+              <>
+                {" "}This section is intentionally minimal — extend it in{" "}
+                <code>apps/web/src/pages/settings/workspace/sections/UsersSection.tsx</code> or add new sections via the
+                settings registry.
+              </>
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
@@ -78,13 +83,15 @@ export function UsersSection() {
             </div>
           </div>
 
-          <div className="rounded-lg border border-dashed p-4">
-            <h4 className="font-medium">Extension point</h4>
-            <p className="text-muted-foreground text-sm">
-              Add workspace-wide user defaults (e.g. default invite role, allowed domains) here. Register additional tabs via{" "}
-              <code>workspaceSettings.register()</code> in <code>registry.ts</code> to keep this file small.
-            </p>
-          </div>
+          {__DEV_NOTES__ && (
+            <div className="rounded-lg border border-dashed p-4">
+              <h4 className="font-medium">Extension point</h4>
+              <p className="text-muted-foreground text-sm">
+                Add workspace-wide user defaults (e.g. default invite role, allowed domains) here. Register additional
+                tabs via <code>workspaceSettings.register()</code> in <code>registry.ts</code> to keep this file small.
+              </p>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

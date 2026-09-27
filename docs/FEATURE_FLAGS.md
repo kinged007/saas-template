@@ -18,6 +18,7 @@ something, so new workspaces need no backfill.
 |------|---------|-------|
 | `invites_enabled` | on | `POST /invitations` refuses with 409 when false |
 | `require_2fa` | off | Session requests on a workspace-scoped route are refused with 403 `2fa_required_for_workspace` when the session never cleared 2FA |
+| `onboarding_enabled` | on | Dashboard hides the “Get set up” card when false |
 
 Add a row here (and a code reference below) when a new flag lands.
 
@@ -27,8 +28,8 @@ is unaffected, and turning it off removes the key rather than storing `false`.
 
 ## Where flags are enforced
 
-- `WorkspaceService.create_invitation` refuses when `invites_enabled`
-  is false (`apps/api/src/services/workspaces.py`).
+- `WorkspaceService.create_invitation` refuses when `invites_enabled` is
+  false (`apps/api/src/services/workspaces.py`).
 - `enforce_workspace_security` refuses when `require_2fa` is set
   (`apps/api/src/api/deps.py`). Called from `require_permission` and
   `require_key_permission`.
@@ -56,3 +57,13 @@ Two exemptions are deliberate:
 - **The settings route itself** (`PATCH /workspaces/{id}/security`). An admin
   with no 2FA who turns the requirement on is otherwise locked out with no way
   to turn it off again. It declares `skip_workspace_security`.
+
+- The WebSocket at `ws://…/ws` is user-scoped, not workspace-scoped, and stays
+  outside the gate: a member this setting refuses still receives live
+  notifications.
+
+`onboarding_enabled` is the one flag also writable by non-superusers, through
+`PATCH /workspaces/{id}` (`workspace:update`, i.e. owners and admins) rather
+than the superuser-only flags endpoint. Enabling it does not clear anyone's
+per-user dismissal, which is a localStorage choice each member makes for
+themselves.

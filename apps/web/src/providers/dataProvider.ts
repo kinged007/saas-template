@@ -108,7 +108,11 @@ async function tryRefresh(): Promise<boolean> {
 // FastAPI errors carry the human-readable reason in the `detail` body field.
 // Surfaces it as the axios error message so refine notifications (and any
 // direct callers) show *why* a request failed instead of just the status code.
-function enrichErrorMessage(error: AxiosError): AxiosError {
+function normalizeError(error: AxiosError): AxiosError {
+  // refine reads `statusCode` for its generic error notification and
+  // authProvider.onError reads it to detect a 401; axios errors carry no such
+  // field, so without this every notification says "status code: undefined".
+  Object.assign(error, { statusCode: error.response?.status });
   const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail;
   // 2FA challenge responses carry an object detail ({code: "2fa_required",
   // challenge_token}) — leave the message alone so the login page can branch
@@ -146,7 +150,7 @@ function forceLogout() {
 httpClient.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
-    enrichErrorMessage(error);
+    normalizeError(error);
     const original = error.config as RetriableRequest | undefined;
     const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail;
     if (error.response?.status === 401 && original && !original._retried) {
