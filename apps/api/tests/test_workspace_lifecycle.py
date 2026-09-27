@@ -203,6 +203,7 @@ async def test_api_key_cannot_transfer_ownership(app_client):
     members = (await client.get("/api/v1/members", headers=ws_headers(heir, ws["id"]))).json()
     assert next(m for m in members if m["email"] == "own6@example.com")["role"] == "owner"
 
+
 async def test_resend_rejects_accepted_invitation(app_client):
     client = app_client
     owner = await register_user(client, "own7@example.com")
@@ -230,6 +231,7 @@ async def test_resend_rejects_accepted_invitation(app_client):
     )
     assert resp.status_code == 409, resp.text
 
+
 async def test_member_status_constraint_rejects_unknown_value(app_client):
     client = app_client
     owner = await register_user(client, "own8@example.com")
@@ -254,6 +256,7 @@ async def test_member_status_constraint_rejects_unknown_value(app_client):
         # Release the failed transaction so the teardown can drop the table.
         await session.rollback()
 
+
 async def test_safe_delete_cascades_but_keeps_audit(app_client):
     client = app_client
     owner = await register_user(client, "own5@example.com")
@@ -264,6 +267,22 @@ async def test_safe_delete_cascades_but_keeps_audit(app_client):
     assert (
         await client.get("/api/v1/workspaces/" + ws["id"], headers=owner_headers)
     ).status_code == 404
-    audit = await client.get("/api/v1/audit", headers=owner_headers)
-    assert audit.status_code == 200, audit.text
-    assert any(e["action"] == "workspace.deleted" for e in audit.json())
+    # The delete also drops the caller's membership, so the workspace-scoped
+    # audit endpoint is no longer reachable for them — assert the retained rows
+    # directly instead.
+    from sqlalchemy import select
+
+    from src.db.session import SessionFactory
+    from src.models.audit import AuditLogEntry
+
+    async with SessionFactory() as session:
+        actions = (
+            (
+                await session.execute(
+                    select(AuditLogEntry.action).where(AuditLogEntry.workspace_id == ws["id"])
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert "workspace.deleted" in actions

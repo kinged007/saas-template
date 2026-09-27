@@ -125,7 +125,7 @@ async def suspend_member(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(MEMBER_MANAGE)),
+    _=Depends(require_permission(MEMBER_UPDATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -151,7 +151,7 @@ async def reactivate_member(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(MEMBER_MANAGE)),
+    _=Depends(require_permission(MEMBER_UPDATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):

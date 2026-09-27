@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { toast } from "sonner";
 import { useCan, useCreate, useCustomMutation, useGetIdentity, useInvalidate, useUpdate } from "@refinedev/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";

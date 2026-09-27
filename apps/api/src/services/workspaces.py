@@ -510,6 +510,16 @@ class WorkspaceService:
                 "removed_by_name": actor.display_name,
             },
         )
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="member",
+            resource_id=member.id,
+            action="member.left",
+            actor_user_id=actor.id,
+            details={"workspace_name": workspace_name},
+            ip_address=ip_address,
+        )
 
     async def _require_manager(
         self, workspace_id: str, actor: User
@@ -547,12 +557,6 @@ class WorkspaceService:
             workspace_id=workspace_id,
             resource_type="member",
             resource_id=member.id,
-            action="member.left",
-            actor_user_id=actor.id,
-            details={"workspace_name": workspace_name},
-            ip_address=ip_address,
-        )
-
             action="member.suspended",
             actor_user_id=actor.id,
             details={"user_id": member.user_id},
@@ -649,9 +653,10 @@ class WorkspaceService:
         expires_in_hours: int = 72,
         ip_address: str | None = None,
     ) -> Invitation:
-        if actor is not None and await self.get_membership(
-            workspace_id, actor.id, active_only=True
-        ) is None:
+        if (
+            actor is not None
+            and await self.get_membership(workspace_id, actor.id, active_only=True) is None
+        ):
             raise WorkspaceForbidden("you are not a member of this workspace")
         invite = await self._session.get(Invitation, invitation_id)
         if invite is None or invite.workspace_id != workspace_id:

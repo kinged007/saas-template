@@ -84,6 +84,7 @@ async def get_current_user(
 ) -> User:
     return principal.user
 
+
 async def require_session_user(
     principal: AuthPrincipal = Depends(resolve_auth_principal),
 ) -> User:
