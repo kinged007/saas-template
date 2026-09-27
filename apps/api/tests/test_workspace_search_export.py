@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 
 from tests.conftest import create_workspace, register_user, ws_headers
@@ -103,7 +105,7 @@ async def test_search_restricted_to_participant_conversations(app_client):
 
 
 async def test_search_hides_jobs_without_jobs_view(app_client):
-    """Viewer/editor roles lack jobs:view, so search must omit job definitions."""
+    """Viewer/editor roles lack jobs:read, so search must omit job definitions."""
     client, h, ws, conv = await _setup(app_client)
     roles = (await client.get("/api/v1/roles", headers=h)).json()
     viewer = next(r for r in roles if r["name"] == "viewer")
@@ -139,11 +141,18 @@ async def test_search_escapes_like_wildcards(app_client):
     # "%_%" matches every row as wildcards; literally it appears nowhere.
     client, h, ws, conv = await _setup(app_client)
     resp = await client.get("/api/v1/workspaces/search", params={"q": "%"}, headers=h)
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["results"] == []
+    assert resp.status_code == 422, resp.text
     resp = await client.get("/api/v1/workspaces/search", params={"q": "%_%"}, headers=h)
     assert resp.status_code == 200, resp.text
     assert resp.json()["results"] == []
+
+
+async def test_conversation_list_escapes_like_wildcards(app_client):
+    # "%" appears in no title; unescaped it would match every conversation.
+    client, h, ws, conv = await _setup(app_client)
+    resp = await client.get("/api/v1/conversations", params={"q": "%"}, headers=h)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []
 
 
 async def test_export_strips_superuser_and_rejects_bad_format(app_client):
@@ -164,10 +173,13 @@ async def test_export_strips_superuser_and_rejects_bad_format(app_client):
     assert csv_resp.text.splitlines()[0] == "key,name,enabled,cron_schedule,next_run_at"
 
 
-async def test_search_rejects_blank_and_non_member(app_client):
+async def test_search_rejects_blank_and_short_and_non_member(app_client):
     client, h, ws, conv = await _setup(app_client)
     assert (
         await client.get("/api/v1/workspaces/search", params={"q": " "}, headers=h)
+    ).status_code == 422
+    assert (
+        await client.get("/api/v1/workspaces/search", params={"q": "z"}, headers=h)
     ).status_code == 422
     outsider = await register_user(client, "outsider@example.com")
     from tests.conftest import auth_headers
@@ -197,10 +209,24 @@ async def test_export_json_and_csv(app_client):
         "messages",
         "notifications",
         "webhook_subscriptions",
+        "audit",
     ):
         assert key in bundle, key
     assert bundle["workspace"]["id"] == ws["id"]
     assert any(m["email"] == "searcher@example.com" for m in bundle["members"])
+    # Every member carries a profile key even when the user has no profile row,
+    # so importers see one uniform member shape.
+    assert all("profile" in m for m in bundle["members"])
+    audit = bundle["audit"]
+    assert audit, "expected audit rows in the bundle"
+    for key in ("id", "actor_email", "action", "resource_type", "resource_id", "created_at"):
+        assert key in audit[0], key
+    assert any(
+        a["action"] == "workspace.created"
+        and a["actor_email"] == "searcher@example.com"
+        and a["resource_id"] == ws["id"]
+        for a in audit
+    )
     # No secrets leak: key hashes, webhook secrets, job ciphertext stay out.
     assert not any("key_hash" in k or "secret" in str(k).lower() for k in bundle["api_keys"])
     assert not any("secret" in str(s).lower() for s in bundle["webhook_subscriptions"])
@@ -210,13 +236,114 @@ async def test_export_json_and_csv(app_client):
     )
     assert csv_resp.status_code == 200, csv_resp.text
     assert csv_resp.headers["content-type"].startswith("text/csv")
-    assert csv_resp.text.splitlines()[0] == "email,display_name,role,status,joined_at"
+    member_rows = list(csv.DictReader(io.StringIO(csv_resp.text)))
+    assert member_rows, "expected member rows"
+    from src.services.search_export import CSV_RESOURCES
+
+    assert list(member_rows[0]) == CSV_RESOURCES["members"]
+    searcher = next(r for r in member_rows if r["email"] == "searcher@example.com")
+    # The profile table must be exported, not just the user row: the seeded
+    # member's name lives only in user_profiles, and issue #167 asks for those
+    # fields "even if empty".
+    assert searcher["profile_first_name"] == "Test"
+    assert searcher["profile_last_name"] == "User"
+    # Unset profile fields are empty cells, not dropped columns.
+    assert searcher["profile_bio"] == ""
+    assert searcher["profile_timezone"] == ""
+    # Redacted by the public projection, so they stay out of the column set
+    # rather than shipping as permanently empty.
+    assert "profile_phone_number" not in searcher
+    assert "profile_date_of_birth" not in searcher
+    # structured profile values stay valid JSON, not Python repr
+    assert json.loads(searcher["profile_custom_data"]) == {}
     bad = await client.get(
         "/api/v1/workspaces/export",
         params={"format": "csv", "resource": "nope"},
         headers=h,
     )
     assert bad.status_code == 422
+
+
+async def test_export_members_csv_keeps_columns_for_members_without_profile(app_client):
+    """A member with no profile row still gets every profile column, empty."""
+    from src.services.search_export import CSV_RESOURCES
+
+    client, h, ws, conv = await _setup(app_client)
+    # register_user always creates a profile, so delete the row to get a member
+    # without one — the columns must survive the missing row, not vanish with it.
+    from sqlalchemy import delete, select
+
+    from src.db.session import SessionFactory
+    from src.models.user_profile import UserProfile
+    from src.models.workspace import User
+
+    email = "teammate@example.com"
+    async with SessionFactory() as session:
+        user_id = (
+            (await session.execute(select(User).where(User.email == email).limit(1)))
+            .scalar_one()
+            .id
+        )
+        await session.execute(delete(UserProfile).where(UserProfile.user_id == user_id))
+        await session.commit()
+        assert await session.get(UserProfile, user_id) is None
+
+    resp = await client.get(
+        "/api/v1/workspaces/export", params={"format": "csv", "resource": "members"}, headers=h
+    )
+    assert resp.status_code == 200, resp.text
+    rows = {r["email"]: r for r in csv.DictReader(io.StringIO(resp.text))}
+    assert email in rows
+    bare = rows[email]
+    assert set(bare) == set(CSV_RESOURCES["members"])
+    for col in CSV_RESOURCES["members"]:
+        if col.startswith("profile_"):
+            assert bare[col] == "", col
+    # The rest of the row is unaffected by the missing profile.
+    assert bare["email"] == email
+    assert bare["role"]
+
+
+async def test_export_audit_csv(app_client):
+    """The audit log is selectable in the export card and exports as CSV."""
+    from src.services.search_export import CSV_RESOURCES
+
+    client, h, ws, conv = await _setup(app_client)
+    resp = await client.get(
+        "/api/v1/workspaces/export", params={"format": "csv", "resource": "audit"}, headers=h
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert "attachment" in resp.headers["content-disposition"]
+    assert (
+        resp.text.splitlines()[0]
+        == "created_at,actor_email,action,resource_type,resource_id,ip_address"
+    )
+    rows = list(csv.DictReader(io.StringIO(resp.text)))
+    assert rows, "expected audit rows"
+    # Every row carries the full column set; unset values are empty, not dropped.
+    assert all(set(r) == set(CSV_RESOURCES["audit"]) for r in rows)
+    # `workspace.created` is written exactly once, so it is the one row that is
+    # stable across the two separate export calls the suite makes. Later entries
+    # (message.created, and the export's own workspace.exported) land
+    # asynchronously and vary run to run.
+    created = [r for r in rows if r["action"] == "workspace.created"]
+    assert len(created) == 1, created
+    assert created[0]["actor_email"] == "searcher@example.com"
+    assert created[0]["resource_type"] == "workspace"
+    assert created[0]["resource_id"] == ws["id"]
+    assert created[0]["created_at"]
+
+
+async def test_export_resources_endpoint_is_the_selector_source(app_client):
+    """The frontend selector reads this list, so it must match CSV_RESOURCES."""
+    from src.services.search_export import CSV_RESOURCES
+
+    client, h, ws, conv = await _setup(app_client)
+    resp = await client.get("/api/v1/workspaces/export/resources", headers=h)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["resources"] == list(CSV_RESOURCES)
+    assert "audit" in resp.json()["resources"]
 
 
 async def test_export_requires_audit_read(app_client):

@@ -163,7 +163,11 @@ export function RolesSection() {
   const { data: canManage } = useCan({ resource: "roles", action: "create" });
   const { data: canEdit } = useCan({ resource: "roles", action: "edit" });
 
-  const rows = result?.data ?? [];
+  const rows = [...(result?.data ?? [])].sort((a, b) => {
+    const rank = (name: string) =>
+      ({ owner: 0, admin: 1, editor: 2, viewer: 3 })[name.toLowerCase()] ?? 4;
+    return rank(a.name) - rank(b.name) || a.name.localeCompare(b.name);
+  });
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
@@ -182,11 +186,15 @@ export function RolesSection() {
   const togglePermission = (p: string) =>
     setPermissions((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
 
-  const resetCreate = () => {
-    setCreateOpen(false);
+  const clearForm = () => {
     setName("");
     setDescription("");
     setPermissions([]);
+  };
+
+  const resetCreate = () => {
+    setCreateOpen(false);
+    clearForm();
   };
 
   const submitCreate = (e: React.FormEvent) => {
@@ -197,7 +205,6 @@ export function RolesSection() {
         resource: "roles",
         values: { name, description: description || undefined, permissions },
         successNotification: { message: "Role created", type: "success" },
-        errorNotification: false,
       },
       { onSuccess: resetCreate },
     );
@@ -212,9 +219,7 @@ export function RolesSection() {
 
   const closeEdit = () => {
     setEditing(null);
-    setName("");
-    setDescription("");
-    setPermissions([]);
+    clearForm();
   };
 
   const submitEdit = (e: React.FormEvent) => {
@@ -226,7 +231,6 @@ export function RolesSection() {
         id: editing.id,
         values: { name, description: description || undefined, permissions },
         successNotification: { message: "Role updated", type: "success" },
-        errorNotification: false,
       },
       { onSuccess: closeEdit },
     );
@@ -287,7 +291,10 @@ export function RolesSection() {
             <CardTitle>Roles</CardTitle>
             <CardDescription>Workspace roles and their permissions.</CardDescription>
           </div>
-          <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+          <Dialog
+            open={createOpen}
+            onOpenChange={(open) => (open ? setCreateOpen(true) : resetCreate())}
+          >
             <DialogTrigger asChild>
               <Button disabled={!canManage?.can}>
                 <Plus className="mr-2 h-4 w-4" />

@@ -1,10 +1,13 @@
-import { useEditor, EditorContent } from "@tiptap/react";
+import { useEditor, EditorContent, ReactRenderer } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Link from "@tiptap/extension-link";
+import Mention from "@tiptap/extension-mention";
+import type { SuggestionProps, SuggestionKeyDownProps } from "@tiptap/suggestion";
 import TurndownService from "turndown";
-import { useEffect } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { UserAvatar } from "@/components/ui/user-avatar";
 import { Bold, Italic, Code2, SquareCode, List, ListOrdered, Link2, Quote } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -13,43 +16,218 @@ const turndownService = new TurndownService({
   codeBlockStyle: "fenced",
 });
 
+// A mention is an inline atom node, so the markdown body has to be recovered
+// from the node itself — otherwise it serialises to an empty span.
+turndownService.addRule("mention", {
+  filter: (node) => node.nodeName === "SPAN" && node.getAttribute("data-type") === "mention",
+  replacement: (_content, node) => `@${node.getAttribute("data-label") ?? ""}`,
+});
+
+/**
+ * An entity the `@` picker can insert. This array is the extension point:
+ * adding agents or any other mentionable later means appending entries, not
+ * changing the picker.
+ */
+export type MentionTarget = {
+  id: string;
+  type: string;
+  label: string;
+  email?: string | null;
+  avatar_url?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  role?: string | null;
+};
+
+type MentionListRef = {
+  onKeyDown: (props: SuggestionKeyDownProps) => boolean;
+};
+
+const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(function MentionList(
+  props,
+  ref,
+) {
+  const [index, setIndex] = useState(0);
+  const items = props.items;
+
+  const select = (i: number) => {
+    const item = items[i];
+    if (item) props.command({ id: item.id, label: item.label, type: item.type });
+  };
+
+  useImperativeHandle(ref, () => ({
+    onKeyDown: ({ event }) => {
+      if (event.key === "ArrowUp") {
+        setIndex((i) => (i + items.length - 1) % items.length);
+        return true;
+      }
+      if (event.key === "ArrowDown") {
+        setIndex((i) => (i + 1) % items.length);
+        return true;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        select(index);
+        return true;
+      }
+      return false;
+    },
+  }));
+
+  if (items.length === 0) {
+    return (
+      <div className="bg-popover text-popover-foreground rounded-md border p-3 text-sm shadow-md">
+        No one to mention here.
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-popover text-popover-foreground overflow-hidden rounded-md border shadow-md">
+      <ul className="max-h-60 overflow-y-auto p-1">
+        {items.map((item, i) => (
+          <li key={item.id}>
+            <button
+              type="button"
+              className={cn(
+                "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm",
+                i === index ? "bg-accent text-accent-foreground" : "hover:bg-accent/60"
+              )}
+              // onMouseDown so the click lands before the editor loses focus.
+              onMouseDown={(e) => {
+                e.preventDefault();
+                select(i);
+              }}
+            >
+              <UserAvatar
+                name={item.label}
+                email={item.email ?? null}
+                avatarUrl={item.avatar_url ?? null}
+                sizeClassName="h-5 w-5"
+                fallbackClassName="text-[9px]"
+                firstName={item.first_name ?? null}
+                lastName={item.last_name ?? null}
+                withTooltip={false}
+              />
+              <span className="truncate font-medium">{item.label}</span>
+              {item.email && <span className="text-muted-foreground truncate text-xs">{item.email}</span>}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+});
+
 type Props = {
   value: string;
   onChange: (markdown: string, html: string) => void;
   placeholder?: string;
   className?: string;
   minHeight?: string;
+  /** Omit (or pass []) to turn the `@` picker off. */
+  mentions?: MentionTarget[];
+  /** Ids of the users currently mentioned in the draft, in document order. */
+  onMention?: (userIds: string[]) => void;
 };
 
-export function TiptapEditor({ value, onChange, placeholder = "Write a message…", className, minHeight = "80px" }: Props) {
-  const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        heading: false,
-        // StarterKit includes codeBlock/bulletList/orderedList/blockquote/code etc.
-      }),
-      Placeholder.configure({ placeholder }),
-      Link.configure({
-        openOnClick: false,
-        autolink: true,
-        linkOnPaste: true,
-        HTMLAttributes: { rel: "noopener noreferrer", target: null },
-      }),
-    ],
-    content: value ? `<p>${escapeHtml(value)}</p>` : "",
-    onUpdate: ({ editor }) => {
-      const html = editor.getHTML();
-      let markdown: string;
-      try {
-        markdown = turndownService.turndown(html);
-      } catch {
-        markdown = editor.getText();
-      }
-      // turndown leaves extra newlines; trim
-      markdown = markdown.trim();
-      onChange(markdown, html);
+export function TiptapEditor({ value, onChange, placeholder = "Write a message…", className, minHeight = "80px", mentions, onMention }: Props) {
+  const mentionKey = useMemo(() => (mentions ?? []).map((m) => m.id).join(","), [mentions]);
+  // The picker reads the latest list without the extension being rebuilt for it.
+  const mentionsRef = useRef(mentions);
+  mentionsRef.current = mentions;
+
+  const editor = useEditor(
+    {
+      extensions: [
+        StarterKit.configure({
+          heading: false,
+          // StarterKit bundles Link; the explicitly configured Link below wins.
+          link: false,
+          // StarterKit includes codeBlock/bulletList/orderedList/blockquote/code etc.
+        }),
+        Placeholder.configure({ placeholder }),
+        Link.configure({
+          openOnClick: false,
+          autolink: true,
+          linkOnPaste: true,
+          HTMLAttributes: { rel: "noopener noreferrer", target: null },
+        }),
+        Mention.configure({
+          HTMLAttributes: { class: "mention" },
+          renderText: ({ node }) => `@${node.attrs.label}`,
+          renderHTML: ({ node }) => [
+            "span",
+            { "data-type": "mention", "data-id": node.attrs.id, "data-label": node.attrs.label, class: "mention" },
+            `@${node.attrs.label}`,
+          ],
+          suggestion: {
+            char: "@",
+            // ponytail: naive substring match, so "an" also matches "Ann". Swap in a
+            // fuzzy matcher if the workspace member list ever gets large.
+            items: ({ query }) => {
+              const q = query.toLowerCase();
+              return (mentionsRef.current ?? []).filter((m) => m.label.toLowerCase().includes(q));
+            },
+            render: () => {
+              let component: ReactRenderer<MentionListRef> | null = null;
+              let unmount: (() => void) | null = null;
+              return {
+                onStart: (props: SuggestionProps<MentionTarget>) => {
+                  component = new ReactRenderer(MentionList, { props, editor: props.editor });
+                  component.element.classList.add("z-50");
+                  // TipTap mounts into document.body and keeps it anchored to the
+                  // caret, repositioning on scroll/resize.
+                  unmount = props.mount(component.element);
+                },
+                onUpdate: (props: SuggestionProps<MentionTarget>) => {
+                  component?.updateProps(props);
+                },
+                onKeyDown: (props: SuggestionKeyDownProps) => {
+                  if (props.event.key === "Escape") {
+                    unmount?.();
+                    component?.destroy();
+                    component = null;
+                    unmount = null;
+                    return true;
+                  }
+                  return component?.ref?.onKeyDown(props) ?? false;
+                },
+                onExit: () => {
+                  unmount?.();
+                  component?.destroy();
+                  component = null;
+                  unmount = null;
+                },
+              };
+            },
+          },
+        }),
+      ],
+      content: value ? `<p>${escapeHtml(value)}</p>` : "",
+      onUpdate: ({ editor }) => {
+        const html = editor.getHTML();
+        let markdown: string;
+        try {
+          markdown = turndownService.turndown(html);
+        } catch {
+          markdown = editor.getText();
+        }
+        // turndown leaves extra newlines; trim
+        markdown = markdown.trim();
+        onChange(markdown, html);
+        const userIds: string[] = [];
+        editor.state.doc.descendants((node) => {
+          if (node.type.name === "mention" && typeof node.attrs.id === "string") {
+            userIds.push(node.attrs.id);
+          }
+          return true;
+        });
+        onMention?.(userIds);
+      },
     },
-  });
+    // Rebuild when the mentionable set changes; the picker closes over it.
+    [mentionKey],
+  );
 
   // Sync external value if needed (e.g., reset after send)
   useEffect(() => {
@@ -207,6 +385,8 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a message�
           "[&_.tiptap_li_p]:m-0",
           // Inline code visibly distinct
           "[&_.tiptap_code]:bg-muted [&_.tiptap_code]:rounded [&_.tiptap_code]:px-1.5 [&_.tiptap_code]:py-0.5 [&_.tiptap_code]:font-mono [&_.tiptap_code]:text-[0.9em] [&_.tiptap_code]:border",
+          // Mention node, same treatment the rendered message gets
+          "[&_.tiptap_.mention]:bg-primary/10 [&_.tiptap_.mention]:text-primary [&_.tiptap_.mention]:rounded [&_.tiptap_.mention]:px-1 [&_.tiptap_.mention]:py-0.5 [&_.tiptap_.mention]:font-medium",
           // Code block distinct from inline (pre wraps code)
           "[&_.tiptap_pre]:bg-muted [&_.tiptap_pre]:rounded-md [&_.tiptap_pre]:p-3 [&_.tiptap_pre]:my-2 [&_.tiptap_pre]:overflow-x-auto [&_.tiptap_pre]:font-mono [&_.tiptap_pre]:text-sm [&_.tiptap_pre]:border",
           "[&_.tiptap_pre_code]:bg-transparent [&_.tiptap_pre_code]:p-0 [&_.tiptap_pre_code]:border-0 [&_.tiptap_pre_code]:rounded-none"

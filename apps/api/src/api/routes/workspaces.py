@@ -41,14 +41,26 @@ async def search_workspace(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    if not q or not q.strip() or len(q.strip()) > 200:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "q must be 1-200 characters")
+    if not q or not q.strip() or len(q.strip()) < 2 or len(q.strip()) > 200:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "q must be 2-200 characters")
     try:
         return await SearchExportService(db, container.bus).search(
             workspace_id=workspace_id, user_id=user.id, q=q.strip()
         )
     except ConversationForbidden as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+
+
+@router.get("/export/resources")
+async def export_resources(
+    _=Depends(require_permission(AUDIT_READ)),
+):
+    """Exportable resource names for the workspace export selector.
+
+    Served from CSV_RESOURCES so adding a resource is a one-line backend
+    change instead of an edit in two places.
+    """
+    return {"resources": list(CSV_RESOURCES)}
 
 
 @router.get("/export")
@@ -136,8 +148,12 @@ async def list_workspaces(
     rows = await db.execute(stmt)
     memberships = await service.list_workspaces(user.id)
     roles_by_ws = {w.id: role.name for w, role, _ in memberships}
+    joined_by_ws = {w.id: m.created_at for w, _, m in memberships}
     response.headers["X-Total-Count"] = str(total)
-    return [workspace_to_dict(w, role=roles_by_ws.get(w.id)) for w in rows.scalars().all()]
+    return [
+        workspace_to_dict(w, role=roles_by_ws.get(w.id), joined_at=joined_by_ws.get(w.id))
+        for w in rows.scalars().all()
+    ]
 
 
 @router.post("", response_model=dict, status_code=201)
@@ -203,6 +219,7 @@ async def update_workspace(
             workspace_id,
             name=body.name,
             description=body.description,
+            onboarding_enabled=body.onboarding_enabled,
             actor=user,
             ip_address=request.client.host if request.client else None,
         )
@@ -234,3 +251,34 @@ async def delete_workspace(
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+
+
+@router.delete("/{workspace_id}/membership", status_code=204)
+async def leave_workspace(
+    workspace_id: str,
+    request: Request,
+    user=Depends(get_current_user),
+    principal=Depends(resolve_auth_principal),
+    _=Depends(require_existing_workspace),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+) -> None:
+    """Leave a workspace. Owners cannot leave; transfer or delete instead."""
+    if principal.api_key is not None:
+        # Leaving ends a user's own membership; API keys hold no membership
+        # of their own (the row found would be the key owner's), so they
+        # cannot walk away from a workspace like a session user can.
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "api keys cannot leave workspaces")
+    try:
+        await WorkspaceService(db, container.bus).leave_workspace(
+            workspace_id,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    except WorkspaceError as exc:
+        msg = str(exc)
+        if msg == "owners cannot leave the workspace":
+            raise HTTPException(status.HTTP_409_CONFLICT, msg) from None
+        raise HTTPException(status.HTTP_404_NOT_FOUND, msg) from None

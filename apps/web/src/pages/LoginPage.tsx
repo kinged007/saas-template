@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SsoButtons, fetchAuthConfig, type AuthConfig } from "@/components/AuthConfig";
 import { authProvider, seedWorkspace } from "@/providers/authProvider";
 import { API_URL, httpClient } from "@/providers/dataProvider";
 import { identityStore, tokenStore, workspaceStore } from "@/utils/storage";
@@ -17,7 +19,21 @@ export function LoginPage() {
   const [code, setCode] = useState("");
   const [challenge, setChallenge] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [config, setConfig] = useState<AuthConfig | null>(null);
+  const [passwordChanged, setPasswordChanged] = useState(false);
   const codeRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    fetchAuthConfig().then(setConfig);
+    const params = new URLSearchParams(window.location.search);
+    const challengeParam = params.get("challenge");
+    if (challengeParam) setChallenge(challengeParam);
+    const err = params.get("error");
+    if (err) setError(err === "registration is disabled" ? "Registration is disabled." : "Sign-in failed.");
+    // Set by the change-password redirect: that flow revokes every session,
+    // so the user lands here instead of staying on the settings page.
+    if (params.get("password_changed") === "1") setPasswordChanged(true);
+  }, []);
 
   useEffect(() => {
     if (challenge) codeRef.current?.focus();
@@ -26,11 +42,12 @@ export function LoginPage() {
   // Same token + identity + workspace seeding as a normal login (see
   // authProvider): without this the identity query settles with no
   // workspace selected and the app mounts behind a blank gate.
-  const storeTokens = async (tokens: { access_token: string; refresh_token: string }) => {
+  // Access token only — the refresh token lives in the HttpOnly cookie.
+  const storeTokens = async (tokens: { access_token: string }) => {
     workspaceStore.clear();
     identityStore.set(null);
     clearAllCaches(queryClient);
-    tokenStore.setTokens(tokens.access_token, tokens.refresh_token);
+    tokenStore.setTokens(tokens.access_token);
     try {
       const { data: identity } = await httpClient.get(`${API_URL}/auth/me`);
       await seedWorkspace(identity);
@@ -51,6 +68,7 @@ export function LoginPage() {
         const { data } = await httpClient.post(`${API_URL}/auth/2fa/login`, {
           challenge_token: challenge,
           code,
+          use_cookies: true,
         });
         await storeTokens(data);
         window.location.assign("/");
@@ -84,14 +102,30 @@ export function LoginPage() {
     }
   };
 
+  const passwordEnabled = config?.password_enabled ?? true;
+  const ssoProviders = config?.providers ?? [];
+  const registrationEnabled = config?.registration_enabled ?? true;
+
   return (
     <div className="bg-background flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <img src="/logo.svg" alt="SaaS Template" className="mx-auto mb-2 w-48" />
           <CardDescription>Sign in to your account</CardDescription>
+          {passwordChanged && (
+            <Badge variant="success" className="mt-2 w-fit self-center bg-green-800 hover:bg-green-900">
+              Password changed — sign in with your new password
+            </Badge>
+          )}
         </CardHeader>
         <CardContent>
+          {ssoProviders.length > 0 && !challenge && (
+            <div className="mb-4">
+              <SsoButtons providers={ssoProviders} disabled={pending} />
+            </div>
+          )}
+          {(!passwordEnabled && ssoProviders.length > 0 && !challenge) ? null : (
+          <>
           {challenge ? (
             <form onSubmit={submit} className="flex flex-col gap-4">
               <p className="text-muted-foreground text-sm">
@@ -154,7 +188,10 @@ export function LoginPage() {
               </p>
             </form>
           )}
+          </>
+          )}
         </CardContent>
+        {registrationEnabled && (
         <CardFooter className="justify-center">
           <p className="text-muted-foreground text-sm">
             No account?{" "}
@@ -163,6 +200,7 @@ export function LoginPage() {
             </Link>
           </p>
         </CardFooter>
+        )}
       </Card>
     </div>
   );

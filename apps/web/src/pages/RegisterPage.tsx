@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRegister } from "@refinedev/core";
-import { Link } from "react-router";
+import { Link, Navigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SsoButtons, fetchAuthConfig } from "@/components/AuthConfig";
 
 export function RegisterPage() {
   const { mutate: register, isPending } = useRegister();
@@ -14,6 +15,11 @@ export function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [config, setConfig] = useState<{ registration_enabled: boolean; password_enabled: boolean; providers: Array<{ id: string; display_name: string }> } | null>(null);
+  useEffect(() => {
+    fetchAuthConfig().then(setConfig);
+  }, []);
+  if (config && !config.registration_enabled) return <Navigate to="/login" replace />;
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,6 +38,12 @@ export function RegisterPage() {
           <CardDescription>Create your account</CardDescription>
         </CardHeader>
         <CardContent>
+          {(config?.providers?.length ?? 0) > 0 && (
+            <div className="mb-4">
+              <SsoButtons providers={config?.providers ?? []} disabled={isPending} />
+            </div>
+          )}
+          {(config?.password_enabled ?? true) && (
           <form onSubmit={submit} className="flex flex-col gap-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="flex flex-col gap-2">
@@ -85,6 +97,7 @@ export function RegisterPage() {
               {isPending ? "Creating account…" : "Register"}
             </Button>
           </form>
+          )}
         </CardContent>
         <CardFooter className="justify-center">
           <p className="text-muted-foreground text-sm">

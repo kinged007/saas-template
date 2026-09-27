@@ -2,11 +2,13 @@
 
 > **Navigation aid.** Route list and file locations extracted via AST. Read the source files listed below before implementing or modifying this subsystem.
 
-The Infra subsystem handles **3 routes**.
+The Infra subsystem handles **4 routes**.
 
 ## Routes
 
 - `GET` `/healthz`
+  `apps/api/src/api/routes/meta.py`
+- `GET` `/metrics`
   `apps/api/src/api/routes/meta.py`
 - `GET` `/readyz`
   `apps/api/src/api/routes/meta.py`

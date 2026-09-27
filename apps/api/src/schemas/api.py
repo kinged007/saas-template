@@ -9,6 +9,9 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field, StrictB
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8)
+    # Browser opt-in: set the HttpOnly refresh cookie and omit the refresh
+    # token from the JSON body (in-memory access token only).
+    use_cookies: bool = False
 
 
 class RegisterRequest(BaseModel):
@@ -18,17 +21,26 @@ class RegisterRequest(BaseModel):
     password: str = Field(min_length=8)
     # Deprecated — kept for backward compat, ignored if first_name/last_name provided.
     display_name: str | None = Field(default=None, min_length=1, max_length=150, deprecated=True)
+    # Browser opt-in: set the HttpOnly refresh cookie and omit the refresh
+    # token from the JSON body (in-memory access token only).
+    use_cookies: bool = False
 
 
 class TokenResponse(BaseModel):
     access_token: str
-    refresh_token: str
+    # Absent for the browser cookie flow (refresh lives in the HttpOnly
+    # cookie); present for non-browser JSON clients.
+    refresh_token: str | None = None
     token_type: str = "Bearer"
     expires_in: int
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    # Optional: cookie-authenticated callers send none (refresh comes from
+    # the HttpOnly cookie). 401 when neither is present.
+    refresh_token: str | None = None
+    # Browser opt-in: re-set the HttpOnly refresh cookie on rotation.
+    use_cookies: bool = False
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -56,10 +68,19 @@ class TwoFactorSetupConfirm(BaseModel):
 class TwoFactorLogin(BaseModel):
     challenge_token: str
     code: str = Field(min_length=6, max_length=10)
+    # Browser opt-in: set the HttpOnly refresh cookie and omit the refresh
+    # token from the JSON body (in-memory access token only).
+    use_cookies: bool = False
 
 
 class TwoFactorDisable(BaseModel):
     password: str = Field(min_length=8)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=8)
+    new_password: str = Field(min_length=8)
+    code: str | None = Field(default=None, min_length=6, max_length=10)
 
 
 class SessionRead(BaseModel):
@@ -81,6 +102,9 @@ class WorkspaceCreate(BaseModel):
 class WorkspaceUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=150)
     description: str | None = Field(default=None, max_length=500)
+    # StrictBool so a string/int is rejected with 422 rather than coerced.
+    # None = leave the flag alone; the flag itself is default-on.
+    onboarding_enabled: StrictBool | None = None
 
 
 class InvitationCreate(BaseModel):
@@ -133,12 +157,19 @@ class ConversationUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=300)
 
 
+class ConversationParticipantsUpdate(BaseModel):
+    # The caller must keep their own id in the list; the service rejects removal.
+    participant_user_ids: list[str] = Field(min_length=1, max_length=19)
+
+
 class ConversationArchive(BaseModel):
     archived: bool
 
 
 class MessageCreate(BaseModel):
     body: str = Field(min_length=1, max_length=5000)
+    # Mentioned users are added to the conversation so they receive the message.
+    mentioned_user_ids: list[str] = Field(default_factory=list, max_length=19)
 
 
 class ConversationRead(BaseModel):

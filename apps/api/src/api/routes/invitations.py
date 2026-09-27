@@ -17,7 +17,7 @@ from src.api.deps import (
     resolve_auth_principal,
 )
 from src.core.dates import ensure_utc, now_utc
-from src.core.permissions import MEMBER_INVITE
+from src.core.permissions import MEMBER_CREATE, MEMBER_DELETE
 from src.db.session import get_db
 from src.models.core import Invitation
 from src.models.workspace import Role
@@ -60,7 +60,7 @@ async def list_invitations(
     request: Request,
     response: Response,
     workspace_id: str = Depends(get_current_workspace_id),
-    _=Depends(require_permission(MEMBER_INVITE)),
+    _=Depends(require_permission(MEMBER_CREATE)),
     db: AsyncSession = Depends(get_db),
 ):
     stmt = select(Invitation).where(Invitation.workspace_id == workspace_id)
@@ -85,7 +85,7 @@ async def create_invitation(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(MEMBER_INVITE)),
+    _=Depends(require_permission(MEMBER_CREATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -115,7 +115,7 @@ async def revoke_invitation(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(MEMBER_INVITE)),
+    _=Depends(require_permission(MEMBER_DELETE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -136,7 +136,7 @@ async def accept_invitation(
     request: Request,
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
-    _=Depends(require_key_permission(MEMBER_INVITE)),
+    _=Depends(require_key_permission(MEMBER_CREATE)),
     workspace_id: str | None = Depends(get_optional_workspace_id),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
@@ -163,7 +163,7 @@ async def accept_invitation(
 async def my_invitations(
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
-    _=Depends(require_key_permission(MEMBER_INVITE)),
+    _=Depends(require_key_permission(MEMBER_CREATE)),
     workspace_id: str | None = Depends(get_optional_workspace_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -187,7 +187,7 @@ async def decline_invitation(
     request: Request,
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
-    _=Depends(require_key_permission(MEMBER_INVITE)),
+    _=Depends(require_key_permission(MEMBER_CREATE)),
     workspace_id: str | None = Depends(get_optional_workspace_id),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),

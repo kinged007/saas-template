@@ -70,6 +70,7 @@ export function WebhookCreatePage() {
       resource: "webhooks",
       action: "create",
       redirect: false,
+      errorNotification: false,
       successNotification: {
         message: "Webhook created",
         description: "Copy the signing secret now — it won't be shown again.",
@@ -91,7 +92,6 @@ export function WebhookCreatePage() {
     } catch (err) {
       toast.error("Could not create webhook", {
         description: String((err as { message?: string })?.message ?? err),
-        // ponytail: refine already toasts the FastAPI `detail`; drop ours when noisy.
       });
     }
   };

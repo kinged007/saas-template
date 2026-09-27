@@ -4,10 +4,16 @@ export type Workspace = {
   slug: string;
   description?: string;
   role?: string;
+  joined_at?: string;
   /** Permissions granted by this user's role in this workspace. */
   permissions?: string[];
   created_by_user_id?: string;
   created_at?: string;
+  /**
+   * Workspace-wide "Get set up" card. Default-on server side, so it is only
+   * ever false when an owner or admin turned it off.
+   */
+  onboarding_enabled?: boolean;
 };
 
 export type UserProfile = {

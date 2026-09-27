@@ -148,3 +148,8 @@ async def test_list_members_pagination(app_client):
     assert resp.status_code == 200
     assert resp.headers["X-Total-Count"] == "3"
     assert len(resp.json()) == 1
+
+    resp = await client.get("/api/v1/members?_start=2&_end=4", headers=owner_headers)
+    assert resp.status_code == 200
+    assert resp.headers["X-Total-Count"] == "3"
+    assert len(resp.json()) == 1

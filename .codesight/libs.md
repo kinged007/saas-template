@@ -1,222 +1,5 @@
 # Libraries
 
-- `_bmad/scripts/config_utils.py`
-  - function load_toml: (path, *, required) -> dict[str, Any]
-  - function structural_merge: (base, override) -> Any
-  - function merge_layers: (layers, Any]]) -> dict[str, Any]
-  - function load_central_config: (project_root) -> dict[str, Any]
-  - function load_customization: (project_root, skill_dir) -> dict[str, Any]
-  - class ConfigError
-- `_bmad/scripts/memlog.py`
-  - function now: () -> str
-  - function resolve: (args) -> Path
-  - function split: (text) -> tuple[dict, str]
-  - function render: (meta, body) -> str
-  - function touch: (meta) -> None
-  - function write_atomic: (path, text) -> None
-  - _...7 more_
-- `_bmad/scripts/render_skill.py`
-  - function render: (project_root, skill_dir) -> Path
-  - function main: () -> int
-  - class RenderError
-- `_bmad/scripts/resolve_config.py` — function extract_key: (data, dotted_key), function main: () -> int
-- `_bmad/scripts/resolve_customization.py`
-  - function find_project_root: (start) -> Path | None
-  - function extract_key: (data, dotted_key)
-  - function write_json_stdout: (output) -> None
-  - function main: () -> int
-- `agent/skills/ai-multimodal/scripts/check_setup.py`
-  - function print_header: (text)
-  - function print_success: (text)
-  - function print_warning: (text)
-  - function print_error: (text)
-  - function print_info: (text)
-  - function check_dependencies: ()
-  - _...7 more_
-- `agent/skills/ai-multimodal/scripts/document_converter.py`
-  - function find_api_key: () -> Optional[str]
-  - function find_project_root: () -> Path
-  - function get_mime_type: (file_path) -> str
-  - function upload_file: (client, file_path, verbose) -> Any
-  - function convert_to_markdown: (client, file_path, model, custom_prompt, verbose, max_retries) -> Dict[str, Any]
-  - function batch_convert: (files, output_file, auto_name, model, custom_prompt, verbose) -> List[Dict[str, Any]]
-  - _...1 more_
-- `agent/skills/ai-multimodal/scripts/gemini_batch_process.py`
-  - function find_api_key: () -> Optional[str]
-  - function get_default_model: (task) -> str
-  - function validate_model_task_combination: (model, task) -> None
-  - function infer_task_from_file: (file_path) -> str
-  - function get_mime_type: (file_path) -> str
-  - function upload_file: (client, file_path, verbose) -> Any
-  - _...7 more_
-- `agent/skills/ai-multimodal/scripts/media_optimizer.py`
-  - function load_env_files: ()
-  - function check_ffmpeg: () -> bool
-  - function get_media_info: (file_path) -> Dict[str, Any]
-  - function optimize_video: (input_path, output_path, target_size_mb, max_duration, quality, resolution, verbose) -> bool
-  - function optimize_audio: (input_path, output_path, target_size_mb, bitrate, sample_rate, verbose) -> bool
-  - function optimize_image: (input_path, output_path, max_width, quality, verbose) -> bool
-  - _...2 more_
-- `agent/skills/architecture-viz-studio/assets/diagrams/component-detail-modal.js`
-  - function initDrill: ({...}, lanes, detail, drill, panZoom, // pass attachPanZoom from pan-zoom-viewport.js
-}) => void
-  - const DETAIL
-  - const ENGINE_DESIGN
-  - const LANES_DESIGN
-- `agent/skills/architecture-viz-studio/assets/diagrams/edge-hit-proxies.js` — function tagSvgEdges: (root, {...}, prefix, idAttr }) => void
-- `agent/skills/architecture-viz-studio/assets/diagrams/erd-diagram.js`
-  - function buildErd: (erdBody, data, rels, opts) => void
-  - function drawErdLines: (rels) => void
-  - function initErd: ({...}, rels, drill, panZoom, intro, // caption above the grid (HTML) => void
-  - const ERD
-  - const ERD_RELS
-- `agent/skills/architecture-viz-studio/assets/diagrams/overlay-lens-system.js` — function initOverlays: ({...}, overlays, reduced) => void, const OVERLAYS
-- `agent/skills/architecture-viz-studio/assets/diagrams/pan-zoom-viewport.js` — function attachPanZoom: (opts) => void
-- `agent/skills/architecture-viz-studio/assets/scene/post-processing.js` — function makeComposer: ({...}, camera, renderer, opts) => void
-- `agent/skills/architecture-viz-studio/assets/scene/primitives.js`
-  - function box: (w, h, d, color, x, z, {...}, rounded, ry, shadow, material) => void
-  - function tower: (x, z, w, h, d, ry) => void
-  - function house: (x, z, w, h, d, ry) => void
-  - function warehouse: (x, z, w, h, d, ry) => void
-  - function makeCanvasTexture: (w, h, draw) => void
-  - function corrugate: (ctx, w, h, base, rib) => void
-  - _...15 more_
-- `agent/skills/architecture-viz-studio/assets/scene/render-loop.js`
-  - function setComposer: (c, resizeFn) => void
-  - function frame: (_time, dtMs) => void
-  - function startRender: () => void
-  - function stopRender: () => void
-  - function requestRender
-- `agent/skills/architecture-viz-studio/assets/scene/scene-setup.js`
-  - function resize: () => void
-  - function mat: (color, opts) => void
-  - function glowMat: (color, intensity) => void
-  - const PALETTE
-  - const REDUCED
-  - const state
-  - _...5 more_
-- `agent/skills/architecture-viz-studio/assets/scroll/scroll-journey.js`
-  - function camParam: (p) => void
-  - function cometParam: (p) => void
-  - function updateCamera: (p) => void
-  - function tickFeeders: (p, dt) => void
-  - function tickRoute: (p) => void
-  - const journeyCurve
-  - _...7 more_
-- `agent/skills/architecture-viz-studio/sample/diagrams/component-detail-modal.js`
-  - function initDrill: ({...}, lanes, detail, drill, panZoom, // pass attachPanZoom from pan-zoom-viewport.js
-}) => void
-  - const DETAIL
-  - const ENGINE_DESIGN
-  - const LANES_DESIGN
-- `agent/skills/architecture-viz-studio/sample/diagrams/erd-diagram.js`
-  - function buildErd: (erdBody, data, rels, opts) => void
-  - function drawErdLines: (rels) => void
-  - function initErd: ({...}, rels, drill, panZoom, intro, // caption above the grid (HTML) => void
-  - const ERD
-  - const ERD_RELS
-- `agent/skills/architecture-viz-studio/sample/diagrams/overlay-lens-system.js` — function initOverlays: ({...}, overlays, reduced) => void, const OVERLAYS
-- `agent/skills/architecture-viz-studio/sample/diagrams/pan-zoom-viewport.js` — function attachPanZoom: (opts) => void
-- `agent/skills/atlassian-rest/scripts/confluence-format.mjs`
-  - function markdownToStorage: (markdown) => void
-  - function storageToMarkdown: (html) => void
-  - function htmlInlineToMarkdown: (html) => void
-  - function stripHtmlTags: (text) => void
-- `agent/skills/bmad-auto/scripts/context-usage.py`
-  - function claude_projects_dir: () -> Path
-  - function iter_transcripts: () -> list[Path]
-  - function find_transcript_by_session_id: (session_id) -> Optional[Path]
-  - function find_transcript_by_agent: (agent_name, team_name) -> Optional[Path]
-  - function parse_context_window: (model_identifier) -> Optional[int]
-  - function parse_transcript: (transcript_path, agent_name) -> dict[str, Any]
-  - _...4 more_
-- `agent/skills/book-converter/scripts/analyze_structure.py`
-  - function extract_headers: (raw_file) -> list[dict]
-  - function detect_issues: (raw_file, sample_size) -> dict
-  - function generate_structure_report: (project_dir) -> str
-  - function main: ()
-- `agent/skills/book-converter/scripts/convert_book.py`
-  - function sanitize_name: (name) -> str
-  - function setup_project_structure: (epub_path, base_dir) -> dict
-  - function extract_epub_with_pandoc: (epub_path, output_dir) -> Path
-  - function copy_formatting_standards: (project_dir, skill_dir)
-  - function create_progress_file: (project_dir, book_name, raw_file)
-  - function main: ()
-- `agent/skills/book-converter/scripts/merge_book.py`
-  - function extract_headers: (content) -> list[tuple[int, str, str]]
-  - function fix_image_paths: (content, images_subdir) -> str
-  - function load_chapter_map: (project_dir) -> list[dict]
-  - function process_book: (project_dir, chapter_order) -> tuple[str, list[tuple[int, str, str]]]
-  - function generate_toc: (headers, str, str]], book_title) -> str
-  - function detect_book_title: (project_dir) -> str
-  - _...1 more_
-- `agent/skills/github-sync/scripts/parse-artifacts.py`
-  - function extract_story_id: (filename) -> Optional[str]
-  - function parse_frontmatter: (text) -> Dict[str, str]
-  - function read_file: (path) -> str
-  - function shorten_title: (title, max_len) -> str
-  - function detect_synced: (first_line) -> Tuple[bool, Optional[str]]
-  - function extract_status: (text) -> str
-  - _...8 more_
-- `agent/skills/jira-to-local/scripts/adf.mjs`
-  - function adfToMarkdown: (node, mediaResolver, depth) => void
-  - function adfToPlainText: (node) => void
-  - function renderValue: (val, mediaResolver) => void
-  - function parseDevelopment: (raw) => void
-  - function formatSeconds: (secs) => void
-  - function cell: (text) => void
-- `agent/skills/jira-to-local/scripts/config.mjs`
-  - function findConfigPath: (startDir) => void
-  - function findWorkspaceRoot: (startDir) => void
-  - function validateConfigFile: (path) => void
-  - function loadConfig: ({...}) => void
-  - function issueTypeConfig: (config, typeName) => void
-  - function instructionsFor: (config, typeName) => void
-  - _...3 more_
-- `agent/skills/jira-to-local/scripts/confluence-format.mjs`
-  - function storageToMarkdown: (html) => void
-  - function htmlInlineToMarkdown: (html) => void
-  - function stripHtmlTags: (text) => void
-- `agent/skills/jira-to-local/scripts/dev-status.mjs` — function fetchDevStatus: (cred, issueId) => void, function groupByRepository: (dev) => void
-- `agent/skills/jira-to-local/scripts/fetch-confluence.mjs` — function pageIdFromUrl: (url) => void
-- `agent/skills/jira-to-local/scripts/jira-api.mjs`
-  - function credentials: (config) => void
-  - function connect: (options) => void
-  - function apiGet: (cred, path) => void
-  - function apiGetSoft: (cred, path) => void
-  - function graphqlSoft: (cred, operationName, query, variables) => void
-  - function getAllPages: (cred, path, key, {...}, soft) => void
-  - _...1 more_
-- `agent/skills/mcp-builder/scripts/connections.py`
-  - function create_connection: (transport, command, args, env, str], url, headers, str]) -> MCPConnection
-  - class MCPConnection
-  - class MCPConnectionStdio
-  - class MCPConnectionSSE
-  - class MCPConnectionHTTP
-- `agent/skills/mcp-builder/scripts/evaluation.py`
-  - function parse_evaluation_file: (file_path) -> list[dict[str, Any]]
-  - function extract_xml_content: (text, tag) -> str | None
-  - function parse_headers: (header_list) -> dict[str, str]
-  - function parse_env_vars: (env_list) -> dict[str, str]
-  - function agent_loop: (client, model, question, tools, Any]], connection) -> tuple[str, dict[str, Any]]
-  - function evaluate_single_task: (client, model, qa_pair, Any], tools, Any]], connection, task_index) -> dict[str, Any]
-  - _...2 more_
-- `agent/skills/skill-from-book/scripts/init-book-skill.py`
-  - function create_skill_md: (skill_name, categories) -> str
-  - function create_progress_md: (skill_name, categories) -> str
-  - function create_guidelines_md: (skill_name, categories) -> str
-  - function init_skill: (skill_name, output_path, categories) -> None
-  - function main: ()
-- `agent/skills/slide-maker/deck-template/scripts/lib/deck-driver.mjs`
-  - function enterPresentMode: (page) => void
-  - function makeDeckRequire: (deckDir) => void
-  - function buildStandalone: (deckDir) => void
-  - function serveDir: (dir, port) => void
-  - function launchBrowser: (dep) => void
-  - function openDeck: (url, {...}, width, height, scale) => void
-  - _...6 more_
-- `agent/skills/slide-maker/deck-template/scripts/lib/pptx-builders.mjs` — function buildOp: (op, ctx) => void
-- `agent/skills/slide-maker/deck-template/scripts/lib/svg-to-custgeom.mjs` — function svgToCustomGeometryNodes: (icon, chipBox, h, AK, opts) => void, const COMPLEX_SVG_RE
 - `apps/api/alembic/env.py`
   - function run_migrations_offline: () -> None
   - function do_run_migrations: (connection) -> None
@@ -227,6 +10,16 @@
 - `apps/api/alembic/versions/0004_jobs.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0005_conversations.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0006_user_profiles.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0007_stored_secrets_expires_at.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0008_webhooks.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0009_notification_preferences.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0010_auth_tokens.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0011_workspace_flags.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0012_api_key_usage.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0013_converge_historical_drift.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0014_session_metadata.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0015_2fa_sessions.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0016_oauth_accounts.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/src/api/crud.py`
   - function parse_query: (request, *, max_limit) -> QuerySpec
   - function apply_query: (stmt, model, spec, *, sortable, filterable) -> Select
@@ -237,18 +30,36 @@
   - function get_container: (request)
   - function require_key_permission: (permission)
   - function require_permission: (permission)
+  - function record_key_use: (api_key, db, response) -> None
   - function authenticate_websocket_token: (db, token) -> User | None
   - class AuthPrincipal
 - `apps/api/src/container.py` — class Container
 - `apps/api/src/core/cache.py` — class TtlCache
 - `apps/api/src/core/dates.py` — function ensure_utc: (value) -> datetime, function now_utc: () -> datetime
-- `apps/api/src/core/permissions.py` — function permissions_for_role: (role_name) -> list[str]
+- `apps/api/src/core/metrics.py`
+  - function inc: (name, value, **labels) -> None
+  - function observe_request: (*, method, path, status) -> None
+  - function observe_job_run: (*, key, status) -> None
+  - function observe_webhook_delivery: (*, outcome) -> None
+  - function render_prometheus: () -> str
+  - function reset: () -> None
+- `apps/api/src/core/permissions.py` — function register_permission: (permission, *, resource, action) -> str, function permissions_for_role: (role_name) -> list[str]
+- `apps/api/src/core/request_id.py` — function get_request_id: () -> str, class RequestIdMiddleware
 - `apps/api/src/core/security/crypto.py` — class SecretCipher
 - `apps/api/src/core/security/password.py` — class PasswordHasher
+- `apps/api/src/core/security/ratelimit.py` — function get_auth_limiter: () -> SlidingWindowLimiter, class SlidingWindowLimiter
 - `apps/api/src/core/security/tokens.py`
-  - function create_access_token: (user_id, *, expires_minutes) -> str
+  - function create_access_token: (user_id, *, session_id, expires_minutes) -> str
   - function decode_access_token: (token) -> dict[str, Any]
   - class OpaqueToken
+- `apps/api/src/core/security/totp.py`
+  - function generate_secret: (num_bytes) -> bytes
+  - function secret_to_base32: (secret) -> str
+  - function secret_from_base32: (encoded) -> bytes
+  - function otpauth_uri: (*, secret_b32, email, issuer) -> str
+  - function current_code: (secret, *, at) -> str
+  - function verify: (secret, code, *, at, last_counter) -> int | None
+  - _...2 more_
 - `apps/api/src/db/base.py`
   - class StringUUID
   - class Base
@@ -259,6 +70,20 @@
   - function ensure_started: ()
   - function embedded_uri: () -> str
 - `apps/api/src/db/session.py` — function get_db: () -> AsyncGenerator[AsyncSession, None]
+- `apps/api/src/email/base.py`
+  - class EmailDriver
+  - class EmailSendError
+  - class EmailMessage
+  - class EmailSender
+- `apps/api/src/email/console.py` — class ConsoleEmailSender
+- `apps/api/src/email/factory.py` — function build_email_sender: () -> EmailSender, function send_email: (message) -> bool
+- `apps/api/src/email/smtp.py` — class SmtpConfig, class SmtpEmailSender
+- `apps/api/src/email/templates.py`
+  - function invitation: (to, *, workspace_name, invite_url, invited_by) -> EmailMessage
+  - function notification_email: (to, *, title, body, workspace_name, unsubscribe_url) -> EmailMessage
+  - function digest_email: (to, *, items, unsubscribe_url) -> EmailMessage
+  - function email_verification: (to, *, verify_url) -> EmailMessage
+  - function password_reset: (to, *, reset_url) -> EmailMessage
 - `apps/api/src/events/bus.py`
   - class EventMetadata
   - class EventEnvelope
@@ -273,9 +98,17 @@
   - function publish_event: (bus, subject, payload, *, correlation_id, transient) -> None
   - function publish_audit: (bus, *, correlation_id, **kwargs) -> None
 - `apps/api/src/events/subjects.py` — class EventBusDriver, class Subjects
+- `apps/api/src/events/webhook_events.py`
+  - function register_webhook_event: (event_name, subject) -> str
+  - function webhook_event_names: () -> list[str]
+  - function webhook_subject_for: (event_name) -> str | None
+  - function webhook_event_for_subject: (subject) -> str | None
+  - function webhook_subjects: () -> list[str]
 - `apps/api/src/jobs/builtin.py`
   - function system_heartbeat: (ctx) -> None
   - function expire_stale_invitations: (ctx) -> None
+  - function notifications_daily_digest: (ctx) -> None
+  - function retention_cleanup: (ctx) -> None
   - function demo_global_daily_report: (ctx) -> None
 - `apps/api/src/jobs/capture.py`
   - function run_log_collector: () -> RunLogCollector | None
@@ -295,14 +128,20 @@
   - class ValidationError
   - _...4 more_
 - `apps/api/src/jobs/scheduler.py` — class JobScheduler
-- `apps/api/src/main.py` — function lifespan: (app), function root: () -> dict
+- `apps/api/src/main.py`
+  - function lifespan: (app)
+  - function root: () -> dict
+  - class ApiVersionMiddleware
 - `apps/api/src/models/api_key.py` — class ApiKey
 - `apps/api/src/models/audit.py` — class AuditLogEntry
 - `apps/api/src/models/conversation.py`
   - class Conversation
   - class ConversationParticipant
   - class Message
-- `apps/api/src/models/core.py` — class Invitation, class Notification
+- `apps/api/src/models/core.py`
+  - class Invitation
+  - class NotificationPreference
+  - class Notification
 - `apps/api/src/models/jobs.py`
   - class JobScope
   - class JobRunStatus
@@ -311,10 +150,17 @@
   - class JobDefinition
   - class JobRun
   - _...1 more_
+- `apps/api/src/models/oauth.py` — class OAuthAccount
 - `apps/api/src/models/secret.py` — class StoredSecret
+- `apps/api/src/models/two_factor.py` — class UserTotpCredential
 - `apps/api/src/models/user_profile.py` — class UserProfile
+- `apps/api/src/models/webhook.py`
+  - class WebhookSubscription
+  - class WebhookDeliveryStatus
+  - class WebhookDelivery
 - `apps/api/src/models/workspace.py`
   - class User
+  - class AuthToken
   - class RefreshToken
   - class Workspace
   - class Role
@@ -325,9 +171,9 @@
   - class RegisterRequest
   - class TokenResponse
   - class RefreshRequest
-  - class WorkspaceCreate
-  - class WorkspaceUpdate
-  - _...17 more_
+  - class ForgotPasswordRequest
+  - class ResetPasswordRequest
+  - _...32 more_
 - `apps/api/src/secrets/base.py` — class SecretRecord, class SecretStore
 - `apps/api/src/secrets/db_store.py` — class DbSecretStore
 - `apps/api/src/secrets/factory.py` — function build_secret_store: () -> SecretStore
@@ -353,18 +199,41 @@
   - function job_log_to_dict: (e) -> dict
   - class JobError
   - class JobService
-- `apps/api/src/services/notifications.py` — class NotificationSpec, class NotificationService
+- `apps/api/src/services/notifications.py`
+  - function unsubscribe_url_for: (token, type, frontend_url) -> str
+  - class NotificationSpec
+  - class NotificationService
+- `apps/api/src/services/oauth.py`
+  - function get_provider: (provider_id) -> ProviderConfig
+  - function build_authorize_url: (provider, doc, Any], cache, redirect_uri) -> str
+  - function consume_state: (cache, state) -> dict[str, Any]
+  - function claims_from_id_token: (provider, doc, Any], id_token) -> dict[str, Any] | None
+  - function normalize_identity: (*, provider_id, claims, Any] | None, userinfo, Any]) -> dict[str, Any]
+  - function exchange_code: (provider, doc, Any], *, code, redirect_uri) -> dict[str, Any]
+  - _...3 more_
 - `apps/api/src/services/profile_helpers.py`
+  - function escape_like: (q) -> str
   - function format_display_name: (first_name, last_name, fallback) -> str
   - function validate_custom_data: (data) -> None
   - function merge_custom_data: (existing, patch, is_put) -> dict
 - `apps/api/src/services/profiles.py` — class ProfileService
+- `apps/api/src/services/search_export.py` — class SearchExportService
 - `apps/api/src/services/serializers.py`
   - function notification_to_dict: (n, *, workspace_name) -> dict
   - function user_to_dict: (u) -> dict
   - function workspace_to_dict: (w, *, role, permissions) -> dict
   - function profile_to_dict: (p) -> dict
-  - function public_projection: (p) -> dict
+  - function public_projection: (p, user) -> dict
+- `apps/api/src/services/two_factor.py` — class TwoFactorError, class TwoFactorService
+- `apps/api/src/services/webhook_dispatcher.py` — class WebhookDispatcher
+- `apps/api/src/services/webhooks.py`
+  - function secret_key_for: (subscription_id) -> str
+  - function generate_secret: () -> str
+  - function sign_payload: (secret, timestamp, raw_body) -> str
+  - function verify_signature: (secret, timestamp, raw_body, signature) -> bool
+  - function next_retry_delay: (attempt) -> int | None
+  - function validate_url: (url, *, allow_private) -> str
+  - _...9 more_
 - `apps/api/src/services/workspaces.py`
   - class WorkspaceError
   - class WorkspaceForbidden
@@ -372,12 +241,32 @@
   - class WorkspaceService
 - `apps/api/src/settings.py` — class Settings
 - `apps/api/src/workflows/__init__.py` — function build_workflows: (registry, bus, connection_manager, cipher) -> None
+- `apps/web/src/hooks/useNotificationPreferences.ts`
+  - function humanizeType: (type) => string
+  - function useNotificationPreferences: (extraTypes, enabled) => void
+  - const KNOWN_NOTIFICATION_TYPES
+  - const CHANNEL_OPTIONS: Array<{ value: NotificationChannel; label: string }>
+  - const NOTIFICATION_TYPE_META: Record<string, { title: string; description: string }>
 - `apps/web/src/hooks/useProfile.ts`
   - function useProfile: () => void
   - function useUpdateProfile: () => void
   - function useExportProfile: () => void
   - function useDeleteAccount: () => void
+  - function usePublicProfile: (userId) => void
+- `apps/web/src/hooks/useWorkspaceQuery.ts` — function useWorkspaceList: (props, TError, TData>) => void, function useWorkspaceCustom: (props, TError, TQuery, TPayload, TData>) => void
+- `apps/web/src/lib/avatar.ts`
+  - function getInitials: (name) => string
+  - function getInitialsFromNames: (firstName?, lastName?, fallbackName?) => string
+  - function getAvatarSrc: (avatarUrl?) => string | undefined
+  - function getAvatarData: (entity, fallbackEmailAsName) => void
+  - const UserProfileAvatar
 - `apps/web/src/lib/utils.ts` — function cn: (...inputs) => void, function oktaAdminConsoleFix: (value?) => string | null
+- `apps/web/src/providers/authProvider.ts` — function seedWorkspace: (identity) => Promise<void>, const authProvider: AuthProvider
+- `apps/web/src/providers/dataProvider.ts`
+  - function cancelPendingRefresh: () => void
+  - const API_URL
+  - const httpClient
+  - const dataProvider: DataProvider
 - `apps/web/src/providers/liveCache.ts`
   - function upsertThreadMessage: (conversationId, message) => void
   - function removeThreadMessage: (conversationId, messageId) => void
@@ -400,8 +289,14 @@
   - function getDisplayName: (identity?) => string
   - function getMemberDisplayName: (member) => string
   - function getParticipantDisplayName: (participant) => string
-  - _...17 more_
+  - _...26 more_
 - `apps/web/src/utils/permissions.ts` — function activeWorkspacePermissions: (identity?) => string[]
+- `apps/web/src/utils/storage.ts`
+  - function getActiveWorkspaceId: () => string | null
+  - function setActiveWorkspaceId: (id) => void
+  - const tokenStore
+  - const identityStore
+  - const workspaceStore
 - `scripts/dev.py`
   - function main: () -> int
   - function kill_all: (procs, sig) -> None

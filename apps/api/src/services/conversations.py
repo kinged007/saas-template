@@ -14,9 +14,11 @@ from src.models.conversation import Conversation, ConversationParticipant, Messa
 from src.models.user_profile import UserProfile
 from src.models.workspace import User, Workspace, WorkspaceMember
 from src.services.notifications import NotificationService
-from src.services.profile_helpers import format_display_name
+from src.services.profile_helpers import escape_like, format_display_name
 
 logger = logging.getLogger(__name__)
+
+MAX_PARTICIPANTS = 20
 
 
 class ConversationError(Exception):
@@ -114,6 +116,48 @@ class ConversationService:
 
     async def _get_conversation(self, conversation_id: str) -> Conversation | None:
         return await self._session.get(Conversation, conversation_id)
+
+    async def _require_active_members(self, workspace_id: str, user_ids: list[str]) -> None:
+        """Reject ids that are not active members of the workspace."""
+        if not user_ids:
+            return
+        result = await self._session.execute(
+            select(WorkspaceMember.user_id).where(
+                WorkspaceMember.workspace_id == workspace_id,
+                WorkspaceMember.user_id.in_(user_ids),
+                WorkspaceMember.status == "active",
+            )
+        )
+        if set(user_ids) - {row[0] for row in result.all()}:
+            raise ConversationError("one or more participants are not members of this workspace")
+
+    async def _add_user_participants(self, conv: Conversation, user_ids: list[str]) -> list[str]:
+        """Join users to the conversation, skipping the ones already on it.
+        Non-user participants (agents) are left alone."""
+        if not user_ids:
+            return []
+        result = await self._session.execute(
+            select(ConversationParticipant.participant_id).where(
+                ConversationParticipant.conversation_id == conv.id,
+                ConversationParticipant.participant_type == "user",
+                ConversationParticipant.participant_id.in_(user_ids),
+            )
+        )
+        existing = {row[0] for row in result.all()}
+        added = [uid for uid in dict.fromkeys(user_ids) if uid not in existing]
+        joined_at = now_utc()
+        for uid in added:
+            self._session.add(
+                ConversationParticipant(
+                    conversation_id=conv.id,
+                    participant_type="user",
+                    participant_id=uid,
+                    user_id=uid,
+                    agent_id=None,
+                    joined_at=joined_at,
+                )
+            )
+        return added
 
     async def _participants_with_users(
         self, conversation_id: str
@@ -359,26 +403,12 @@ class ConversationService:
         # Need at least 1 other (so total >=2)
         if len(others) < 1:
             raise ConversationError("at least one other participant is required")
-        total = len(others) + 1
-        if total > 20:
-            raise ConversationError("too many participants (max 20)")
+        if len(others) + 1 > MAX_PARTICIPANTS:
+            raise ConversationError(f"too many participants (max {MAX_PARTICIPANTS})")
         # Workspace membership check for creator
         await self._ensure_membership(workspace_id, creator.id)
         # Validate each other participant is active member
-        if others:
-            result = await self._session.execute(
-                select(WorkspaceMember.user_id).where(
-                    WorkspaceMember.workspace_id == workspace_id,
-                    WorkspaceMember.user_id.in_(others),
-                    WorkspaceMember.status == "active",
-                )
-            )
-            found = {row[0] for row in result.all()}
-            missing = set(others) - found
-            if missing:
-                raise ConversationError(
-                    "one or more participants are not members of this workspace"
-                )
+        await self._require_active_members(workspace_id, others)
 
         # Resolve title
         clean_title = title.strip() if title and title.strip() else None
@@ -554,21 +584,21 @@ class ConversationService:
 
         # Search handling
         if q:
-            q_ilike = f"%{q.strip()}%"
+            q_ilike = f"%{escape_like(q.strip())}%"
             # Find conversation ids where participant display name matches
             sub_participant_match = (
                 select(ConversationParticipant.conversation_id)
                 .join(User, User.id == ConversationParticipant.user_id)
                 .where(
                     ConversationParticipant.participant_type == "user",
-                    User.display_name.ilike(q_ilike),
+                    User.display_name.ilike(q_ilike, escape="\\"),
                 )
             )
             # Title / preview matches
             base_stmt = base_stmt.where(
                 or_(
-                    Conversation.title.ilike(q_ilike),
-                    Conversation.last_message_preview.ilike(q_ilike),
+                    Conversation.title.ilike(q_ilike, escape="\\"),
+                    Conversation.last_message_preview.ilike(q_ilike, escape="\\"),
                     Conversation.id.in_(sub_participant_match),
                 )
             )
@@ -733,6 +763,44 @@ class ConversationService:
         participants = await self._participants_with_users(conversation_id)
         mcount = (await self._message_counts([conversation_id])).get(conversation_id, 0)
         return self._conversation_to_dict(conv, participants, 0, False, mcount)
+
+    # ---------------------------------------------------------------- participants
+
+    async def set_participants(
+        self,
+        *,
+        workspace_id: str,
+        conversation_id: str,
+        actor_user_id: str,
+        participant_user_ids: list[str],
+    ) -> dict:
+        """Replace the conversation's user participants.
+
+        The actor must stay on the conversation: removing yourself would make it
+        unreachable and its access rules meaningless.
+        """
+        await self._ensure_membership(workspace_id, actor_user_id)
+        conv = await self._get_conversation(conversation_id)
+        if conv is None or conv.workspace_id != workspace_id:
+            raise ConversationNotFound("conversation not found")
+        if await self._get_participant(conversation_id, actor_user_id) is None:
+            raise ConversationForbidden("you are not a participant of this conversation")
+
+        wanted = list(dict.fromkeys(uid.strip() for uid in participant_user_ids if uid.strip()))
+        if actor_user_id not in wanted:
+            raise ConversationError("you cannot remove yourself from a conversation")
+        if len(wanted) > MAX_PARTICIPANTS:
+            raise ConversationError(f"too many participants (max {MAX_PARTICIPANTS})")
+        await self._require_active_members(workspace_id, wanted)
+
+        for p, _user, _profile in await self._participants_with_users(conversation_id):
+            if p.participant_type == "user" and p.participant_id not in wanted:
+                await self._session.delete(p)
+        await self._add_user_participants(conv, wanted)
+        await self._session.commit()
+        return await self.get_conversation(
+            workspace_id=workspace_id, conversation_id=conversation_id, user_id=actor_user_id
+        )
 
     # ---------------------------------------------------------------- read / archive
 
@@ -915,6 +983,7 @@ class ConversationService:
         conversation_id: str,
         sender: User,
         body: str,
+        mentioned_user_ids: list[str] | None = None,
         ip_address: str | None = None,
     ) -> dict:
         clean = body.strip()
@@ -929,6 +998,10 @@ class ConversationService:
         part = await self._get_participant(conversation_id, sender.id)
         if part is None:
             raise ConversationForbidden("you are not a participant of this conversation")
+        # A mention pulls the user into the conversation so they get the message.
+        mentions = [uid.strip() for uid in (mentioned_user_ids or []) if uid.strip()]
+        await self._require_active_members(workspace_id, mentions)
+        await self._add_user_participants(conv, mentions)
         now = now_utc()
         preview = _plain_preview(clean)
         msg = Message(

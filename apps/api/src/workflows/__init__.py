@@ -112,6 +112,10 @@ def build_workflows(
                     "workspace_name": payload.get("workspace_name"),
                     "invitation_id": payload.get("invitation_id"),
                     "invited_by": payload.get("invited_by"),
+                    # NotificationCenter renders an "Open" button only when
+                    # the payload carries a url; without it the invite is a
+                    # dead end.
+                    "url": "/invitations",
                 },
                 correlation_id=metadata.correlation_id,
             )

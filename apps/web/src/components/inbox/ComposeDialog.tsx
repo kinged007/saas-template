@@ -37,7 +37,7 @@ import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "@/contexts/WorkspaceContex
 import { cn } from "@/lib/utils";
 
 const schema = z.object({
-  title: z.string().max(300, "Title must be at most 300 characters").optional(),
+  title: z.string().max(300, "Subject must be at most 300 characters").optional(),
   participantIds: z.array(z.string()).min(1, "Select at least one participant").max(19, "Max 19 other participants"),
   initialMessage: z.string().min(1, "Message is required").max(5000, "Message must be at most 5000 characters"),
 });
@@ -120,21 +120,6 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
         </DialogHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col gap-4">
-            <FormField
-              control={form.control}
-              name="title"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Title (optional)</FormLabel>
-                  <FormControl>
-                    <Input placeholder="Project discussion" {...field} />
-                  </FormControl>
-                  <FormDescription>Subject — like an email. Leave blank to auto-generate.</FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
             {/* Flex container for participant selector + future select box */}
             <div className="flex gap-2">
               <FormField
@@ -274,6 +259,21 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
                 }}
               />
             </div>
+
+            <FormField
+              control={form.control}
+              name="title"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Subject (optional)</FormLabel>
+                  <FormControl>
+                    <Input placeholder="Project discussion" {...field} />
+                  </FormControl>
+                  <FormDescription>Leave blank to auto-generate.</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             <FormField
               control={form.control}

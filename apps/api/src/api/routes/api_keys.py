@@ -14,7 +14,12 @@ from src.api.deps import (
     require_permission,
     resolve_auth_principal,
 )
-from src.core.permissions import APIKEY_MANAGE, APIKEY_READ
+from src.core.permissions import (
+    APIKEY_CREATE,
+    APIKEY_DELETE,
+    APIKEY_READ,
+    KEY_ONLY_PERMISSIONS,
+)
 from src.db.session import get_db
 from src.models.api_key import ApiKey
 from src.schemas.api import ApiKeyCreate, ApiKeyQuotaUpdate
@@ -82,12 +87,15 @@ async def effective_permissions(
     _=Depends(require_permission(APIKEY_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    """Permissions this user can assign to an API key in the active workspace."""
+    """Permissions this user can assign to an API key in the active workspace.
+
+    Key-only scopes (notification:*) are always offerable: any member may hold
+    them on a key (notifications are personal), mirroring ApiKeyService."""
     membership = await WorkspaceService(db).get_membership(workspace_id, user.id)
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership
-    return {"permissions": sorted(role.permissions)}
+    return {"permissions": sorted(set(role.permissions) | set(KEY_ONLY_PERMISSIONS))}
 
 
 @router.post("", status_code=201)
@@ -97,7 +105,7 @@ async def create_api_key(
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
     principal=Depends(resolve_auth_principal),
-    _=Depends(require_permission(APIKEY_MANAGE)),
+    _=Depends(require_permission(APIKEY_CREATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -116,9 +124,12 @@ async def create_api_key(
         )
     except ApiKeyForbidden as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    except ApiKeyError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     return {**_key_dict(key), "key": raw}
 
 
+# APIKEY_DELETE is the key-lifecycle guard: it covers quota changes and revoke.
 @router.patch("/{api_key_id}")
 async def set_api_key_quota(
     api_key_id: str,
@@ -126,15 +137,12 @@ async def set_api_key_quota(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(APIKEY_MANAGE)),
+    _=Depends(require_permission(APIKEY_DELETE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    # Personal scope, like revoke: only the key's owner may change its quota
-    # (404, not 403, so another user's key id is not leaked).
-    key = await db.get(ApiKey, api_key_id)
-    if key is None or key.workspace_id != workspace_id or key.created_by_user_id != user.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "api key not found")
+    # Personal scope is owned by the service (404, not 403, so another
+    # user's key id is not leaked) — same as the revoke route below.
     try:
         key = await ApiKeyService(db, container.bus).set_quota(
             workspace_id,
@@ -143,6 +151,8 @@ async def set_api_key_quota(
             actor=user,
             ip_address=request.client.host if request.client else None,
         )
+    except ApiKeyNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     except ApiKeyError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     return _key_dict(key)
@@ -154,7 +164,7 @@ async def revoke_api_key(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(APIKEY_MANAGE)),
+    _=Depends(require_permission(APIKEY_DELETE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):

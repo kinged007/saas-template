@@ -17,6 +17,7 @@ something, so new workspaces need no backfill.
 | Flag | Default | Gates |
 |------|---------|-------|
 | `invites_enabled` | on | `POST /invitations` refuses with 409 when false |
+| `onboarding_enabled` | on | Dashboard hides the “Get set up” card when false |
 
 Add a row here (and a code reference below) when a new flag lands.
 
@@ -24,3 +25,11 @@ Add a row here (and a code reference below) when a new flag lands.
 
 - `WorkspaceService.create_invitation` refuses when `invites_enabled` is
   false (`apps/api/src/services/workspaces.py`).
+- The dashboard “Get set up” card is hidden when `onboarding_enabled` is
+  false (`apps/web/src/pages/DashboardPage.tsx`).
+
+`onboarding_enabled` is the one flag also writable by non-superusers, through
+`PATCH /workspaces/{id}` (`workspace:update`, i.e. owners and admins) rather
+than the superuser-only flags endpoint. Enabling it does not clear anyone's
+per-user dismissal, which is a localStorage choice each member makes for
+themselves.

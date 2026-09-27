@@ -24,7 +24,7 @@ def _guarded_permissions() -> set[str]:
             assert value is not None, f"{path.name}: unknown permission constant {name}"
             found.add(value)
     # Constants used indirectly (e.g. jobs' _require_job_access switch).
-    for name in ("JOB_VIEW", "JOB_EDIT"):
+    for name in ("JOB_READ", "JOB_UPDATE"):
         found.add(getattr(perms, name))
     return found
 
@@ -69,8 +69,10 @@ async def test_permission_registry_covers_route_guards():
 
 
 async def test_permission_catalog_requires_auth(app_client):
-    resp = await app_client.get("/api/v1/roles/permission-catalog")
-    assert resp.status_code in (400, 401, 403)
+    resp = await app_client.get(
+        "/api/v1/roles/permission-catalog", headers={"X-Workspace-ID": "ws-does-not-exist"}
+    )
+    assert resp.status_code in (401, 403)
 
 
 async def test_permission_catalog_filtered_to_assignable(app_client):
@@ -85,6 +87,8 @@ async def test_permission_catalog_filtered_to_assignable(app_client):
     ).json()
     assert set(owner_catalog["catalog"]) == set(perms.ALL_PERMISSIONS)
     assert set(owner_catalog["permissions"]) == set(perms.ALL_PERMISSIONS)
+    assert not (set(owner_catalog["catalog"]) & set(perms.KEY_ONLY_PERMISSIONS))
+    assert not (set(owner_catalog["permissions"]) & set(perms.KEY_ONLY_PERMISSIONS))
 
     viewer_catalog = (
         await client.get("/api/v1/roles/permission-catalog", headers=ws_headers(viewer, ws["id"]))
@@ -122,6 +126,44 @@ async def test_create_role_rejects_duplicate_name(app_client):
         "/api/v1/roles", json={"name": "ops", "permissions": []}, headers=headers
     )
     assert resp.status_code == 409
+
+
+async def test_permission_catalog_excludes_legacy_key_only_scope(app_client):
+    # A stale role row holding a legacy key-only scope must not resurface it.
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    client = app_client
+    owner = await register_user(client, "cat-legacy@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    editor_id = await _role_id(client, headers, "editor")
+    async with SessionFactory() as session:
+        role = await session.get(Role, editor_id)
+        role.permissions = [*role.permissions, "notification:read"]
+        await session.commit()
+    catalog = (await client.get("/api/v1/roles/permission-catalog", headers=headers)).json()
+    assert "notification:read" not in catalog["permissions"]
+    assert "notification:read" not in catalog["catalog"]
+
+
+async def test_create_role_rejects_key_only_permissions(app_client):
+    client = app_client
+    owner = await register_user(client, "cr-keyonly@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    resp = await client.post(
+        "/api/v1/roles",
+        json={"name": "ops", "permissions": ["notification:read"]},
+        headers=headers,
+    )
+    assert resp.status_code == 422, resp.text
+    resp = await client.post(
+        "/api/v1/roles",
+        json={"name": "ops", "permissions": ["member:read", "notification:update"]},
+        headers=headers,
+    )
+    assert resp.status_code == 422, resp.text
 
 
 async def test_create_role_rejects_star(app_client):
@@ -217,6 +259,20 @@ async def test_update_role_cross_workspace_is_404(app_client):
     assert resp.status_code == 404
 
 
+async def test_update_role_rejects_key_only_permissions(app_client):
+    client = app_client
+    owner = await register_user(client, "up-keyonly@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    editor_id = await _role_id(client, headers, "editor")
+    resp = await client.patch(
+        f"/api/v1/roles/{editor_id}",
+        json={"permissions": ["member:read", "notification:read"]},
+        headers=headers,
+    )
+    assert resp.status_code == 422, resp.text
+
+
 async def test_update_role_rejects_unknown_permission_and_star(app_client):
     client = app_client
     owner = await register_user(client, "up4@example.com")
@@ -255,6 +311,49 @@ async def test_update_system_role_converts_to_custom(app_client):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["system"] is False
+
+
+async def test_update_role_noop_keeps_system_flag(app_client):
+    client = app_client
+    owner = await register_user(client, "up-noop@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    editor_id = await _role_id(client, headers, "editor")
+    editor = (await client.get(f"/api/v1/roles/{editor_id}", headers=headers)).json()
+    assert editor["system"] is True
+    resp = await client.patch(
+        f"/api/v1/roles/{editor_id}",
+        json={"description": editor["description"], "permissions": editor["permissions"]},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["system"] is True
+
+
+async def test_get_role_unknown_and_cross_workspace_is_404(app_client):
+    """#192: the lookup raises WorkspaceNotFound for both miss shapes."""
+    client = app_client
+    owner = await register_user(client, "get404@example.com")
+    ws1 = await create_workspace(client, owner, name="One")
+    ws2 = await create_workspace(client, owner, name="Two")
+    editor_id = await _role_id(client, ws_headers(owner, ws1["id"]), "editor")
+    for role_id, ws in (("00000000-0000-0000-0000-000000000000", ws1), (editor_id, ws2)):
+        resp = await client.get(f"/api/v1/roles/{role_id}", headers=ws_headers(owner, ws["id"]))
+        assert resp.status_code == 404, (role_id, resp.text)
+        assert resp.json()["detail"] == "role not found"
+
+
+async def test_update_role_noop_body_keeps_system_flag(app_client):
+    """#193: an empty body and a same-name body are both no-ops, not resets."""
+    client = app_client
+    owner = await register_user(client, "up-noop-body@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    editor_id = await _role_id(client, headers, "editor")
+    for body in ({}, {"name": "editor"}):
+        resp = await client.patch(f"/api/v1/roles/{editor_id}", json=body, headers=headers)
+        assert resp.status_code == 200, (body, resp.text)
+        assert resp.json()["system"] is True, body
 
 
 async def test_update_role_duplicate_name_conflicts(app_client):

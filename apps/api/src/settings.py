@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-change-me"
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
+    # Browser session refresh cookie (HttpOnly; JS can never read it).
+    # refresh_cookie_secure=None (default) → Secure unless development.
+    refresh_cookie_name: str = "st_refresh"
+    refresh_cookie_domain: str = ""
+    refresh_cookie_path: str = "/api/v1/auth"
+    refresh_cookie_secure: bool | None = None
     # Comma-separated Fernet keys (encryption key chosen by
     # SECRET_ENCRYPT_VERSION, rest = decryption/rotation history)
     fernet_keys: str = "dev-fernet-key-change-me-00000"
@@ -69,6 +75,17 @@ class Settings(BaseSettings):
     # Superadmin. The user who registers with this email becomes the
     # superuser (global jobs, etc.). Empty disables the bootstrap.
     superadmin_email: str = ""
+
+    # Auth methods: registration kill-switch and password kill-switch (SSO-only mode).
+    auth_allow_registration: bool = True
+    auth_password_enabled: bool = True
+    # Generic OIDC/OAuth2 providers as a JSON list. Each entry:
+    # {id, display_name?, discovery_url?, issuer?, authorize_url?, token_url?,
+    #  userinfo_url?, jwks_uri?, client_id, client_secret, scopes?}.
+    # discovery_url (or issuer + /.well-known/openid-configuration) covers
+    # Google/Microsoft Entra/Okta/GitLab; explicit endpoint URLs cover
+    # non-OIDC providers like GitHub. Secrets come from env, never committed.
+    oauth_providers: str = ""
 
     # Auth brute-force protection: failures allowed per (IP, account) per window.
     auth_rate_limit_max_attempts: int = 10
@@ -111,8 +128,30 @@ class Settings(BaseSettings):
         return [k.strip() for k in self.fernet_keys.split(",") if k.strip()]
 
     @property
+    def refresh_cookie_secure_effective(self) -> bool:
+        if self.refresh_cookie_secure is not None:
+            return self.refresh_cookie_secure
+        # Dev and tests serve plain http:// — a Secure cookie would never
+        # store. Production-like envs default to Secure.
+        return self.environment not in ("development", "test")
+
+    @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def oauth_provider_list(self) -> list[dict]:
+        """Parsed OAUTH_PROVIDERS JSON (empty list when unset or invalid)."""
+        import json as _json
+
+        raw = (self.oauth_providers or "").strip()
+        if not raw:
+            return []
+        try:
+            parsed = _json.loads(raw)
+        except ValueError:
+            return []
+        return parsed if isinstance(parsed, list) else []
 
 
 settings = Settings()

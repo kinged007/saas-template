@@ -13,7 +13,7 @@ from src.api.deps import (
     get_current_workspace_id,
     require_permission,
 )
-from src.core.permissions import PERMISSION_DEFINITIONS, ROLE_MANAGE, ROLE_READ
+from src.core.permissions import ALL_PERMISSIONS, ROLE_CREATE, ROLE_READ
 from src.db.session import get_db
 from src.models.workspace import Role
 from src.schemas.api import RoleCreate, RoleUpdate
@@ -21,6 +21,7 @@ from src.services.workspaces import (
     WorkspaceConflict,
     WorkspaceError,
     WorkspaceForbidden,
+    WorkspaceNotFound,
     WorkspaceService,
 )
 
@@ -84,11 +85,13 @@ async def permission_catalog(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership
     assignable = (
-        sorted(PERMISSION_DEFINITIONS)
+        sorted(ALL_PERMISSIONS)
         if "*" in role.permissions
-        else sorted(set(role.permissions) & set(PERMISSION_DEFINITIONS))
+        # Intersect against ALL_PERMISSIONS (not the full registry): a stale
+        # role row holding a legacy key-only scope must not resurface it here.
+        else sorted(set(role.permissions) & set(ALL_PERMISSIONS))
     )
-    return {"catalog": sorted(PERMISSION_DEFINITIONS), "permissions": assignable}
+    return {"catalog": sorted(ALL_PERMISSIONS), "permissions": assignable}
 
 
 @router.post("", status_code=201)
@@ -97,7 +100,7 @@ async def create_role(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(ROLE_MANAGE)),
+    _=Depends(require_permission(ROLE_CREATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -119,6 +122,8 @@ async def create_role(
     return _role_dict(role)
 
 
+# ROLE_CREATE is the single custom-role writer guard (no ROLE_UPDATE/ROLE_DELETE
+# exist by design) — it covers both create and update below.
 @router.patch("/{role_id}")
 async def update_role(
     role_id: str,
@@ -126,7 +131,7 @@ async def update_role(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    _=Depends(require_permission(ROLE_MANAGE)),
+    _=Depends(require_permission(ROLE_CREATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -144,13 +149,10 @@ async def update_role(
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     except WorkspaceConflict as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    except WorkspaceNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     except WorkspaceError as exc:
-        code = (
-            status.HTTP_404_NOT_FOUND
-            if str(exc) == "role not found"
-            else status.HTTP_422_UNPROCESSABLE_ENTITY
-        )
-        raise HTTPException(code, str(exc)) from None
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     return _role_dict(role)
 
 
@@ -161,7 +163,8 @@ async def get_role(
     _=Depends(require_permission(ROLE_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    role = await db.get(Role, role_id)
-    if role is None or role.workspace_id != workspace_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "role not found")
+    try:
+        role = await WorkspaceService(db).get_role(workspace_id, role_id)
+    except WorkspaceNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     return _role_dict(role)

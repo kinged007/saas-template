@@ -11,15 +11,17 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from datetime import UTC, datetime
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.permissions import JOB_VIEW
+from src.core.permissions import JOB_READ
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
 from src.models.api_key import ApiKey
+from src.models.audit import AuditLogEntry
 from src.models.conversation import Conversation, ConversationParticipant, Message
 from src.models.core import Invitation, Notification
 from src.models.jobs import JobDefinition
@@ -27,6 +29,7 @@ from src.models.user_profile import UserProfile
 from src.models.webhook import WebhookSubscription
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.services.jobs import _mask_params
+from src.services.profile_helpers import escape_like
 from src.services.serializers import (
     notification_to_dict,
     public_projection,
@@ -44,18 +47,52 @@ _EXPORT_MESSAGES_CAP = 5000
 _EXPORT_NOTIFICATIONS_CAP = 5000
 
 
-def _escape_like(q: str) -> str:
-    return q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+_EXPORT_AUDIT_CAP = 5000
 
+
+# Profile fields mirrored into the members CSV. Prefixed because the profile
+# projection also carries display_name/email/avatar_url, which would otherwise
+# shadow the user columns. phone_number and date_of_birth are left out: the
+# projection redacts both, and a permanently empty column reads as data loss.
+_MEMBER_PROFILE_COLUMNS = [
+    "first_name",
+    "last_name",
+    "bio",
+    "timezone",
+    "locale",
+    "website_url",
+    "location",
+    "custom_data",
+]
 
 # resource -> tabular CSV columns for ?format=csv&resource=<name>
+# Single source of truth: GET /workspaces/export/resources serves these keys so
+# the frontend selector never carries its own copy of the list.
 CSV_RESOURCES: dict[str, list[str]] = {
-    "members": ["email", "display_name", "role", "status", "joined_at"],
+    "members": [
+        "id",
+        "email",
+        "display_name",
+        "avatar_url",
+        "email_verified",
+        "role",
+        "status",
+        "joined_at",
+    ]
+    + [f"profile_{c}" for c in _MEMBER_PROFILE_COLUMNS],
     "invitations": ["email", "status", "expires_at", "created_at"],
     "api_keys": ["name", "key_prefix", "permissions", "revoked_at", "created_at"],
     "jobs": ["key", "name", "enabled", "cron_schedule", "next_run_at"],
     "conversations": ["title", "last_message_preview", "last_message_at", "created_at"],
     "notifications": ["type", "title", "acknowledged_at", "created_at"],
+    "audit": [
+        "created_at",
+        "actor_email",
+        "action",
+        "resource_type",
+        "resource_id",
+        "ip_address",
+    ],
 }
 
 
@@ -87,6 +124,11 @@ async def _ensure_membership(session: AsyncSession, workspace_id: str, user_id: 
         raise ConversationForbidden("you are not a member of this workspace")
 
 
+def _csv_cell(value: object) -> object:
+    """JSON-encode structured values so a CSV cell stays valid JSON, not repr."""
+    return json.dumps(value) if isinstance(value, (dict, list)) else value
+
+
 class SearchExportService:
     def __init__(self, session: AsyncSession, bus: EventBus | None = None) -> None:
         self._session = session
@@ -94,8 +136,8 @@ class SearchExportService:
 
     async def search(self, *, workspace_id: str, user_id: str, q: str) -> dict:
         await _ensure_membership(self._session, workspace_id, user_id)
-        like = f"%{_escape_like(q.strip())}%"
-        can_view_jobs = await self._can(workspace_id, user_id, JOB_VIEW)
+        like = f"%{escape_like(q.strip())}%"
+        can_view_jobs = await self._can(workspace_id, user_id, JOB_READ)
         results: list[dict] = []
 
         conv_rows = (
@@ -294,8 +336,9 @@ class SearchExportService:
                     "joined_at": m.created_at.isoformat() if m.created_at else None,
                 }
             )
-            if p is not None:
-                entry["profile"] = public_projection(p, u)
+            # Key stays present even without a profile row, so importers see a
+            # uniform member shape.
+            entry["profile"] = public_projection(p, u) if p is not None else None
             members.append(entry)
 
         roles = (
@@ -367,6 +410,18 @@ class SearchExportService:
         )
         if len(notifs) > _EXPORT_NOTIFICATIONS_CAP:
             notifs = notifs[:_EXPORT_NOTIFICATIONS_CAP]
+            truncated = True
+        audit_rows = (
+            await self._session.execute(
+                select(AuditLogEntry, User.email)
+                .outerjoin(User, User.id == AuditLogEntry.actor_user_id)
+                .where(AuditLogEntry.workspace_id == workspace_id)
+                .order_by(AuditLogEntry.created_at.asc())
+                .limit(_EXPORT_AUDIT_CAP + 1)
+            )
+        ).all()
+        if len(audit_rows) > _EXPORT_AUDIT_CAP:
+            audit_rows = audit_rows[:_EXPORT_AUDIT_CAP]
             truncated = True
         subs = (
             (
@@ -452,6 +507,22 @@ class SearchExportService:
                 for m in messages
             ],
             "notifications": [notification_to_dict(n) for n in notifs],
+            "audit": [
+                {
+                    "id": e.id,
+                    "actor_user_id": e.actor_user_id,
+                    "actor_email": email,
+                    "resource_type": e.resource_type,
+                    "resource_id": e.resource_id,
+                    "action": e.action,
+                    # `details` is already readable through GET /audit by anyone
+                    # holding audit:read, which gates this export too.
+                    "details": e.details,
+                    "ip_address": e.ip_address,
+                    "created_at": e.created_at.isoformat() if e.created_at else None,
+                }
+                for e, email in audit_rows
+            ],
             "webhook_subscriptions": [
                 {"url": s.url, "events": s.events or [], "active": s.active} for s in subs
             ],
@@ -477,11 +548,21 @@ class SearchExportService:
         if resource == "members":
             flat = [
                 {
+                    "id": r.get("id"),
                     "email": r.get("email"),
                     "display_name": r.get("display_name"),
+                    "avatar_url": r.get("avatar_url"),
+                    "email_verified": r.get("email_verified"),
                     "role": r.get("role"),
                     "status": r.get("status"),
                     "joined_at": r.get("joined_at"),
+                    # Read back from the bundle, so the CSV carries exactly what
+                    # the JSON export carries: the redacted public projection,
+                    # and empty cells when the member has no profile row.
+                    **{
+                        f"profile_{c}": _csv_cell((r.get("profile") or {}).get(c))
+                        for c in _MEMBER_PROFILE_COLUMNS
+                    },
                 }
                 for r in rows
             ]
@@ -524,6 +605,18 @@ class SearchExportService:
                     "title": r.get("title"),
                     "acknowledged_at": r.get("acknowledged_at"),
                     "created_at": r.get("created_at"),
+                }
+                for r in rows
+            ]
+        elif resource == "audit":
+            flat = [
+                {
+                    "created_at": r.get("created_at"),
+                    "actor_email": r.get("actor_email"),
+                    "action": r.get("action"),
+                    "resource_type": r.get("resource_type"),
+                    "resource_id": r.get("resource_id"),
+                    "ip_address": r.get("ip_address"),
                 }
                 for r in rows
             ]

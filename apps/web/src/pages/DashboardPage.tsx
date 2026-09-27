@@ -1,12 +1,15 @@
-import { useCan, useList } from "@refinedev/core";
+import { useReducer } from "react";
+import { useCan, useGetIdentity, useList } from "@refinedev/core";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { CheckCircle2, Circle, PlusCircle } from "lucide-react";
+import { CheckCircle2, Circle, PlusCircle, X } from "lucide-react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { WorkspaceSearch } from "@/components/WorkspaceSearch";
 import { useWorkspace } from "../contexts/WorkspaceContext";
-import type { ApiKey, Invitation } from "../types";
+import { onboardingStore } from "@/utils/storage";
+import { IDENTITY_QUERY_OPTIONS } from "../contexts/WorkspaceContext";
+import type { ApiKey, Identity, Invitation } from "../types";
 
 function Step({ done, title, hint, to, cta }: { done: boolean; title: string; hint: string; to: string; cta: string }) {
   return (
@@ -33,6 +36,19 @@ function Step({ done, title, hint, to, cta }: { done: boolean; title: string; hi
 
 export function DashboardPage() {
   const { workspace } = useWorkspace();
+  const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
+  // Dismissal is read from the store every render; force() only triggers a
+  // re-render after dismiss. No dismissed state is kept, so switching
+  // workspaces can never show a stale dismissal from another workspace.
+  const [, force] = useReducer((x: number) => x + 1, 0);
+  const onboardingDismissed = workspace
+    ? onboardingStore.isDismissed(workspace.id, identity?.id)
+    : false;
+  // Workspace-wide switch (workspace:update): off hides the card for everyone,
+  // including users who never dismissed it. A user's own dismissal is
+  // deliberately not cleared when this is switched back on — it is their
+  // choice, and the flag exists to control what new users are shown.
+  const onboardingOffForWorkspace = workspace?.onboarding_enabled === false;
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
   const { result: keysResult } = useList<ApiKey>({
     resource: "api-keys",
@@ -66,7 +82,7 @@ export function DashboardPage() {
 
   const keys = keysResult?.data ?? [];
   const invitations = invitationsResult?.data ?? [];
-  // ponytail: progress is derived per render (no persistence); add a dismissible tour store when onboarding grows past 3 steps.
+  // ponytail: step progress is derived per render; only dismissal persists (onboardingStore). Add a tour store when onboarding grows past 3 steps.
   const steps = workspace
     ? [
         { done: invitations.length > 0, title: "Invite your team", hint: "Members get workspace access by role.", to: "/members", cta: "Invite" },
@@ -84,13 +100,30 @@ export function DashboardPage() {
         </p>
       </div>
 
-      {!allDone && (
+      {!allDone && !onboardingDismissed && !onboardingOffForWorkspace && (
         <Card>
           <CardHeader>
-            <CardTitle>Get set up</CardTitle>
-            <CardDescription>
-              {workspace ? "Finish these steps to get the most out of your workspace." : "Create a workspace to get started with managing your team."}
-            </CardDescription>
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <CardTitle>Get set up</CardTitle>
+                <CardDescription>
+                  {workspace ? "Finish these steps to get the most out of your workspace." : "Create a workspace to get started with managing your team."}
+                </CardDescription>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0"
+                aria-label="Dismiss onboarding"
+                disabled={!identity}
+                onClick={() => {
+                  if (workspace) onboardingStore.dismiss(workspace.id, identity?.id);
+                  force();
+                }}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="divide-y">
             {!workspace && (

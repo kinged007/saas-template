@@ -1,7 +1,7 @@
 import type { AuthProvider } from "@refinedev/core";
 
 import { activeWorkspacePermissions } from "../utils/permissions";
-import { API_URL, cancelPendingRefresh, httpClient } from "./dataProvider";
+import { API_URL, cancelPendingRefresh, ensureSession, httpClient } from "./dataProvider";
 import {
   identityStore,
   tokenStore,
@@ -14,7 +14,8 @@ import type { Identity } from "../types";
 const post = async (path: string, body: unknown) => {
   const resp = await fetch(`${API_URL}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
+    credentials: "include",
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
@@ -52,7 +53,7 @@ export async function seedWorkspace(identity: Identity): Promise<void> {
 export const authProvider: AuthProvider = {
   login: async ({ email, password }) => {
     try {
-      const tokens = await post("/auth/login", { email, password }).catch((err: unknown) => {
+      const tokens = await post("/auth/login", { email, password, use_cookies: true }).catch((err: unknown) => {
         // 2FA challenge: raw fetch stringifies an object detail — recover the
         // payload from the message when it parses as the challenge shape.
         const msg = (err as Error)?.message ?? "";
@@ -87,7 +88,7 @@ export const authProvider: AuthProvider = {
       setActiveWorkspaceId(null);
       identityStore.set(null);
       clearAllCaches(queryClient);
-      tokenStore.setTokens(tokens.access_token, tokens.refresh_token);
+      tokenStore.setTokens(tokens.access_token);
       try {
         const { data: identity } = await httpClient.get<Identity>(`${API_URL}/auth/me`);
         await seedWorkspace(identity);
@@ -117,13 +118,13 @@ export const authProvider: AuthProvider = {
       if (first_name) body.first_name = first_name;
       if (last_name) body.last_name = last_name;
       if (display_name && !body.display_name) body.display_name = display_name;
-      const tokens = await post("/auth/register", body);
+      const tokens = await post("/auth/register", { ...body, use_cookies: true });
       // Same stale-session reset + workspace seed as login (see above).
       workspaceStore.clear();
       setActiveWorkspaceId(null);
       identityStore.set(null);
       clearAllCaches(queryClient);
-      tokenStore.setTokens(tokens.access_token, tokens.refresh_token);
+      tokenStore.setTokens(tokens.access_token);
       try {
         const { data: identity } = await httpClient.get<Identity>(`${API_URL}/auth/me`);
         await seedWorkspace(identity);
@@ -137,9 +138,8 @@ export const authProvider: AuthProvider = {
   },
 
   logout: async () => {
-    const refresh = tokenStore.getRefresh();
-    if (refresh) {
-      post("/auth/logout", { refresh_token: refresh }).catch(() => null);
+    if (tokenStore.getAccess()) {
+      post("/auth/logout", {}).catch(() => null);
     }
     cancelPendingRefresh();
     // Read the user id BEFORE clearing: the selection is keyed per user, so
@@ -155,13 +155,18 @@ export const authProvider: AuthProvider = {
   },
 
   check: async () => {
-    const access = tokenStore.getAccess();
-    if (!access) return { authenticated: false, redirectTo: "/login" };
-    return { authenticated: true };
+    // The access token is in-memory only, so a reload starts empty even with
+    // a live cookie session. One silent refresh restores it; failure means
+    // signed out. Shared single-flight with the dataProvider's 401 retries.
+    if (tokenStore.getAccess()) return { authenticated: true };
+    if (await ensureSession()) return { authenticated: true };
+    return { authenticated: false, redirectTo: "/login" };
   },
 
   onError: async (error) => {
     if ((error as { statusCode?: number })?.statusCode === 401) {
+      // tokenStore.clear() also drops the signed-in marker, so the next
+      // check() short-circuits instead of retrying a dead session.
       tokenStore.clear();
       setActiveWorkspaceId(null);
       clearAllCaches(queryClient);

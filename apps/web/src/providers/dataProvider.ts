@@ -2,7 +2,7 @@ import type { DataProvider } from "@refinedev/core";
 import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import dataProviderModule from "@refinedev/simple-rest";
 
-import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId } from "../utils/storage";
+import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId, sessionHint } from "../utils/storage";
 import { clearAllCaches, queryClient } from "./queryClient";
 
 // Same-origin API path: the vite dev proxy (and nginx in production) forwards
@@ -10,7 +10,7 @@ import { clearAllCaches, queryClient } from "./queryClient";
 // reached. Override with VITE_API_URL when a direct endpoint is preferred.
 export const API_URL = import.meta.env.VITE_API_URL || "/api/v1";
 
-export const httpClient = axios.create();
+export const httpClient = axios.create({ withCredentials: true });
 
 /** True when the JWT's `exp` claim has passed (with a small clock-skew buffer). */
 function isAccessTokenExpired(token: string | null): boolean {
@@ -63,19 +63,37 @@ export function cancelPendingRefresh() {
   refreshPromise = null;
 }
 
+/**
+ * Shared single-flight session restore: one refresh serves all concurrent
+ * callers (boot check + a 401 retry racing would otherwise double-rotate a
+ * rotating refresh token and log the user out). Returns false immediately
+ * when the signed-in marker is absent, so logged-out boots never POST.
+ */
+export async function ensureSession(): Promise<boolean> {
+  if (!sessionHint.get()) return false;
+  return tryRefresh();
+}
+
 async function tryRefresh(): Promise<boolean> {
   if (!refreshPromise) {
-    const capturedRefresh = tokenStore.getRefresh();
-    if (!capturedRefresh) return false;
+    // The refresh token travels in the HttpOnly cookie (withCredentials) —
+    // JS never sees it.
+    const capturedAccess = tokenStore.getAccess();
     refreshPromise = (async () => {
       try {
-        const { data } = await axios.post(`${API_URL}/auth/refresh`, {
-          refresh_token: capturedRefresh,
-        });
+        const { data } = await axios.post(
+          `${API_URL}/auth/refresh`,
+          {},
+          {
+            withCredentials: true,
+            headers: { "X-Requested-With": "XMLHttpRequest" },
+          },
+        );
         // Logout may have cleared tokens while refresh was in-flight —
         // don't restore a session the user just ended.
-        if (tokenStore.getRefresh() !== capturedRefresh) return false;
-        tokenStore.setTokens(data.access_token, data.refresh_token);
+        if (capturedAccess !== null && tokenStore.getAccess() !== capturedAccess) return false;
+        if (!data?.access_token) return false;
+        tokenStore.setTokens(data.access_token);
         return true;
       } catch {
         return false;
@@ -90,7 +108,11 @@ async function tryRefresh(): Promise<boolean> {
 // FastAPI errors carry the human-readable reason in the `detail` body field.
 // Surfaces it as the axios error message so refine notifications (and any
 // direct callers) show *why* a request failed instead of just the status code.
-function enrichErrorMessage(error: AxiosError): AxiosError {
+function normalizeError(error: AxiosError): AxiosError {
+  // refine reads `statusCode` for its generic error notification and
+  // authProvider.onError reads it to detect a 401; axios errors carry no such
+  // field, so without this every notification says "status code: undefined".
+  Object.assign(error, { statusCode: error.response?.status });
   const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail;
   // 2FA challenge responses carry an object detail ({code: "2fa_required",
   // challenge_token}) — leave the message alone so the login page can branch
@@ -116,7 +138,8 @@ function forceLogout() {
   // Revoked/expired session: drop everything synchronously so no further
   // request can go out with the dead tokens, then bounce to /login. The
   // queryClient listener notifies the live socket via onTokensChanged.
-  const hadSession = Boolean(tokenStore.getAccess() ?? tokenStore.getRefresh());
+  // tokenStore.clear() also drops the signed-in marker.
+  const hadSession = Boolean(tokenStore.getAccess());
   tokenStore.clear();
   clearAllCaches(queryClient);
   if (hadSession && window.location.pathname !== "/login") {
@@ -127,7 +150,7 @@ function forceLogout() {
 httpClient.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
-    enrichErrorMessage(error);
+    normalizeError(error);
     const original = error.config as RetriableRequest | undefined;
     const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail;
     if (error.response?.status === 401 && original && !original._retried) {
@@ -153,6 +176,39 @@ httpClient.interceptors.response.use(
 
 const baseDataProvider = dataProviderModule(API_URL, httpClient);
 
+// `admin-workspaces` / `admin-audit` are virtual resources: the list views
+// read from the superuser-only GET /admin/* endpoints, which speak the same
+// offset/limit + X-Total-Count dialect as every other list endpoint.
+// They are not real REST resources (detail/toggle use `custom`), so only
+// getList is overridden. (`admin-users` maps through RESOURCE_PATHS above.)
+function adminList(path: string): DataProvider["getList"] {
+  return async ({ pagination, filters, sorters }) => {
+    const { currentPage = 1, pageSize = 10 } = pagination ?? {};
+    const params = new URLSearchParams({
+      offset: String((currentPage - 1) * pageSize),
+      limit: String(pageSize),
+    });
+    for (const f of filters ?? []) {
+      if (!("field" in f)) continue;
+      // `q` is the cross-field search term (backend `?q=`), not a column.
+      params.append(f.field === "q" ? "q" : `${f.field}_like`, String(f.value));
+    }
+    for (const s of sorters ?? []) {
+      if (!s.field) continue;
+      params.append("sort[]", s.field);
+      params.append("order[]", s.order);
+    }
+    const { data, headers } = await httpClient.get(`${API_URL}${path}?${params}`);
+    const total = Number(headers["x-total-count"]);
+    return { data, total: Number.isFinite(total) ? total : data.length };
+  };
+}
+
+const adminLists = {
+  "admin-workspaces": adminList("/admin/workspaces"),
+  "admin-audit": adminList("/admin/audit"),
+} as const;
+
 // Refine resource name → backend path when they differ (hyphenated resource
 // names are not valid backend route prefixes).
 const RESOURCE_PATHS: Record<string, string> = {
@@ -168,8 +224,11 @@ const resourcePath = (resource: string) => RESOURCE_PATHS[resource] ?? resource;
  */
 export const dataProvider: DataProvider = {
   ...baseDataProvider,
-  getList: ({ resource, ...params }) =>
-    baseDataProvider.getList({ resource: resourcePath(resource), ...params }),
+  getList: ({ resource, ...params }) => {
+    const admin = (adminLists as Record<string, DataProvider["getList"]>)[resource];
+    if (admin) return admin({ resource, ...params });
+    return baseDataProvider.getList({ resource: resourcePath(resource), ...params });
+  },
   getOne: ({ resource, ...params }) =>
     baseDataProvider.getOne({ resource: resourcePath(resource), ...params }),
   update: ({ resource, ...params }) =>

@@ -9,13 +9,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dates import ensure_utc, now_utc
-from src.core.permissions import ALL_PERMISSIONS, permissions_for_role
+from src.core.permissions import (
+    ALL_PERMISSIONS,
+    KEY_ONLY_PERMISSIONS,
+    permissions_for_role,
+)
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
 from src.models.core import Invitation
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.services.auth import AuthService
+from src.services.serializers import ONBOARDING_ENABLED_FLAG
 
 
 class WorkspaceError(Exception):
@@ -27,6 +32,10 @@ class WorkspaceForbidden(WorkspaceError):
 
 
 class WorkspaceConflict(WorkspaceError):
+    pass
+
+
+class WorkspaceNotFound(WorkspaceError):
     pass
 
 
@@ -173,6 +182,7 @@ class WorkspaceService:
         *,
         name: str | None = None,
         description: str | None = None,
+        onboarding_enabled: bool | None = None,
         actor: User | None = None,
         ip_address: str | None = None,
     ) -> Workspace:
@@ -186,6 +196,21 @@ class WorkspaceService:
         if description is not None and description != workspace.description:
             changes["description"] = {"from": workspace.description, "to": description}
             workspace.description = description
+        if onboarding_enabled is not None:
+            # Stored in the flags JSON (FEATURE_FLAGS.md), default-on: a stored
+            # True is dropped so the key never implies anything but "off".
+            current = (workspace.flags or {}).get(ONBOARDING_ENABLED_FLAG) is not False
+            if current != onboarding_enabled:
+                changes[ONBOARDING_ENABLED_FLAG] = {
+                    "from": current,
+                    "to": onboarding_enabled,
+                }
+                flags = {
+                    k: v for k, v in (workspace.flags or {}).items() if k != ONBOARDING_ENABLED_FLAG
+                }
+                if not onboarding_enabled:
+                    flags[ONBOARDING_ENABLED_FLAG] = False
+                workspace.flags = flags
         await self._session.commit()
         if changes:
             await publish_audit(
@@ -449,6 +474,51 @@ class WorkspaceService:
             ip_address=ip_address,
         )
 
+    async def leave_workspace(
+        self,
+        workspace_id: str,
+        *,
+        actor: User,
+        ip_address: str | None = None,
+    ) -> None:
+        """Delete the actor's own membership. Owners cannot leave."""
+        stmt = select(WorkspaceMember).where(
+            WorkspaceMember.workspace_id == workspace_id,
+            WorkspaceMember.user_id == actor.id,
+            WorkspaceMember.status == "active",
+        )
+        member = (await self._session.execute(stmt)).scalar_one_or_none()
+        if member is None:
+            raise WorkspaceError("membership not found")
+        role = await self._session.get(Role, member.role_id)
+        if role and role.name == "owner":
+            raise WorkspaceError("owners cannot leave the workspace")
+        workspace = await self._session.get(Workspace, workspace_id)
+        workspace_name = workspace.name if workspace else "workspace"
+        await self._session.delete(member)
+        await self._session.commit()
+        await publish_event(
+            self._bus,
+            Subjects.WORKSPACE_MEMBER_REMOVED,
+            {
+                "workspace_id": workspace_id,
+                "workspace_name": workspace_name,
+                "user_id": actor.id,
+                "removed_by_user_id": actor.id,
+                "removed_by_name": actor.display_name,
+            },
+        )
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="member",
+            resource_id=member.id,
+            action="member.left",
+            actor_user_id=actor.id,
+            details={"workspace_name": workspace_name},
+            ip_address=ip_address,
+        )
+
     # ------------------------------------------------------------- invitations
 
     async def create_invitation(
@@ -705,6 +775,12 @@ class WorkspaceService:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_role(self, workspace_id: str, role_id: str) -> Role:
+        role = await self._session.get(Role, role_id)
+        if role is None or role.workspace_id != workspace_id:
+            raise WorkspaceNotFound("role not found")
+        return role
+
     async def _single_workspace_role(self, workspace_id: str) -> Role:
         """Auto-join role: viewer, else the lowest non-owner system role.
 
@@ -737,9 +813,16 @@ class WorkspaceService:
         self, permissions: list[str], assignable: set[str], *, owner: bool = False
     ) -> None:
         """Unknown strings and `"*"` fail fast; unheld permissions are Forbidden."""
-        unknown = sorted(set(permissions) - set(ALL_PERMISSIONS) - {"*"})
+        unknown = sorted(
+            set(permissions) - set(ALL_PERMISSIONS) - {"*"} - set(KEY_ONLY_PERMISSIONS)
+        )
         if unknown:
             raise WorkspaceError(f"unknown permissions: {', '.join(unknown)}")
+        key_only = sorted(set(permissions) & set(KEY_ONLY_PERMISSIONS))
+        if key_only:
+            raise WorkspaceError(
+                f"API-key-only permissions cannot be granted to roles: {', '.join(key_only)}"
+            )
         if "*" in permissions:
             # Reserved for owner — minting it would clone owner minus the name.
             raise WorkspaceError('"*" is reserved for the owner role')
@@ -811,17 +894,18 @@ class WorkspaceService:
         actor: User | None = None,
         ip_address: str | None = None,
     ) -> Role:
-        role = await self._session.get(Role, role_id)
-        if role is None or role.workspace_id != workspace_id:
-            raise WorkspaceError("role not found")
+        role = await self.get_role(workspace_id, role_id)
         if role.name == "owner":
             raise WorkspaceForbidden("the owner role cannot be edited")
+        changed = False
         if name is not None and name != role.name:
             await self._check_name_free(workspace_id, name, exclude_id=role.id)
             role.name = name
-        if description is not None:
+            changed = True
+        if description is not None and description != role.description:
             role.description = description
-        if permissions is not None:
+            changed = True
+        if permissions is not None and sorted(permissions) != sorted(role.permissions or []):
             assignable: set[str] = set()
             is_owner = False
             if actor is not None:
@@ -832,6 +916,9 @@ class WorkspaceService:
                     assignable = set(actor_role.permissions)
             self._check_permissions_assignable(permissions, assignable, owner=is_owner)
             role.permissions = permissions
+            changed = True
+        if not changed:
+            return role
         # An edited system role opts out of boot-time convergence — otherwise
         # the next restart would silently revert the change. The name stays.
         role.system = False
