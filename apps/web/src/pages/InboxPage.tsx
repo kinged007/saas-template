@@ -1176,9 +1176,7 @@ export function InboxPage() {
                   </div>
                 </div>
                 <div className="prose prose-sm dark:prose-invert max-w-none flex-1">
-                  <Markdown components={markdownComponents} remarkPlugins={mentionPlugins}>
-                    {selectedNotif.body || ""}
-                  </Markdown>
+                  <Markdown components={markdownComponents}>{selectedNotif.body || ""}</Markdown>
                 </div>
                 <div className="border-border mt-6 flex items-center gap-2 border-t pt-4">
                   {linkUrl(selectedNotif) && (

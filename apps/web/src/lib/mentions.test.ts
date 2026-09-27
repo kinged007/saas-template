@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { mentionRemarkPlugin } from "./markdown";
-import { rankMentionTargets, type MentionTarget } from "@/components/inbox/TiptapEditor";
+import { pickerIndex, rankMentionTargets, type MentionTarget } from "@/components/inbox/TiptapEditor";
 
 /** The subset of an mdast node these tests build by hand. */
 type Node = { type: string; value?: string; url?: string; children?: Node[] };
@@ -131,5 +131,30 @@ describe("rankMentionTargets", () => {
 
   it("returns nothing when no label matches", () => {
     assert.deepEqual(rankMentionTargets(LABELS, "zz"), []);
+  });
+});
+
+describe("pickerIndex", () => {
+  it("selects the first row once the query has picked the list", () => {
+    assert.equal(pickerIndex(-1, "an", 3), 0);
+    assert.equal(pickerIndex(2, "an", 3), 2);
+  });
+
+  it("selects nothing for a blank query the user has not arrowed into", () => {
+    assert.equal(pickerIndex(-1, "", 3), -1);
+    assert.equal(pickerIndex(-1, "   ", 3), -1);
+  });
+
+  it("follows the cursor on a blank query once the user arrows in", () => {
+    assert.equal(pickerIndex(0, "", 3), 0);
+    assert.equal(pickerIndex(2, "", 3), 2);
+  });
+
+  it("selects nothing with no rows to select", () => {
+    assert.equal(pickerIndex(0, "an", 0), -1);
+  });
+
+  it("clamps a cursor left over from a longer list", () => {
+    assert.equal(pickerIndex(7, "a", 2), 1);
   });
 });
