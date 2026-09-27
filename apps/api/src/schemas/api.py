@@ -83,6 +83,13 @@ class ChangePasswordRequest(BaseModel):
     code: str | None = Field(default=None, min_length=6, max_length=10)
 
 
+class MemberPasswordUpdate(BaseModel):
+    """Admin-set password: no current_password. The caller already holds
+    `profile:update` on the target's workspace."""
+
+    new_password: str = Field(min_length=8)
+
+
 class SessionRead(BaseModel):
     id: str
     created_at: datetime | None = None

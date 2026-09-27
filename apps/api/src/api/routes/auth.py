@@ -40,7 +40,7 @@ from src.schemas.api import (
 )
 from src.services.auth import AuthError, AuthService
 from src.services.profiles import ProfileService
-from src.services.serializers import profile_to_dict, user_to_dict, workspace_to_dict
+from src.services.serializers import profile_to_dict, session_to_dict, user_to_dict, workspace_to_dict
 from src.services.two_factor import TwoFactorError, TwoFactorService
 from src.services.workspaces import WorkspaceService
 from src.settings import settings
@@ -342,15 +342,7 @@ def _require_session_user(principal: AuthPrincipal) -> None:
 
 
 def _session_to_dict(row, *, current: bool) -> dict:
-    return {
-        "id": row.id,
-        "created_at": row.created_at,
-        "expires_at": row.expires_at,
-        "revoked_at": row.revoked_at,
-        "ip_address": row.ip_address,
-        "user_agent": row.user_agent,
-        "current": current,
-    }
+    return session_to_dict(row, current=current)
 
 
 @router.post("/change-password", status_code=204)

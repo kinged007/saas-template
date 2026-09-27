@@ -350,6 +350,7 @@ class AuthService:
         *,
         current_session_id: str | None,
         ip_address: str | None = None,
+        actor_user_id: str | None = None,
     ) -> None:
         """Revoke one session; raises AuthError when it is current or unknown."""
         if session_id == current_session_id:
@@ -368,13 +369,18 @@ class AuthService:
                 resource_type="user",
                 resource_id=user_id,
                 action="user.session_revoked",
-                actor_user_id=user_id,
+                actor_user_id=actor_user_id or user_id,
                 details={"session_id": session_id},
                 ip_address=ip_address,
             )
 
     async def revoke_other_sessions(
-        self, user_id: str, *, current_session_id: str | None, ip_address: str | None = None
+        self,
+        user_id: str,
+        *,
+        current_session_id: str | None,
+        ip_address: str | None = None,
+        actor_user_id: str | None = None,
     ) -> int:
         """Revoke every live session except the current one; returns the count."""
         rows = await self.list_sessions(user_id)
@@ -395,7 +401,7 @@ class AuthService:
                 resource_type="user",
                 resource_id=user_id,
                 action="user.sessions_revoked",
-                actor_user_id=user_id,
+                actor_user_id=actor_user_id or user_id,
                 details={"revoked_count": count},
                 ip_address=ip_address,
             )
@@ -532,7 +538,12 @@ class AuthService:
         return user
 
     async def change_password(
-        self, user: User, new_password: str, *, ip_address: str | None = None
+        self,
+        user: User,
+        new_password: str,
+        *,
+        ip_address: str | None = None,
+        actor_user_id: str | None = None,
     ) -> User:
         """Set a new password hash and revoke every refresh session.
 
@@ -554,7 +565,7 @@ class AuthService:
             resource_type="user",
             resource_id=user.id,
             action="user.password_changed",
-            actor_user_id=user.id,
+            actor_user_id=actor_user_id or user.id,
             ip_address=ip_address,
         )
         return user

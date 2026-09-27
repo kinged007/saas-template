@@ -17,6 +17,10 @@ MEMBER_CREATE = "member:create"  # invite
 MEMBER_UPDATE = "member:update"  # change roles
 MEMBER_DELETE = "member:delete"  # remove members, revoke invitations
 
+# Edit another member's profile, notifications and security. Distinct from
+# `member:update` so holding it never implies role changes or removal.
+PROFILE_UPDATE = "profile:update"
+
 ROLE_READ = "role:read"
 ROLE_CREATE = "role:create"  # create + update custom roles
 
@@ -57,6 +61,7 @@ PERMISSION_DEFINITIONS: dict[str, dict[str, str]] = {
     MEMBER_CREATE: {"resource": "member", "action": "create"},
     MEMBER_UPDATE: {"resource": "member", "action": "update"},
     MEMBER_DELETE: {"resource": "member", "action": "delete"},
+    PROFILE_UPDATE: {"resource": "profile", "action": "update"},
     ROLE_READ: {"resource": "role", "action": "read"},
     ROLE_CREATE: {"resource": "role", "action": "create"},
     APIKEY_READ: {"resource": "apikey", "action": "read"},

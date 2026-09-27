@@ -88,6 +88,17 @@ def profile_to_dict(p: UserProfile) -> dict:
     }
 
 
+def session_to_dict(row, *, current: bool) -> dict:
+    return {
+        "id": row.id,
+        "created_at": row.created_at,
+        "expires_at": row.expires_at,
+        "revoked_at": row.revoked_at,
+        "ip_address": row.ip_address,
+        "user_agent": row.user_agent,
+        "current": current,
+    }
+
 def public_projection(p: UserProfile, user: User | None = None) -> dict:
     """
     Redacted projection for cross-user reads: strips phone_number, date_of_birth,
