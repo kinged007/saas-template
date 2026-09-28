@@ -14,6 +14,12 @@ class OAuthAccount(Base, TimestampMixin):
     Identity survives email changes (subject is stable); email is only the
     first-connect fallback key. Multiple providers with the same email link
     to the same user.
+
+    One-to-many per (user_id, provider) is the intended cardinality, not an
+    oversight: uq_oauth_provider_subject is the only link key, so
+    AuthService.upsert_oauth_user adds a subject instead of replacing the one
+    already linked. A user legitimately holds several subjects under one
+    provider when a shared IdP issues a separate subject per work email.
     """
 
     __tablename__ = "oauth_accounts"
