@@ -107,10 +107,15 @@ class Settings(BaseSettings):
     auth_rate_limit_window_seconds: int = 300
     # Single-workspace mode. When true, the first login/register creates the
     # one shared workspace (owned by whoever arrives first, normally the
-    # superadmin) and every later login/register auto-joins it as viewer.
-    # Creating a second workspace and deleting the workspace are rejected;
-    # the sidebar switcher and the delete danger-zone are hidden.
+    # superadmin) and every later login/register auto-joins it as
+    # single_workspace_default_role. Creating a second workspace and deleting
+    # the workspace are rejected; the sidebar switcher and the delete
+    # danger-zone are hidden.
     single_workspace: bool = False
+    # Role given to users who auto-join the single workspace: any of its
+    # system or custom role names. An unknown or blank name falls back to
+    # viewer (SINGLE_WORKSPACE_DEFAULT_ROLE=editor).
+    single_workspace_default_role: str = "viewer"
 
     # Scheduled jobs
     jobs_scheduler_tick_seconds: float = 10.0

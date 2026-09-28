@@ -42,8 +42,8 @@ class WorkspaceNotFound(WorkspaceError):
 class WorkspaceService:
     DEFAULT_ROLES = ["owner", "admin", "editor", "viewer"]
 
-    # Auto-join role for single-workspace mode (SINGLE_WORKSPACE). Viewer:
-    # edit access requires explicit designation.
+    # Fallback auto-join role for single-workspace mode (SINGLE_WORKSPACE).
+    # Viewer: edit access requires explicit designation.
     SINGLE_WORKSPACE_ROLE = "viewer"
 
     def __init__(self, session: AsyncSession, bus: EventBus | None = None) -> None:
@@ -69,7 +69,8 @@ class WorkspaceService:
         """Ensure the shared workspace exists, then add the user idempotently.
 
         First arrival creates it (owned by them, normally the superadmin);
-        everyone else joins as viewer. Existing members keep their role."""
+        everyone else joins as single_workspace_default_role. Existing
+        members keep their role."""
         workspace = await self.get_single_workspace()
         if workspace is None:
             try:
@@ -963,23 +964,22 @@ class WorkspaceService:
         return role
 
     async def _single_workspace_role(self, workspace_id: str) -> Role:
-        """Auto-join role: viewer, else the lowest non-owner system role.
+        """Auto-join role: SINGLE_WORKSPACE_DEFAULT_ROLE, else viewer.
 
-        Falls back when the viewer role was renamed/removed so a missing
-        role does not brick every later login in single-workspace mode."""
-        stmt = select(Role).where(Role.workspace_id == workspace_id)
-        result = await self._session.execute(stmt)
-        roles = list(result.scalars().all())
-        for role in roles:
-            if role.name == self.SINGLE_WORKSPACE_ROLE:
+        Matched by exact name over the workspace's non-owner roles, so a
+        custom role works too and an unknown, blank or "owner" value resolves
+        viewer. The wider chain keeps logins working when the viewer role
+        was renamed or removed, instead of bricking every later login."""
+        from src.settings import settings
+
+        result = await self._session.execute(select(Role).where(Role.workspace_id == workspace_id))
+        roles = {role.name: role for role in result.scalars() if role.name != "owner"}
+        names = (settings.single_workspace_default_role.strip(), self.SINGLE_WORKSPACE_ROLE)
+        for name in (*names, "editor", "admin"):
+            if role := roles.get(name):
                 return role
-        for fallback in ("editor", "admin"):
-            for role in roles:
-                if role.name == fallback:
-                    return role
-        non_owner = [r for r in roles if r.name != "owner"]
-        if non_owner:
-            return non_owner[0]
+        if roles:
+            return next(iter(roles.values()))
         raise WorkspaceError(f"role {self.SINGLE_WORKSPACE_ROLE} not found")
 
     async def _role_by_name(self, workspace_id: str, name: str) -> Role:
