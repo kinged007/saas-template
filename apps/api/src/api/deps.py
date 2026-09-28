@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import format_datetime
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.dates import now_utc
 from src.core.security.tokens import decode_access_token
 from src.db.session import get_db
 from src.models.api_key import ApiKey
 from src.models.workspace import User, Workspace
-from src.services.api_keys import ApiKeyService, roll_window
+from src.services.api_keys import ApiKeyService
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
 
@@ -148,36 +151,41 @@ async def get_optional_workspace_id(
     return x_workspace_id
 
 
-def _check_key_quota(api_key: ApiKey) -> None:
-    """Reject keys that exhausted this month's quota (None = unlimited)."""
-    if api_key.usage_quota is not None and api_key.usage_window_count >= api_key.usage_quota:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "api key quota exceeded")
+def _quota_headers(api_key: ApiKey, now: datetime) -> dict[str, str]:
+    """Quota/remaining/reset headers for key-authenticated responses.
 
-
-def _quota_headers(api_key: ApiKey) -> dict[str, str]:
-    """Quota/remaining headers for key-authenticated responses (empty = unlimited).
-
-    Both are per calendar month: Remaining counts the uses left in the current
-    window, not the lifetime total."""
+    Empty = unlimited key. All three are per calendar month: Remaining counts
+    the uses left in the current window, not the lifetime total, and Reset is
+    the instant the window rolls over, so a client blocked at the quota knows
+    when it recovers.
+    """
     if api_key.usage_quota is None:
         return {}
+    month = now.month
+    reset = datetime(now.year + month // 12, month % 12 + 1, 1, tzinfo=UTC)
     return {
         "X-API-Key-Quota": str(api_key.usage_quota),
         "X-API-Key-Remaining": str(max(0, api_key.usage_quota - api_key.usage_window_count)),
+        "X-API-Key-Window-Reset": format_datetime(reset, usegmt=True),
     }
 
 
 async def record_key_use(api_key: ApiKey, db: AsyncSession, response: Response) -> None:
-    """Charge one unit of the key's quota and publish the quota headers.
+    """Count the use + emit quota headers for key-authenticated requests.
 
-Shared by require_key_permission and require_permission so the two
-    branches cannot drift."""
-    # Roll the window before the check: a key that ran out last month must be
-    # usable on the first request of the new month, not one request later.
-    roll_window(api_key)
-    _check_key_quota(api_key)
-    await ApiKeyService(db).touch(api_key)
-    for k, v in _quota_headers(api_key).items():
+    Shared by require_key_permission and require_permission so the two
+    branches cannot drift. One clock read feeds the rollover, the counter and
+    the reset header, so they cannot disagree. The rejection carries the same
+    headers, which a client that has run out needs more than one that has not.
+    """
+    now = now_utc()
+    if not await ApiKeyService(db).record_use(api_key, now):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "api key quota exceeded",
+            headers=_quota_headers(api_key, now),
+        )
+    for k, v in _quota_headers(api_key, now).items():
         response.headers[k] = v
 
 

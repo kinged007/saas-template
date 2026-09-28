@@ -29,27 +29,6 @@ class ApiKeyNotFound(ApiKeyError):
     pass
 
 
-def roll_window(key: ApiKey, now: datetime | None = None) -> None:
-    """Start a new quota window when `now` falls in a later calendar month.
-
-    The window is month-aligned in UTC rather than anchored to the first use:
-    any request landing in a new calendar month opens a fresh window, so the
-    stored start is the first instant of that month. `usage_count` is the
-    lifetime total and is never reset.
-
-    Mutates in place; the caller commits. A window start read back from SQLite
-    is naive, hence ensure_utc.
-    """
-    now = ensure_utc(now or now_utc())
-    start = key.usage_window_start
-    if start is not None:
-        start = ensure_utc(start)
-        if (start.year, start.month) == (now.year, now.month):
-            return
-    key.usage_window_count = 0
-    key.usage_window_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-
 class ApiKeyService:
     """Workspace-scoped API key management.
 
@@ -73,6 +52,32 @@ class ApiKeyService:
         self._bus = bus
 
     # --------------------------------------------------------------- helpers
+
+    @staticmethod
+    def roll_window(key: ApiKey, now: datetime | None = None) -> None:
+        """Start a new quota window when `now` falls in a later calendar month.
+
+        The window is month-aligned in UTC rather than anchored to the first
+        use: any request landing in a new calendar month opens a fresh window,
+        so the stored start is the first instant of that month. `usage_count`
+        is the lifetime total and is never reset.
+
+        Only a strictly earlier stored month rolls. The same month is current,
+        and a *later* one means the host clock moved backwards — rolling there
+        would hand out a second full budget, so the counter is left alone and
+        the key fails closed instead.
+
+        Mutates in place; the caller flushes. A window start read back from
+        SQLite is naive, hence ensure_utc.
+        """
+        now = ensure_utc(now or now_utc())
+        start = key.usage_window_start
+        if start is not None:
+            start = ensure_utc(start)
+            if (start.year, start.month) >= (now.year, now.month):
+                return
+        key.usage_window_count = 0
+        key.usage_window_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
     @staticmethod
     def _hash(raw: str) -> str:
@@ -249,8 +254,11 @@ class ApiKeyService:
 
         A key past its `expires_at` is rejected here rather than relying on the
         cleanup job, so expiry takes effect the moment it passes.
+
+        Takes the row lock for the rest of the transaction: the caller is about
+        to read-modify-write this key's quota counters (see `record_use`).
         """
-        stmt = select(ApiKey).where(ApiKey.key_hash == self._hash(raw))
+        stmt = select(ApiKey).where(ApiKey.key_hash == self._hash(raw)).with_for_update()
         result = await self._session.execute(stmt)
         key = result.scalar_one_or_none()
         if key is None or key.revoked_at is not None:
@@ -259,14 +267,41 @@ class ApiKeyService:
             return None
         return key
 
-    async def touch(self, key: ApiKey) -> None:
-        """Record a successful use: bump the lifetime + in-window counters."""
-        roll_window(key)
-        key.usage_count += 1
-        key.usage_window_count += 1
-        key.last_used_at = now_utc()
+    async def record_use(self, key: ApiKey, now: datetime | None = None) -> bool:
+        """Count one successful use; False when the month's quota is spent.
+
+        The quota test and the increment are a single UPDATE, so concurrent
+        requests carrying one key cannot interleave a read-modify-write and
+        consume more than `usage_quota` uses. `authenticate` holds the row
+        lock, which is what makes the budget exact on Postgres; SQLite ignores
+        FOR UPDATE, so the atomic increment is what carries it there.
+
+        Returns False without committing, so the caller's session teardown
+        discards the pending rollover: a rejected request neither counts nor
+        opens the next window.
+        """
+        now = ensure_utc(now or now_utc())
+        # Roll before the check: a key that ran out last month must be usable
+        # on the first request of the new month, not one request later.
+        self.roll_window(key, now)
+        await self._session.flush()
+        result = await self._session.execute(
+            update(ApiKey)
+            .where(
+                ApiKey.id == key.id,
+                or_(ApiKey.usage_quota.is_(None), ApiKey.usage_window_count < ApiKey.usage_quota),
+            )
+            .values(
+                usage_count=ApiKey.usage_count + 1,
+                usage_window_count=ApiKey.usage_window_count + 1,
+                last_used_at=now,
+            )
+            .execution_options(synchronize_session="fetch")
+        )
+        if result.rowcount == 0:
+            return False
         await self._session.commit()
-        await self._session.refresh(key)
+        return True
 
     async def set_quota(
         self,

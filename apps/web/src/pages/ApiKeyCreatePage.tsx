@@ -205,7 +205,8 @@ export function ApiKeyCreatePage() {
                   />
                 </FormControl>
                 <FormDescription>
-                  Max authenticated uses per calendar month (UTC). Leave empty for unlimited.
+                  Max authenticated uses per calendar month (UTC). The first window is
+                  truncated to the rest of this month. Leave empty for unlimited.
                 </FormDescription>
                 <FormMessage />
               </FormItem>

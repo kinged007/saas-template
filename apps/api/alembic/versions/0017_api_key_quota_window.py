@@ -20,7 +20,6 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     # usage_count stays the lifetime total; usage_window_count is the counter
     # usage_quota caps, reset when a request lands in a later calendar month.
-    # New keys start the window empty: usage_window_start is set on first use.
     op.add_column(
         "api_keys",
         sa.Column("usage_window_count", sa.Integer(), nullable=False, server_default="0"),
@@ -28,6 +27,11 @@ def upgrade() -> None:
     op.add_column(
         "api_keys", sa.Column("usage_window_start", sa.DateTime(timezone=True), nullable=True)
     )
+    # Seed the window from the lifetime total so the deploy does not hand a
+    # second full budget to a key that had already exhausted its old lifetime
+    # quota: such a key stays rejected until the next month boundary, and from
+    # that boundary on it gets a fresh budget every month.
+    op.execute("UPDATE api_keys SET usage_window_count = usage_count")
 
 
 def downgrade() -> None:

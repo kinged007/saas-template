@@ -74,7 +74,10 @@ export function ApiKeysPage() {
                 <TableCell className="text-muted-foreground">
                   {key.usage_window_count ?? 0}
                   {key.usage_quota != null ? ` / ${key.usage_quota}` : ""}
-                  <p className="text-xs">{key.usage_count ?? 0} total</p>
+                  <p className="text-xs">
+                    <span className="sr-only">lifetime </span>
+                    {key.usage_count ?? 0} total
+                  </p>
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {formatDate(key.expires_at)}
