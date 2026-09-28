@@ -64,7 +64,10 @@ import type { Identity } from "../types";
 import { getDisplayName } from "../types";
 
 type MenuItem = {
-  key: string;
+  /** React key. Independent of `to`, so re-routing an item keeps its identity. */
+  id: string;
+  /** Route target. `"#"` renders a dead link that goes nowhere. */
+  to: string;
   label: string;
   icon: LucideIcon;
   permission: string | null;
@@ -75,28 +78,33 @@ type MenuItem = {
  * two sides. Omit `title` for an unlabelled group. Adding a group is a data
  * change only; `SidebarNav` does not need to know about it.
  */
-const SIDEBAR_GROUPS: { id: string; title?: string; position: "top" | "bottom"; items: MenuItem[] }[] = [
+const SIDEBAR_GROUPS: {
+  id: string;
+  title?: string;
+  position: "primary" | "secondary";
+  items: MenuItem[];
+}[] = [
   {
     id: "main",
-    position: "top",
+    position: "primary",
     items: [
-      { key: "/", label: "Dashboard", icon: LayoutDashboard, permission: "workspace:read" },
-      { key: "/inbox", label: "Inbox", icon: Inbox, permission: null },
+      { id: "dashboard", to: "/", label: "Dashboard", icon: LayoutDashboard, permission: "workspace:read" },
+      { id: "inbox", to: "/inbox", label: "Inbox", icon: Inbox, permission: null },
     ],
   },
   {
     id: "demo",
     title: "Demo",
-    position: "top",
+    position: "primary",
     items: [
-      { key: "#", label: "Sample page", icon: FileText, permission: null },
-      { key: "#", label: "Support", icon: LifeBuoy, permission: null },
+      { id: "sample-page", to: "#", label: "Sample page", icon: FileText, permission: null },
+      { id: "support", to: "#", label: "Support", icon: LifeBuoy, permission: null },
     ],
   },
   {
     id: "workspace",
-    position: "bottom",
-    items: [{ key: "/members", label: "Members", icon: Users, permission: "member:read" }],
+    position: "secondary",
+    items: [{ id: "members", to: "/members", label: "Members", icon: Users, permission: "member:read" }],
   },
 ];
 
@@ -131,30 +139,36 @@ function SidebarNav() {
     <SidebarGroup key={group.id}>
       {group.title && <SidebarGroupLabel>{group.title}</SidebarGroupLabel>}
       <SidebarMenu>
-        {group.items.map((item, index) => {
+        {group.items.map((item) => {
           const Icon = item.icon;
-          const active = isActive(item.key);
-          const isInbox = item.key === "/inbox";
-          const badgeCount = isInbox ? convUnreadCount : 0;
-          return (
-            <SidebarMenuItem key={`${group.id}-${item.key}-${index}`}>
-              <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
-                <Link to={item.key}>
-                  <span className="relative">
-                    <Icon className="h-4 w-4 shrink-0" />
-                    {badgeCount > 0 && (
-                      <span className="absolute -right-1.5 -top-1.5 hidden h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-0.5 text-[10px] font-medium leading-none text-destructive-foreground group-data-[collapsible=icon]:flex">
-                        {badgeCount > 99 ? "99+" : badgeCount}
-                      </span>
-                    )}
+          const active = isActive(item.to);
+          const badgeCount = item.id === "inbox" ? convUnreadCount : 0;
+          const content = (
+            <>
+              <span className="relative">
+                <Icon className="h-4 w-4 shrink-0" />
+                {badgeCount > 0 && (
+                  <span className="absolute -right-1.5 -top-1.5 hidden h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-0.5 text-[10px] font-medium leading-none text-destructive-foreground group-data-[collapsible=icon]:flex">
+                    {badgeCount > 99 ? "99+" : badgeCount}
                   </span>
-                  <span>{item.label}</span>
-                  {badgeCount > 0 && (
-                    <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-xs font-medium text-destructive-foreground group-data-[collapsible=icon]:hidden">
-                      {badgeCount > 99 ? "99+" : badgeCount}
-                    </span>
-                  )}
-                </Link>
+                )}
+              </span>
+              <span>{item.label}</span>
+              {badgeCount > 0 && (
+                <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-xs font-medium text-destructive-foreground group-data-[collapsible=icon]:hidden">
+                  {badgeCount > 99 ? "99+" : badgeCount}
+                </span>
+              )}
+            </>
+          );
+          return (
+            <SidebarMenuItem key={item.id}>
+              <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
+                {/* A `to` of "#" is a placeholder: a plain anchor keeps the href
+                    literal, where `<Link to="#">` resolves to the current
+                    pathname (React Router drops a bare "#") and silently
+                    no-ops. Real routes keep client-side navigation. */}
+                {item.to === "#" ? <a href={item.to}>{content}</a> : <Link to={item.to}>{content}</Link>}
               </SidebarMenuButton>
             </SidebarMenuItem>
           );
@@ -163,14 +177,14 @@ function SidebarNav() {
     </SidebarGroup>
   );
 
-  const topGroups = visibleGroups.filter((g) => g.position === "top");
-  const bottomGroups = visibleGroups.filter((g) => g.position === "bottom");
+  const primaryGroups = visibleGroups.filter((g) => g.position === "primary");
+  const secondaryGroups = visibleGroups.filter((g) => g.position === "secondary");
 
   return (
     <>
-      {topGroups.map(renderGroup)}
-      {topGroups.length > 0 && bottomGroups.length > 0 && <SidebarSeparator />}
-      {bottomGroups.map(renderGroup)}
+      {primaryGroups.map(renderGroup)}
+      {primaryGroups.length > 0 && secondaryGroups.length > 0 && <SidebarSeparator />}
+      {secondaryGroups.map(renderGroup)}
     </>
   );
 }
