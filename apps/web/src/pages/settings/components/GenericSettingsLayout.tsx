@@ -1,4 +1,5 @@
-import { Navigate, Outlet, useLocation } from "react-router";
+import { Link, Navigate, Outlet, useLocation } from "react-router";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { SettingsRegistry } from "../types";
 import { SettingsNav } from "./SettingsNav";
@@ -46,6 +47,9 @@ export function GenericSettingsLayout({
         <p className="text-muted-foreground mt-2 text-sm">
           {guard.deniedMessage ?? "You do not have permission to access these settings."}
         </p>
+        <Button variant="outline" asChild className="mt-4">
+          <Link to="/">Back to dashboard</Link>
+        </Button>
       </div>
     );
   }

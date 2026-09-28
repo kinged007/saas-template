@@ -41,6 +41,16 @@ _AUDIT_SORTABLE = {"created_at", "action", "resource_type"}
 _AUDIT_FILTERABLE = {"action", "resource_type", "actor_user_id", "workspace_id"}
 
 
+def _uuid_or_404(value: str, label: str) -> str:
+    # StringUUID's bind processor raises ValueError (-> 500) on a malformed id,
+    # so validate before it reaches the query.
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{label} not found") from None
+    return value
+
+
 def _admin_user_dict(u: User) -> dict:
     return {
         **user_to_dict(u),
@@ -82,6 +92,8 @@ async def list_users(
         )
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(User.created_at.desc(), User.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
@@ -94,7 +106,7 @@ async def get_user(
     _=Depends(require_superuser),
     db: AsyncSession = Depends(get_db),
 ):
-    user = await db.get(User, user_id)
+    user = await db.get(User, _uuid_or_404(user_id, "user"))
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     stmt = (
@@ -120,7 +132,7 @@ async def update_user(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    user = await db.get(User, user_id)
+    user = await db.get(User, _uuid_or_404(user_id, "user"))
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     if user.id == admin.id and body.is_active is False:
@@ -158,6 +170,8 @@ async def list_all_workspaces(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(Workspace.created_at.desc(), Workspace.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     workspaces = rows.scalars().all()
@@ -184,7 +198,7 @@ async def update_workspace_flags(
 ):
     # Row lock: flags is a JSON blob, so the merge below is a read-modify-write
     # that must not race WorkspaceService.set_require_2fa.
-    workspace = await db.get(Workspace, workspace_id, with_for_update=True)
+    workspace = await db.get(Workspace, _uuid_or_404(workspace_id, "workspace"), with_for_update=True)
     if workspace is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
     merged = {**(workspace.flags or {}), **body.flags}
