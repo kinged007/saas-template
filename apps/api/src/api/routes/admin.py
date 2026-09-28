@@ -196,7 +196,7 @@ async def update_workspace_flags(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    workspace = await db.get(Workspace, _uuid_or_404(workspace_id, "workspace"))
+    workspace = await db.get(Workspace, workspace_id)
     if workspace is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
     merged = {**(workspace.flags or {}), **body.flags}
