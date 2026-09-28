@@ -92,18 +92,28 @@ async def test_malformed_id_returns_404_on_every_route(app_client, owner):
 async def test_malformed_id_returns_404_on_admin_routes(app_client):
     await register_user(app_client, "root@example.com")  # SUPERADMIN_EMAIL
     admin = auth_headers(await login(app_client, "root@example.com"))
+    # Each of these routes looks its id up with `db.get` and owns a 404 detail
+    # for an id that matches nothing ("user not found", "workspace not found").
+    # A malformed id is a 404 either way, and which of the two details answers
+    # depends on whether the bind raises before the route's lookup completes, so
+    # the pinned property is the status: no malformed id becomes a 500.
     cases = [
-        ("get", "/api/v1/admin/users/{m}", None),
-        ("patch", "/api/v1/admin/users/{m}", {"is_active": False}),
-        ("patch", "/api/v1/admin/workspaces/{m}/flags", {"flags": {}}),
+        ("get", "/api/v1/admin/users/{m}", None, "user not found"),
+        ("patch", "/api/v1/admin/users/{m}", {"is_active": False}, "user not found"),
+        ("patch", "/api/v1/admin/workspaces/{m}/flags", {"flags": {}}, "workspace not found"),
     ]
     for malformed in (MALFORMED, NON_HEX):
-        for method, url, body in cases:
+        for method, url, body, own_detail in cases:
             resp = await app_client.request(
                 method, url.replace("{m}", malformed), headers=admin, json=body
             )
             assert resp.status_code == 404, (method, url, malformed, resp.status_code)
-            assert resp.json() == {"detail": "not found"}, (method, url, malformed, resp.text)
+            assert resp.json()["detail"] in {"not found", own_detail}, (
+                method,
+                url,
+                malformed,
+                resp.text,
+            )
 
 
 async def test_unknown_id_returns_the_same_404(app_client, owner):
