@@ -26,6 +26,7 @@ from typing import Any
 
 from croniter import croniter
 
+from src.events.bus import EventBus
 from src.models.jobs import MissedJobPolicy
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,8 @@ class JobContext:
     workspace_id: str | None
     # Decrypted parameter values for this run.
     params: dict[str, Any]
+    # Application bus, so a handler can publish its own events/audit entries.
+    bus: EventBus | None = None
 
     def session(self):
         """Open a DB session scoped to this execution.

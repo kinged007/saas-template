@@ -239,6 +239,8 @@ export type ApiKey = {
   permissions: string[];
   created_by_user_id?: string;
   last_used_at?: string;
+  /** Optional hard expiry; the key is rejected once this passes. */
+  expires_at?: string | null;
   /** Lifetime authenticated uses; null usage_quota = unlimited. */
   usage_count?: number;
   usage_quota?: number | null;

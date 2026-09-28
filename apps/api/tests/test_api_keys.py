@@ -8,10 +8,10 @@ from tests.conftest import (
 )
 
 
-async def _create_key(client, headers, name="ci-deploy", permissions=None):
+async def _create_key(client, headers, name="ci-deploy", permissions=None, body=None):
     resp = await client.post(
         "/api/v1/api-keys",
-        json={"name": name, "permissions": permissions or []},
+        json={"name": name, "permissions": permissions or [], **(body or {})},
         headers=headers,
     )
     assert resp.status_code == 201, resp.text

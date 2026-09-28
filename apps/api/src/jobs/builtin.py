@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from src.core.dates import ensure_utc, now_utc
 from src.jobs.registry import JobContext, JobSpec, job_registry
+from src.models.api_key import ApiKey
 from src.models.core import Invitation, Notification, NotificationPreference
 
 logger = logging.getLogger(__name__)
@@ -263,6 +264,99 @@ async def retention_cleanup(ctx: JobContext) -> None:
         f"retention cleanup — {runs_removed} run(s), "
         f"{notifs_removed} notification(s), {audit_removed} audit entr(ies) removed"
     )
+
+
+@job_registry.register(
+    JobSpec(
+        key="apikeys.cleanup",
+        name="API key expiry cleanup",
+        description=(
+            "Revokes API keys whose expires_at has passed and hard-deletes keys "
+            "revoked more than the retention window ago. Expired keys already "
+            "fail authentication immediately, so revoking them here keeps the "
+            "stored state honest rather than gating access."
+        ),
+        scope="global",
+        schedule="0 5 * * *",
+        params_schema={},
+        default_enabled=True,
+        missed_policy="single",
+        timeout_seconds=300,
+    )
+)
+async def api_key_cleanup(ctx: JobContext) -> None:
+    from datetime import timedelta
+
+    from src.events.publisher import publish_audit, publish_event
+    from src.events.subjects import Subjects
+    from src.settings import settings
+
+    now = now_utc()
+    async with ctx.session() as session:
+        # Only the keys that actually expired are read — the id and label
+        # columns the audit trail needs — so a large table is never
+        # materialized. The mutation itself is a set-based UPDATE.
+        expired = (
+            (
+                await session.execute(
+                    select(ApiKey.id, ApiKey.workspace_id, ApiKey.name, ApiKey.key_prefix).where(
+                        ApiKey.revoked_at.is_(None),
+                        ApiKey.expires_at.is_not(None),
+                        ApiKey.expires_at <= now,
+                    )
+                )
+            )
+            .tuples()
+            .all()
+        )
+        revoked = 0
+        if expired:
+            result = await session.execute(
+                update(ApiKey)
+                .where(ApiKey.id.in_([e[0] for e in expired]))
+                .values(revoked_at=now)
+                .execution_options(synchronize_session=False)
+            )
+            revoked = result.rowcount or 0
+
+        removed = 0
+        if settings.api_key_retention_days > 0:
+            cutoff = now - timedelta(days=settings.api_key_retention_days)
+            # Keys the UPDATE above just revoked carry revoked_at == now, so
+            # they never match this cutoff: expiry starts the retention clock,
+            # it does not end the key.
+            result = await session.execute(delete(ApiKey).where(ApiKey.revoked_at <= cutoff))
+            removed = result.rowcount or 0
+        await session.commit()
+
+    for key_id, workspace_id, name, key_prefix in expired:
+        await publish_event(
+            ctx.bus,
+            Subjects.APIKEY_REVOKED,
+            {
+                "apikey_id": key_id,
+                "workspace_id": workspace_id,
+                "name": name,
+                "key_prefix": key_prefix,
+                "revoked_by_user_id": None,
+            },
+        )
+        await publish_audit(
+            ctx.bus,
+            workspace_id=workspace_id,
+            resource_type="apikey",
+            resource_id=key_id,
+            action="apikey.revoked",
+            actor_user_id=None,
+            details={"name": name, "key_prefix": key_prefix, "reason": "expired"},
+        )
+
+    logger.info(
+        "api key cleanup — %d key(s) revoked as expired, %d key(s) deleted",
+        revoked,
+        removed,
+    )
+    print(f"api key cleanup — {revoked} key(s) revoked as expired, {removed} key(s) deleted")
 
 
 @job_registry.register(

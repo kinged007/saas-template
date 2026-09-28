@@ -19,6 +19,11 @@ import {
 import { EmptyRow, formatDate } from "../components/ui";
 import type { ApiKey } from "../types";
 
+/** Past its expiry the key already fails auth, before the job revokes it. */
+function isExpired(key: ApiKey): boolean {
+  return !!key.expires_at && new Date(key.expires_at).getTime() <= Date.now();
+}
+
 export function ApiKeysPage() {
   const { result } = useWorkspaceList<ApiKey>({ resource: "api-keys" });
   const { data: canManage } = useCan({ resource: "api-keys", action: "delete" });
@@ -35,6 +40,7 @@ export function ApiKeysPage() {
               <TableHead>Name</TableHead>
               <TableHead>Permissions</TableHead>
               <TableHead>Usage</TableHead>
+              <TableHead>Expires</TableHead>
               <TableHead>Last used</TableHead>
               <TableHead>Created</TableHead>
               <TableHead className="text-right">Actions</TableHead>
@@ -70,29 +76,42 @@ export function ApiKeysPage() {
                   {key.usage_quota != null ? ` / ${key.usage_quota}` : ""}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
+                  {formatDate(key.expires_at)}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
                   {formatDate(key.last_used_at)}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {formatDate(key.created_at)}
                 </TableCell>
                 <TableCell className="text-right">
+                  {/* An expired key stays deletable: revocation is idempotent,
+                      so the row never loses its only affordance while the
+                      cleanup job has yet to run. */}
                   {key.revoked_at ? (
-                    <Badge variant="secondary">revoked</Badge>
+                    <Badge variant="secondary">
+                      {isExpired(key) ? "expired" : "revoked"}
+                    </Badge>
                   ) : (
-                    canManage?.can && (
-                      <DeleteButton
-                        resource="api-keys"
-                        recordItemId={key.id}
-                        variant="ghost"
-                        size="sm"
-                      />
-                    )
+                    <div className="flex items-center justify-end gap-2">
+                      {isExpired(key) && (
+                        <Badge variant="secondary">expired</Badge>
+                      )}
+                      {canManage?.can && (
+                        <DeleteButton
+                          resource="api-keys"
+                          recordItemId={key.id}
+                          variant="ghost"
+                          size="sm"
+                        />
+                      )}
+                    </div>
                   )}
                 </TableCell>
               </TableRow>
             ))}
             {rows.length === 0 && (
-              <EmptyRow colSpan={6}>No API keys yet.</EmptyRow>
+              <EmptyRow colSpan={7}>No API keys yet.</EmptyRow>
             )}
           </TableBody>
         </Table>

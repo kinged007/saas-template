@@ -13,6 +13,7 @@ from src.api.deps import (
     require_permission,
     resolve_auth_principal,
 )
+from src.core.dates import ensure_utc
 from src.core.permissions import (
     APIKEY_CREATE,
     APIKEY_DELETE,
@@ -30,7 +31,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api-keys", tags=["api-keys"])
 
 _APIKEY_FILTERABLE = {"name"}
-_APIKEY_SORTABLE = {"name", "created_at", "last_used_at"}
+_APIKEY_SORTABLE = {"name", "created_at", "last_used_at", "expires_at"}
 
 
 def _key_dict(k: ApiKey) -> dict:
@@ -44,6 +45,7 @@ def _key_dict(k: ApiKey) -> dict:
         "usage_count": k.usage_count,
         "usage_quota": k.usage_quota,
         "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
+        "expires_at": ensure_utc(k.expires_at).isoformat() if k.expires_at else None,
         "revoked_at": k.revoked_at.isoformat() if k.revoked_at else None,
         "created_at": k.created_at.isoformat() if k.created_at else None,
     }
@@ -113,6 +115,7 @@ async def create_api_key(
             name=body.name,
             permissions=body.permissions,
             usage_quota=body.usage_quota,
+            expires_at=body.expires_at,
             actor=user,
             ip_address=request.client.host if request.client else None,
             # When the caller is itself an API key, the new key's permissions
