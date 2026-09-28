@@ -27,6 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { EmptyRow, formatDate } from "@/components/ui";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 export type AuthSession = {
   id: string;
@@ -39,6 +40,7 @@ export type AuthSession = {
 };
 
 export function SecuritySection() {
+  const { refresh: refreshIdentity } = useWorkspace();
   const sessions = useCustom<AuthSession[]>({ url: "auth/sessions", method: "get" });
   const status = useCustom<{ enabled: boolean }>({ url: "auth/2fa/status", method: "get" });
   const { mutateAsync, mutation } = useCustomMutation();
@@ -64,6 +66,11 @@ export function SecuritySection() {
   const refresh = () => {
     sessions.query.refetch();
     status.query.refetch();
+    // Enabling or disabling 2FA changes this session's verdict, which lives on
+    // the identity — the cache WorkspaceSecurityGuard subscribes to. Without
+    // this the guard keeps redirecting a user who just enabled 2FA, and lets
+    // through one who just disabled it while the server refuses every request.
+    refreshIdentity();
   };
 
   const revokeOne = async (id: string) => {

@@ -198,7 +198,9 @@ async def update_workspace_flags(
 ):
     # Row lock: flags is a JSON blob, so the merge below is a read-modify-write
     # that must not race WorkspaceService.set_require_2fa.
-    workspace = await db.get(Workspace, _uuid_or_404(workspace_id, "workspace"), with_for_update=True)
+    workspace = await db.get(
+        Workspace, _uuid_or_404(workspace_id, "workspace"), with_for_update=True
+    )
     if workspace is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
     merged = {**(workspace.flags or {}), **body.flags}
