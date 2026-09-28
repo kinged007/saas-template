@@ -86,6 +86,7 @@ CSV_RESOURCES: dict[str, list[str]] = {
     "conversations": ["title", "last_message_preview", "last_message_at", "created_at"],
     "notifications": ["type", "title", "acknowledged_at", "created_at"],
     "audit": [
+        "id",
         "created_at",
         "actor_email",
         "action",
@@ -124,9 +125,21 @@ async def _ensure_membership(session: AsyncSession, workspace_id: str, user_id: 
         raise ConversationForbidden("you are not a member of this workspace")
 
 
+# Excel and LibreOffice evaluate a cell starting with one of these as a formula
+# on open, so an exported name or email runs on whoever opens the file. TAB, CR
+# and LF start a formula too: the spreadsheet drops the control character and
+# reads the formula behind it. The "'" prefix is a convention, not a guarantee —
+# Excel can strip it on save-and-reopen, so an edited file can reactivate.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
 def _csv_cell(value: object) -> object:
-    """JSON-encode structured values so a CSV cell stays valid JSON, not repr."""
-    return json.dumps(value) if isinstance(value, (dict, list)) else value
+    """Encode one CSV cell: structured values as JSON, formulas defused."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + value
+    return value
 
 
 class SearchExportService:
@@ -538,7 +551,8 @@ class SearchExportService:
         )
         return bundle
 
-    def export_csv(self, bundle: dict, resource: str) -> str:
+    @staticmethod
+    def export_csv(bundle: dict, resource: str) -> str:
         columns = CSV_RESOURCES.get(resource)
         if columns is None:
             raise ValueError(
@@ -560,7 +574,7 @@ class SearchExportService:
                     # the JSON export carries: the redacted public projection,
                     # and empty cells when the member has no profile row.
                     **{
-                        f"profile_{c}": _csv_cell((r.get("profile") or {}).get(c))
+                        f"profile_{c}": (r.get("profile") or {}).get(c)
                         for c in _MEMBER_PROFILE_COLUMNS
                     },
                 }
@@ -611,6 +625,7 @@ class SearchExportService:
         elif resource == "audit":
             flat = [
                 {
+                    "id": r.get("id"),
                     "created_at": r.get("created_at"),
                     "actor_email": r.get("actor_email"),
                     "action": r.get("action"),
@@ -633,5 +648,6 @@ class SearchExportService:
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=columns)
         writer.writeheader()
-        writer.writerows(flat)
+        # One choke point, so a new resource is covered by construction.
+        writer.writerows({k: _csv_cell(v) for k, v in row.items()} for row in flat)
         return buf.getvalue()
