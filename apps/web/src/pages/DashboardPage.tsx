@@ -1,4 +1,4 @@
-import { useReducer } from "react";
+import { useLayoutEffect, useReducer, useRef } from "react";
 import { useCan, useGetIdentity, useList } from "@refinedev/core";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle2, Circle, PlusCircle, X } from "lucide-react";
@@ -41,6 +41,16 @@ export function DashboardPage() {
   // re-render after dismiss. No dismissed state is kept, so switching
   // workspaces can never show a stale dismissal from another workspace.
   const [, force] = useReducer((x: number) => x + 1, 0);
+  // Restoring unmounts the button while it holds focus, which drops focus to
+  // <body> and tells a screen reader nothing. Move focus to the card heading
+  // in the commit that brings the card back.
+  const restoreHeading = useRef<HTMLDivElement>(null);
+  const focusHeadingOnRender = useRef(false);
+  useLayoutEffect(() => {
+    if (!focusHeadingOnRender.current) return;
+    focusHeadingOnRender.current = false;
+    restoreHeading.current?.focus();
+  });
   const onboardingDismissed = workspace
     ? onboardingStore.isDismissed(workspace.id, identity?.id)
     : false;
@@ -110,6 +120,7 @@ export function DashboardPage() {
             className="shrink-0"
             onClick={() => {
               if (workspace) onboardingStore.clear(workspace.id, identity?.id);
+              focusHeadingOnRender.current = true;
               force();
             }}
           >
@@ -123,7 +134,7 @@ export function DashboardPage() {
           <CardHeader>
             <div className="flex items-start justify-between gap-2">
               <div>
-                <CardTitle>Get set up</CardTitle>
+                <CardTitle tabIndex={-1} ref={restoreHeading}>Get set up</CardTitle>
                 <CardDescription>
                   {workspace ? "Finish these steps to get the most out of your workspace." : "Create a workspace to get started with managing your team."}
                 </CardDescription>
