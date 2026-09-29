@@ -5,7 +5,8 @@ import Markdown from "react-markdown";
 import { ArrowLeft, Inbox, Mail, MailOpen, ExternalLink, SendHorizontal, Pencil, Archive, ArchiveRestore, Search, MessageSquare, PanelLeftClose, PanelLeftOpen, X, Check, UserPlus } from "lucide-react";
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
-import { markdownComponents, markdownComponentsInverted, mentionRemarkPlugin, mentionUrlTransform, stripMarkdown, truncate as truncatePreview } from "@/lib/markdown";
+import { markdownComponents, markdownComponentsInverted, stripMarkdown, truncate as truncatePreview } from "@/lib/markdown";
+import { mentionRemarkPlugin, mentionUrlTransform, type MentionTarget } from "@/lib/mentions";
 import { activeWorkspacePermissions } from "../utils/permissions";
 
 import { Badge } from "@/components/ui/badge";
@@ -21,7 +22,7 @@ import { cn } from "@/lib/utils";
 import type { Notification, Conversation, Message, Identity, Member } from "../types";
 import { getDisplayName, getParticipantDisplayName, getMemberDisplayName } from "../types";
 import { ComposeDialog } from "../components/inbox/ComposeDialog";
-import { TiptapEditor, type MentionTarget } from "../components/inbox/TiptapEditor";
+import { TiptapEditor } from "../components/inbox/TiptapEditor";
 import { EditParticipantsDialog } from "../components/inbox/EditParticipantsDialog";
 import {
   applyConversationRead,

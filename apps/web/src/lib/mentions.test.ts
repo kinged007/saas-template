@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mentionRemarkPlugin } from "./markdown";
-import { pickerIndex, rankMentionTargets, type MentionTarget } from "@/components/inbox/TiptapEditor";
+import { mentionRemarkPlugin, mentionUrlTransform, pickerIndex, rankMentionTargets, type MentionTarget } from "./mentions.ts";
 
 /** The subset of an mdast node these tests build by hand. */
-type Node = { type: string; value?: string; url?: string; children?: Node[] };
+type Node = { type: string; value?: string; url?: string; identifier?: string; children?: Node[] };
 
 const text = (value: string): Node => ({ type: "text", value });
 const doc = (...children: Node[]): Node => ({ type: "root", children });
@@ -48,6 +47,7 @@ describe("mentionRemarkPlugin", () => {
       para(text("@Ann"), { type: "inlineCode", value: "@Ann" }),
       { type: "code", value: "@Ann" },
       { type: "link", url: "/u/@Ann", children: [text("@Ann")] },
+      { type: "linkReference", identifier: "ref", children: [text("@Ann")] },
       { type: "image", url: "@Ann" },
     );
     transformer(tree);
@@ -60,8 +60,17 @@ describe("mentionRemarkPlugin", () => {
     assert.deepEqual(mentionsOf(tree), []);
   });
 
-  it("rejects an address or a URL path before the name, ASCII or not", () => {
-    for (const source of ["bob@Ann", "bobé@Ann", "中文@Ann", "/u/@Ann", "a.b/@Ann"]) {
+  it("rejects an address, a URL path or a URL query string before the name", () => {
+    for (const source of [
+      "bob@Ann",
+      "bobé@Ann",
+      "中文@Ann",
+      "/u/@Ann",
+      "a.b/@Ann",
+      "https://x.com/@Ann",
+      "https://x.com/?u=@Ann",
+      "https://x.com/?a=1&to=@Ann",
+    ]) {
       const tree = para(text(source));
       transformer(tree);
       assert.deepEqual(mentionsOf(tree), [], source);
@@ -134,27 +143,41 @@ describe("rankMentionTargets", () => {
   });
 });
 
+describe("mentionUrlTransform", () => {
+  it("keeps the mention marker and defers every other scheme to react-markdown", () => {
+    assert.equal(mentionUrlTransform("mention:"), "mention:");
+    for (const url of ["javascript:alert(1)", "JaVaScRiPt:alert(1)", "data:text/html,x", "vbscript:x"]) {
+      assert.equal(mentionUrlTransform(url), "", url);
+    }
+  });
+});
+
 describe("pickerIndex", () => {
   it("selects the first row once the query has picked the list", () => {
-    assert.equal(pickerIndex(-1, "an", 3), 0);
-    assert.equal(pickerIndex(2, "an", 3), 2);
+    assert.equal(pickerIndex(null, LABELS, "an"), 0);
   });
 
   it("selects nothing for a blank query the user has not arrowed into", () => {
-    assert.equal(pickerIndex(-1, "", 3), -1);
-    assert.equal(pickerIndex(-1, "   ", 3), -1);
+    assert.equal(pickerIndex(null, LABELS, ""), -1);
+    assert.equal(pickerIndex(null, LABELS, "   "), -1);
   });
 
-  it("follows the cursor on a blank query once the user arrows in", () => {
-    assert.equal(pickerIndex(0, "", 3), 0);
-    assert.equal(pickerIndex(2, "", 3), 2);
+  it("keeps the picked person highlighted when the list re-ranks under a new query", () => {
+    // The review's H1: arrowing to "User T." and then typing one character
+    // re-ranked the list and made Enter name "User O." instead. Selection is
+    // an id, so it follows the person rather than the slot.
+    const before = [target("Admin U."), target("User O."), target("User T.")];
+    const after = [target("User O."), target("User T."), target("Admin U.")];
+    assert.equal(pickerIndex(before[2].id, before, ""), 2);
+    assert.equal(pickerIndex(before[2].id, after, "U"), 1);
+  });
+
+  it("selects nothing once the picked person is gone from the list", () => {
+    assert.equal(pickerIndex("Gone", [target("Ann"), target("Bo")], "an"), -1);
   });
 
   it("selects nothing with no rows to select", () => {
-    assert.equal(pickerIndex(0, "an", 0), -1);
-  });
-
-  it("clamps a cursor left over from a longer list", () => {
-    assert.equal(pickerIndex(7, "a", 2), 1);
+    assert.equal(pickerIndex(null, [], "an"), -1);
+    assert.equal(pickerIndex("Ann", [], ""), -1);
   });
 });

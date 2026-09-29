@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { Bold, Italic, Code2, SquareCode, List, ListOrdered, Link2, Quote } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { pickerIndex, rankMentionTargets, type MentionTarget } from "@/lib/mentions";
 
 const turndownService = new TurndownService({
   headingStyle: "atx",
@@ -23,77 +24,19 @@ turndownService.addRule("mention", {
   replacement: (_content, node) => `@${node.getAttribute("data-label") ?? ""}`,
 });
 
-/**
- * An entity the `@` picker can insert. This array is the extension point:
- * adding agents or any other mentionable later means appending entries, not
- * changing the picker.
- */
-export type MentionTarget = {
-  id: string;
-  type: string;
-  label: string;
-  email?: string | null;
-  avatar_url?: string | null;
-  first_name?: string | null;
-  last_name?: string | null;
-  role?: string | null;
-};
-
 type MentionListRef = {
   onKeyDown: (props: SuggestionKeyDownProps) => boolean;
 };
-
-/** Rows the picker renders; the list box is sized to show exactly this many. */
-const MENTION_PICKER_LIMIT = 8;
-
-/**
- * Rank candidates for the `@` query: exact match, then a label starting with
- * the query, then any other label containing it. Each bucket keeps the order
- * the editor was handed, so equally-ranked names stay in that order. The
- * result is capped, so the list stays usable as the mentionable set grows.
- */
-export function rankMentionTargets(targets: MentionTarget[], query: string): MentionTarget[] {
-  const q = query.trim().toLowerCase();
-  // An empty query lists everyone, so it needs the cap just as much.
-  if (!q) return targets.slice(0, MENTION_PICKER_LIMIT);
-  const exact: MentionTarget[] = [];
-  const wordPrefix: MentionTarget[] = [];
-  const other: MentionTarget[] = [];
-  for (const target of targets) {
-    const label = target.label.toLowerCase();
-    if (label === q) exact.push(target);
-    else if (label.startsWith(q)) wordPrefix.push(target);
-    else if (label.includes(q)) other.push(target);
-  }
-  return [...exact, ...wordPrefix, ...other].slice(0, MENTION_PICKER_LIMIT);
-}
-
-/**
- * The row the picker highlights, or -1 when there is nothing to highlight.
- * A blank query lists everyone, so nothing is selected until the user arrows
- * into the list: a bare Enter after `@` must not insert whoever happens to be
- * first. A cursor past the end clamps to the last row, which is what a
- * shortening list leaves behind.
- */
-export function pickerIndex(cursor: number, query: string, itemCount: number): number {
-  if (itemCount === 0) return -1;
-  if (cursor < 0 && !query.trim()) return -1;
-  return Math.min(Math.max(cursor, 0), itemCount - 1);
-}
 
 const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(function MentionList(
   props,
   ref,
 ) {
-  const [cursor, setCursor] = useState(-1);
+  // The picked person, not their position: a keystroke re-ranks the list, and
+  // a position would land on whoever moved into that slot.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const items = props.items;
-  const index = pickerIndex(cursor, props.query, items.length);
-  // Every query is a different list, so a cursor carried across the change
-  // would point into the old one and Enter would insert the wrong person.
-  // Clearing it on a query change can only drop a highlight, never add one.
-  useEffect(() => {
-    setCursor(-1);
-  }, [props.query]);
+  const index = pickerIndex(selectedId, items, props.query);
 
   const select = (i: number) => {
     const item = items[i];
@@ -104,11 +47,11 @@ const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(f
     onKeyDown: ({ event }) => {
       if (items.length === 0) return false;
       if (event.key === "ArrowUp") {
-        setCursor(index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length);
+        setSelectedId(items[index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length].id);
         return true;
       }
       if (event.key === "ArrowDown") {
-        setCursor(index < 0 ? 0 : (index + 1) % items.length);
+        setSelectedId(items[index < 0 ? 0 : (index + 1) % items.length].id);
         return true;
       }
       if (event.key === "Enter" || event.key === "Tab") {
@@ -132,6 +75,7 @@ const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(f
 
   return (
     <div className="bg-popover text-popover-foreground overflow-hidden rounded-md border shadow-md">
+      {/* max-h-72 is 288px, so all MENTION_PICKER_LIMIT (8) rows of 32px fit. */}
       <ul className="max-h-72 overflow-y-auto p-1">
         {items.map((item, i) => (
           <li key={item.id}>

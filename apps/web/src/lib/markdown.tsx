@@ -1,5 +1,6 @@
 import * as React from "react";
-import { defaultUrlTransform, type Components } from "react-markdown";
+import { type Components } from "react-markdown";
+import { MENTION_SCHEME } from "./mentions";
 import { cn } from "./utils";
 
 /**
@@ -80,86 +81,6 @@ function LinkBase({
       {children}
     </a>
   );
-}
-
-/** Protocol marker `mentionRemarkPlugin` emits; `a` overrides turn it into a span. */
-const MENTION_SCHEME = "mention:";
-
-/**
- * react-markdown's default `urlTransform` drops any href without a known
- * scheme, which turns the mention marker into an empty `href` before the `a`
- * override sees it. Keep the marker and defer every other decision to the
- * default transform so javascript:/data: links stay blocked.
- */
-export function mentionUrlTransform(url: string): string {
-  if (url.startsWith(MENTION_SCHEME)) return url;
-  return defaultUrlTransform(url);
-}
-
-/** The subset of an mdast/hast node this plugin needs to walk. */
-type TreeNode = { type: string; value?: string; url?: string; children?: TreeNode[] };
-
-/**
- * A remark plugin that rewrites `@Name` occurrences of known people into a
- * marker link so the `a` overrides can style them. The message body itself
- * stays plain markdown — other clients read the raw text.
- *
- * It runs on the parsed tree, so only `text` nodes are considered: a name
- * inside a fenced block, an inline code span or a URL is left alone. Both
- * boundaries are Unicode-aware: a trailing `\p{L}\p{N}_` keeps `@Ann` from
- * matching `@Annabelle`, and a leading lookbehind keeps it from matching the
- * `@` inside an address (`bob@Ann.com`, `bobé@Ann.com`) or a URL path
- * (`/u/@Ann`).
- *
- * Markdown `link` nodes are skipped as well: a mention inside a link label
- * would nest one anchor inside another.
- */
-export function mentionRemarkPlugin(names: string[]) {
-  // One pass, so a match can never be re-matched by a later name.
-  const unique = [...new Set(names.filter(Boolean))].sort((a, b) => b.length - a.length);
-  if (unique.length === 0) return function noopPlugin() { return function noop() {}; };
-  // Longest first so "Ann Lee" wins over "Ann" at the same position.
-  const alternation = unique.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  // ponytail: the lookbehind needs Safari 16.4+ (Mar 2023). If that floor is
-  // too high, rewrite the leading guard as a captured-prefix check.
-  const re = new RegExp(`(?<![\\p{L}\\p{N}_.~%+\\-/])@(${alternation})(?![\\p{L}\\p{N}_])`, "gu");
-  return function attacher() {
-    return function transformer(tree: TreeNode) {
-      const children = tree.children;
-      if (!Array.isArray(children)) return;
-      for (let i = 0; i < children.length; i++) {
-        const child = children[i];
-        if (child.type === "text" && typeof child.value === "string") {
-          const replaced = splitText(child.value);
-          if (replaced) {
-            children.splice(i, 1, ...replaced);
-            i += replaced.length - 1;
-          }
-          continue;
-        }
-        if (child.type !== "code" && child.type !== "inlineCode" && child.type !== "image" && child.type !== "link") {
-          transformer(child);
-        }
-      }
-    };
-  };
-  function splitText(value: string): TreeNode[] | null {
-    re.lastIndex = 0;
-    if (!re.test(value)) return null;
-    re.lastIndex = 0;
-    const out: TreeNode[] = [];
-    let last = 0;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(value)) !== null) {
-      if (m.index > last) out.push({ type: "text", value: value.slice(last, m.index) });
-      // The `@` is kept in the label so the mention renders as `@Name`, the
-      // same as the plain-text form the editor writes.
-      out.push({ type: "link", url: MENTION_SCHEME, children: [{ type: "text", value: m[0] }] });
-      last = m.index + m[0].length;
-    }
-    if (last < value.length) out.push({ type: "text", value: value.slice(last) });
-    return out;
-  }
 }
 
 /** Shared render for a highlighted mention; not a real link. */
