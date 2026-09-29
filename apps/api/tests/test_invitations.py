@@ -1,5 +1,7 @@
 import asyncio  # noqa: E402
 
+import pytest
+
 from tests.conftest import (
     auth_headers,
     create_workspace,
@@ -404,3 +406,58 @@ async def test_list_invitations_pagination(app_client):
     assert resp.headers["X-Total-Count"] == "3"
     assert len(resp.json()) == 1
     assert resp.json()[0]["email"] == "inv_page_2@example.com"
+
+
+async def test_resend_invitation_requires_a_manager_actor(app_client):
+    """#302: resend is a manager action. A viewer actor must be refused, and
+    the actor may not be left out — an omitted actor skipped authorization."""
+    from src.db.session import SessionFactory
+    from src.models.workspace import User
+    from src.services.workspaces import WorkspaceForbidden, WorkspaceService
+
+    client = app_client
+    owner = await register_user(client, "resend-owner@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+    viewer = next(
+        r
+        for r in (await client.get("/api/v1/roles", headers=owner_headers)).json()
+        if r["name"] == "viewer"
+    )
+
+    viewer_invite = await client.post(
+        "/api/v1/invitations",
+        json={"email": "resend-viewer@example.com", "role_id": viewer["id"]},
+        headers=owner_headers,
+    )
+    assert viewer_invite.status_code == 201, viewer_invite.text
+    viewer_tokens = await register_user(client, "resend-viewer@example.com")
+    accepted = await client.post(
+        "/api/v1/invitations/accept",
+        params={"token": viewer_invite.json()["token"]},
+        headers=auth_headers(viewer_tokens),
+    )
+    assert accepted.status_code == 200, accepted.text
+    viewer_id = (await client.get("/api/v1/auth/me", headers=auth_headers(viewer_tokens))).json()[
+        "id"
+    ]
+    owner_id = (await client.get("/api/v1/auth/me", headers=auth_headers(owner))).json()["id"]
+
+    target = await client.post(
+        "/api/v1/invitations",
+        json={"email": "resend-target@example.com", "role_id": viewer["id"]},
+        headers=owner_headers,
+    )
+    assert target.status_code == 201, target.text
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session)
+        viewer_user = await session.get(User, viewer_id)
+        with pytest.raises(WorkspaceForbidden):
+            await service.resend_invitation(ws["id"], target.json()["id"], actor=viewer_user)
+        with pytest.raises(TypeError):
+            await service.resend_invitation(ws["id"], target.json()["id"])
+        resent = await service.resend_invitation(
+            ws["id"], target.json()["id"], actor=await session.get(User, owner_id)
+        )
+        assert resent.status == "pending"

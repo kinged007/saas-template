@@ -80,7 +80,7 @@ async def permission_catalog(
     (`"*"` implies the full catalog) — same capping semantics as
     `GET /api-keys/effective-permissions`. The single source for the roles
     matrix and the New/Edit role dialogs."""
-    membership = await WorkspaceService(db).get_membership(workspace_id, user.id)
+    membership = await WorkspaceService(db).get_membership(workspace_id, user.id, active_only=True)
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership
