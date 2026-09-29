@@ -1,5 +1,7 @@
 """Browser cookie session flow: HttpOnly refresh cookie + CSRF + dual-mode."""
 
+import pytest
+
 from src.settings import settings
 from tests.conftest import auth_headers, register_user
 
@@ -331,3 +333,53 @@ async def test_cookie_secure_explicit_override_wins(monkeypatch, app_client):
     plain = await app_client.post("/api/v1/auth/login", json=body)
     assert plain.status_code == 200, plain.text
     assert "Secure" in plain.headers.get("set-cookie", ""), plain.headers.get("set-cookie")
+
+
+def _plain_request(headers: dict[str, str] | None = None, scheme: str = "http"):
+    from fastapi import Request
+
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": scheme,
+            "path": "/",
+            "raw_path": b"/",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()],
+            "client": ("test", 1),
+            "server": ("testserver", 80),
+        }
+    )
+
+
+async def test_cookie_secure_follows_forwarded_host_port(app_client):
+    """Retained :443 host fallback, for a proxy that forwards the host only."""
+    await register_user(app_client, "fwdhost@example.com")
+    resp = await app_client.post(
+        "/api/v1/auth/login",
+        json={"email": "fwdhost@example.com", "password": "Password123!", "use_cookies": True},
+        headers={"X-Forwarded-Host": "example.com:443"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert "Secure" in resp.headers.get("set-cookie", ""), resp.headers.get("set-cookie")
+
+
+def test_client_headers_can_only_add_secure():
+    """The header reads are client-controlled: they must never strip Secure."""
+    from src.core.security.cookies import cookie_secure_for
+
+    assert cookie_secure_for(_plain_request({"x-forwarded-proto": "http"}, scheme="https")) is True
+    assert cookie_secure_for(_plain_request({"x-forwarded-proto": "https"})) is True
+    assert cookie_secure_for(_plain_request({"host": "example.com:443"})) is True
+
+
+def test_set_refresh_cookie_requires_request():
+    """Omitting request would silently restore the pre-#155 ENVIRONMENT flag."""
+    from fastapi import Response
+
+    from src.core.security.cookies import set_refresh_cookie
+
+    with pytest.raises(TypeError):
+        set_refresh_cookie(Response(), "token")
