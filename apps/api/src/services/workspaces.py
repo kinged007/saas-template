@@ -742,8 +742,9 @@ class WorkspaceService:
         existing = await AuthService(self._session).get_by_email(email)
         is_registered = existing is not None
 
-        # Fired for every invitation. The workflow currently only handles
-        # unregistered recipients; email delivery is not implemented yet.
+        # Fired for every invitation. The workflow emails unregistered
+        # recipients; a failed send is audited, not raised, and the
+        # invitation stays pending for `POST /invitations/{id}/resend`.
         await publish_event(
             self._bus,
             Subjects.WORKSPACE_INVITATION_CREATED,
@@ -756,9 +757,6 @@ class WorkspaceService:
                 "invited_by_user_id": invited_by.id,
                 "invited_by_name": invited_by.display_name,
                 "is_registered": is_registered,
-                # TODO(events): include an accept URL when email delivery is
-                # implemented, e.g.
-                # "accept_url": f"{settings.frontend_url}/invitations/accept?token={invite.token}",
             },
         )
         # Notify an existing user with that email via the event bus.

@@ -373,6 +373,85 @@ async def test_notification_unacknowledge_and_filter(app_client):
     assert resp.json()[0]["acknowledged"] is True
 
 
+async def _wait_for_audit(action: str, deadline_seconds: float = 5.0) -> list:
+    """Poll audit_log_entries — the in-process bus delivers asynchronously, so
+    a single immediate read can race the workflow."""
+    from sqlalchemy import select
+
+    from src.db.session import SessionFactory
+    from src.models.audit import AuditLogEntry
+
+    deadline = asyncio.get_running_loop().time() + deadline_seconds
+    while True:
+        async with SessionFactory() as session:
+            rows = (
+                (await session.execute(select(AuditLogEntry).where(AuditLogEntry.action == action)))
+                .scalars()
+                .all()
+            )
+            if rows:
+                return list(rows)
+        if asyncio.get_running_loop().time() >= deadline:
+            return []
+        await asyncio.sleep(0.05)
+
+
+async def test_failed_invitation_email_is_recorded_in_audit(app_client, monkeypatch):
+    from src.db.session import SessionFactory
+    from src.models.core import Invitation
+
+    async def failing_send(message):
+        return False
+
+    # `send_email` never raises, it returns False — the handler must act on it.
+    monkeypatch.setattr("src.email.factory.send_email", failing_send)
+
+    client = app_client
+    owner = await register_user(client, "noemail_owner@example.com")
+    ws = await create_workspace(client, owner)
+    roles = await client.get("/api/v1/roles", headers=ws_headers(owner, ws["id"]))
+    viewer = next(r for r in roles.json() if r["name"] == "viewer")
+
+    resp = await client.post(
+        "/api/v1/invitations",
+        json={"email": "unreachable@example.com", "role_id": viewer["id"]},
+        headers=ws_headers(owner, ws["id"]),
+    )
+    assert resp.status_code == 201, resp.text
+    invite = resp.json()
+
+    rows = await _wait_for_audit("invitation.email_failed")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.workspace_id == ws["id"]
+    assert row.resource_type == "invitation"
+    assert row.resource_id == invite["id"]
+    assert row.details["email"] == "unreachable@example.com"
+
+    # The invitation row stays pending: the audit entry is the only trace of the
+    # failure, `POST /invitations/{id}/resend` is the recovery path.
+    async with SessionFactory() as session:
+        assert (await session.get(Invitation, invite["id"])).status == "pending"
+
+
+async def test_successful_invitation_email_records_no_audit_row(app_client):
+    client = app_client
+    owner = await register_user(client, "okemail_owner@example.com")
+    ws = await create_workspace(client, owner)
+    roles = await client.get("/api/v1/roles", headers=ws_headers(owner, ws["id"]))
+    viewer = next(r for r in roles.json() if r["name"] == "viewer")
+
+    resp = await client.post(
+        "/api/v1/invitations",
+        json={"email": "reachable@example.com", "role_id": viewer["id"]},
+        headers=ws_headers(owner, ws["id"]),
+    )
+    assert resp.status_code == 201, resp.text
+
+    # console driver (EMAIL_DRIVER unset) → `sent` is True → no failure entry
+    assert await _wait_for_audit("invitation.email_failed", deadline_seconds=1.0) == []
+
+
 async def test_list_invitations_pagination(app_client):
     client = app_client
     owner = await register_user(client, "inv_page_owner@example.com")
