@@ -40,7 +40,8 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
     # Browser session refresh cookie (HttpOnly; JS can never read it).
-    # refresh_cookie_secure=None (default) → Secure unless development.
+    # refresh_cookie_secure=None (default) → Secure on https requests; plain http
+    # falls back to Secure unless ENVIRONMENT is development or test.
     refresh_cookie_name: str = "st_refresh"
     refresh_cookie_domain: str = ""
     refresh_cookie_path: str = "/api/v1/auth"
