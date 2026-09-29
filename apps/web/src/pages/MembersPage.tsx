@@ -312,7 +312,7 @@ export function MembersPage() {
                     <TableCell className="text-muted-foreground">{formatDate(i.expires_at)}</TableCell>
                     <TableCell className="text-muted-foreground">{formatDate(i.created_at)}</TableCell>
                     <TableCell className="text-right">
-                      {i.status === "pending" && !i.expired && (
+                      {i.status === "pending" && (
                         <DeleteButton
                           resource="invitations"
                           recordItemId={i.id}
