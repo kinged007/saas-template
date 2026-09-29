@@ -70,17 +70,32 @@ export function WorkspaceExportCard() {
       <CardHeader>
         <CardTitle>Data export</CardTitle>
         <CardDescription>
-          Download a complete, importable-shaped dump of this workspace (members, roles, conversations, jobs,
-          notifications, webhooks, audit log). Secrets (API key values, webhook signing secrets, job secret
-          params) are never included — re-mint them after import.
+          Download a read-only snapshot of this workspace: the workspace itself, members and their profiles,
+          roles, invitations, conversations and their messages, jobs, API key metadata, webhook subscriptions,
+          notifications, and the audit log. The JSON download is the full record. There is no import in this
+          app — the file is for your own backup, or for loading into another system. The CSV download is a
+          spreadsheet view of one selected resource, and cells a spreadsheet would read as a formula are prefixed
+          with an apostrophe, so use the JSON for anything you intend to parse. Secrets (API key values, webhook
+          signing secrets, secret job parameters) are never included — re-mint them yourself.
         </CardDescription>
       </CardHeader>
       <CardContent>
         {resourcesFailed && (
-          <p role="alert" className="mb-2 text-sm text-destructive">
-            Could not load the exportable resources. CSV export is unavailable; the JSON export below still
-            works.
-          </p>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <p role="alert" className="text-sm text-destructive">
+              Could not load the exportable resources. CSV export is unavailable; the JSON export below still
+              works.
+            </p>
+            {/* Recovery is user-initiated: retry stays off so a mount makes one attempt, not a storm. */}
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={resourcesQuery.isFetching}
+              onClick={() => void resourcesQuery.refetch()}
+            >
+              Retry
+            </Button>
+          </div>
         )}
         <div className="flex flex-wrap items-center gap-2">
           <Select value={resource} onValueChange={setResource} disabled={resourcesFailed}>
