@@ -435,11 +435,13 @@ async def test_roles_client_sort_desc_reverses_only_within_the_rank_groups(app_c
 
 
 async def test_roles_paging_tiles_the_set_without_gaps(app_client):
-    """Rank + name is a total order, so pages tile the set with no dupes or drops."""
+    """Rank + name is a total order, so pages tile the set in that one order.
+
+    The expectation is built here rather than fetched from a full-set request:
+    two runs of the same endpoint agree even when the order is not total.
+    """
     client = app_client
     headers = await _roles_past_ten(client, "list-page")
-    full = await client.get("/api/v1/roles", params={"_start": 0, "_end": 100}, headers=headers)
-    assert full.status_code == 200, full.text
     paged: list[dict] = []
     for start in (0, 5, 10):
         resp = await client.get(
@@ -447,4 +449,6 @@ async def test_roles_paging_tiles_the_set_without_gaps(app_client):
         )
         assert resp.status_code == 200, resp.text
         paged += resp.json()
-    assert [r["id"] for r in paged] == [r["id"] for r in full.json()]
+    expected = ["owner", "admin", "editor", "viewer", *sorted(_CUSTOM_ROLE_NAMES)]
+    assert [r["name"] for r in paged] == expected
+    assert len({r["id"] for r in paged}) == 12
