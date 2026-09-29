@@ -16,10 +16,18 @@ class OAuthAccount(Base, TimestampMixin):
     to the same user.
 
     One-to-many per (user_id, provider) is the intended cardinality, not an
-    oversight: uq_oauth_provider_subject is the only link key, so
-    AuthService.upsert_oauth_user adds a subject instead of replacing the one
-    already linked. A user legitimately holds several subjects under one
-    provider when a shared IdP issues a separate subject per work email.
+    oversight: uq_oauth_provider_subject is the only link key, and
+    AuthService.upsert_oauth_user looks an identity up by (provider, subject)
+    alone, so it adds a subject rather than replacing the one already linked.
+    The fan-out fires when a new subject resolves to an email that already
+    belongs to a user: the IdP re-issued the subject for the same person, or
+    the user changed their email. A separate subject per work email matches no
+    user and creates a second user instead.
+
+    The fallback links on the unverified email claim (normalize_identity never
+    checks email_verified), so it is only as safe as the IdP: a provider that
+    lets a caller assert an arbitrary email can attach a subject to another
+    user's account.
     """
 
     __tablename__ = "oauth_accounts"
