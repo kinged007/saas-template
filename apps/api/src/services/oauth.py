@@ -44,6 +44,7 @@ class ProviderConfig:
     authorize_url: str | None = None
     token_url: str | None = None
     userinfo_url: str | None = None
+    emails_url: str | None = None
     jwks_uri: str | None = None
 
     @property
@@ -69,6 +70,7 @@ def get_provider(provider_id: str) -> ProviderConfig:
                 authorize_url=raw.get("authorize_url"),
                 token_url=raw.get("token_url"),
                 userinfo_url=raw.get("userinfo_url"),
+                emails_url=raw.get("emails_url"),
                 jwks_uri=raw.get("jwks_uri"),
             )
     raise OAuthError(f"unknown oauth provider '{provider_id}'")
@@ -189,6 +191,25 @@ def claims_from_id_token(
         return None
 
 
+async def _verified_email(client: httpx.AsyncClient, url: str, headers: dict[str, str]) -> str:
+    """Primary verified address from a provider's email list.
+
+    GitHub returns a null email from /user whenever the account keeps its
+    address private, and only this endpoint states whether an address is
+    verified. The claim is the provider's, not proof of mailbox control.
+    """
+    resp = await client.get(url, headers=headers)
+    resp.raise_for_status()
+    data = resp.json()
+    entries = (
+        [e for e in data if isinstance(e, dict) and e.get("verified") and e.get("email")]
+        if isinstance(data, list)
+        else []
+    )
+    chosen = next((e for e in entries if e.get("primary")), None) or next(iter(entries), None)
+    return str(chosen["email"]) if chosen else ""
+
+
 async def fetch_userinfo(
     provider: ProviderConfig, doc: dict[str, Any], access_token: str
 ) -> dict[str, Any]:
@@ -197,10 +218,15 @@ async def fetch_userinfo(
         return {}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(endpoint, headers={"Authorization": f"Bearer {access_token}"})
+            headers = {"Authorization": f"Bearer {access_token}"}
+            resp = await client.get(endpoint, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-            return data if isinstance(data, dict) else {}
+            if not isinstance(data, dict):
+                return {}
+            if not data.get("email") and provider.emails_url:
+                data["email"] = await _verified_email(client, provider.emails_url, headers)
+            return data
     except Exception as exc:
         raise OAuthError("could not fetch user info") from exc
 
