@@ -246,7 +246,7 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
 
   return (
     <div className={cn("rounded-md border bg-background", className)}>
-      <div className="flex flex-wrap items-center gap-1 border-b p-1">
+      <div role="toolbar" aria-label="Formatting" className="flex flex-wrap items-center gap-1 border-b p-1">
         <Button
           type="button"
           variant={editor.isActive("bold") ? "secondary" : "ghost"}
