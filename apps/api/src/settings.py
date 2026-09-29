@@ -115,7 +115,9 @@ class Settings(BaseSettings):
     single_workspace: bool = False
     # Role given to users who auto-join the single workspace: any of its
     # system or custom role names. An unknown or blank name falls back to
-    # viewer (SINGLE_WORKSPACE_DEFAULT_ROLE=editor).
+    # viewer (SINGLE_WORKSPACE_DEFAULT_ROLE=editor). The name only picks the
+    # role a new member gets: changing a member's role checks the literal role
+    # name ("owner"/"admin"), so a custom role here cannot change member roles.
     single_workspace_default_role: str = "viewer"
 
     # Scheduled jobs
