@@ -17,8 +17,12 @@ Covers, end to end over the HTTP API:
     and proof that key permissions never inherit the creator's role
 """
 
+from sqlalchemy import select
+
 from src.core.permissions import ALL_PERMISSIONS, JOB_READ, permissions_for_role
 from src.db.session import SessionFactory
+from src.models.api_key import ApiKey
+from src.services.api_keys import ApiKeyService
 from src.services.notifications import NotificationService
 from tests.conftest import (
     auth_headers,
@@ -479,6 +483,43 @@ async def test_users_only_see_their_own_api_keys(app_client):
     assert {admin_a["id"], admin_b["id"]}.isdisjoint(editor_ids)
     assert {"admin-key-a", "admin-key-b"}.isdisjoint({k["name"] for k in seen_by_editor.json()})
 
+
+async def test_runners_reapply_the_owner_predicate(app_client):
+    """The runners enforce the scope themselves: a bare select(ApiKey) still
+    cannot reach another user's keys, or the same user's keys elsewhere."""
+    client = app_client
+    owner = await register_user(client, "sven@example.com")
+    owner_id = await _user_id(client, owner)
+    ws = await create_workspace(client, owner, name="One")
+    other_ws = await create_workspace(client, owner, name="Two")
+    owner_headers = ws_headers(owner, ws["id"])
+
+    editor = await _add_member(client, owner_headers, ws["id"], "teresa@example.com", "editor")
+    editor_id = await _user_id(client, editor)
+
+    owner_key = await _create_key(client, owner_headers, "owner-key", ["member:read"])
+    elsewhere = await _create_key(
+        client, ws_headers(owner, other_ws["id"]), "elsewhere", ["member:read"]
+    )
+    editor_key = await _create_key(
+        client, ws_headers(editor, ws["id"]), "editor-key", ["member:read"]
+    )
+
+    async with SessionFactory() as session:
+        service = ApiKeyService(session)
+        rows = await service.list_for_user(ws["id"], owner_id, select(ApiKey))
+        assert {k.id for k in rows} == {owner_key["id"]}
+        assert await service.count_for_user(ws["id"], owner_id, select(ApiKey)) == 1
+
+        # ... and the scope of the other user is equally narrow
+        rows = await service.list_for_user(ws["id"], editor_id, select(ApiKey))
+        assert {k.id for k in rows} == {editor_key["id"]}
+        assert await service.count_for_user(ws["id"], editor_id, select(ApiKey)) == 1
+
+    # the unscoped statement really does reach every key — the runners narrowed it
+    async with SessionFactory() as session:
+        all_rows = list((await session.execute(select(ApiKey))).scalars().all())
+    assert {k.id for k in all_rows} == {owner_key["id"], editor_key["id"], elsewhere["id"]}
 
 async def test_user_cannot_revoke_anothers_api_key(app_client):
     """Revoking someone else's key 404s — even for wildcard-permission admins."""

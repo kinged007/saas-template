@@ -72,8 +72,10 @@ async def list_api_keys(
             sortable=_APIKEY_SORTABLE,
             filterable=_APIKEY_FILTERABLE,
         )
-        total = await service.count_for_user(stmt)
-        rows = await service.list_for_user(stmt.offset(spec.offset).limit(spec.limit))
+        total = await service.count_for_user(workspace_id, user.id, stmt)
+        rows = await service.list_for_user(
+            workspace_id, user.id, stmt.offset(spec.offset).limit(spec.limit)
+        )
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     response.headers["X-Total-Count"] = str(total)
