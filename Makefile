@@ -3,7 +3,7 @@ SHELL := /bin/bash
 
 SUDO := $(shell [ "$$(id -u)" -eq 0 ] 2>/dev/null && echo "" || echo sudo)
 
-.PHONY: help setup dev api api-install api-migrate api-seed api-test api-lint web web-install web-build web-test web-typecheck hooks-install db-check db-squash db-new db-history infra-up infra-down nats-up nats-down nats-status nats-logs
+.PHONY: help setup dev api api-install api-migrate api-seed api-test api-lint web web-install web-build web-test web-typecheck web-test-e2e hooks-install db-check db-squash db-new db-history infra-up infra-down nats-up nats-down nats-status nats-logs
 
 # USE_SQLITE=1 (env or `make <target> USE_SQLITE=1`): use the per-checkout
 # sqlite dev DB (apps/api/dev.db) instead of embedded postgres. Exported so it
@@ -37,6 +37,8 @@ help:
 	@echo "  make web          run frontend (vite, :$(WEB_PORT))"
 	@echo "  make web-build    type-check + build frontend"
 	@echo "  make web-test     run frontend unit tests (node --test, stdlib only)"
+	@echo "  make web-typecheck type-check frontend (tsc --noEmit)"
+	@echo "  make web-test-e2e run frontend e2e tests (playwright; no API needed)"
 	@echo ""
 	@echo "Optional (prod-like testing with NATS, requires docker — no compose needed):"
 	@echo "  make nats-up      start a NATS JetStream container (plain docker run)"
@@ -150,6 +152,9 @@ web-test:
 
 web-typecheck:
 	cd apps/web && npx tsc -p tsconfig.json --noEmit
+
+web-test-e2e:
+	cd apps/web && npx playwright install chromium && npm run test:e2e
 
 hooks-install:
 	pre-commit install --config .pre-commit-config.yaml
