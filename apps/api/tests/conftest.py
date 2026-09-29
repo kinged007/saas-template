@@ -1,7 +1,9 @@
-import asyncio  # noqa: E402
 import os  # noqa: E402
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_saas_template.db"
+# Only selects the sqlite branch of settings.resolved_database_url. The module-level
+# engine built from it is never connected to — the autouse fixture below rebinds it
+# per test — so no file is created at this path.
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite://"
 os.environ["SECRET_KEY"] = "test-secret-key-not-for-production"
 os.environ["FERNET_KEYS"] = "test-fernet-key-value"
 os.environ["EVENT_BUS_DRIVER"] = "inprocess"
@@ -9,63 +11,42 @@ os.environ["ENVIRONMENT"] = "test"
 os.environ["CORS_ORIGINS"] = "http://localhost:5173"
 os.environ["SUPERADMIN_EMAIL"] = "root@example.com"
 
-import warnings  # noqa: E402
-
 import pytest  # noqa: E402
 from asgi_lifespan import LifespanManager  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 
 from src import models as _models  # noqa: E402,F401  (register tables on Base.metadata)
+from src.db import session as session_module  # noqa: E402
 from src.db.base import Base  # noqa: E402
-from src.db.session import engine  # noqa: E402
-from src.settings import settings  # noqa: E402
-
-
-async def _drop_all_with_retry(tries: int = 24, delay: float = 0.25) -> None:
-    """Drop all tables, retrying transient sqlite locks.
-
-    Background bus workers may still be draining their last transactions when a
-    test ends; a fresh engine connection then blocks on the file lock. Dispose
-    pooled connections first, then retry briefly.
-
-    The drop runs on a dedicated engine with a *short* busy timeout: the
-    background worker holding the lock always finishes within a few seconds, so
-    waiting 30s (the app engine's timeout) per attempt only turns a transient
-    contention into a multi-minute stall.
-
-    The budget is ~6s: workspace provisioning (workspaces.created workflow)
-    and scheduled-job workers add a little more post-test drain time than the
-    notification workflows alone.
-    """
-    drop_engine = create_async_engine(settings.resolved_database_url, connect_args={"timeout": 2})
-    try:
-        for attempt in range(tries):
-            try:
-                await engine.dispose()  # force-close any leaked pooled connections
-                await drop_engine.dispose()
-                async with drop_engine.begin() as conn:
-                    await conn.run_sync(Base.metadata.drop_all)
-                return
-            except Exception as exc:
-                if attempt == tries - 1:
-                    raise
-                # ponytail: warn (not log — no logger configured in tests) so the next
-                # flake shows it was lock contention and how many retries it took.
-                msg = f"db drop attempt {attempt + 1}/{tries} failed, retrying: {exc}"
-                warnings.warn(msg, stacklevel=2)
-                await asyncio.sleep(delay)
-    finally:
-        await drop_engine.dispose()
+from src.db.session import SessionFactory  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-async def _clean_db():
-    await _drop_all_with_retry()
-    async with engine.begin() as conn:
+async def _clean_db(tmp_path):
+    """Give every test its own SQLite file, rebound over the shared SessionFactory.
+
+    One file for the whole session plus a drop_all between tests made full-suite runs
+    fail spuriously: a background event-bus worker still draining its last transaction
+    could hold the file lock when the drop ran. A fresh file per test removes the
+    shared state and the contention at once — a late writer only ever touches a
+    database nobody reads again.
+
+    `SessionFactory.configure` reaches every `src` consumer (all modules importing it
+    hold the same object); the module-attribute rebind is what `tests/test_ws_auth.py`
+    reads. `timeout` matches src/db/session.py: busy-wait on the write lock, no WAL.
+    """
+    test_engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path}/test.db", connect_args={"timeout": 30}
+    )
+    session_module.engine = test_engine
+    SessionFactory.configure(bind=test_engine)
+    async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    yield
-    await _drop_all_with_retry()
+    try:
+        yield
+    finally:
+        await test_engine.dispose()
 
 
 @pytest.fixture
