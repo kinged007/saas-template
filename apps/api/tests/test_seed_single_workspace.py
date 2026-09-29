@@ -107,12 +107,14 @@ async def test_seed_registers_fixture_when_canonical_workspace_has_no_owner_memb
 ):
     """A canonical workspace with nobody in its owner role still gets the fixture.
 
-    The owner was demoted to viewer, so no membership holds the owner role and
-    the guard's `owner is None` arm is what admits the workspace. It is
-    reachable without the app: a workspace whose owner left keeps its owner
-    role row but no membership pointing at it. The demo admin is not a member
-    here, so the fixture attaches on registration and the seed adds it the
-    membership, invitations, API keys and notifications.
+    No membership holds the owner role, so the guard's `owner is None` arm is
+    what admits the workspace. The app blocks every route to this state —
+    `remove_member`, `leave_workspace` and `set_member_role` all refuse the
+    owner, and roles cannot be deleted — so the branch is defensive. The test
+    reaches it the only way the seed could see it in production: an
+    out-of-band write of `role_id`. The demo admin is not a member here, so the
+    fixture attaches on registration and the seed creates API keys,
+    invitations and notifications for the workspace.
     """
     monkeypatch.setattr(settings, "single_workspace", False)
     async with SessionFactory() as session:
