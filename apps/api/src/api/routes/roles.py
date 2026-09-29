@@ -32,9 +32,13 @@ router = APIRouter(prefix="/roles", tags=["roles"])
 _ROLE_FILTERABLE = {"name", "system"}
 _ROLE_SORTABLE = {"name", "created_at"}
 
-# System roles first in DEFAULT_ROLES order, custom roles after. Ordering here
-# rather than on the client so it holds over the whole set: a page boundary
-# cannot split the system block, and every role surface agrees by construction.
+# Rank: a role whose lower-cased name is a DEFAULT_ROLES entry gets that
+# entry's index, everything else ranks last. Ordering here rather than on the
+# client so it holds across a page boundary: the system block cannot be split,
+# and every role *list* surface agrees by construction (the export orders
+# roles on its own). Names are unique only by exact match, so a custom role
+# differing from a system name in case alone joins that rank group; #257
+# re-keys the rank on Role.system.
 _ROLE_RANK = case(
     {name: i for i, name in enumerate(WorkspaceService.DEFAULT_ROLES)},
     value=func.lower(Role.name),

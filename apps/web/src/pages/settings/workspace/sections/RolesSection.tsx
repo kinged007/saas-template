@@ -30,7 +30,7 @@ import type { Role } from "@/types";
 
 type CatalogResponse = { catalog: string[]; permissions: string[] };
 
-// parse_query's max_limit: ask for the whole set so the server order is
+// parse_query's max_limit: ask for one full page so the server order is
 // complete. A workspace past this is reported as truncated below the list.
 const ROLES_PAGE_SIZE = 100;
 

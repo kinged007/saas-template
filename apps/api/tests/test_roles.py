@@ -356,6 +356,20 @@ async def test_update_role_noop_body_keeps_system_flag(app_client):
         assert resp.json()["system"] is True, body
 
 
+async def test_update_role_duplicate_name_conflicts(app_client):
+    client = app_client
+    owner = await register_user(client, "up7@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    created = (
+        await client.post("/api/v1/roles", json={"name": "ops", "permissions": []}, headers=headers)
+    ).json()
+    resp = await client.patch(
+        f"/api/v1/roles/{created['id']}", json={"name": "editor"}, headers=headers
+    )
+    assert resp.status_code == 409
+
+
 # ------------------------------------------------------------------- listing
 
 # 4 system roles + 8 custom = 12, past the default page size of 10.
@@ -406,15 +420,31 @@ async def test_roles_client_sort_does_not_split_the_system_block(app_client):
     assert [r["name"] for r in resp.json()][:4] == ["owner", "admin", "editor", "viewer"]
 
 
-async def test_update_role_duplicate_name_conflicts(app_client):
+async def test_roles_client_sort_desc_reverses_only_within_the_rank_groups(app_client):
     client = app_client
-    owner = await register_user(client, "up7@example.com")
-    ws = await create_workspace(client, owner)
-    headers = ws_headers(owner, ws["id"])
-    created = (
-        await client.post("/api/v1/roles", json={"name": "ops", "permissions": []}, headers=headers)
-    ).json()
-    resp = await client.patch(
-        f"/api/v1/roles/{created['id']}", json={"name": "editor"}, headers=headers
+    headers = await _roles_past_ten(client, "list-sorted-desc")
+    resp = await client.get(
+        "/api/v1/roles",
+        params={"_start": 0, "_end": 100, "sort[]": "name", "order[]": "desc"},
+        headers=headers,
     )
-    assert resp.status_code == 409
+    assert resp.status_code == 200, resp.text
+    names = [r["name"] for r in resp.json()]
+    assert names[:4] == ["owner", "admin", "editor", "viewer"]
+    assert names[4:] == sorted(_CUSTOM_ROLE_NAMES, reverse=True)
+
+
+async def test_roles_paging_tiles_the_set_without_gaps(app_client):
+    """Rank + name is a total order, so pages tile the set with no dupes or drops."""
+    client = app_client
+    headers = await _roles_past_ten(client, "list-page")
+    full = await client.get("/api/v1/roles", params={"_start": 0, "_end": 100}, headers=headers)
+    assert full.status_code == 200, full.text
+    paged: list[dict] = []
+    for start in (0, 5, 10):
+        resp = await client.get(
+            "/api/v1/roles", params={"_start": start, "_end": start + 5}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        paged += resp.json()
+    assert [r["id"] for r in paged] == [r["id"] for r in full.json()]

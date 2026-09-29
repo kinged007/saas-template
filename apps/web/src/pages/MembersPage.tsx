@@ -34,8 +34,9 @@ import { getMemberDisplayName } from "../types";
 const MANAGER_ROLES = ["owner", "admin"];
 
 const PAGE_SIZE = 10;
-// The role pickers need every role, ordered by the endpoint; the list is a
-// settings surface, so a workspace past this is not worth a pager.
+// The role pickers need every role, ordered by the endpoint. Capped at one
+// full page: past this the pickers drop the tail, and a pager is not worth it
+// on a settings surface.
 const ROLES_PAGE_SIZE = 100;
 
 export function MembersPage() {
