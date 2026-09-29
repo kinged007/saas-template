@@ -59,7 +59,6 @@ export function useUpdateProfile() {
             queryClient.invalidateQueries({ queryKey: ["auth"] });
             queryClient.invalidateQueries({ queryKey: ["data"] });
             invalidate({ resource: "profile", invalidates: ["all"] });
-            queryClient.invalidateQueries({ queryKey: ["getIdentity"] });
             opts?.onSuccess?.();
           },
           onError: (e) => {
@@ -85,7 +84,6 @@ export function useUpdateProfile() {
       } as never);
       queryClient.invalidateQueries({ queryKey: ["auth"] });
       queryClient.invalidateQueries({ queryKey: ["data"] });
-      queryClient.invalidateQueries({ queryKey: ["getIdentity"] });
       return res;
     },
     [mutateAsync, queryClient]
