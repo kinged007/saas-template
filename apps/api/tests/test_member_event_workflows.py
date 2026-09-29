@@ -233,3 +233,77 @@ async def test_unregistered_invite_emits_no_in_app_notification(app_client):
     async with SessionFactory() as session:
         result = await session.execute(select(func.count()).select_from(Notification))
         assert result.scalar_one() == 0
+
+
+async def _wait_for_invite_email(sent, to: str):
+    """Wait for the *invitation* email to `to`.
+
+    Registration also sends a verification mail through the same patched
+    `send_email`, so matching on the recipient is what separates the two.
+    """
+    assert await _wait_for(lambda: any(m.to == to for m in sent)), f"no invite email to {to}"
+    return next(m for m in sent if m.to == to)
+
+
+async def test_invitation_email_carries_committed_token(app_client, monkeypatch):
+    """The emailed accept link must use the token of the committed row.
+
+    `invitation.created` deliberately carries no token, so the handler re-reads
+    it from the row — which only holds if `create_invitation` committed before
+    publishing.
+    """
+    import src.email.factory as factory
+    from tests.conftest import create_workspace, register_user
+
+    sent = []
+
+    async def _send(message):
+        sent.append(message)
+        return True
+
+    monkeypatch.setattr(factory, "send_email", _send)
+
+    owner = await register_user(app_client, "owner@wf5.com")
+    ws = await create_workspace(app_client, owner)
+    roles = await _roles_by_name(app_client, owner, ws["id"])
+    invite = await _invite(app_client, owner, ws["id"], roles["editor"], "stranger@wf5.com")
+
+    message = await _wait_for_invite_email(sent, "stranger@wf5.com")
+    assert f"?token={invite['token']}" in message.text_body, message.text_body
+    assert f"?token={invite['token']}" in message.html_body, message.html_body
+
+
+async def test_resend_email_carries_rotated_token(app_client, monkeypatch):
+    """A resent invite must email the *new* token, not the revoked one."""
+    import src.email.factory as factory
+    from tests.conftest import create_workspace, register_user
+
+    sent = []
+
+    async def _send(message):
+        sent.append(message)
+        return True
+
+    monkeypatch.setattr(factory, "send_email", _send)
+
+    owner = await register_user(app_client, "owner@wf6.com")
+    ws = await create_workspace(app_client, owner)
+    roles = await _roles_by_name(app_client, owner, ws["id"])
+    invite = await _invite(app_client, owner, ws["id"], roles["editor"], "stranger@wf6.com")
+    await _wait_for_invite_email(sent, "stranger@wf6.com")
+    sent.clear()
+
+    headers = {
+        "Authorization": f"Bearer {owner['access_token']}",
+        "X-Workspace-ID": ws["id"],
+    }
+    revoked = await app_client.delete(f"/api/v1/invitations/{invite['id']}", headers=headers)
+    assert revoked.status_code == 204, revoked.text
+    resent = await app_client.post(f"/api/v1/invitations/{invite['id']}/resend", headers=headers)
+    assert resent.status_code == 200, resent.text
+    rotated = resent.json()["token"]
+    assert rotated != invite["token"]
+
+    message = await _wait_for_invite_email(sent, "stranger@wf6.com")
+    assert f"?token={rotated}" in message.text_body, message.text_body
+    assert invite["token"] not in message.text_body

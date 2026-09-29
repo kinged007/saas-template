@@ -8,7 +8,10 @@ up a live bus or waiting on async delivery.
 
 from __future__ import annotations
 
+from src.db.session import SessionFactory
 from src.events.bus import EventBus
+from src.events.subjects import Subjects
+from src.models.core import Invitation
 
 
 class RecordingBus(EventBus):
@@ -50,3 +53,38 @@ class RecordingBus(EventBus):
 
     def actions(self) -> list[str]:
         return [payload["action"] for payload, _, _ in self.audit()]
+
+
+class CommitProbeBus(RecordingBus):
+    """RecordingBus that snapshots committed invitation state at publish time.
+
+    `invitation.created` carries no token, so the only token a handler can use
+    is whatever it re-reads from the row — which means the publishing service
+    must commit before it publishes. This double opens an independent session
+    inside `publish` and records the token durably committed at that instant, so
+    a service that publishes first shows up as `None` (row not yet visible) or
+    as the pre-rotation token.
+
+    ponytail: probes only `invitation.created`; widen the subject list if another
+    event ever needs the same ordering guarantee.
+    """
+
+    name = "commit-probe"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.committed_token_at_publish: list[str | None] = []
+
+    async def publish(
+        self,
+        subject: str,
+        payload: dict,
+        *,
+        correlation_id: str | None = None,
+        transient: bool = False,
+    ) -> None:
+        if subject == Subjects.WORKSPACE_INVITATION_CREATED:
+            async with SessionFactory() as probe:
+                invite = await probe.get(Invitation, payload.get("invitation_id"))
+                self.committed_token_at_publish.append(invite.token if invite else None)
+        await super().publish(subject, payload, correlation_id=correlation_id, transient=transient)
