@@ -9,13 +9,19 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import ipaddress
+import re
+from pathlib import Path
 
+import yaml
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from src.db.session import SessionFactory
 from src.models.audit import AuditLogEntry
+
+COMPOSE = Path(__file__).resolve().parents[3] / "infra/docker/docker-compose.prod.yml"
 
 
 async def _audit_rows():
@@ -276,3 +282,24 @@ async def test_forwarded_for_from_untrusted_peer_is_ignored(app):
     )
     rows = await _audit_rows()
     assert rows[0].ip_address == "198.51.100.7"
+
+
+def test_prod_compose_trusts_only_the_pinned_proxy_network():
+    """The shipped value the tests above stand in for must stay narrow.
+
+    Reverting docker-compose.prod.yml to '--forwarded-allow-ips=*' leaves every
+    other test green while reopening the spoofing hole, so pin the config too:
+    every entry must be a network, and the subnet the compose file pins nginx to
+    must be inside the trusted set.
+    """
+    compose = yaml.safe_load(COMPOSE.read_text())
+    command = compose["services"]["api"]["command"]
+    default = re.search(r"--forwarded-allow-ips=\$\{FORWARDED_ALLOW_IPS:-([^}]+)\}", command)
+    assert default, f"no --forwarded-allow-ips default in: {command}"
+    trusted = [
+        ipaddress.ip_network(entry.strip(), strict=False) for entry in default.group(1).split(",")
+    ]
+    subnet = ipaddress.ip_network(compose["networks"]["default"]["ipam"]["config"][0]["subnet"])
+    assert all(subnet.subnet_of(net) for net in trusted), (
+        f"pinned subnet {subnet} outside FORWARDED_ALLOW_IPS default {trusted}"
+    )

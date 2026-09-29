@@ -18,18 +18,27 @@ Path labels use route templates, never raw ids. `GET /healthz` and `GET
 
 The API never parses `X-Forwarded-For` itself. It records `scope["client"]`,
 which uvicorn's `ProxyHeadersMiddleware` overwrites from `X-Forwarded-For` —
-but only when the connecting peer matches `--forwarded-allow-ips`. Everything
-recorded from that address (session rows, audit log entries, webhook deliveries)
-is correct as long as that flag names your proxy. The shipped
-`infra/docker/docker-compose.prod.yml` defaults it to `172.16.0.0/12` (Docker's
-private bridge pool — the api service publishes no ports, so nginx is its only
-peer) and `FORWARDED_ALLOW_IPS` overrides it.
+but only when uvicorn runs with `--proxy-headers` and the connecting peer
+matches `--forwarded-allow-ips`. Everything recorded from that address (session
+rows, audit log entries, webhook deliveries) is correct as long as that flag
+names your proxy. `infra/docker/docker-compose.prod.yml` pins the compose
+network to `172.30.0.0/24` and defaults `FORWARDED_ALLOW_IPS` to that subnet —
+the api service publishes no ports, so nginx is its only peer — and
+`infra/docker/.env` overrides it.
 
 Keep the list narrow. Under `'*'`, uvicorn takes the leftmost `X-Forwarded-For`
 entry verbatim, so any peer that can reach the API port picks the address
 recorded against it. Set the flag to your proxy's IP, CIDR, or a
-comma-separated list — on a custom `ipam` subnet, set `FORWARDED_ALLOW_IPS` in
-`infra/docker/.env` to the network Docker actually assigned.
+comma-separated list. Running the image outside compose means supplying both
+proxy flags yourself; without them no header is read and every address is the
+proxy's.
+
+Behind an external load balancer or CDN, add its address to
+`FORWARDED_ALLOW_IPS`. nginx appends to `X-Forwarded-For`, so an unlisted LB
+makes uvicorn stop at the LB entry: every recorded client IP becomes the LB's,
+and the OAuth rate limiter (`oauth:{ip}:{provider}` at
+`apps/api/src/api/routes/oauth.py`) collapses into one bucket shared by all
+users.
 
 Only `X-Forwarded-For` is honoured. `X-Real-IP` and `CF-Connecting-IP` are read
 by neither uvicorn nor this code, so a proxy configured to send only
