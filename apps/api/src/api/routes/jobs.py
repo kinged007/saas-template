@@ -194,9 +194,10 @@ async def get_job_run_logs(
 async def _require_run_access(db: AsyncSession, principal: AuthPrincipal, run: JobRun) -> None:
     """Global runs are superuser-only; workspace runs need jobs:read there.
 
-    Mirrors _require_job_access: an API key is authorized by its own
+    Same rule as _require_job_access: an API key is authorized by its own
     permission list and stays inside its own workspace — never by the
-    creator's role, and never over a global run.
+    creator's role, and never over a global run. A key outside the run's
+    workspace gets 404, a session user who is not a member gets 403.
     """
     if run.workspace_id is None:
         if not principal.is_deployment_admin:
@@ -245,8 +246,7 @@ async def _require_job_access(
         definition.workspace_id, principal.user.id, active_only=True
     )
     if membership is None:
-        # Hide cross-workspace existence (isolation test expects 404, not 403)
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership
     if "*" in role.permissions or required in role.permissions:
         return
