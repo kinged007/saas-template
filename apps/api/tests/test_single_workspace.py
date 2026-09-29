@@ -110,7 +110,7 @@ async def test_unknown_role_name_falls_back_to_viewer(app_client, single_workspa
 
 async def test_relogin_keeps_existing_member_role(app_client, single_workspace_on, monkeypatch):
     await _first_workspace(app_client)
-    second = await register_user(app_client, "second@example.com")
+    await register_user(app_client, "second@example.com")
     monkeypatch.setattr(settings, "single_workspace_default_role", "editor")
     resp = await app_client.post(
         "/api/v1/auth/login",
@@ -119,7 +119,6 @@ async def test_relogin_keeps_existing_member_role(app_client, single_workspace_o
     assert resp.status_code == 200, resp.text
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(resp.json()))
     assert me.json()["workspaces"][0]["role"] == "viewer"
-    assert second["access_token"]
 
 
 async def test_flag_off_keeps_current_behavior(app_client):
@@ -165,6 +164,68 @@ async def test_join_survives_missing_viewer_role(app_client, single_workspace_on
     tokens = await register_user(app_client, "second@example.com")
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
     assert [w["id"] for w in me.json()["workspaces"]] == [ws_id]
+
+
+async def _retire_system_roles(app_client, created_at: list) -> str:
+    """Leave the workspace owner plus two custom roles, newest inserted first.
+
+    Dropping admin/editor/viewer is what forces the last-resort branch.
+    Returns the workspace id; `created_at` is per custom role, in insert order.
+    """
+    from sqlalchemy import delete
+
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    _, ws_id = await _first_workspace(app_client)
+    async with SessionFactory() as session:
+        await session.execute(
+            delete(Role).where(
+                Role.workspace_id == ws_id, Role.name.in_(["admin", "editor", "viewer"])
+            )
+        )
+        session.add_all(
+            Role(workspace_id=ws_id, name=name, permissions=[], created_at=stamp)
+            for name, stamp in zip(["zulu", "alpha"], created_at, strict=True)
+        )
+        await session.commit()
+    return ws_id
+
+
+async def test_last_resort_role_is_the_oldest_remaining_role(app_client, single_workspace_on):
+    from datetime import timedelta
+
+    from src.core.dates import now_utc
+
+    base = now_utc()
+    ws_id = await _retire_system_roles(app_client, [base + timedelta(days=1), base])
+    tokens = await register_user(app_client, "second@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert [(w["id"], w["role"]) for w in me.json()["workspaces"]] == [(ws_id, "alpha")]
+
+
+async def test_last_resort_role_breaks_timestamp_ties_by_name(app_client, single_workspace_on):
+    from src.core.dates import now_utc
+
+    # Roles created in one transaction share a created_at; the pick must still be stable.
+    base = now_utc()
+    ws_id = await _retire_system_roles(app_client, [base, base])
+    tokens = await register_user(app_client, "second@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert [(w["id"], w["role"]) for w in me.json()["workspaces"]] == [(ws_id, "alpha")]
+
+
+async def test_unresolvable_default_role_is_logged(
+    app_client, single_workspace_on, monkeypatch, caplog
+):
+    import logging
+
+    await _first_workspace(app_client)
+    monkeypatch.setattr(settings, "single_workspace_default_role", "edtior")
+    with caplog.at_level(logging.WARNING, logger="src.services.workspaces"):
+        await register_user(app_client, "second@example.com")
+    assert "SINGLE_WORKSPACE_DEFAULT_ROLE" in caplog.text
+    assert "edtior" in caplog.text
 
 
 async def test_join_failure_does_not_break_login(app_client, single_workspace_on, monkeypatch):

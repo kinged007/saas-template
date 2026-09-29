@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import secrets
 import uuid
 from datetime import timedelta
@@ -22,6 +23,8 @@ from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.services.auth import AuthService
 from src.services.serializers import ONBOARDING_ENABLED_FLAG
 
+logger = logging.getLogger(__name__)
+
 
 class WorkspaceError(Exception):
     pass
@@ -42,9 +45,9 @@ class WorkspaceNotFound(WorkspaceError):
 class WorkspaceService:
     DEFAULT_ROLES = ["owner", "admin", "editor", "viewer"]
 
-    # Fallback auto-join role for single-workspace mode (SINGLE_WORKSPACE).
-    # Viewer: edit access requires explicit designation.
-    SINGLE_WORKSPACE_ROLE = "viewer"
+    # Fallback auto-join role for single-workspace mode (SINGLE_WORKSPACE), used
+    # when SINGLE_WORKSPACE_DEFAULT_ROLE names no role of the workspace.
+    SINGLE_WORKSPACE_FALLBACK_ROLE = "viewer"
 
     def __init__(self, session: AsyncSession, bus: EventBus | None = None) -> None:
         self._session = session
@@ -969,18 +972,32 @@ class WorkspaceService:
         Matched by exact name over the workspace's non-owner roles, so a
         custom role works too and an unknown, blank or "owner" value resolves
         viewer. The wider chain keeps logins working when the viewer role
-        was renamed or removed, instead of bricking every later login."""
+        was renamed or removed, instead of bricking every later login. The
+        last resort is the oldest remaining role, ties broken by name, so the
+        grant does not depend on the query plan."""
         from src.settings import settings
 
-        result = await self._session.execute(select(Role).where(Role.workspace_id == workspace_id))
+        result = await self._session.execute(
+            select(Role)
+            .where(Role.workspace_id == workspace_id)
+            .order_by(Role.created_at.asc(), Role.name.asc())
+        )
         roles = {role.name: role for role in result.scalars() if role.name != "owner"}
-        names = (settings.single_workspace_default_role.strip(), self.SINGLE_WORKSPACE_ROLE)
+        configured = settings.single_workspace_default_role.strip()
+        if configured and configured not in roles:
+            logger.warning(
+                "SINGLE_WORKSPACE_DEFAULT_ROLE=%r not found in workspace %s; falling back to %s",
+                configured,
+                workspace_id,
+                self.SINGLE_WORKSPACE_FALLBACK_ROLE,
+            )
+        names = (configured, self.SINGLE_WORKSPACE_FALLBACK_ROLE)
         for name in (*names, "editor", "admin"):
             if role := roles.get(name):
                 return role
         if roles:
             return next(iter(roles.values()))
-        raise WorkspaceError(f"role {self.SINGLE_WORKSPACE_ROLE} not found")
+        raise WorkspaceError(f"role {self.SINGLE_WORKSPACE_FALLBACK_ROLE} not found")
 
     async def _role_by_name(self, workspace_id: str, name: str) -> Role:
         stmt = select(Role).where(Role.workspace_id == workspace_id, Role.name == name)
