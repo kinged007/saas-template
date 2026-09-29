@@ -330,8 +330,15 @@ async def main() -> None:
                 continue
             invite = invitations.get((slug, email))
             payload: dict = {"workspace_id": workspace.id, "workspace_name": workspace.name}
-            if type_ == "workspace_invitation" and invite is not None:
-                payload.update({"invitation_id": invite.id, "invited_by": "Admin User"})
+            if type_ == "workspace_invitation":
+                # NotificationCenter renders an "Open" button only when the
+                # payload carries a url; without it the invite is a dead end.
+                # /invitations is a static frontend route, so it does not
+                # depend on a live invitation row. Mirrors the workflow path
+                # (workflows.on_member_invited), which sets the same url.
+                payload["url"] = "/invitations"
+                if invite is not None:
+                    payload.update({"invitation_id": invite.id, "invited_by": "Admin User"})
             created_at = now - timedelta(hours=age_hours)
             session.add(
                 Notification(
