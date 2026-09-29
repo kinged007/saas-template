@@ -71,16 +71,21 @@ export function GeneralSection() {
   const [confirmName, setConfirmName] = useState("");
 
   const { mutate: transfer, mutation: transferMutation } = useCustomMutation();
-  const { result: membersResult } = useWorkspaceList<Member>({
+  const { result: membersResult, query: membersQuery } = useWorkspaceList<Member>({
     resource: "members",
     pagination: { pageSize: 100 },
   });
   const invalidate = useInvalidate();
   const [transferId, setTransferId] = useState("");
+  const [transferOpen, setTransferOpen] = useState(false);
   const isOwner = workspace?.role === "owner";
-  const transferCandidates = (membersResult?.data ?? []).filter(
-    (m) => m.role !== "owner" && m.status === "active",
-  );
+  const members = membersResult?.data ?? [];
+  const transferCandidates = members.filter((m) => m.role !== "owner" && m.status === "active");
+  const transferTarget = transferCandidates.find((m) => m.membership_id === transferId);
+  const transferTargetName = transferTarget ? getMemberDisplayName(transferTarget) : "";
+  // ponytail: the members endpoint clamps `limit` to 100, so the list can be
+  // truncated. The UI says so; page the select once a workspace can exceed 100 members.
+  const membersTruncated = (membersResult?.total ?? 0) > members.length;
 
   const transferOwnership = () => {
     if (!workspace || !transferId) return;
@@ -98,6 +103,7 @@ export function GeneralSection() {
             description: "You are now an admin of this workspace.",
           });
           setTransferId("");
+          setTransferOpen(false);
           // Identity carries the role and permissions the UI gates on, and the
           // shared identity query is stale for 30s — refetch it explicitly.
           refresh();
@@ -305,30 +311,73 @@ export function GeneralSection() {
                     transfer ownership.
                   </p>
                 </div>
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                  <div className="flex flex-1 flex-col gap-2">
-                    <Label>New owner</Label>
-                    <Select value={transferId} onValueChange={setTransferId}>
-                      <SelectTrigger className="w-full sm:w-72">
-                        <SelectValue placeholder="Select member" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {transferCandidates.map((m) => (
-                          <SelectItem key={m.membership_id} value={m.membership_id}>
-                            {getMemberDisplayName(m)} ({m.email})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                {transferCandidates.length > 0 ? (
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                    <div className="flex flex-1 flex-col gap-2">
+                      <Label>New owner</Label>
+                      <Select value={transferId} onValueChange={setTransferId}>
+                        <SelectTrigger className="w-full sm:w-72">
+                          <SelectValue placeholder="Select member" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {transferCandidates.map((m) => (
+                            <SelectItem key={m.membership_id} value={m.membership_id}>
+                              {getMemberDisplayName(m)} ({m.email})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <Dialog open={transferOpen} onOpenChange={setTransferOpen}>
+                      <DialogTrigger asChild>
+                        <Button variant="destructive" disabled={!transferId || transferMutation.isPending}>
+                          Transfer ownership
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>
+                            Transfer ownership{transferTargetName ? ` to ${transferTargetName}` : ""}?
+                          </DialogTitle>
+                          <DialogDescription>
+                            <span className="font-semibold">{workspace.name}</span> will be owned by{" "}
+                            <span className="font-semibold">{transferTargetName}</span>
+                            {transferTarget ? ` (${transferTarget.email})` : ""}. You are demoted to admin
+                            immediately, and only the new owner can transfer it back. This cannot be undone.
+                          </DialogDescription>
+                        </DialogHeader>
+                        <DialogFooter>
+                          <Button
+                            variant="outline"
+                            onClick={() => setTransferOpen(false)}
+                            disabled={transferMutation.isPending}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            onClick={transferOwnership}
+                            disabled={!transferId || transferMutation.isPending}
+                          >
+                            {transferMutation.isPending ? "Transferring…" : "Transfer ownership"}
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
                   </div>
-                  <Button
-                    variant="destructive"
-                    onClick={transferOwnership}
-                    disabled={!transferId || transferMutation.isPending}
-                  >
-                    {transferMutation.isPending ? "Transferring…" : "Transfer ownership"}
-                  </Button>
-                </div>
+                ) : (
+                  <p className="text-muted-foreground text-sm">
+                    {membersQuery.isPending
+                      ? "Loading members…"
+                      : "No eligible members to transfer to. Transferring needs another active member in this workspace — invite one first."}
+                  </p>
+                )}
+                {membersTruncated && (
+                  <p className="text-muted-foreground text-xs">
+                    Showing the first {members.length} of {membersResult?.total} members. Members beyond the first{" "}
+                    {members.length} are not listed here.
+                  </p>
+                )}
               </div>
             )}
 
