@@ -147,7 +147,13 @@ def apply_query(
     *,
     sortable: set[str],
     filterable: set[str],
+    default_sort: tuple[tuple[str, str], ...] = (),
 ) -> Select:
+    """Apply filters, ids and ordering to `stmt`.
+
+    `default_sort` is the order used when the caller sent no `sort[]`/`_sort`;
+    a caller's terms win over it.
+    """
     for fname, op, value in spec.filters:
         if fname not in filterable:
             raise InvalidQuery(f"filter on unknown field: {fname}")
@@ -157,11 +163,19 @@ def apply_query(
         stmt = stmt.where(_COMPARATORS[op](column, _coerce(column, value)))
     if spec.ids:
         stmt = stmt.where(model.id.in_(spec.ids))
-    for fname, order in zip(spec.sort_by, spec.sort_order, strict=True):
+    sort_by = list(spec.sort_by) or [f for f, _ in default_sort]
+    sort_order = list(spec.sort_order) or [o for _, o in default_sort]
+    for fname, order in zip(sort_by, sort_order, strict=True):
         if fname not in sortable:
             raise InvalidQuery(f"sort on unknown field: {fname}")
         column = getattr(model, fname)
         stmt = stmt.order_by(column.desc() if order == "desc" else column.asc())
+    # A unique column last makes the order total, so offset/limit paging can
+    # neither repeat nor skip rows when the leading terms tie. Only where an
+    # order already exists: making one up is not this helper's call.
+    if sort_by and "id" not in sort_by:
+        last = sort_order[-1] if sort_order else "asc"
+        stmt = stmt.order_by(model.id.desc() if last == "desc" else model.id.asc())
     return stmt
 
 

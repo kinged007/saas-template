@@ -22,6 +22,7 @@ router = APIRouter(prefix="/audit", tags=["audit"])
 
 _AUDIT_SORTABLE = {"created_at", "action", "resource_type"}
 _AUDIT_FILTERABLE = {"action", "resource_type", "actor_user_id"}
+_DEFAULT_CREATED_DESC = (("created_at", "desc"),)
 
 
 def _audit_to_dict(
@@ -67,7 +68,12 @@ async def list_audit_logs(
     try:
         spec = parse_query(request)
         stmt = apply_query(
-            stmt, AuditLogEntry, spec, sortable=_AUDIT_SORTABLE, filterable=_AUDIT_FILTERABLE
+            stmt,
+            AuditLogEntry,
+            spec,
+            sortable=_AUDIT_SORTABLE,
+            filterable=_AUDIT_FILTERABLE,
+            default_sort=_DEFAULT_CREATED_DESC,
         )
         q = (request.query_params.get("q") or "").strip()
         if q:
@@ -99,8 +105,6 @@ async def list_audit_logs(
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
 
-    if not spec.sort_by:
-        stmt = stmt.order_by(AuditLogEntry.created_at.desc(), AuditLogEntry.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)

@@ -39,6 +39,7 @@ _WORKSPACE_SORTABLE = {"created_at", "name", "slug"}
 _WORKSPACE_FILTERABLE = {"name", "slug"}
 _AUDIT_SORTABLE = {"created_at", "action", "resource_type"}
 _AUDIT_FILTERABLE = {"action", "resource_type", "actor_user_id", "workspace_id"}
+_DEFAULT_CREATED_DESC = (("created_at", "desc"),)
 
 
 def _uuid_or_404(value: str, label: str) -> str:
@@ -79,7 +80,14 @@ async def list_users(
         if not searches and (plain := request.query_params.get("search")):
             searches = [plain]
         spec.filters = [f for f in spec.filters if f[0] != "search"]
-        stmt = apply_query(stmt, User, spec, sortable=_USER_SORTABLE, filterable=_USER_FILTERABLE)
+        stmt = apply_query(
+            stmt,
+            User,
+            spec,
+            sortable=_USER_SORTABLE,
+            filterable=_USER_FILTERABLE,
+            default_sort=_DEFAULT_CREATED_DESC,
+        )
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     for term in searches:
@@ -92,8 +100,6 @@ async def list_users(
         )
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
-    if not spec.sort_by:
-        stmt = stmt.order_by(User.created_at.desc(), User.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
@@ -164,14 +170,17 @@ async def list_all_workspaces(
     try:
         spec = parse_query(request)
         stmt = apply_query(
-            stmt, Workspace, spec, sortable=_WORKSPACE_SORTABLE, filterable=_WORKSPACE_FILTERABLE
+            stmt,
+            Workspace,
+            spec,
+            sortable=_WORKSPACE_SORTABLE,
+            filterable=_WORKSPACE_FILTERABLE,
+            default_sort=_DEFAULT_CREATED_DESC,
         )
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
-    if not spec.sort_by:
-        stmt = stmt.order_by(Workspace.created_at.desc(), Workspace.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     workspaces = rows.scalars().all()
@@ -232,7 +241,12 @@ async def list_all_audit_logs(
         spec = parse_query(request)
         q = (request.query_params.get("q") or "").strip()
         stmt = apply_query(
-            stmt, AuditLogEntry, spec, sortable=_AUDIT_SORTABLE, filterable=_AUDIT_FILTERABLE
+            stmt,
+            AuditLogEntry,
+            spec,
+            sortable=_AUDIT_SORTABLE,
+            filterable=_AUDIT_FILTERABLE,
+            default_sort=_DEFAULT_CREATED_DESC,
         )
         if q:
             # Single cross-field search: substring match on workspace name,
@@ -263,8 +277,6 @@ async def list_all_audit_logs(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
-    if not spec.sort_by:
-        stmt = stmt.order_by(AuditLogEntry.created_at.desc(), AuditLogEntry.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)

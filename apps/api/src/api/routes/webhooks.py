@@ -41,6 +41,8 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 _SUB_SORTABLE = {"created_at", "url"}
 _SUB_FILTERABLE = {"active", "url"}
 _DELIVERY_SORTABLE = {"created_at", "status", "attempt_count"}
+# Default: newest first.
+_DEFAULT_CREATED_DESC = (("created_at", "desc"),)
 _DELIVERY_FILTERABLE = {"status", "event_type", "subscription_id"}
 
 
@@ -225,12 +227,10 @@ async def list_deliveries(
             spec,
             sortable=_DELIVERY_SORTABLE,
             filterable=_DELIVERY_FILTERABLE,
+            default_sort=_DEFAULT_CREATED_DESC,
         )
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
-    # Default: newest first.
-    if not spec.sort_by:
-        stmt = stmt.order_by(WebhookDelivery.created_at.desc(), WebhookDelivery.id.desc())
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
     stmt = stmt.offset(spec.offset).limit(spec.limit)
@@ -263,11 +263,10 @@ async def list_subscription_deliveries(
             spec,
             sortable=_DELIVERY_SORTABLE,
             filterable=_DELIVERY_FILTERABLE,
+            default_sort=_DEFAULT_CREATED_DESC,
         )
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
-    if not spec.sort_by:
-        stmt = stmt.order_by(WebhookDelivery.created_at.desc(), WebhookDelivery.id.desc())
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
     stmt = stmt.offset(spec.offset).limit(spec.limit)
