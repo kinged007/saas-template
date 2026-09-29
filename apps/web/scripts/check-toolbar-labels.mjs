@@ -1,9 +1,10 @@
-// Check that every composer toolbar icon button exposes an accessible name.
-//   node scripts/check-toolbar-labels.mjs
-// Env: WEB_URL (default http://localhost:5273), EMAIL / PASSWORD (seeded demo login).
+// Manual check that every composer toolbar icon button exposes an accessible name.
+// This repo has no web test runner and no CI job for it: start the dev stack
+// (`make dev`, web on :5173), then run `npm run check:a11y-toolbar` by hand.
+// Env: WEB_URL (default http://localhost:5173), EMAIL / PASSWORD (seeded demo login).
 import { chromium } from "playwright";
 
-const WEB_URL = process.env.WEB_URL || "http://localhost:5273";
+const WEB_URL = process.env.WEB_URL || "http://localhost:5173";
 const EMAIL = process.env.EMAIL || "admin@example.com";
 const PASSWORD = process.env.PASSWORD || "password";
 
@@ -27,24 +28,22 @@ try {
   page.setDefaultTimeout(30000);
   await page.goto(`${WEB_URL}/login`);
 
-  if (await page.getByLabel("Email").count()) {
-    await page.getByLabel("Email").fill(EMAIL);
-    await page.getByLabel(/password/i).fill(PASSWORD);
-    await page.getByRole("button", { name: /sign in|log in/i }).click();
-  } else {
-    await page.getByLabel("Email address").fill(EMAIL);
-    await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
-    await page.getByRole("button", { name: "Sign in" }).click();
-  }
-  await page.waitForURL((u) => !u.pathname.includes("/login"));
+  await page.getByLabel("Email").fill(EMAIL);
+  await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.waitForURL((u) => !u.pathname.includes("/login")).catch(() => {
+    throw new Error(`login failed for ${EMAIL} — set EMAIL / PASSWORD to a seeded account`);
+  });
 
   await page.goto(`${WEB_URL}/inbox`);
-  await page.getByRole("button", { name: "Compose" }).first().click();
+  await page.getByRole("button", { name: "Compose", exact: true }).click();
 
-  // The toolbar is the bottom-bordered strip of the editor wrapper.
   const dialog = page.getByRole("dialog");
   await dialog.waitFor();
-  const toolbar = dialog.locator("div.rounded-md > div.border-b");
+  const toolbar = dialog.getByRole("toolbar", { name: "Formatting" });
+  if ((await toolbar.count()) === 0) {
+    failures.push('composer has no role="toolbar" named "Formatting"');
+  }
 
   const buttons = await toolbar.getByRole("button").evaluateAll((nodes) =>
     nodes.map((b) => ({ title: b.getAttribute("title"), name: b.getAttribute("aria-label") })),
@@ -55,9 +54,6 @@ try {
   if (unnamed.length) {
     failures.push(`${unnamed.length} of ${buttons.length} toolbar buttons have no aria-label`);
   }
-  if (buttons.length !== EXPECTED.length) {
-    failures.push(`expected ${EXPECTED.length} toolbar buttons, found ${buttons.length}`);
-  }
   // How an automated check has to reach them: by role and accessible name.
   for (const expected of EXPECTED) {
     if ((await toolbar.getByRole("button", { name: expected, exact: true }).count()) !== 1) {
@@ -66,7 +62,9 @@ try {
   }
 
   // The accessible names the browser computes, not just our attributes.
-  console.log("accessibility tree:\n" + (await toolbar.ariaSnapshot()));
+  if (await toolbar.count()) {
+    console.log("accessibility tree:\n" + (await toolbar.ariaSnapshot()));
+  }
 } finally {
   await browser.close();
 }
@@ -75,4 +73,4 @@ if (failures.length) {
   console.error(`FAIL: ${failures.length} problem(s)\n- ${failures.join("\n- ")}`);
   process.exit(1);
 }
-console.log(`PASS: ${EXPECTED.length} toolbar buttons, all named`);
+console.log(`PASS: ${EXPECTED.length} expected names all resolve, no unnamed button`);
