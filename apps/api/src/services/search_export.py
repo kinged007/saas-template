@@ -128,9 +128,11 @@ async def _ensure_membership(session: AsyncSession, workspace_id: str, user_id: 
 # Excel and LibreOffice evaluate a cell starting with one of these as a formula
 # on open, so an exported name or email runs on whoever opens the file. TAB, CR
 # and LF start a formula too: the spreadsheet drops the control character and
-# reads the formula behind it. The "'" prefix is a convention, not a guarantee —
-# Excel can strip it on save-and-reopen, so an edited file can reactivate.
-_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+# reads the formula behind it. The full-width forms are the same characters from
+# a CJK IME, which produces them while the user types an ASCII payload. The "'"
+# prefix is a convention, not a guarantee — Excel can strip it on
+# save-and-reopen, so an edited file can reactivate.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n", "＝", "＋", "－", "＠")
 
 
 def _csv_cell(value: object) -> object:
@@ -648,6 +650,14 @@ class SearchExportService:
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=columns)
         writer.writeheader()
+        # DictWriter raises on a key the columns do not declare, but writes an
+        # empty cell for a column the projection does not produce, so that drift
+        # ships as a blank column. One row is enough: every row of a resource
+        # comes from the same projection arm.
+        if flat and set(flat[0]) != set(columns):
+            raise ValueError(
+                f"{resource} projection and columns differ: {sorted(set(columns) ^ set(flat[0]))}"
+            )
         # One choke point, so a new resource is covered by construction.
         writer.writerows({k: _csv_cell(v) for k, v in row.items()} for row in flat)
         return buf.getvalue()

@@ -2,6 +2,8 @@ import csv
 import io
 import json
 
+import pytest
+
 from tests.conftest import create_workspace, register_user, ws_headers
 
 
@@ -374,6 +376,62 @@ def test_export_csv_sanitises_formula_cells_for_every_resource():
         payload = f"{control}=1+1"
         text = SearchExportService.export_csv({"members": [{"display_name": payload}]}, "members")
         assert next(csv.DictReader(io.StringIO(text)))["display_name"] == f"'{payload}", control
+
+
+@pytest.mark.parametrize(
+    ("prefix", "name"),
+    [
+        ("＝", "U+FF1D fullwidth equals"),
+        ("＋", "U+FF0B fullwidth plus"),
+        ("－", "U+FF0D fullwidth hyphen-minus"),
+        ("＠", "U+FF20 fullwidth commercial at"),
+    ],
+)
+def test_export_csv_sanitises_full_width_formula_prefixes(prefix, name):
+    """Every full-width formula prefix is defused, not just a representative one.
+
+    A CJK IME produces these forms of the ASCII payload on the way in, and a
+    spreadsheet evaluates them the same way once the file is opened.
+    """
+    from src.services.search_export import SearchExportService
+
+    payload = f"{prefix}cmd|' /C calc'!A0"
+    text = SearchExportService.export_csv({"members": [{"display_name": payload}]}, "members")
+    assert next(csv.DictReader(io.StringIO(text)))["display_name"] == f"'{payload}", name
+
+
+def test_export_csv_leaves_full_width_values_untouched_after_the_first_char():
+    """Only a leading character is a formula; a full-width one further in is data."""
+    from src.services.search_export import SearchExportService
+
+    payload = "Ada ＝ Lovelace"
+    text = SearchExportService.export_csv({"members": [{"display_name": payload}]}, "members")
+    assert next(csv.DictReader(io.StringIO(text)))["display_name"] == payload
+
+
+def test_export_csv_rejects_a_column_missing_from_the_projection(monkeypatch):
+    """A declared column no projection arm produces must fail, not render blank.
+
+    DictWriter writes an empty cell for a field the row lacks, so the drift is
+    invisible in the file. Every row for a resource comes from one projection
+    arm, so checking one row is enough to catch the whole resource.
+    """
+    from src.services.search_export import CSV_RESOURCES, SearchExportService
+
+    row = {"display_name": "Ada"}
+    # The un-defused writer accepts the same row silently: that is the bug.
+    buf = io.StringIO()
+    un_defused = csv.DictWriter(buf, fieldnames=["display_name", "department"])
+    un_defused.writeheader()
+    un_defused.writerow(row)
+    assert list(csv.DictReader(io.StringIO(buf.getvalue())))[0]["department"] == ""
+
+    monkeypatch.setitem(CSV_RESOURCES, "members", [*CSV_RESOURCES["members"], "department"])
+    with pytest.raises(ValueError) as excinfo:
+        SearchExportService.export_csv({"members": [row]}, "members")
+    message = str(excinfo.value)
+    assert "members" in message
+    assert "department" in message
 
 
 def test_export_csv_leaves_safe_values_untouched():
