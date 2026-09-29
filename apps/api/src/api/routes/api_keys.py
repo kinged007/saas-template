@@ -32,6 +32,10 @@ router = APIRouter(prefix="/api-keys", tags=["api-keys"])
 
 _APIKEY_FILTERABLE = {"name"}
 _APIKEY_SORTABLE = {"name", "created_at", "last_used_at", "expires_at"}
+# offset/limit page stably only against a total order. created_at is
+# server_default=now() (second granularity on SQLite), so keys minted in the
+# same second tie and id breaks it. An explicit client sort replaces this.
+_APIKEY_DEFAULT_ORDER = (ApiKey.created_at.desc(), ApiKey.id.desc())
 
 
 def _key_dict(k: ApiKey) -> dict:
@@ -72,6 +76,8 @@ async def list_api_keys(
             sortable=_APIKEY_SORTABLE,
             filterable=_APIKEY_FILTERABLE,
         )
+        if not spec.sort_by:
+            stmt = stmt.order_by(*_APIKEY_DEFAULT_ORDER)
         total = await service.count_for_user(stmt)
         rows = await service.list_for_user(stmt.offset(spec.offset).limit(spec.limit))
     except InvalidQuery as exc:
