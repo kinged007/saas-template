@@ -777,6 +777,15 @@ async def test_superuser_key_cannot_reach_superuser_routes(app_client):
     resp = await client.get(f"/api/v1/users/{victim_id}/profile", headers=key_headers)
     assert resp.status_code == 404, resp.text
 
+    # The 403 detail names the supported path to a key caller and the missing
+    # privilege to a session caller, without either revealing whether the
+    # session user would otherwise be a superuser.
+    key_detail = (await client.get("/api/v1/admin/users", headers=key_headers)).json()["detail"]
+    assert key_detail == "deployment administration is not available to API keys", key_detail
+    plain = await register_user(client, "plain@example.com")
+    plain_detail = (await client.get("/api/v1/admin/users", headers=auth_headers(plain))).json()
+    assert plain_detail["detail"] == "superuser access required", plain_detail
+
     # The superuser's own session still reaches all of them.
     session = await client.get("/api/v1/admin/users", headers=auth_headers(root))
     assert session.status_code == 200, session.text
