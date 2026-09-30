@@ -168,10 +168,14 @@ export function GeneralSection() {
     [profile, identity?.avatar_url, detectedTimezone],
   );
 
+  // `values` still runs a full reset, so a profile that arrives after the user
+  // has started typing must not wipe what they typed: the fetch lands late
+  // precisely when the embedded profile was blank.
   const form = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
     defaultValues: values,
     values,
+    resetOptions: { keepDirtyValues: true },
   });
 
   const onSubmit = (data: ProfileFormData) => {

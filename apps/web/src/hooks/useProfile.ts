@@ -21,8 +21,8 @@ export function useProfile() {
   // payload: `result.data` is a frozen, always-truthy `{}` until the request
   // settles, which is what left the form blank. `/auth/me`'s embed is only the
   // first-paint fallback — it can arrive with all-null fields.
-  const data = ((custom.query.data as { data?: UserProfile } | undefined)?.data ??
-    identity?.profile) as UserProfile | undefined;
+  const data =
+    (custom.query.data as { data?: UserProfile } | undefined)?.data ?? identity?.profile;
   const isLoading = custom.query.isPending as boolean;
   const isError = custom.query.isError as boolean;
   return {
@@ -30,7 +30,6 @@ export function useProfile() {
     isLoading,
     isError,
     query: custom.query,
-    result: custom.result,
     refetch: custom.query.refetch,
   };
 }

@@ -1,21 +1,12 @@
-import { expect, test as base, type Page } from "playwright/test";
+import { expect, type Page } from "playwright/test";
+
+import { test } from "./fixtures";
 
 /**
  * The general profile form must render the saved profile on a hard reload
  * (#461). Every backend call is mocked, so the spec runs without an API:
  * `/auth/me` embeds a profile, `GET /me/profile` returns the same resource.
  */
-const test = base.extend<{ pageerrors: Error[] }>({
-  pageerrors: [
-    async ({ page }, use) => {
-      const errors: Error[] = [];
-      page.on("pageerror", (error) => errors.push(error));
-      await use(errors);
-      expect(errors).toEqual([]);
-    },
-    { auto: true },
-  ],
-});
 
 const PROFILE = {
   id: "user-1",
@@ -68,17 +59,32 @@ const ACCESS_TOKEN = [
   "sig",
 ].join(".");
 
+/** Holds `GET /me/profile` until `release` is called. */
+function hold() {
+  let release!: () => void;
+  const settled = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { settled, release };
+}
+
 /**
  * @param profile  what `/auth/me` embeds: omitted, `null`-fielded or full
- * @param fetched  what `GET /me/profile` answers, after `delay` ms
+ * @param fetched  what `GET /me/profile` answers once `gate` settles
+ * @param gate     awaited inside the `GET /me/profile` handler, so the test
+ *                 decides when that request lands
  */
 async function mockApi(
   page: Page,
   {
     profile,
     fetched = PROFILE,
-    delay = 0,
-  }: { profile?: Record<string, unknown>; fetched?: Record<string, unknown> | null; delay?: number },
+    gate,
+  }: {
+    profile?: Record<string, unknown>;
+    fetched?: Record<string, unknown> | null;
+    gate?: Promise<void>;
+  },
 ) {
   await page.route("**/api/v1/**", async (route) => {
     const reply = (status: number, body: unknown) =>
@@ -91,7 +97,7 @@ async function mockApi(
       return reply(200, profile ? { ...IDENTITY, profile } : IDENTITY);
     }
     if (pathname.endsWith("/me/profile")) {
-      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+      if (gate) await gate;
       if (!fetched) return reply(500, { detail: "boom" });
       return reply(200, fetched);
     }
@@ -123,21 +129,25 @@ test.describe("profile form boot", () => {
   });
 
   test("fills the form from the /auth/me embed before the fetch resolves", async ({ page }) => {
-    await mockApi(page, { profile: PROFILE, delay: 5000 });
+    const fetch = hold();
+    await mockApi(page, { profile: PROFILE, gate: fetch.settled });
     await openGeneral(page);
-    // Strictly before the delayed `GET /me/profile` answers, so only the embed
-    // can have filled the input.
-    await expect(page.getByLabel("First name")).toHaveValue("Reviewer", { timeout: 4000 });
+    // The fetch is still held, so only the embed can have filled the input.
+    await expect(page.getByLabel("First name")).toHaveValue("Reviewer");
+    fetch.release();
   });
 
   test("keeps typed input when the profile fetch resolves afterwards", async ({ page }) => {
-    await mockApi(page, { profile: PROFILE, delay: 2000 });
+    const fetch = hold();
+    // A blank embed paints an empty form and the fetch then answers with
+    // different content, so RHF's reset really runs instead of being skipped by
+    // its deepEqual guard.
+    await mockApi(page, { profile: NULL_PROFILE, gate: fetch.settled });
     await openGeneral(page);
-    const firstName = page.getByLabel("First name");
-    await expect(firstName).toHaveValue("Reviewer");
-    await firstName.fill("Edited");
-    await page.waitForTimeout(3000);
-    await expect(firstName).toHaveValue("Edited");
+    await page.getByLabel("Bio").fill("TYPED-BIO");
+    fetch.release();
+    await expect(page.getByLabel("First name")).toHaveValue("Reviewer");
+    await expect(page.getByLabel("Bio")).toHaveValue("TYPED-BIO");
   });
 
   test("survives a failing profile fetch", async ({ page }) => {
