@@ -37,7 +37,14 @@ export function WorkspaceExportCard() {
     // report the same failure a second time.
     errorNotification: false,
   });
-  const resourcesFailed = resourcesQuery.isError;
+  // refine's isLoading is `isFetching && !data`, which is true again while a
+  // retry runs: the refetch targets a query that never resolved. A non-zero
+  // errorUpdatedAt means an earlier attempt already failed, and that is what
+  // tells a first load from a retry. Holding the card and its alert up while
+  // the retry is in flight is the point: Retry shows as disabled, not gone.
+  const retrying =
+    resourcesQuery.isFetching && !resourcesQuery.data && resourcesQuery.errorUpdatedAt > 0;
+  const resourcesFailed = resourcesQuery.isError || retrying;
   const resources = resourcesResult?.data?.resources ?? [];
   const [resource, setResource] = useState<string>("members");
   const [busy, setBusy] = useState<"json" | "csv" | null>(null);
@@ -62,7 +69,7 @@ export function WorkspaceExportCard() {
     }
   };
 
-  if (!workspace || isLoading || resourcesQuery.isLoading) return null;
+  if (!workspace || isLoading || (resourcesQuery.isLoading && !resourcesQuery.errorUpdatedAt)) return null;
   if (canExport && !canExport.can) return null;
 
   return (

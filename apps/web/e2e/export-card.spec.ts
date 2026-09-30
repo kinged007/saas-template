@@ -119,8 +119,11 @@ test.describe("workspace export card", () => {
     // One press, one request, even while the request is still in flight.
     await page.waitForTimeout(500);
     expect(resources.attempts.length).toBe(2);
-    await expect(page.getByRole("button", { name: "Retry" })).toBeHidden();
-    await expect(page.getByText("Data export")).toBeHidden();
+    // The card and its alert survive the in-flight retry, and Retry is shown
+    // disabled instead of unmounted, so it cannot be pressed a second time.
+    await expect(page.getByText("Data export")).toBeVisible();
+    await expect(alert).toBeVisible();
+    await expect(page.getByRole("button", { name: "Retry" })).toBeDisabled();
 
     await expect(alert).toBeHidden();
     await expect(page.getByRole("button", { name: "Export CSV" })).toBeEnabled();
