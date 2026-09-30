@@ -57,11 +57,14 @@ async def test_sessions_list_and_revoke(app_client):
     assert len(others) == 1
     resp = await client.delete(f"/api/v1/auth/sessions/{others[0]['id']}", headers=headers)
     assert resp.status_code == 204
-    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": other["refresh_token"]})
-    assert resp.status_code == 401
     # revoked sessions disappear from the list; the current one remains
     resp = await client.get("/api/v1/auth/sessions", headers=headers)
     assert [s["id"] for s in resp.json()] == [sessions[0]["id"]]
+    # replaying the revoked token is refresh-token reuse: 401, current session revoked
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": other["refresh_token"]})
+    assert resp.status_code == 401
+    resp = await client.get("/api/v1/auth/sessions", headers=headers)
+    assert resp.status_code == 401, resp.text
 
 
 async def test_revoked_session_access_token_rejected(app_client):
@@ -82,12 +85,14 @@ async def test_revoked_session_access_token_rejected(app_client):
     # The revoked session's access token is rejected on the next request.
     resp = await client.get("/api/v1/auth/me", headers=h1)
     assert resp.status_code == 401, resp.text
-    # And its refresh token no longer rotates.
-    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
-    assert resp.status_code == 401, resp.text
-    # The surviving session keeps working.
+    # The surviving session keeps working until the revoked token is replayed.
     resp = await client.get("/api/v1/auth/me", headers=h2)
     assert resp.status_code == 200, resp.text
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
+    assert resp.status_code == 401, resp.text
+    # Replaying it is refresh-token reuse, so the surviving session is revoked too.
+    resp = await client.get("/api/v1/auth/me", headers=h2)
+    assert resp.status_code == 401, resp.text
 
 
 async def test_revoke_all_sessions(app_client):
@@ -101,9 +106,10 @@ async def test_revoke_all_sessions(app_client):
     assert sum(s["current"] for s in listed) == 1
     resp = await client.delete("/api/v1/auth/sessions", headers=headers)
     assert resp.status_code == 204
-    # the other session is revoked; the current one keeps working
-    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
-    assert resp.status_code == 401
+    # the other session is revoked; its access token 401s on the next request
+    resp = await client.get("/api/v1/auth/me", headers=auth_headers(t1))
+    assert resp.status_code == 401, resp.text
+    # the current session survives and refreshes
     resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]})
     assert resp.status_code == 200, resp.text
     # refresh rotates: the current session id moves to the new row
@@ -112,6 +118,13 @@ async def test_revoke_all_sessions(app_client):
     remaining = resp.json()
     assert len(remaining) == 1
     assert remaining[0]["current"] is True
+    # replaying the revoked token is reuse and revokes the current session too
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
+    assert resp.status_code == 401
+    resp = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": rotated["refresh_token"]}
+    )
+    assert resp.status_code == 401
 
 
 async def test_totp_enrol_login_disable(app_client):

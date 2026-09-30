@@ -19,10 +19,14 @@ async def test_revoked_session_access_token_rejected(app_client):
     resp = await client.get("/api/v1/auth/me", headers=h1)
     assert resp.status_code == 401, resp.text
     assert resp.json()["detail"] == "session revoked"
-    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
-    assert resp.status_code == 401, resp.text
+    # the surviving session keeps working until the revoked token is replayed
     resp = await client.get("/api/v1/auth/me", headers=h2)
     assert resp.status_code == 200, resp.text
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
+    assert resp.status_code == 401, resp.text
+    # replaying it is refresh-token reuse: the surviving session goes too
+    resp = await client.get("/api/v1/auth/me", headers=h2)
+    assert resp.status_code == 401, resp.text
 
 
 async def test_session_routes_reject_api_key_callers(app_client):
@@ -49,6 +53,63 @@ async def test_session_routes_reject_api_key_callers(app_client):
     assert resp.status_code == 403, resp.text
 
 
+async def test_reused_refresh_token_revokes_all_sessions(app_client):
+    client = app_client
+    t1 = await register_user(client, "reuse@example.com")
+    t2 = await login(client, "reuse@example.com")
+
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]})
+    assert resp.status_code == 200, resp.text
+    rotated = resp.json()
+
+    # replaying an already-rotated token is a compromise signal
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]})
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["detail"] == "invalid refresh token"
+
+    # every live session of that user is revoked
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
+    assert resp.status_code == 401, resp.text
+    resp = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": rotated["refresh_token"]}
+    )
+    assert resp.status_code == 401, resp.text
+    resp = await client.get("/api/v1/auth/me", headers=auth_headers(rotated))
+    assert resp.status_code == 401, resp.text
+
+
+async def test_unknown_refresh_token_revokes_nothing(app_client):
+    client = app_client
+    t1 = await register_user(client, "unknown@example.com")
+    t2 = await login(client, "unknown@example.com")
+
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": "not-a-real-token"})
+    assert resp.status_code == 401, resp.text
+
+    resp = await client.get("/api/v1/auth/me", headers=auth_headers(t1))
+    assert resp.status_code == 200, resp.text
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]})
+    assert resp.status_code == 200, resp.text
+
+
+async def test_reused_refresh_token_does_not_lock_the_account(app_client):
+    client = app_client
+    t1 = await register_user(client, "reuse-login@example.com")
+    t2 = await login(client, "reuse-login@example.com")
+
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]})
+    assert resp.status_code == 200, resp.text
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]})
+    assert resp.status_code == 401, resp.text
+
+    # signed out, not disabled
+    resp = await client.get("/api/v1/auth/me", headers=auth_headers(t1))
+    assert resp.status_code == 401, resp.text
+    t3 = await login(client, "reuse-login@example.com")
+    resp = await client.get("/api/v1/auth/me", headers=auth_headers(t3))
+    assert resp.status_code == 200, resp.text
+
+
 async def test_revoke_all_sessions(app_client):
     client = app_client
     t1 = await register_user(client, "all@example.com")
@@ -65,8 +126,6 @@ async def test_revoke_all_sessions(app_client):
     assert resp.status_code == 400, resp.text
     resp = await client.delete("/api/v1/auth/sessions", headers=headers)
     assert resp.status_code == 204
-    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
-    assert resp.status_code == 401
     # the revoked session's access token 401s on the next request
     resp = await client.get("/api/v1/auth/me", headers=auth_headers(t1))
     assert resp.status_code == 401, resp.text
@@ -78,3 +137,10 @@ async def test_revoke_all_sessions(app_client):
     remaining = resp.json()
     assert len(remaining) == 1
     assert remaining[0]["current"] is True
+    # replaying the revoked token is reuse, and takes the surviving session too
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
+    assert resp.status_code == 401
+    resp = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": rotated["refresh_token"]}
+    )
+    assert resp.status_code == 401

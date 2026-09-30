@@ -321,7 +321,17 @@ class AuthService:
         )
         result = await self._session.execute(stmt)
         row = result.scalar_one_or_none()
-        if row is None or row.revoked_at is not None:
+        if row is None:
+            raise AuthError("invalid refresh token")
+        if row.revoked_at is not None:
+            # already rotated: presenting it again is a compromise signal
+            logger.warning("refresh token reuse user=%s session=%s", row.user_id, row.id)
+            await self.revoke_other_sessions(
+                row.user_id,
+                current_session_id=None,
+                ip_address=ip_address,
+                action="user.refresh_token_reuse",
+            )
             raise AuthError("invalid refresh token")
         if ensure_utc(row.expires_at) < now_utc():
             raise AuthError("refresh token expired")
@@ -374,7 +384,12 @@ class AuthService:
             )
 
     async def revoke_other_sessions(
-        self, user_id: str, *, current_session_id: str | None, ip_address: str | None = None
+        self,
+        user_id: str,
+        *,
+        current_session_id: str | None,
+        ip_address: str | None = None,
+        action: str = "user.sessions_revoked",
     ) -> int:
         """Revoke every live session except the current one; returns the count."""
         rows = await self.list_sessions(user_id)
@@ -394,7 +409,7 @@ class AuthService:
                 workspace_id=None,
                 resource_type="user",
                 resource_id=user_id,
-                action="user.sessions_revoked",
+                action=action,
                 actor_user_id=user_id,
                 details={"revoked_count": count},
                 ip_address=ip_address,
