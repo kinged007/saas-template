@@ -29,6 +29,16 @@ class ApiKeyNotFound(ApiKeyError):
     pass
 
 
+def _payload_iso(value: datetime | None) -> str | None:
+    """Serialize an ORM datetime for a publish payload.
+
+    Normalized at the emission edge instead of read off the attribute: SQLite
+    hands `DateTime(timezone=True)` back without an offset, and a consumer's
+    `new Date(...)` reads a naive ISO string as local time.
+    """
+    return ensure_utc(value).isoformat() if value is not None else None
+
+
 class ApiKeyService:
     """Workspace-scoped API key management.
 
@@ -140,7 +150,7 @@ class ApiKeyService:
                 "permissions": key.permissions,
                 "created_by_user_id": actor.id,
                 "created_by_name": actor.display_name,
-                "expires_at": ensure_utc(key.expires_at).isoformat() if key.expires_at else None,
+                "expires_at": _payload_iso(key.expires_at),
             },
         )
         await publish_audit(

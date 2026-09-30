@@ -13,7 +13,7 @@ import pytest
 
 from src.db.session import SessionFactory
 from src.events.subjects import Subjects
-from src.services.api_keys import ApiKeyService
+from src.services.api_keys import ApiKeyService, _payload_iso
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
 from tests.bus_doubles import RecordingBus
@@ -408,27 +408,33 @@ async def test_api_key_create_and_revoke_emit_events_and_audit(bus, owner):
 
 
 async def test_api_key_created_event_expiry_is_offset_aware(bus, owner):
-    """The published expiry carries its offset, like the HTTP payload does.
-
-    A naive ISO string makes a consumer's `new Date(...)` parse it as local
-    time. What SQLite stores and returns is naive, so the service normalizes
-    on the way out rather than trusting the instance it just built.
-    """
+    """`apikey.created` publishes the exact expiry string, or None for a key
+    without one."""
     workspace = await _create_workspace(bus, owner.id, slug="acme8")
     async with SessionFactory() as session:
-        key, _ = await ApiKeyService(session, bus).create_api_key(
+        await ApiKeyService(session, bus).create_api_key(
             workspace_id=workspace.id,
             name="ci-key",
             permissions=["workspace:read"],
             actor=owner,
             expires_at=datetime(2027, 1, 1, tzinfo=UTC),
         )
-        await session.refresh(key)  # the column comes back naive on SQLite
-        naive = key.expires_at.isoformat()
+        await ApiKeyService(session, bus).create_api_key(
+            workspace_id=workspace.id,
+            name="forever-key",
+            permissions=["workspace:read"],
+            actor=owner,
+        )
 
-    payload = bus.by_subject(Subjects.APIKEY_CREATED)[0][0]
-    assert payload["expires_at"] != naive
-    assert datetime.fromisoformat(payload["expires_at"]).utcoffset() is not None
+    published = [payload["expires_at"] for payload, _, _ in bus.by_subject(Subjects.APIKEY_CREATED)]
+    assert published == ["2027-01-01T00:00:00+00:00", None]
+
+
+def test_api_key_expiry_payload_normalizes_a_naive_attribute():
+    """A naive expiry — what SQLite returns for `DateTime(timezone=True)` —
+    must not reach a consumer as a local-time ISO string."""
+    assert _payload_iso(datetime(2027, 1, 1)) == "2027-01-01T00:00:00+00:00"
+    assert _payload_iso(None) is None
 
 
 # ------------------------------------------------------------------- roles
