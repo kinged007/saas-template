@@ -1,28 +1,18 @@
-import { expect, test as base } from "playwright/test";
+import { expect } from "playwright/test";
 
-import { mockApi } from "./mock-api";
+import { mockApi, test } from "./harness";
 
 /**
  * The sidebar shell must be a navigation landmark. The settings pages already
  * render their own `nav`, so the shell one needs a name to be told apart.
  */
-const test = base.extend<{ pageerrors: Error[] }>({
-  pageerrors: [
-    async ({ page }, use) => {
-      const errors: Error[] = [];
-      page.on("pageerror", (error) => errors.push(error));
-      await use(errors);
-      expect(errors).toEqual([]);
-    },
-    { auto: true },
-  ],
-});
 
 test.describe("sidebar landmark", () => {
   test("the shell sidebar is a named navigation landmark holding links and group headings", async ({
     page,
+    errors,
   }) => {
-    await mockApi(page, { signedIn: true });
+    await mockApi(page, { signedIn: true, errors });
     await page.goto("/members");
     await expect(page.getByRole("heading", { name: "Members", exact: true })).toBeVisible();
 

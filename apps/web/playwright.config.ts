@@ -14,10 +14,15 @@ export default defineConfig({
   // per-test options, so they sit at the top level rather than under `use`.
   timeout: 90_000,
   expect: { timeout: 10_000 },
+  // The two directories ci.yml uploads on a red run. Declared rather than left
+  // at their defaults so the paths the workflow names live in this file too.
+  outputDir: "test-results",
   // Without a reporter a CI run is a dot log and an exit code, so a red job
   // said nothing about which spec failed or why. The HTML report is what gets
   // uploaded; `open: "never"` because a failing run must not hang on a server.
-  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
+  reporter: process.env.CI
+    ? [["list"], ["html", { open: "never", outputFolder: "playwright-report" }]]
+    : "list",
   use: {
     baseURL,
     // A retained trace is the only record of the DOM, network and console of a

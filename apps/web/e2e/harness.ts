@@ -9,7 +9,7 @@ import { expect, test as base, type Page } from "playwright/test";
 /**
  * The component stack the app ErrorBoundary records on window when it catches
  * a crash (ErrorBoundary.componentDidCatch). `pageerror` covers this only
- * because React rethrows a caught error in dev; the flag is the contract that
+ * because React 18 rethrows a caught error in dev; the flag is the contract that
  * holds in either build, and the fallback the user sees is a screen, not a
  * failed assertion.
  */
@@ -84,6 +84,8 @@ const BODIES: Record<string, unknown> = {
   // the dashboard and the export card in workspace settings
   "/api-keys": [],
   "/members": [],
+  // the roles table on the workspace roles page
+  "/roles": [],
   // the data-export card lists what it can export
   "/workspaces/export/resources": { resources: ["members", "roles", "conversations"] },
   // the pending-invitations card in the app layout
@@ -115,14 +117,19 @@ export async function mockApi(page: Page, { signedIn, errors, bodies }: MockOpti
       return reply(200, IDENTITY);
     }
     if (pathname.endsWith("/auth/logout")) return route.fulfill({ status: 204, body: "" });
-    const suffix = Object.keys(table).find((key) => pathname.endsWith(key));
+    // Longest suffix first, so the most specific entry wins when one key is a
+    // suffix of another.
+    const suffix = Object.keys(table)
+      .sort((a, b) => b.length - a.length)
+      .find((key) => pathname.endsWith(key));
     if (suffix) return reply(200, table[suffix]);
     // Fail closed. Answering [] here let an endpoint nobody mocked pass as an
     // empty list, so a new route or a paginated envelope surfaced as a crash
-    // far from its cause instead of as a missing mock.
-    const error = new Error(`unmocked: ${pathname}`);
-    errors.push(error);
-    throw error;
+    // far from its cause instead of as a missing mock. The endpoint is aborted
+    // so the caller sees a failed request rather than a hanging one, and the
+    // guard fixture fails the spec naming every unmocked endpoint at once.
+    errors.push(new Error(`unmocked: ${pathname}`));
+    await route.abort("failed");
   });
   // The auth check only refreshes when the signed-in marker is set, so seed it
   // before any app code runs.

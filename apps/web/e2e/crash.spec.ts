@@ -5,10 +5,12 @@ import { boundaryCrash, mockApi } from "./harness";
 /**
  * The ErrorBoundary absorbs a render crash and renders its own fallback, so a
  * spec's own assertion can pass on the right URL while the user stares at an
- * error screen. React rethrows a caught error in dev, so `pageerror` happens to
- * cover this under the dev server and nothing else does. This spec crashes the
- * dashboard on purpose and asserts what the shared guard reads: the fallback is
- * on screen, and the boundary recorded the component stack on window.
+ * error screen. React 18 rethrows a caught error in dev, so `pageerror` happens
+ * to cover this under the dev server and nothing else does.
+ *
+ * This spec crashes the dashboard on purpose and asserts what the shared guard
+ * reads: the fallback is on screen, and the boundary recorded the component
+ * stack on window.
  *
  * It runs on the bare `test` from playwright, without the guard fixture,
  * because this is the one run that is supposed to crash.
