@@ -15,6 +15,8 @@ Covers, end to end over the HTTP API:
     wildcard-permission admins
   * authentication hygiene — garbage/revoked keys, zero-permission keys,
     and proof that key permissions never inherit the creator's role
+  * session-only surfaces — 2FA, sessions, the password, the personal data
+    export, and the deployment-admin flag all refuse a key
 """
 
 from src.core.permissions import ALL_PERMISSIONS, JOB_READ, permissions_for_role
@@ -770,32 +772,43 @@ async def test_superuser_key_cannot_reach_superuser_routes(app_client):
     victim_id = await _user_id(client, await register_user(client, "victim@example.com"))
     runs = await _seed_runs(ws["id"])
 
-    for method, url in [
+    surfaces = [
         ("get", "/api/v1/admin/users"),
         ("get", "/api/v1/admin/workspaces"),
         ("get", "/api/v1/jobs/global"),
-        # The same rule, reached through routes that resolve their own
-        # superuser check rather than through `require_superuser`.
         ("get", f"/api/v1/users/{victim_id}/export"),
         ("delete", f"/api/v1/users/{victim_id}"),
+        # The same rule, reached through routes that resolve their own
+        # superuser check (`_require_run_access`) rather than through
+        # `require_superuser`.
         ("get", f"/api/v1/jobs/runs/{runs['global']}"),
         ("get", f"/api/v1/jobs/runs/{runs['global']}/logs"),
-    ]:
+    ]
+    for method, url in surfaces:
         resp = await client.request(method, url, headers=key_headers)
         assert resp.status_code == 403, (method, url, resp.status_code, resp.text)
+
+    # /auth/me stays readable by a key — it is the key's own identity — but
+    # reports the creator's deployment-admin flag as false, so the field
+    # reads the principal's power rather than the raw user column.
+    me_key = await client.get("/api/v1/auth/me", headers=key_headers)
+    assert me_key.status_code == 200, me_key.text
+    assert me_key.json()["is_superuser"] is False, me_key.text
 
     # The profile projection's superuser bypass is off for a key, so it
     # falls back to co-membership and finds none (404, not a 403 leak).
     resp = await client.get(f"/api/v1/users/{victim_id}/profile", headers=key_headers)
     assert resp.status_code == 404, resp.text
-
-    # The superuser's own session still reaches all of them.
-    session = await client.get("/api/v1/admin/users", headers=auth_headers(root))
-    assert session.status_code == 200, session.text
-    export = await client.get(f"/api/v1/users/{victim_id}/export", headers=auth_headers(root))
-    assert export.status_code == 200, export.text
     profile = await client.get(f"/api/v1/users/{victim_id}/profile", headers=auth_headers(root))
     assert profile.status_code == 200, profile.text
+
+    # The superuser's own session reaches all of them, from the same list
+    # the key loop uses. 204 is the delete's success code.
+    for method, url in surfaces:
+        resp = await client.request(method, url, headers=auth_headers(root))
+        assert resp.status_code in (200, 204), (method, url, resp.status_code, resp.text)
+    me_session = await client.get("/api/v1/auth/me", headers=auth_headers(root))
+    assert me_session.json()["is_superuser"] is True, me_session.text
 
 
 async def test_job_run_access_uses_the_keys_own_permissions(app_client):
@@ -864,22 +877,28 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
         assert "quota" in second.json()["detail"].lower(), url
 
 
-async def test_key_cannot_enroll_two_factor(app_client):
-    """A key holder must not mint TOTP codes that outlive the key.
+async def test_key_cannot_touch_two_factor(app_client):
+    """No 2FA surface is reachable by a key, not just enrolment.
 
-    2FA enrolment is a session capability: the backup codes it returns stay
-    valid logins for the account, and no permission list covers them."""
+    Backup codes stay valid logins for the account and no permission list
+    covers them, so 2FA is session-only as a feature. `2fa/disable` and
+    `2fa/backup-codes` re-verify the password, which a key holder does not
+    have — both send the owner's *correct* password here, so the 403 proves
+    the gate stopped them, not the credential check."""
     client = app_client
     owner = await register_user(client, "totp-owner@example.com")
     ws = await create_workspace(client, owner, "Totp Owner Inc")
     key = await _create_key(client, ws_headers(owner, ws["id"]), "no-2fa", ["member:read"])
     key_headers = _key_headers(key["key"], ws["id"])
 
-    for url, body in [
-        ("/api/v1/auth/2fa/setup", None),
-        ("/api/v1/auth/2fa/enable", {"setup_token": "x", "code": "000000"}),
+    for method, url, body in [
+        ("get", "/api/v1/auth/2fa/status", None),
+        ("post", "/api/v1/auth/2fa/setup", None),
+        ("post", "/api/v1/auth/2fa/enable", {"setup_token": "x", "code": "000000"}),
+        ("post", "/api/v1/auth/2fa/disable", {"password": "Password123!"}),
+        ("post", "/api/v1/auth/2fa/backup-codes", {"password": "Password123!"}),
     ]:
-        resp = await client.post(url, json=body, headers=key_headers)
+        resp = await client.request(method, url, json=body, headers=key_headers)
         assert resp.status_code == 403, (url, resp.status_code, resp.text)
 
     # The owner's own session can still enrol; the refusals left 2FA off.
@@ -887,6 +906,63 @@ async def test_key_cannot_enroll_two_factor(app_client):
     assert resp.status_code == 200, resp.text
     state = await client.get("/api/v1/auth/2fa/status", headers=auth_headers(owner))
     assert state.json() == {"enabled": False}, state.text
+
+
+async def test_key_cannot_export_its_creator_data(app_client):
+    """Self-service export is a session capability, like /users/{id}/export.
+
+    The bare key header (no X-Workspace-ID) is deliberate: the route takes no
+    workspace scoping, so the missing gate — not workspace scoping — is the
+    entire defect."""
+    client = app_client
+    owner = await register_user(client, "export-owner@example.com")
+    ws = await create_workspace(client, owner, "Export Owner Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "no-export", ["member:read"])
+
+    resp = await client.get("/api/v1/me/export", headers={"Authorization": f"Bearer {key['key']}"})
+    assert resp.status_code == 403, resp.text
+
+    resp = await client.get("/api/v1/me/export", headers=auth_headers(owner))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["user"]["id"] == await _user_id(client, owner)
+
+
+async def test_key_cannot_manage_sessions_or_password(app_client):
+    """Sessions and the password are a session concept; a key carries none.
+
+    This passes before and after the change — it is the guard that deleting
+    auth.py's private gate did not silently un-gate the six routes that used
+    to call it."""
+    client = app_client
+    owner = await register_user(client, "session-owner@example.com")
+    ws = await create_workspace(client, owner, "Session Owner Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "no-sessions", ["member:read"])
+    key_headers = _key_headers(key["key"], ws["id"])
+    runs = await _seed_runs(ws["id"])
+
+    for method, url, body in [
+        ("get", "/api/v1/auth/sessions", None),
+        ("delete", "/api/v1/auth/sessions", None),
+        ("delete", f"/api/v1/auth/sessions/{runs['global']}", None),
+        (
+            "post",
+            "/api/v1/auth/change-password",
+            {"current_password": "Password123!", "new_password": "Password456!"},
+        ),
+    ]:
+        resp = await client.request(method, url, json=body, headers=key_headers)
+        assert resp.status_code == 403, (url, resp.status_code, resp.text)
+
+    # The owner's own session still lists its sessions, and still changes
+    # its password.
+    resp = await client.get("/api/v1/auth/sessions", headers=auth_headers(owner))
+    assert resp.status_code == 200, resp.text
+    resp = await client.post(
+        "/api/v1/auth/change-password",
+        json={"current_password": "Password123!", "new_password": "Password456!"},
+        headers=auth_headers(owner),
+    )
+    assert resp.status_code == 204, resp.text
 
 
 # ------------------------------------------------------------------- seed

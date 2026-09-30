@@ -98,12 +98,15 @@ async def get_current_user(
 async def require_session_user(
     principal: AuthPrincipal = Depends(resolve_auth_principal),
 ) -> User:
-    """Reject API-key principals.
+    """Reject API-key principals. The single session-only gate.
 
     An API key carries its creator's role into the service layer, so a route
     whose real authority check is a *role* check (not a permission) would let a
-    narrowly scoped key exercise owner-level powers. Owner-level operations
-    (ownership transfer) therefore require an interactive session.
+    narrowly scoped key exercise owner-level powers. Two families need an
+    interactive session: owner-level operations (ownership transfer), and
+    self-service routes that read or change the caller's own account — 2FA,
+    sessions, the password, and the personal data export. No permission list
+    covers any of them, so the key would be the only thing deciding access.
     """
     if principal.api_key is not None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "api keys cannot perform this action")
