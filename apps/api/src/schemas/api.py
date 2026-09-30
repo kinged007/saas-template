@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     AnyHttpUrl,
@@ -10,8 +10,14 @@ from pydantic import (
     EmailStr,
     Field,
     StrictBool,
+    StringConstraints,
     field_validator,
 )
+
+# strip_whitespace runs before the length check, so padding is normalized on
+# write (role names are compared exactly on read, e.g. the auto-join lookup)
+# and a name that is blank after stripping fails min_length.
+RoleName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]
 
 
 class LoginRequest(BaseModel):
@@ -129,13 +135,13 @@ class OwnershipTransfer(BaseModel):
 
 
 class RoleCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=50)
+    name: RoleName
     description: str | None = Field(default=None, max_length=300)
     permissions: list[str] = Field(default_factory=list)
 
 
 class RoleUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=50)
+    name: RoleName | None = None
     description: str | None = Field(default=None, max_length=300)
     permissions: list[str] | None = None
 
