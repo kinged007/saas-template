@@ -43,7 +43,7 @@ async def get_my_profile(
 async def put_my_profile(
     body: ProfileUpdate,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -65,7 +65,7 @@ async def put_my_profile(
 async def patch_my_profile(
     body: ProfileUpdate,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -137,7 +137,7 @@ async def export_user_data(
 async def delete_me(
     body: DeleteMeRequest,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):

@@ -610,6 +610,10 @@ async def me(
     # user who minted it is one.
     data["is_superuser"] = principal.is_deployment_admin
     memberships = await service.list_workspaces(user.id)
+    if principal.api_key is not None:
+        # A key learns only its own workspace, never the creator's inventory:
+        # every workspace listed here is one the key can actually reach.
+        memberships = [m for m in memberships if m[0].id == principal.api_key.workspace_id]
     if settings.single_workspace:
         # Toggling onto an existing deployment: oldest wins, rest stay hidden.
         # (GET /workspaces still lists all memberships; /me is the UI surface.)

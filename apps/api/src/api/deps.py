@@ -104,9 +104,11 @@ async def require_session_user(
     whose real authority check is a *role* check (not a permission) would let a
     narrowly scoped key exercise owner-level powers. Two families need an
     interactive session: owner-level operations (ownership transfer), and
-    self-service routes that read or change the caller's own account — 2FA,
-    sessions, the password, and the personal data export. No permission list
-    covers any of them, so the key would be the only thing deciding access.
+    self-service routes that read or change the caller's own account — the
+    `/me` family (profile writes, data export, account deletion), 2FA, sessions
+    and the password. No permission list covers any of them, so the key would be
+    the only thing deciding access. (`GET /me/profile` and `GET /auth/me` stay
+    readable by a key: they report the caller's own identity.)
     """
     if principal.api_key is not None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "api keys cannot perform this action")

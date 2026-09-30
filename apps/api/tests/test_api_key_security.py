@@ -803,12 +803,45 @@ async def test_superuser_key_cannot_reach_superuser_routes(app_client):
     assert profile.status_code == 200, profile.text
 
     # The superuser's own session reaches all of them, from the same list
-    # the key loop uses. 204 is the delete's success code.
+    # the key loop uses. Only the delete answers 204.
     for method, url in surfaces:
         resp = await client.request(method, url, headers=auth_headers(root))
-        assert resp.status_code in (200, 204), (method, url, resp.status_code, resp.text)
+        assert resp.status_code == (204 if method == "delete" else 200), (
+            method,
+            url,
+            resp.status_code,
+            resp.text,
+        )
     me_session = await client.get("/api/v1/auth/me", headers=auth_headers(root))
     assert me_session.json()["is_superuser"] is True, me_session.text
+
+
+async def test_auth_me_reports_the_principals_scope_not_the_owners(app_client):
+    """/auth/me answers for the caller, so a key never learns the owner's inventory.
+
+    A workspace-scoped key used to be handed every workspace its creator
+    belonged to, each with its role and permission set. That leaked another
+    workspace's id — the one value every route behind it refuses to hand out
+    ("api key is not scoped to this workspace").
+    """
+    client = app_client
+    owner = await register_user(client, "scope-owner@example.com")
+    ws = await create_workspace(client, owner, "Scoped Inc")
+    other_ws = await create_workspace(client, owner, "Other Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "scoped", ["member:read"])
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    assert [w["id"] for w in me_key.json()["workspaces"]] == [ws["id"]]
+
+    # The owner's own session still sees the whole inventory, and it is the
+    # reference for what a key may read back: the roles it holds in the one
+    # workspace the key is scoped to, never the union across all of them.
+    me_owner = await client.get("/api/v1/auth/me", headers=auth_headers(owner))
+    assert me_owner.status_code == 200, me_owner.text
+    assert {w["id"] for w in me_owner.json()["workspaces"]} == {ws["id"], other_ws["id"]}
+    in_scope = next(w for w in me_owner.json()["workspaces"] if w["id"] == ws["id"])
+    assert set(me_key.json()["permissions"]) == set(in_scope["permissions"])
 
 
 async def test_job_run_access_uses_the_keys_own_permissions(app_client):
@@ -927,6 +960,35 @@ async def test_key_cannot_export_its_creator_data(app_client):
     assert resp.json()["user"]["id"] == await _user_id(client, owner)
 
 
+async def test_key_cannot_write_its_creator_profile_or_delete_the_account(app_client):
+    """The rest of the /me write family is a session concept too.
+
+    `DELETE /me` is the sharp edge: for an OAuth-registered user
+    (`password_hash is None`) the password confirmation never runs, so any key
+    the user ever minted could destroy the account.
+    """
+    client = app_client
+    owner = await register_user(client, "profile-owner@example.com")
+    ws = await create_workspace(client, owner, "Profile Owner Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "no-profile", ["member:read"])
+    key_headers = {"Authorization": f"Bearer {key['key']}"}
+
+    for method, url, body in [
+        ("put", "/api/v1/me/profile", {"display_name": "Hacked"}),
+        ("patch", "/api/v1/me/profile", {"bio": "Hacked"}),
+        ("delete", "/api/v1/me", {"password": "Password123!", "confirm": "DELETE"}),
+    ]:
+        resp = await client.request(method, url, json=body, headers=key_headers)
+        assert resp.status_code == 403, (method, url, resp.status_code, resp.text)
+
+    # Reading the profile with a key, and writing it as a session, still work.
+    assert (await client.get("/api/v1/me/profile", headers=key_headers)).status_code == 200
+    resp = await client.patch(
+        "/api/v1/me/profile", json={"bio": "Mine"}, headers=auth_headers(owner)
+    )
+    assert resp.status_code == 200, resp.text
+
+
 async def test_key_cannot_manage_sessions_or_password(app_client):
     """Sessions and the password are a session concept; a key carries none.
 
@@ -943,6 +1005,8 @@ async def test_key_cannot_manage_sessions_or_password(app_client):
     for method, url, body in [
         ("get", "/api/v1/auth/sessions", None),
         ("delete", "/api/v1/auth/sessions", None),
+        # A global run id the owner never owned: the session gate refuses
+        # before the lookup, so no session row is needed for the 403.
         ("delete", f"/api/v1/auth/sessions/{runs['global']}", None),
         (
             "post",
