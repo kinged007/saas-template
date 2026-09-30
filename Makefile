@@ -3,7 +3,7 @@ SHELL := /bin/bash
 
 SUDO := $(shell [ "$$(id -u)" -eq 0 ] 2>/dev/null && echo "" || echo sudo)
 
-.PHONY: help setup dev api api-install api-migrate api-seed api-test api-lint web web-install web-build web-test web-typecheck web-test-e2e hooks-install db-check db-squash db-new db-history infra-up infra-down nats-up nats-down nats-status nats-logs
+.PHONY: help setup check-node dev api api-install api-migrate api-seed api-test api-lint web web-install web-build web-test web-typecheck web-test-e2e hooks-install db-check db-squash db-new db-history infra-up infra-down nats-up nats-down nats-status nats-logs
 
 # USE_SQLITE=1 (env or `make <target> USE_SQLITE=1`): use the per-checkout
 # sqlite dev DB (apps/api/dev.db) instead of embedded postgres. Exported so it
@@ -16,9 +16,15 @@ endif
 API_PORT ?= 8000
 WEB_PORT ?= 5173
 
+# Node floor for apps/web — keep in sync with apps/web/package.json "engines".
+# The API is Python, so it has no Node requirement.
+WEB_NODE_MAJOR := 22
+WEB_NODE_MINOR := 18
+
 help:
 	@echo "SaaS Template targets (development runs from the terminal — no docker needed):"
 	@echo "  make setup        one-time: install uv + Node.js if missing (fnm -> apt -> nvm)"
+	@echo "  make check-node   warn if Node is below the apps/web floor ($(WEB_NODE_MAJOR).$(WEB_NODE_MINOR))"
 	@echo "  make dev          install deps, migrate, seed, then run api (:$(API_PORT)) + web (:$(WEB_PORT))"
 	@echo "  make dev API_PORT=8010 WEB_PORT=5273   use other ports (e.g. when :8000/:5173 are taken)"
 	@echo "  make api-install  install backend deps (uv sync)"
@@ -56,10 +62,7 @@ setup:
 	fi
 	@if command -v node >/dev/null 2>&1; then \
 		echo "==> Node.js already installed: $$(node --version)"; \
-		NODE_MAJOR=$$(node --version | cut -d. -f1 | tr -d v); \
-		if [ "$$NODE_MAJOR" -lt 18 ]; then \
-			echo "    warning: Vite 5 needs Node >= 18"; \
-		fi; \
+		$(MAKE) --no-print-directory check-node; \
 	else \
 		echo "==> Node.js not found — trying installers (fnm, then apt, then nvm)..."; \
 		FNM_BIN=""; \
@@ -90,6 +93,20 @@ setup:
 			echo "==> Node.js ready: $$(node --version)"; \
 		else \
 			echo "==> Done — open a new terminal (or run: source ~/.bashrc) so node is on PATH"; \
+		fi; \
+	fi
+
+# Warns (never fails) when the running Node is below the floor apps/web declares:
+# Node 22.18+ strips TS types natively, which `make web-test` relies on.
+check-node:
+	@if command -v node >/dev/null 2>&1; then \
+		NODE_VERSION=$$(node --version); NODE_VERSION=$${NODE_VERSION#v}; \
+		NODE_MAJOR=$${NODE_VERSION%%.*}; \
+		NODE_MINOR=$${NODE_VERSION#*.}; NODE_MINOR=$${NODE_MINOR%%.*}; NODE_MINOR=$${NODE_MINOR:-0}; \
+		if [ "$$NODE_MAJOR" -lt $(WEB_NODE_MAJOR) ] || \
+		   { [ "$$NODE_MAJOR" -eq $(WEB_NODE_MAJOR) ] && [ "$$NODE_MINOR" -lt $(WEB_NODE_MINOR) ]; }; then \
+			echo "    warning: apps/web requires Node >= $(WEB_NODE_MAJOR).$(WEB_NODE_MINOR) (found $$NODE_VERSION) — 'make web-test' needs its native TS type stripping"; \
+			echo "             the API has no Node requirement; only apps/web needs $(WEB_NODE_MAJOR).$(WEB_NODE_MINOR)"; \
 		fi; \
 	fi
 
