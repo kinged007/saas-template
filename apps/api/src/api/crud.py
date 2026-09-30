@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import Request
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select
 from sqlalchemy.sql import ColumnElement
 
 from src.services.profile_helpers import escape_like
@@ -140,6 +140,10 @@ def _coerce(column: ColumnElement, value: str) -> Any:
     return value
 
 
+# The common "newest first" list order, for routes that want one.
+CREATED_DESC = (("created_at", "desc"),)
+
+
 def apply_query(
     stmt: Select,
     model: type,
@@ -163,8 +167,12 @@ def apply_query(
         stmt = stmt.where(_COMPARATORS[op](column, _coerce(column, value)))
     if spec.ids:
         stmt = stmt.where(model.id.in_(spec.ids))
-    sort_by = list(spec.sort_by) or [f for f, _ in default_sort]
-    sort_order = list(spec.sort_order) or [o for _, o in default_sort]
+    # Resolved together: `zip(..., strict=True)` below consumes the two lists as
+    # a pair, so independent fallbacks can desynchronise and 500.
+    if spec.sort_by:
+        sort_by, sort_order = list(spec.sort_by), list(spec.sort_order)
+    else:
+        sort_by, sort_order = [f for f, _ in default_sort], [o for _, o in default_sort]
     for fname, order in zip(sort_by, sort_order, strict=True):
         if fname not in sortable:
             raise InvalidQuery(f"sort on unknown field: {fname}")
@@ -177,21 +185,3 @@ def apply_query(
         last = sort_order[-1] if sort_order else "asc"
         stmt = stmt.order_by(model.id.desc() if last == "desc" else model.id.asc())
     return stmt
-
-
-async def run_list(
-    session,
-    stmt: Select,
-    model: type,
-    request: Request,
-    *,
-    sortable: set[str],
-    filterable: set[str],
-) -> tuple[list[Any], int]:
-    spec = parse_query(request)
-    stmt = apply_query(stmt, model, spec, sortable=sortable, filterable=filterable)
-    count = await session.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
-    total = count.scalar_one()
-    stmt = stmt.offset(spec.offset).limit(spec.limit)
-    result = await session.execute(stmt)
-    return list(result.scalars().all()), total

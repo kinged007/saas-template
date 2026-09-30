@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.crud import InvalidQuery, apply_query, parse_query
+from src.api.crud import CREATED_DESC, InvalidQuery, apply_query, parse_query
 from src.api.deps import get_container, require_superuser
 from src.db.session import get_db
 from src.events.publisher import publish_audit
@@ -39,7 +39,6 @@ _WORKSPACE_SORTABLE = {"created_at", "name", "slug"}
 _WORKSPACE_FILTERABLE = {"name", "slug"}
 _AUDIT_SORTABLE = {"created_at", "action", "resource_type"}
 _AUDIT_FILTERABLE = {"action", "resource_type", "actor_user_id", "workspace_id"}
-_DEFAULT_CREATED_DESC = (("created_at", "desc"),)
 
 
 def _uuid_or_404(value: str, label: str) -> str:
@@ -86,7 +85,7 @@ async def list_users(
             spec,
             sortable=_USER_SORTABLE,
             filterable=_USER_FILTERABLE,
-            default_sort=_DEFAULT_CREATED_DESC,
+            default_sort=CREATED_DESC,
         )
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
@@ -175,7 +174,7 @@ async def list_all_workspaces(
             spec,
             sortable=_WORKSPACE_SORTABLE,
             filterable=_WORKSPACE_FILTERABLE,
-            default_sort=_DEFAULT_CREATED_DESC,
+            default_sort=CREATED_DESC,
         )
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
@@ -246,7 +245,7 @@ async def list_all_audit_logs(
             spec,
             sortable=_AUDIT_SORTABLE,
             filterable=_AUDIT_FILTERABLE,
-            default_sort=_DEFAULT_CREATED_DESC,
+            default_sort=CREATED_DESC,
         )
         if q:
             # Single cross-field search: substring match on workspace name,

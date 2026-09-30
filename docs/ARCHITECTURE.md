@@ -202,10 +202,11 @@ zero-customization data access:
 - `DELETE /{resource}/{id}` → 204
 
 A shared `crud` helper turns Refine params into safe SQLAlchemy queries
-(whitelisted sort/filter fields per resource). List responses are always totally
-ordered: `sort[]`/`order[]` (or `default_sort` when the caller sends none) are
-followed by an `id` tiebreaker, so offset/limit paging can neither repeat nor
-skip a row.
+(whitelisted sort/filter fields per resource). List responses are totally
+ordered **where the route passes `default_sort` or the client sends a sort**:
+those terms are followed by an `id` tiebreaker, so offset/limit paging can
+neither repeat nor skip a row. Routes that pass neither still emit no
+`ORDER BY`.
 
 ## 9. Security
 

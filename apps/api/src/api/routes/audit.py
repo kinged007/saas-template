@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.crud import InvalidQuery, apply_query, parse_query
+from src.api.crud import CREATED_DESC, InvalidQuery, apply_query, parse_query
 from src.api.deps import get_current_workspace_id, require_permission
 from src.core.permissions import AUDIT_READ
 from src.db.session import get_db
@@ -22,7 +22,6 @@ router = APIRouter(prefix="/audit", tags=["audit"])
 
 _AUDIT_SORTABLE = {"created_at", "action", "resource_type"}
 _AUDIT_FILTERABLE = {"action", "resource_type", "actor_user_id"}
-_DEFAULT_CREATED_DESC = (("created_at", "desc"),)
 
 
 def _audit_to_dict(
@@ -73,7 +72,7 @@ async def list_audit_logs(
             spec,
             sortable=_AUDIT_SORTABLE,
             filterable=_AUDIT_FILTERABLE,
-            default_sort=_DEFAULT_CREATED_DESC,
+            default_sort=CREATED_DESC,
         )
         q = (request.query_params.get("q") or "").strip()
         if q:
