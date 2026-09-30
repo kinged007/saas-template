@@ -28,6 +28,7 @@ import { UserAvatar } from "@/components/ui/user-avatar";
 import { UserProfileDialog } from "@/components/UserProfileDialog";
 
 import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceContext";
+import { canResendInvitation, canRevokeInvitation } from "./invitation-actions";
 import type { Identity, Invitation, Member, Role } from "../types";
 import { getMemberDisplayName } from "../types";
 
@@ -312,7 +313,7 @@ export function MembersPage() {
                     <TableCell className="text-muted-foreground">{formatDate(i.expires_at)}</TableCell>
                     <TableCell className="text-muted-foreground">{formatDate(i.created_at)}</TableCell>
                     <TableCell className="text-right">
-                      {i.status === "pending" && (
+                      {canRevokeInvitation(i) && (
                         <DeleteButton
                           resource="invitations"
                           recordItemId={i.id}
@@ -320,7 +321,7 @@ export function MembersPage() {
                           size="sm"
                         />
                       )}
-                      {(i.status !== "pending" || i.expired) && i.status !== "accepted" && (
+                      {canResendInvitation(i) && (
                         <Button
                           variant="ghost"
                           size="sm"

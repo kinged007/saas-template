@@ -668,8 +668,10 @@ class WorkspaceService:
         invite = await self._session.get(Invitation, invitation_id)
         if invite is None or invite.workspace_id != workspace_id:
             raise WorkspaceError("invitation not found")
-        if invite.status == "accepted":
-            raise WorkspaceConflict("invitation has already been accepted")
+        if invite.status in ("accepted", "revoked"):
+            raise WorkspaceConflict(
+                f"invitation is {invite.status} and cannot be re-sent; invite this address again"
+            )
         if invite.status == "pending" and ensure_utc(invite.expires_at) >= now_utc():
             return invite
         invite.status = "pending"
