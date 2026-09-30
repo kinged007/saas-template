@@ -417,13 +417,14 @@ class AuthService:
         ip_address: str | None = None,
         action: RevokeSessionsAction = "user.sessions_revoked",
         revoke_reason: str = "user",
-        actor_user_id: str | None = None,
+        actor_user_id: str | None,
         details: dict[str, object] | None = None,
     ) -> int:
         """Revoke every live session except the current one; returns the count.
 
-        ``actor_user_id`` defaults to ``user_id`` (the user did it themselves);
-        pass ``None`` for actions with no known actor, such as token reuse.
+        ``actor_user_id`` is the user the audit row blames: the user themselves
+        for a route they called, ``None`` for actions with no known actor, such
+        as a refresh token replayed by someone else.
         """
         now = now_utc()
         conditions = [
@@ -448,7 +449,7 @@ class AuthService:
                 resource_type="user",
                 resource_id=user_id,
                 action=action,
-                actor_user_id=user_id if actor_user_id is None else actor_user_id,
+                actor_user_id=actor_user_id,
                 details={**(details or {}), "revoked_count": count},
                 ip_address=ip_address,
             )

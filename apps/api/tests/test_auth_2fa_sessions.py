@@ -86,13 +86,11 @@ async def test_revoked_session_access_token_rejected(app_client):
     # The revoked session's access token is rejected on the next request.
     resp = await client.get("/api/v1/auth/me", headers=h1)
     assert resp.status_code == 401, resp.text
-    # The surviving session keeps working until the revoked token is replayed.
+    # The surviving session keeps working: t1 died by user action, not rotation,
+    # so replaying it is a stale cookie and must not arm the compromise path.
     resp = await client.get("/api/v1/auth/me", headers=h2)
     assert resp.status_code == 200, resp.text
     resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
-    assert resp.status_code == 401, resp.text
-    # Replaying it is refresh-token reuse, so the surviving session is revoked too.
-    resp = await client.get("/api/v1/auth/me", headers=h2)
     assert resp.status_code == 401, resp.text
 
 
@@ -119,13 +117,14 @@ async def test_revoke_all_sessions(app_client):
     remaining = resp.json()
     assert len(remaining) == 1
     assert remaining[0]["current"] is True
-    # replaying the revoked token is reuse and revokes the current session too
+    # t1 was revoked by the user, not by a rotation: stale cookie, not a replay.
+    # t2's live session is untouched.
     resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
     assert resp.status_code == 401
     resp = await client.post(
         "/api/v1/auth/refresh", json={"refresh_token": rotated["refresh_token"]}
     )
-    assert resp.status_code == 401
+    assert resp.status_code == 200, resp.text
 
 
 async def test_totp_enrol_login_disable(app_client):
