@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, apply_query, parse_query
 from src.api.deps import (
+    enforce_workspace_security,
     get_container,
     get_current_user,
     get_current_workspace_id,
@@ -284,9 +285,13 @@ async def transfer_ownership(
     # Session-only: the authority here is the owner *role*, which an API key
     # would inherit from its creator and could use to demote the real owner.
     user=Depends(require_session_user),
+    principal=Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    # Called directly because this route has no permission dependency, so the
+    # gate has no automatic entry point here.
+    await enforce_workspace_security(principal, workspace_id, db, request)
     try:
         member = await WorkspaceService(db, container.bus).transfer_ownership(
             workspace_id,
@@ -337,6 +342,8 @@ async def leave_workspace(
     container=Depends(get_container),
 ) -> None:
     """Leave a workspace. Owners cannot leave; transfer or delete instead."""
+    # Deliberately outside the workspace security gate: a member this setting
+    # refuses must still be able to leave a workspace that requires 2FA.
     if principal.api_key is not None:
         # Leaving ends a user's own membership; API keys hold no membership
         # of their own (the row found would be the key owner's), so they

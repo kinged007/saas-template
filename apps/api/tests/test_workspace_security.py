@@ -424,3 +424,49 @@ async def test_disabling_2fa_clears_the_session_verdict(app_client):
     resp = await client.get("/api/v1/auth/me", headers=auth_headers(owner))
     entry = next(w for w in resp.json()["workspaces"] if w["id"] == ws["id"])
     assert entry["two_factor_verified"] is False
+
+
+async def test_transfer_is_gated_and_leaving_is_not(app_client):
+    """The two workspace-scoped routes that carry no permission dependency.
+
+    `POST /workspaces/{id}/transfer` is authorized by the owner *role*, so it
+    has no `require_permission` to hang the gate off and calls
+    `enforce_workspace_security` directly. `DELETE /workspaces/{id}/membership`
+    is exempt on purpose: a member this setting refuses must still be able to
+    leave a workspace that requires 2FA.
+    """
+    client = app_client
+    owner = await register_user(client, "sec-transfer-owner@example.com")
+    ws = await create_workspace(client, owner, name="sec-transfer")
+    owner_headers = ws_headers(owner, ws["id"])
+    await _invite_viewer(client, owner, ws["id"], "sec-transfer-member@example.com")
+    leaver = await _invite_viewer(client, owner, ws["id"], "sec-transfer-leaver@example.com")
+
+    # Read the target membership while the flag is still off — with it on, the
+    # owner's own session cannot list members.
+    members = (await client.get("/api/v1/members", headers=owner_headers)).json()
+    target = next(m for m in members if m["email"] == "sec-transfer-member@example.com")
+    transfer = {"new_owner_membership_id": target["membership_id"]}
+
+    assert (await _set_require_2fa(client, owner_headers, ws["id"], True)).status_code == 200
+
+    resp = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/transfer", json=transfer, headers=owner_headers
+    )
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"]["code"] == "2fa_required_for_workspace"
+
+    # Leaving is exempt, so a member the gate refuses is not trapped.
+    assert (
+        await client.delete(
+            f"/api/v1/workspaces/{ws['id']}/membership", headers=ws_headers(leaver, ws["id"])
+        )
+    ).status_code == 204
+
+    # The refusal was the gate and not the route: with the requirement off the
+    # very same call goes through.
+    assert (await _set_require_2fa(client, owner_headers, ws["id"], False)).status_code == 200
+    resp = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/transfer", json=transfer, headers=owner_headers
+    )
+    assert resp.status_code == 200, resp.text

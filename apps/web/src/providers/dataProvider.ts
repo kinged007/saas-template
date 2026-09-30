@@ -170,6 +170,18 @@ httpClient.interceptors.response.use(
     if (error.response?.status === 401) {
       forceLogout();
     }
+    if (
+      error.response?.status === 403 &&
+      typeof detail === "object" &&
+      detail !== null &&
+      (detail as { code?: string }).code === "2fa_required_for_workspace"
+    ) {
+      // An admin turned the requirement on while this session was sitting on
+      // a cached identity. Invalidate the query WorkspaceSecurityGuard reads,
+      // so it redirects to the 2FA setup flow instead of leaving the user on
+      // a page of failed requests.
+      queryClient.invalidateQueries({ queryKey: ["auth", "identity"] });
+    }
     return Promise.reject(error);
   },
 );

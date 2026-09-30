@@ -125,7 +125,7 @@ export function SecuritySection() {
           </div>
           <div className="flex justify-between border-b py-2">
             <span className="text-muted-foreground">Checked on</span>
-            <span>Every workspace-scoped HTTP request</span>
+            <span>Every workspace-scoped request except leaving a workspace</span>
           </div>
           <div className="flex justify-between py-2">
             <span className="text-muted-foreground">API keys</span>
@@ -134,7 +134,8 @@ export function SecuritySection() {
           <p className="text-muted-foreground text-xs">
             API keys are server-side credentials with their own permission list and no
             authenticator app, so they are exempt. Keys issued before this setting was turned on
-            keep working. The live notification socket is user-scoped rather than
+            keep working. Leaving a workspace is exempt too, so a member this setting refuses is
+            never trapped in it. The live notification socket is user-scoped rather than
             workspace-scoped, so it stays open for members this setting refuses.
           </p>
         </CardContent>

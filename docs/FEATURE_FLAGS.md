@@ -49,7 +49,7 @@ request. The verdict is set at `POST /auth/2fa/login` and at
 `POST /auth/2fa/enable` (enrolling mid-session proves possession just as well),
 and `rotate_refresh` copies it onto the new session.
 
-Two exemptions are deliberate:
+Exemptions are deliberate:
 
 - **API keys.** A key is a server-side credential with its own permission list
   and no authenticator app. Enforcing 2FA would lock out every key already
@@ -57,10 +57,15 @@ Two exemptions are deliberate:
 - **The settings route itself** (`PATCH /workspaces/{id}/security`). An admin
   with no 2FA who turns the requirement on is otherwise locked out with no way
   to turn it off again. It declares `skip_workspace_security`.
-
-- The WebSocket at `ws://…/ws` is user-scoped, not workspace-scoped, and stays
-  outside the gate: a member this setting refuses still receives live
+- **Leaving a workspace** (`DELETE /workspaces/{id}/membership`). A member this
+  setting refuses must still be able to walk away from it.
+- **The WebSocket** at `ws://…/ws` is user-scoped, not workspace-scoped, so it
+  stays outside the gate: a member this setting refuses still receives live
   notifications.
+
+Every other route whose path carries a workspace id is gated, including
+`POST /workspaces/{id}/transfer`, which calls `enforce_workspace_security`
+directly because its authority is the owner role rather than a permission.
 
 `onboarding_enabled` is the one flag also writable by non-superusers, through
 `PATCH /workspaces/{id}` (`workspace:update`, i.e. owners and admins) rather

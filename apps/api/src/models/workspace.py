@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -72,7 +73,7 @@ class RefreshToken(Base, TimestampMixin):
     # workspace `require_2fa` gate (see docs/FEATURE_FLAGS.md): a session
     # with no timestamp is password-only. Copied onto the new row by
     # rotate_refresh, so refreshing never drops the proof.
-    two_factor_verified_at: Mapped[object | None] = mapped_column(
+    two_factor_verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
