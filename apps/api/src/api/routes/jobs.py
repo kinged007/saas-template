@@ -205,7 +205,9 @@ async def _require_run_access(
     Mirrors _require_job_access: an API key is authorized by its own
     permission list and stays inside its own workspace — never by the
     creator's role, and never over a global run. A key that passes spends one
-    unit of its usage quota, the same charge require_permission makes.
+    unit of its usage quota, the same charge require_permission makes, and
+    `response` is what makes that charge observable (the quota headers) — so
+    callers must thread their own Response through, never drop it.
     """
     if run.workspace_id is None:
         if not principal.is_deployment_admin:
@@ -238,7 +240,13 @@ async def _require_job_access(
     *,
     need_edit: bool = False,
 ) -> None:
-    """Unified check: global → superuser, workspace → jobs:read/update."""
+    """Unified check: global → superuser, workspace → jobs:read/update.
+
+    A key that passes spends one unit of its usage quota through
+    record_key_use, and `response` is what makes that charge observable (the
+    quota headers) — callers must thread their own Response through, never
+    drop it.
+    """
     required = JOB_UPDATE if need_edit else JOB_READ
     if definition.workspace_id is None:
         if not principal.is_deployment_admin:
