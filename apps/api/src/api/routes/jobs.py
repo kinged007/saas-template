@@ -194,10 +194,10 @@ async def get_job_run_logs(
 async def _require_run_access(db: AsyncSession, principal: AuthPrincipal, run: JobRun) -> None:
     """Global runs are superuser-only; workspace runs need jobs:read there.
 
-    Same rule as _require_job_access: an API key is authorized by its own
-    permission list and stays inside its own workspace — never by the
-    creator's role, and never over a global run. A key outside the run's
-    workspace gets 404, a session user who is not a member gets 403.
+    An API key is authorized by its own permission list and stays inside its
+    own workspace — never by the creator's role, and never over a global run.
+    A key outside the run's workspace gets 404, a session user who is not a
+    member gets 403.
     """
     if run.workspace_id is None:
         if not principal.is_deployment_admin:
@@ -206,7 +206,7 @@ async def _require_run_access(db: AsyncSession, principal: AuthPrincipal, run: J
     if principal.api_key is not None:
         api_key = principal.api_key
         if api_key.workspace_id != run.workspace_id:
-            # Hide cross-workspace existence.
+            # A key learns nothing about runs outside its own workspace.
             raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
         if "*" in api_key.permissions or JOB_READ in api_key.permissions:
             return
@@ -228,7 +228,11 @@ async def _require_job_access(
     *,
     need_edit: bool = False,
 ) -> None:
-    """Unified check: global → superuser, workspace → jobs:read/update."""
+    """Unified check: global → superuser, workspace → jobs:read/update.
+
+    A key outside the definition's workspace gets 404, a session user who is
+    not a member gets 403.
+    """
     required = JOB_UPDATE if need_edit else JOB_READ
     if definition.workspace_id is None:
         if not principal.is_deployment_admin:
