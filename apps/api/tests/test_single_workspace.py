@@ -130,6 +130,42 @@ async def test_role_created_with_padded_name_is_granted(
     assert [(w["id"], w["role"]) for w in me.json()["workspaces"]] == [(ws_id, "ops")]
 
 
+async def test_custom_default_role_cannot_manage_existing_members(
+    app_client, single_workspace_on, monkeypatch
+):
+    # The .env.example / settings.py note is only true because the role-change
+    # path checks the literal role name, not the permission list.
+    tokens, ws_id = await _first_workspace(app_client)
+    headers = {**auth_headers(tokens), "X-Workspace-ID": ws_id}
+    created = await app_client.post(
+        "/api/v1/roles",
+        json={"name": "ops", "permissions": ["member:read", "member:create", "member:update"]},
+        headers=headers,
+    )
+    assert created.status_code in (200, 201), created.text
+    ops_id = created.json()["id"]
+    monkeypatch.setattr(settings, "single_workspace_default_role", "ops")
+
+    joined = await register_user(app_client, "ops@example.com")
+    ops = {**auth_headers(joined), "X-Workspace-ID": ws_id}
+    members = await app_client.get("/api/v1/members", headers=headers)
+    assert members.status_code == 200, members.text
+    target = next(m for m in members.json() if m["email"] == "ops@example.com")
+
+    # Assigning a role to a new member is permission-gated, so the open
+    # permission list is enough.
+    invited = await app_client.post(
+        "/api/v1/invitations", json={"email": "new@example.com", "role_id": ops_id}, headers=ops
+    )
+    assert invited.status_code == 201, invited.text
+
+    # Changing an existing member's role is name-gated, so it is not.
+    resp = await app_client.patch(
+        f"/api/v1/members/{target['membership_id']}", json={"role_id": ops_id}, headers=ops
+    )
+    assert resp.status_code == 403, resp.text
+
+
 async def test_unknown_role_name_falls_back_to_viewer(app_client, single_workspace_on, monkeypatch):
     from src.db.session import SessionFactory
     from src.models.workspace import Role
