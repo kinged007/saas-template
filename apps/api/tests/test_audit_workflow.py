@@ -289,8 +289,9 @@ def test_prod_compose_trusts_only_the_pinned_proxy_network():
 
     Reverting docker-compose.prod.yml to '--forwarded-allow-ips=*' leaves every
     other test green while reopening the spoofing hole, so pin the config too:
-    every entry must be a network, and the subnet the compose file pins nginx to
-    must be inside the trusted set.
+    every entry must be a network, no entry may be a default route, the subnet
+    the compose file pins nginx to must be inside the trusted set, and
+    --proxy-headers must be on or the allowlist never applies.
     """
     compose = yaml.safe_load(COMPOSE.read_text())
     command = compose["services"]["api"]["command"]
@@ -299,7 +300,11 @@ def test_prod_compose_trusts_only_the_pinned_proxy_network():
     trusted = [
         ipaddress.ip_network(entry.strip(), strict=False) for entry in default.group(1).split(",")
     ]
+    assert all(net.prefixlen > 0 for net in trusted), (
+        f"FORWARDED_ALLOW_IPS default trusts every peer: {trusted}"
+    )
     subnet = ipaddress.ip_network(compose["networks"]["default"]["ipam"]["config"][0]["subnet"])
     assert all(subnet.subnet_of(net) for net in trusted), (
         f"pinned subnet {subnet} outside FORWARDED_ALLOW_IPS default {trusted}"
     )
+    assert "--proxy-headers" in command, f"--proxy-headers missing from: {command}"
