@@ -38,6 +38,7 @@ from src.core.security.crypto import SecretCipher
 from src.db.session import SessionFactory
 from src.events.bus import EventBus
 from src.events.factory import WorkflowRegistry
+from src.events.publisher import publish_audit
 from src.events.subjects import Subjects
 from src.jobs.executor import execute_run
 from src.models.workspace import WorkspaceMember
@@ -60,7 +61,8 @@ async def _create_notification(
 
     Honors the recipient's channel preference: `off` skips the insert;
     `email` inserts and sends an immediate email, fail-closed (the in-app
-    row is kept and the failure logged when sending fails).
+    row is kept and the failure logged and audited
+    (`notification.email_failed`) when sending fails).
     """
     service = NotificationService(session, bus)
     n_type = kwargs.get("type", "")
@@ -81,7 +83,7 @@ async def _create_notification(
     if recipient is None or not recipient.email:
         return
     token = await service.token_for(n_user_id, n_type)
-    await send_email(
+    sent = await send_email(
         notification_email(
             recipient.email,
             title=notification.title,
@@ -89,6 +91,26 @@ async def _create_notification(
             workspace_name=(notification.payload or {}).get("workspace_name", ""),
             unsubscribe_url=unsubscribe_url_for(token or "", n_type, settings.frontend_url),
         )
+    )
+    if sent:
+        return
+    logger.error(
+        "notification email failed for %s (notification %s)", recipient.email, notification.id
+    )
+    # Published after the send, so a failing publish nacks the message and the
+    # notification row is created again on redelivery.
+    await publish_audit(
+        bus,
+        correlation_id=correlation_id,
+        workspace_id=notification.workspace_id,
+        resource_type="notification",
+        resource_id=notification.id,
+        action="notification.email_failed",
+        details={
+            "user_id": n_user_id,
+            "type": n_type,
+            "email": recipient.email,
+        },
     )
 
 
