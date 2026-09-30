@@ -20,10 +20,10 @@ import {
   adminUserPatch,
   asAdminUserDetail,
   canToggleUser,
-  errorMessage,
   pageRange,
   type AdminUserDetail,
 } from "./users-toggle";
+import { errorMessage } from "@/utils/errorMessage";
 
 export function UsersSection() {
   const { identity, isSuperuser } = useAdminGuard();
