@@ -12,6 +12,11 @@ def _cookie_name() -> str:
     return settings.refresh_cookie_name
 
 
+def _attrs(raw: str) -> str:
+    """Attributes after the first ";": the JWT value can contain "Secure"."""
+    return raw.split(";", 1)[1] if ";" in raw else ""
+
+
 def _set_cookie(resp) -> str:
     raw = resp.headers.get("set-cookie", "")
     assert _cookie_name() in raw, f"refresh cookie missing: {raw!r}"
@@ -19,7 +24,7 @@ def _set_cookie(resp) -> str:
     assert "SameSite=Lax" in raw or "SameSite=lax" in raw, raw
     assert "Path=/api/v1/auth" in raw, raw
     if settings.environment not in ("development", "test"):
-        assert "Secure" in raw, raw
+        assert "Secure" in _attrs(raw), raw
     return raw
 
 
@@ -298,15 +303,15 @@ async def test_cookie_secure_follows_forwarded_proto(app_client):
         headers={"X-Forwarded-Proto": "https"},
     )
     assert resp.status_code == 200, resp.text
-    assert "Secure" in resp.headers.get("set-cookie", ""), resp.headers.get("set-cookie")
+    raw = _set_cookie(resp)
+    assert "Secure" in _attrs(raw), raw
     plain = await app_client.post(
         "/api/v1/auth/login",
         json={"email": "fwdproto@example.com", "password": "Password123!", "use_cookies": True},
     )
     assert plain.status_code == 200, plain.text
-    raw = plain.headers.get("set-cookie", "")
-    assert _cookie_name() in raw, raw
-    assert "Secure" not in raw, raw
+    raw = _set_cookie(plain)
+    assert "Secure" not in _attrs(raw), raw
 
 
 async def test_cookie_secure_explicit_override_wins(monkeypatch, app_client):
@@ -325,16 +330,16 @@ async def test_cookie_secure_explicit_override_wins(monkeypatch, app_client):
         "/api/v1/auth/login", json=body, headers={"X-Forwarded-Proto": "https"}
     )
     assert resp.status_code == 200, resp.text
-    raw = resp.headers.get("set-cookie", "")
-    # A login without use_cookies sets no cookie at all — pin that one is set,
-    # otherwise the "not Secure" assertion below passes on an empty header.
-    assert _cookie_name() in raw, raw
-    assert "Secure" not in raw, raw
+    # _set_cookie pins the cookie is present, otherwise the "not Secure"
+    # assertion below would pass on an empty header.
+    raw = _set_cookie(resp)
+    assert "Secure" not in _attrs(raw), raw
 
     monkeypatch.setattr(settings, "refresh_cookie_secure", True)
     plain = await app_client.post("/api/v1/auth/login", json=body)
     assert plain.status_code == 200, plain.text
-    assert "Secure" in plain.headers.get("set-cookie", ""), plain.headers.get("set-cookie")
+    raw = _set_cookie(plain)
+    assert "Secure" in _attrs(raw), raw
 
 
 async def test_cookie_secure_plain_http_in_production_is_secure(monkeypatch, app_client):
@@ -352,7 +357,7 @@ async def test_cookie_secure_plain_http_in_production_is_secure(monkeypatch, app
         json={"email": "prodsec@example.com", "password": "Password123!", "use_cookies": True},
     )
     assert resp.status_code == 200, resp.text
-    assert "Secure" in _set_cookie(resp)
+    assert "Secure" in _attrs(_set_cookie(resp))
 
 
 def _plain_request(headers: dict[str, str] | None = None, scheme: str = "http"):
@@ -383,13 +388,15 @@ async def test_cookie_secure_follows_forwarded_host_port(app_client):
         headers={"X-Forwarded-Host": "example.com:443"},
     )
     assert resp.status_code == 200, resp.text
-    assert "Secure" in resp.headers.get("set-cookie", ""), resp.headers.get("set-cookie")
+    raw = _set_cookie(resp)
+    assert "Secure" in _attrs(raw), raw
 
 
-def test_client_headers_can_only_add_secure():
+def test_client_headers_can_only_add_secure(monkeypatch):
     """The header reads are client-controlled: they must never strip Secure."""
     from src.core.security.cookies import cookie_secure_for
 
+    monkeypatch.setattr(settings, "refresh_cookie_secure", None)
     assert cookie_secure_for(_plain_request({"x-forwarded-proto": "http"}, scheme="https")) is True
     assert cookie_secure_for(_plain_request({"x-forwarded-proto": "https"})) is True
     assert cookie_secure_for(_plain_request({"host": "example.com:443"})) is True
