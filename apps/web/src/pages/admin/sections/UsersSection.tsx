@@ -20,6 +20,7 @@ import {
   adminUserPatch,
   asAdminUserDetail,
   canToggleUser,
+  errorMessage,
   pageRange,
   type AdminUserDetail,
 } from "./users-toggle";
@@ -60,7 +61,7 @@ export function UsersSection() {
         void detailQuery.query.refetch();
       },
       onError: (e) => {
-        toast.error(String((e as { message?: string })?.message ?? e));
+        toast.error(errorMessage(e));
       },
     });
   };

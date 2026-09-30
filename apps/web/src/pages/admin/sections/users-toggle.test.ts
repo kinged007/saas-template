@@ -6,6 +6,7 @@ import {
   adminUserPatch,
   asAdminUserDetail,
   canToggleUser,
+  errorMessage,
   pageRange,
   type AdminUserDetail,
 } from "./users-toggle.ts";
@@ -49,6 +50,12 @@ test("asAdminUserDetail rejects a payload without a workspaces array", () => {
   assert.deepEqual(asAdminUserDetail(detail()), detail());
 });
 
+test("asAdminUserDetail rejects a workspaces payload with no usable id", () => {
+  const { id: _dropped, ...noId } = detail();
+  assert.equal(asAdminUserDetail({ ...noId, workspaces: [] }), undefined);
+  assert.equal(asAdminUserDetail({ ...detail(), id: 42 }), undefined);
+});
+
 test("pageRange clamps the visible window and never reports zero pages", () => {
   assert.deepEqual(pageRange(1, 0), { from: 0, to: 0, totalPages: 1 });
   assert.deepEqual(pageRange(1, 25), { from: 1, to: 20, totalPages: 2 });
@@ -57,6 +64,21 @@ test("pageRange clamps the visible window and never reports zero pages", () => {
   assert.deepEqual(pageRange(1, 41), { from: 1, to: 20, totalPages: 3 });
   // A page that empties out after a refetch must not invert the range.
   assert.deepEqual(pageRange(3, 5), { from: 5, to: 5, totalPages: 1 });
+  // A current page below 1 must not report a negative start.
+  assert.deepEqual(pageRange(0, 10), { from: 1, to: 0, totalPages: 1 });
+});
+
+test("errorMessage renders the detail instead of [object Object]", () => {
+  assert.equal(
+    errorMessage({ message: "You cannot disable your own account" }),
+    "You cannot disable your own account",
+  );
+  assert.equal(
+    errorMessage({ response: { data: { detail: { code: "2fa_required" } } } }),
+    '{"code":"2fa_required"}',
+  );
+  assert.equal(errorMessage({}), "Request failed");
+  assert.equal(errorMessage(null), "Request failed");
 });
 
 test("adminUserPatch's url is built from a row typed as the list item, not the detail", () => {
