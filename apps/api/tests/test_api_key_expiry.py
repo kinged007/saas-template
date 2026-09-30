@@ -1,19 +1,27 @@
 """API key expiry: creation validation, auth rejection, and the cleanup job."""
 
+import asyncio
+import logging
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from src.core.dates import ensure_utc, now_utc
 from src.db.session import SessionFactory
 from src.events.subjects import Subjects
 from src.jobs.builtin import api_key_cleanup
-from src.jobs.registry import job_registry
 from src.models.api_key import ApiKey
+from src.models.audit import AuditLogEntry
+from src.models.jobs import JobDefinition
 from src.settings import settings
 from tests.bus_doubles import RecordingBus
-from tests.conftest import create_workspace, register_user, ws_headers
+from tests.conftest import (
+    create_workspace,
+    register_user,
+    run_job_via_scheduler,
+    ws_headers,
+)
 
 
 async def _create_key(client, headers, *, name="expiring", body=None):
@@ -267,11 +275,12 @@ class _RacingCtx(_FakeCtx):
 
 
 class _FailingBus(RecordingBus):
-    """Raises on the first publish for the second distinct key, then records the rest."""
+    """Fails every publish for the second distinct key, or for every key if `fail_all`."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, fail_all: bool = False) -> None:
         super().__init__()
         self._seen = []
+        self._fail_all = fail_all
         self.fail_on = None
 
     async def publish(
@@ -288,7 +297,7 @@ class _FailingBus(RecordingBus):
                 self._seen.append(key_id)
                 if len(self._seen) == 2:
                     self.fail_on = key_id
-            if key_id == self.fail_on:
+            if key_id == self.fail_on or self._fail_all:
                 raise RuntimeError("nats unavailable")
         await super().publish(subject, payload, correlation_id=correlation_id, transient=transient)
 
@@ -336,6 +345,35 @@ async def test_cleanup_job_keeps_a_revocation_raced_inside_the_run(app_client, m
     assert bus.audit() == []
 
 
+async def test_cleanup_job_reports_only_the_keys_it_actually_revoked(
+    app_client, monkeypatch, caplog
+):
+    """One raced and one clean key: the summary counts the write, not the read."""
+    monkeypatch.setattr(settings, "api_key_retention_days", 0)
+    client = app_client
+    owner = await register_user(client, "mixed@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    raced = await _backdated_key(client, headers, "raced")
+    clean = await _backdated_key(client, headers, "clean")
+
+    user_revoked_at = now_utc() - timedelta(minutes=5)
+    bus = RecordingBus()
+    with caplog.at_level(logging.INFO, logger="src.jobs.builtin"):
+        await api_key_cleanup(_RacingCtx(bus, raced["id"], user_revoked_at))
+
+    async with SessionFactory() as session:
+        assert ensure_utc((await session.get(ApiKey, raced["id"])).revoked_at) == ensure_utc(
+            user_revoked_at
+        )
+        assert (await session.get(ApiKey, clean["id"])).revoked_at is not None
+
+    # The raced key was selected but not written, so it gets no event and no audit entry.
+    assert [p["apikey_id"] for p, _, _ in bus.by_subject(Subjects.APIKEY_REVOKED)] == [clean["id"]]
+    assert [p["resource_id"] for p, _, _ in bus.audit()] == [clean["id"]]
+    assert "1 key(s) revoked as expired" in caplog.text
+
+
 async def test_cleanup_job_publishes_every_other_key_when_one_publish_fails(
     app_client, monkeypatch
 ):
@@ -374,8 +412,81 @@ async def test_cleanup_job_publishes_every_other_key_when_one_publish_fails(
     assert failing in message
 
 
-def test_job_is_registered_as_a_global_daily_job():
-    spec = job_registry.get("apikeys.cleanup")
-    assert spec is not None
-    assert spec.scope == "global"
-    assert spec.default_enabled is True
+async def test_cleanup_job_error_message_caps_the_id_list(app_client, monkeypatch):
+    """job_runs.error is unbounded Text: a bus outage must not write one id per key."""
+    monkeypatch.setattr(settings, "api_key_retention_days", 0)
+    client = app_client
+    owner = await register_user(client, "outage@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    keys = [await _backdated_key(client, headers, f"key {n}") for n in range(12)]
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await api_key_cleanup(_FakeCtx(_FailingBus(fail_all=True)))
+
+    message = str(excinfo.value)
+    assert "12 key(s) revoked" in message
+    assert "for 12 of them" in message
+    # 10 ids listed by name, the remaining 2 only counted.
+    assert sum(1 for key in keys if key["id"] in message) == 10
+    assert "(+2 more)" in message
+
+
+async def test_job_is_dispatched_by_the_scheduler(app_client):
+    """Production wiring: the provisioned global job runs on the daily
+    schedule, is claimed by a scheduler tick, and reaches its handler with the
+    app's real bus — none of which `_FakeCtx` can observe."""
+    client = app_client
+    owner = await register_user(client, "odette@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    async with SessionFactory() as session:
+        definition = (
+            await session.execute(
+                select(JobDefinition).where(
+                    JobDefinition.key == "apikeys.cleanup",
+                    JobDefinition.workspace_id.is_(None),
+                )
+            )
+        ).scalar_one()
+        assert definition.enabled is True
+        assert definition.cron_schedule == "0 5 * * *"
+        assert definition.missed_policy == "single"
+
+    expired = (await _create_key(client, headers, name="expired")).json()
+    async with SessionFactory() as session:
+        row = await session.get(ApiKey, expired["id"])
+        row.expires_at = now_utc() - timedelta(days=2)
+        await session.commit()
+
+    run, messages = await run_job_via_scheduler("apikeys.cleanup")
+    assert run.trigger == "scheduled"
+    assert run.status == "success", run.error
+    assert any("api key cleanup — 1 key(s) revoked as expired" in m for m in messages), messages
+
+    async with SessionFactory() as session:
+        assert (await session.get(ApiKey, expired["id"])).revoked_at is not None
+
+    # `publish_audit` no-ops without a bus, so this row exists only if the
+    # executor really passed the app's bus to the handler.
+    audited = await _wait_for_audit(expired["id"])
+    assert audited.details.get("reason") == "expired"
+
+
+async def _wait_for_audit(resource_id: str, timeout_s: float = 10.0):
+    """The audit consumer is a background handler — poll for its row."""
+    for _ in range(int(timeout_s * 10)):
+        async with SessionFactory() as session:
+            entry = (
+                await session.execute(
+                    select(AuditLogEntry).where(
+                        AuditLogEntry.resource_id == resource_id,
+                        AuditLogEntry.action == "apikey.revoked",
+                    )
+                )
+            ).scalar_one_or_none()
+            if entry is not None:
+                return entry
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"no apikey.revoked audit entry for {resource_id}")

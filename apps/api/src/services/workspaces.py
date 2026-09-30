@@ -4,7 +4,7 @@ import secrets
 import uuid
 from datetime import timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -344,8 +344,14 @@ class WorkspaceService:
         return await self._session.get(Workspace, workspace_id)
 
     async def get_membership(
-        self, workspace_id: str, user_id: str, *, active_only: bool = False
+        self, workspace_id: str, user_id: str, *, active_only: bool = True
     ) -> tuple[WorkspaceMember, Role] | None:
+        """Resolve (member, role) for a user in a workspace.
+
+        Defaults to active rows only, so a caller that forgets the flag cannot
+        read a suspended member as active. A caller asking about the row itself
+        rather than about access must pass `active_only=False`.
+        """
         stmt = (
             select(WorkspaceMember, Role)
             .join(Role, Role.id == WorkspaceMember.role_id)
@@ -668,8 +674,10 @@ class WorkspaceService:
         invite = await self._session.get(Invitation, invitation_id)
         if invite is None or invite.workspace_id != workspace_id:
             raise WorkspaceError("invitation not found")
-        if invite.status == "accepted":
-            raise WorkspaceConflict("invitation has already been accepted")
+        if invite.status in ("accepted", "revoked"):
+            raise WorkspaceConflict(
+                f"invitation is {invite.status} and cannot be re-sent; invite this address again"
+            )
         if invite.status == "pending" and ensure_utc(invite.expires_at) >= now_utc():
             return invite
         invite.status = "pending"
@@ -1023,11 +1031,18 @@ class WorkspaceService:
     async def _check_name_free(
         self, workspace_id: str, name: str, *, exclude_id: str | None = None
     ) -> None:
-        stmt = select(Role).where(Role.workspace_id == workspace_id, Role.name == name)
+        # Case-insensitive: an "Admin" beside the seeded "admin" is a second,
+        # indistinguishable row in listings and selects. `.first()`, not
+        # `scalar_one_or_none()`: a workspace created before the case-insensitive
+        # check can already hold such a pair, and the predicate then matches both.
+        stmt = select(Role).where(
+            Role.workspace_id == workspace_id, func.lower(Role.name) == name.lower()
+        )
         if exclude_id is not None:
             stmt = stmt.where(Role.id != exclude_id)
-        if (await self._session.execute(stmt)).scalar_one_or_none() is not None:
-            raise WorkspaceConflict(f"a role named '{name}' already exists")
+        existing = (await self._session.execute(stmt)).scalars().first()
+        if existing is not None:
+            raise WorkspaceConflict(f"a role named '{existing.name}' already exists")
 
     async def create_custom_role(
         self,
@@ -1042,7 +1057,7 @@ class WorkspaceService:
         assignable: set[str] = set()
         is_owner = False
         if actor is not None:
-            membership = await self.get_membership(workspace_id, actor.id)
+            membership = await self.get_membership(workspace_id, actor.id, active_only=True)
             if membership is not None:
                 _, actor_role = membership
                 is_owner = "*" in actor_role.permissions
@@ -1096,7 +1111,7 @@ class WorkspaceService:
             assignable: set[str] = set()
             is_owner = False
             if actor is not None:
-                membership = await self.get_membership(workspace_id, actor.id)
+                membership = await self.get_membership(workspace_id, actor.id, active_only=True)
                 if membership is not None:
                     _, actor_role = membership
                     is_owner = "*" in actor_role.permissions

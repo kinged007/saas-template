@@ -315,7 +315,8 @@ async def api_key_cleanup(ctx: JobContext) -> None:
             # `revoked_at IS NULL` is re-asserted: a key the user revoked between the
             # SELECT and this UPDATE keeps its own revoked_at, so its retention clock is
             # not restarted. The returned ids are exactly the rows the audit trail below
-            # describes — `rowcount` is unavailable once RETURNING is used.
+            # describes — `rowcount` is -1 on aiosqlite once RETURNING is used, so the
+            # count comes from the returned ids.
             result = await session.execute(
                 update(ApiKey)
                 .where(
@@ -368,7 +369,12 @@ async def api_key_cleanup(ctx: JobContext) -> None:
             # The commit is not transactional with the bus, so a failed publish leaves a
             # revoked key with no event and no audit entry. Record it and keep going; the
             # run fails below with the count of what was lost.
-            logger.exception("api key cleanup — audit publish failed for key %s", key_id)
+            # ponytail: the gap is permanent — nothing retries a FAILED run and the key
+            # now carries revoked_at, so the next run's SELECT will never select it again.
+            # Repair is manual. Upgrade path: a backfill job re-publishing audit entries
+            # for keys revoked with reason "expired" that have no audit row.
+            log = logger.exception if len(unpublished) == 0 else logger.warning
+            log("api key cleanup — audit publish failed for key %s", key_id)
             unpublished.append(key_id)
 
     logger.info(
@@ -378,9 +384,14 @@ async def api_key_cleanup(ctx: JobContext) -> None:
     )
     print(f"api key cleanup — {revoked} key(s) revoked as expired, {removed} key(s) deleted")
     if unpublished:
+        # Cap the id list: job_runs.error is unbounded Text and a bus outage during a
+        # large cleanup would otherwise write one id per revoked key into the row.
+        listed = unpublished[:10]
+        more = len(unpublished) - len(listed)
         raise RuntimeError(
             f"api key cleanup — {revoked} key(s) revoked as expired, but the event or audit "
-            f"entry was not published for {len(unpublished)} of them: {', '.join(unpublished)}"
+            f"entry was not published for {len(unpublished)} of them: {chr(39).join(listed)}"
+            f"{f' (+{more} more)' if more else ''}"
         )
 
 

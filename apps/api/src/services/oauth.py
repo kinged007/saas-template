@@ -177,6 +177,12 @@ def claims_from_id_token(
     client = _jwks_client(provider, doc)
     if client is None:
         return None
+    # The document's issuer is what the IdP itself states, so it wins over the
+    # configured one; the config covers providers that skip discovery.
+    issuer = doc.get("issuer") or provider.issuer
+    if not issuer:
+        # Nothing to compare `iss` against, so only its presence is enforced.
+        logger.warning("no issuer configured for provider %s; id_token iss not pinned", provider.id)
     try:
         key = client.get_signing_key_from_jwt(id_token).key
         return jwt.decode(
@@ -184,6 +190,7 @@ def claims_from_id_token(
             key,
             algorithms=["RS256", "ES256"],
             audience=provider.client_id,
+            issuer=issuer,
             options={"require": ["exp", "iss", "sub"]},
         )
     except Exception:

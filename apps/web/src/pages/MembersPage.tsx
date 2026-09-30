@@ -28,12 +28,17 @@ import { UserAvatar } from "@/components/ui/user-avatar";
 import { UserProfileDialog } from "@/components/UserProfileDialog";
 
 import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceContext";
+import { canResendInvitation, canRevokeInvitation } from "./invitation-actions";
 import type { Identity, Invitation, Member, Role } from "../types";
 import { getMemberDisplayName } from "../types";
 
 const MANAGER_ROLES = ["owner", "admin"];
 
 const PAGE_SIZE = 10;
+// The role pickers need every role, ordered by the endpoint. Capped at one
+// full page: past this the pickers drop the tail, and a pager is not worth it
+// on a settings surface.
+const ROLES_PAGE_SIZE = 100;
 
 export function MembersPage() {
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
@@ -46,7 +51,10 @@ export function MembersPage() {
     pagination: { currentPage: membersPage, pageSize: PAGE_SIZE },
     sorters: [{ field: "created_at", order: "desc" }],
   });
-  const { result: rolesResult } = useWorkspaceList<Role>({ resource: "roles" });
+  const { result: rolesResult } = useWorkspaceList<Role>({
+    resource: "roles",
+    pagination: { currentPage: 1, pageSize: ROLES_PAGE_SIZE },
+  });
   const { data: canManage } = useCan({ resource: "members", action: "edit" });
   const { data: canDelete } = useCan({ resource: "members", action: "delete" });
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
@@ -312,7 +320,7 @@ export function MembersPage() {
                     <TableCell className="text-muted-foreground">{formatDate(i.expires_at)}</TableCell>
                     <TableCell className="text-muted-foreground">{formatDate(i.created_at)}</TableCell>
                     <TableCell className="text-right">
-                      {i.status === "pending" && (
+                      {canRevokeInvitation(i) && (
                         <DeleteButton
                           resource="invitations"
                           recordItemId={i.id}
@@ -320,7 +328,7 @@ export function MembersPage() {
                           size="sm"
                         />
                       )}
-                      {(i.status !== "pending" || i.expired) && i.status !== "accepted" && (
+                      {canResendInvitation(i) && (
                         <Button
                           variant="ghost"
                           size="sm"

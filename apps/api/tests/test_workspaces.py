@@ -1,3 +1,6 @@
+import pytest
+from sqlalchemy import select
+
 from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
 
 
@@ -248,3 +251,59 @@ async def test_simple_rest_range_pagination_query(app_client):
     )
     assert resp.status_code == 200
     assert len(resp.json()) == 2
+
+
+async def test_suspended_actor_cannot_widen_a_custom_role(app_client):
+    """A suspended actor is capped as if unauthenticated, not by its own role.
+
+    The role-capping sites resolve the actor's membership with
+    `active_only=True`; a suspended row therefore reads as "no actor cap" and
+    every requested permission is denied.
+    """
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role, WorkspaceMember
+    from src.services.auth import AuthService
+    from src.services.workspaces import WorkspaceForbidden, WorkspaceService
+
+    client = app_client
+    owner = await register_user(client, "cap-owner@example.com")
+    ws = await create_workspace(client, owner)
+    await register_user(client, "cap-admin@example.com")
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session)
+        admin_user = await AuthService(session).get_by_email("cap-admin@example.com")
+        role_ids = {
+            name: (
+                await session.execute(
+                    select(Role).where(Role.workspace_id == ws["id"], Role.name == name)
+                )
+            )
+            .scalar_one()
+            .id
+            for name in ("admin", "editor")
+        }
+        session.add(
+            WorkspaceMember(
+                workspace_id=ws["id"],
+                user_id=admin_user.id,
+                role_id=role_ids["admin"],
+                status="suspended",
+            )
+        )
+        await session.commit()
+
+        # `member:read` is in the admin role's permission set, so this only
+        # fails when the suspended membership is not treated as an actor cap.
+        with pytest.raises(WorkspaceForbidden):
+            await service.create_custom_role(
+                ws["id"],
+                name="ops",
+                description=None,
+                permissions=["member:read"],
+                actor=admin_user,
+            )
+        with pytest.raises(WorkspaceForbidden):
+            await service.update_role(
+                ws["id"], role_ids["editor"], permissions=["member:read"], actor=admin_user
+            )

@@ -107,6 +107,11 @@ async def _user_count() -> int:
         return (await s.execute(select(func.count()).select_from(User))).scalar_one()
 
 
+async def _link_count() -> int:
+    async with SessionFactory() as s:
+        return (await s.execute(select(func.count()).select_from(OAuthAccount))).scalar_one()
+
+
 async def test_config_reflects_flags(app_client, oauth_on, monkeypatch):
     resp = await app_client.get("/api/v1/auth/config")
     assert resp.status_code == 200
@@ -207,16 +212,19 @@ async def test_oauth_existing_user_links_by_subject(app_client, oauth_on, monkey
     assert await _user_count() == before  # linked, not duplicated
 
 
-async def test_oauth_multi_provider_same_email_links(app_client, oauth_on, monkeypatch):
+async def test_oauth_same_provider_new_subject_links_same_user(app_client, oauth_on, monkeypatch):
     _mock_oauth(monkeypatch)
     _, first = await _callback(app_client, monkeypatch, state="s1")
     assert first.status_code == 302
     before = await _user_count()
-    # Same email from a different subject still links to the same user.
+    # Same email from a different subject still links to the same user, which
+    # leaves two rows under one (user_id, provider) -- the documented
+    # one-to-many cardinality, not a duplicate user.
     _mock_oauth(monkeypatch, sub="sub-other")
     _, second = await _callback(app_client, monkeypatch, state="s2")
     assert second.status_code == 302
     assert await _user_count() == before
+    assert await _link_count() == 2
 
 
 async def test_oauth_new_user_blocked_when_registration_disabled(app_client, oauth_on, monkeypatch):

@@ -4,7 +4,7 @@ import hashlib
 import secrets
 from datetime import datetime
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dates import ensure_utc, now_utc
@@ -238,14 +238,34 @@ class ApiKeyService:
             return None
         return key
 
-    async def touch(self, key: ApiKey) -> None:
+    async def touch(self, key: ApiKey) -> bool:
         # ponytail: lifetime counter, never reset (usage_quota is a lifetime
         # cap); add a window start column + rollover here when true monthly
         # quotas are needed.
-        """Record a successful use: bump the usage counter + last_used_at."""
-        key.usage_count += 1
-        key.last_used_at = now_utc()
+        """Record a successful use: bump the usage counter + last_used_at.
+
+        Returns False and leaves the row alone when the quota is already
+        spent. The counter bump and the quota test are one conditional
+        UPDATE, so two requests that read usage_count before either writes
+        race on this statement alone and only the first can spend the last
+        unit. `refresh` keeps the caller's key in step with the row (the
+        session does not expire on commit), so quota headers read
+        post-increment values and a later flush cannot write the old count
+        back."""
+        result = await self._session.execute(
+            update(ApiKey)
+            .where(
+                ApiKey.id == key.id,
+                or_(ApiKey.usage_quota.is_(None), ApiKey.usage_count < ApiKey.usage_quota),
+            )
+            .values(usage_count=ApiKey.usage_count + 1, last_used_at=now_utc())
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount == 0:
+            return False
         await self._session.commit()
+        await self._session.refresh(key)
+        return True
 
     async def set_quota(
         self,
