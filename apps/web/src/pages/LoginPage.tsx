@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader } from "@/co
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SsoButtons, fetchAuthConfig, type AuthConfig } from "@/components/AuthConfig";
-import { authProvider, seedWorkspace } from "@/providers/authProvider";
+import { afterAuthRedirect, authProvider, seedWorkspace } from "@/providers/authProvider";
 import { API_URL, httpClient } from "@/providers/dataProvider";
 import { identityStore, tokenStore, workspaceStore } from "@/utils/storage";
 import { clearAllCaches, queryClient } from "@/providers/queryClient";
@@ -75,7 +75,8 @@ export function LoginPage() {
           use_cookies: true,
         });
         await storeTokens(data);
-        navigate("/");
+        // replace: Back must not return to a spent sign-in form.
+        navigate(afterAuthRedirect(), { replace: true });
       } catch {
         setChallenge(null);
         setCode("");
@@ -89,7 +90,7 @@ export function LoginPage() {
     try {
       const res = await authProvider.login({ email, password });
       if (res.success) {
-        navigate(res.redirectTo ?? "/");
+        navigate(res.redirectTo ?? "/", { replace: true });
         return;
       }
       // 2FA challenge arrives as "2fa_required:<token>" (see authProvider).
