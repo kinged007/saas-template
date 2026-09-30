@@ -171,6 +171,12 @@ async def _jwks(
     Fetched over httpx rather than `jwt.PyJWKClient` so the round trip is awaited
     (PyJWKClient fetches with blocking urllib) and covered by the same 10s timeout
     as the module's other IdP calls.
+
+    `refresh=True` bypasses the cache and writes the result back, so a kid the
+    provider does not publish costs one extra IdP round trip per failed login for
+    as long as the entry lives. Bounding that needs a fetch timestamp on the
+    cached document; the cost is kept because the path requires a completed code
+    exchange.
     """
     uri = doc.get("jwks_uri") or provider.jwks_uri
     if not uri:
@@ -192,10 +198,15 @@ async def _jwks(
     return keys
 
 
-def _signing_key(keys: dict[str, Any], id_token: str) -> jwt.PyJWK | None:
+def _signing_key(jwks_doc: dict[str, Any], id_token: str) -> jwt.PyJWK | None:
     """The signing key whose kid the token names, or None when the set has no match."""
     kid = jwt.get_unverified_header(id_token).get("kid")
-    jwks = jwt.PyJWKSet.from_dict(keys)
+    try:
+        jwks = jwt.PyJWKSet.from_dict(jwks_doc)
+    except jwt.PyJWKSetError:
+        # A miss, not a raise: the caller refetches on a miss, and that refetch is
+        # what keeps an unusable set from sitting in the cache for its whole TTL.
+        return None
     signing = [k for k in jwks.keys if k.public_key_use in (None, "sig")]
     for key in signing:
         if key.key_id == kid:
@@ -222,7 +233,7 @@ async def claims_from_id_token(
             options={"require": ["exp", "iss", "sub"]},
         )
     except Exception:
-        logger.warning("id_token verification failed for provider %s", provider.id)
+        logger.warning("id_token verification failed for provider %s", provider.id, exc_info=True)
         return None
 
 

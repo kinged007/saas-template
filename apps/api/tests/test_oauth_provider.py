@@ -3,7 +3,7 @@
 The pre-existing OAuth tests monkeypatch `_discovery`, `exchange_code` and
 `fetch_userinfo` at the service-module boundary, so none of them ever run. This
 file drives them for real against an in-process IdP — a `ThreadingHTTPServer`
-on `127.0.0.1:0` serving a discovery document, an RS256 JWKS, a token endpoint
+on `127.0.0.1:0` serving a discovery document, a JWKS, a token endpoint
 and a userinfo endpoint. No network egress, no mocked seams, no new dependency
 (`pyjwt`, `cryptography` and `httpx` are already runtime deps).
 
@@ -26,7 +26,7 @@ from urllib.parse import parse_qs
 
 import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from src.core.cache import TtlCache
 from src.services.oauth import (
@@ -47,9 +47,9 @@ ROTATED_KID = "stub-key-2"
 REDIRECT_URI = "http://localhost:8000/api/v1/auth/oauth/stub/callback"
 
 
-def _jwk(key: rsa.RSAPrivateKey, kid: str) -> dict[str, Any]:
-    pub = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
-    return {**pub, "kid": kid, "use": "sig", "alg": "RS256"}
+def _jwk(key: Any, kid: str, alg: str) -> dict[str, Any]:
+    pub = json.loads(jwt.algorithms.get_default_algorithms()[alg].to_jwk(key.public_key()))
+    return {**pub, "kid": kid, "use": "sig", "alg": alg}
 
 
 class _StubIdP:
@@ -66,7 +66,9 @@ class _StubIdP:
         self.token_forms: list[dict[str, list[str]]] = []
         self.auth_headers: list[str] = []
         # Published key set, mutable so a test can rotate it mid-cache.
-        self.published: tuple[rsa.RSAPrivateKey, str] = (self.signing_key, KID)
+        self.published: list[tuple[Any, str, str]] = [(self.signing_key, KID, "RS256")]
+        # Set by a test to make /jwks-broken answer with an unusable set.
+        self.broken_jwks: dict[str, Any] | None = None
         self.jwks_delay = 0.0
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -96,7 +98,7 @@ class _StubIdP:
         self,
         *,
         kid: str = KID,
-        key: rsa.RSAPrivateKey | None = None,
+        key: Any = None,
         alg: str = "RS256",
         **claims: Any,
     ) -> str:
@@ -114,6 +116,9 @@ class _StubIdP:
         if alg == "none":
             return jwt.encode(payload, key="", algorithm="none", headers={"kid": kid})
         return jwt.encode(payload, key or self.signing_key, algorithm=alg, headers={"kid": kid})
+
+    def published_jwks(self) -> dict[str, Any]:
+        return {"keys": [_jwk(*p) for p in self.published]}
 
     def _handler(self) -> type[BaseHTTPRequestHandler]:
         stub = self
@@ -137,7 +142,11 @@ class _StubIdP:
                 elif self.path == "/jwks":
                     if stub.jwks_delay:
                         time.sleep(stub.jwks_delay)
-                    self._send(200, {"keys": [_jwk(*stub.published)]})
+                    self._send(200, stub.published_jwks())
+                elif self.path == "/jwks-broken":
+                    # Answers with `broken_jwks` while a test holds one, so the IdP can
+                    # be made to publish an unusable set and then repair itself.
+                    self._send(200, stub.broken_jwks or stub.published_jwks())
                 elif self.path == "/userinfo":
                     stub.auth_headers.append(self.headers.get("Authorization", ""))
                     self._send(
@@ -245,6 +254,20 @@ async def test_claims_from_id_token_accepts_valid_rs256(provider, idp, cache):
     assert claims["email"] == "user@example.com"
 
 
+async def test_claims_from_id_token_accepts_valid_es256(provider, idp, cache):
+    """The allowed-algorithm list names ES256, so an EC-signed id_token has to verify too."""
+    ec_key = ec.generate_private_key(ec.SECP256R1())
+    idp.published = [(ec_key, KID, "ES256")]
+    try:
+        claims = await claims_from_id_token(
+            provider, idp.doc, idp.mint(key=ec_key, alg="ES256"), cache
+        )
+    finally:
+        idp.published = [(idp.signing_key, KID, "RS256")]
+    assert claims is not None
+    assert claims["sub"] == "sub-1"
+
+
 async def test_claims_from_id_token_rejects_wrong_audience(provider, idp, cache):
     assert (
         await claims_from_id_token(provider, idp.doc, idp.mint(aud="another-client"), cache) is None
@@ -289,15 +312,42 @@ async def test_jwks_is_refetched_for_a_rotated_kid(provider, idp, cache):
     """A new kid must not wait out the cache TTL, or every login fails after a key rotation."""
     assert await claims_from_id_token(provider, idp.doc, idp.mint(), cache) is not None
     before = idp.hits.count("/jwks")
-    idp.published = (idp.other_key, ROTATED_KID)
+    idp.published = [(idp.other_key, ROTATED_KID, "RS256")]
     try:
         claims = await claims_from_id_token(
             provider, idp.doc, idp.mint(key=idp.other_key, kid=ROTATED_KID), cache
         )
     finally:
-        idp.published = (idp.signing_key, KID)
+        idp.published = [(idp.signing_key, KID, "RS256")]
     assert claims is not None
     assert idp.hits.count("/jwks") == before + 1
+
+
+async def test_unusable_jwks_is_not_served_from_the_cache(provider, idp, cache):
+    """A malformed key set must cost only the logins it broke, not the whole cache TTL."""
+    doc = dict(idp.doc, jwks_uri=f"{idp.base}/jwks-broken")
+    idp.broken_jwks = {"keys": []}
+    try:
+        assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+        before = idp.hits.count("/jwks-broken")
+        idp.broken_jwks = None
+        claims = await claims_from_id_token(provider, doc, idp.mint(), cache)
+    finally:
+        idp.broken_jwks = None
+    assert claims is not None
+    assert claims["sub"] == "sub-1"
+    assert idp.hits.count("/jwks-broken") == before + 1, "the bad set was served from the cache"
+
+
+async def test_signing_key_is_matched_by_kid_not_position(provider, idp, cache):
+    """Key selection is hand-rolled here, so the first published key is not the answer."""
+    idp.published = [(idp.other_key, "other-kid", "RS256"), (idp.signing_key, KID, "RS256")]
+    try:
+        claims = await claims_from_id_token(provider, idp.doc, idp.mint(), cache)
+    finally:
+        idp.published = [(idp.signing_key, KID, "RS256")]
+    assert claims is not None
+    assert claims["sub"] == "sub-1"
 
 
 async def test_claims_from_id_token_keeps_the_event_loop_responsive(provider, idp, cache):
