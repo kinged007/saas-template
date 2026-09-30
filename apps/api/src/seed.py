@@ -20,6 +20,7 @@ from src.services.api_keys import ApiKeyService
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
 from src.settings import settings
+from src.workflows import INVITATIONS_ROUTE
 
 logger = logging.getLogger(__name__)
 
@@ -338,7 +339,7 @@ async def main() -> None:
                 # /invitations is a static frontend route, so it does not
                 # depend on a live invitation row. Mirrors the workflow path
                 # (workflows.on_member_invited), which sets the same url.
-                payload["url"] = "/invitations"
+                payload["url"] = INVITATIONS_ROUTE
                 if invite is not None:
                     payload.update({"invitation_id": invite.id, "invited_by": "Admin User"})
             created_at = now - timedelta(hours=age_hours)
