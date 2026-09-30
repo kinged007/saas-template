@@ -33,6 +33,7 @@ from src.events.factory import WorkflowRegistry
 from src.jobs.capture import install_run_capture, uninstall_run_capture
 from src.jobs.scheduler import JobScheduler
 from src.services.jobs import JobService
+from src.services.oauth import untrusted_emails_urls
 from src.services.webhook_dispatcher import WebhookDispatcher
 from src.settings import settings
 from src.workflows import build_workflows
@@ -46,6 +47,20 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # An emails_url the origin guard refuses can never sign in, so report it at
+    # boot. Logged, not raised: SSO is optional per provider, and one bad entry
+    # must not keep the API down for everyone else. The check reads the config
+    # only, so a provider whose emails_url is anchored by its discovery document
+    # is named here and still accepted at the callback.
+    untrusted = untrusted_emails_urls()
+    if untrusted:
+        logger.error(
+            "oauth providers whose emails_url is not https on a host their config names "
+            "(this check reads the config only, so it can be conservative); sign-in may "
+            "fail for: %s",
+            ", ".join(untrusted),
+        )
+
     container: Container = app.state.container
     registry = WorkflowRegistry(container.bus)
     build_workflows(registry, container.bus, container.connection_manager, container.cipher)
