@@ -23,7 +23,7 @@ test("a session survives the refresh call and a hard navigation", async ({ page 
 
   // A hard navigation drops the in-memory access token (#274) and has to
   // recover it from the refresh cookie — the call require_csrf gates. A
-  // rejected refresh bounces to /login, so idle first, then read the calls.
+  // rejected refresh bounces to /login, so wait for the call, not a sleep.
   const refreshResponse = page.waitForResponse(
     (r) => new URL(r.url()).pathname === "/api/v1/auth/refresh",
   );
