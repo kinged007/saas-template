@@ -277,7 +277,7 @@ async def delete_workspace(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    service = WorkspaceService(db, container.bus)
+    service = WorkspaceService(db, container.bus, container.storage)
     try:
         await service.delete_workspace(
             workspace_id,

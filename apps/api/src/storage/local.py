@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 
 from src.storage.base import FileStorage, StorageError, StoredObject
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve(root: Path, key: str) -> Path:
@@ -39,6 +42,9 @@ class LocalFileStorage(FileStorage):
         try:
             dest = _resolve(self._root, key)
         except StorageError:
+            # Fails closed like a missing key; log it so a rejected key is not
+            # indistinguishable from an absent one.
+            logger.warning("rejected storage key on read: %r", key)
             return None
         try:
             content = await asyncio.to_thread(dest.read_bytes)

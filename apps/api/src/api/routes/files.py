@@ -10,7 +10,6 @@ from src.api.deps import (
     get_current_workspace_id,
     require_key_permission,
     require_permission,
-    resolve_auth_principal,
 )
 from src.core.permissions import FILE_CREATE, FILE_READ
 from src.db.session import get_db
@@ -37,7 +36,6 @@ async def upload_file(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    principal=Depends(resolve_auth_principal),
     _=Depends(require_permission(FILE_CREATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
@@ -84,7 +82,6 @@ async def list_files(
     response: Response,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    principal=Depends(resolve_auth_principal),
     _key: None = Depends(require_key_permission(FILE_READ)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
@@ -109,7 +106,6 @@ async def download_file(
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
-    principal=Depends(resolve_auth_principal),
     _key: None = Depends(require_key_permission(FILE_READ)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),

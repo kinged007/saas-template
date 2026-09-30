@@ -62,13 +62,23 @@ class S3FileStorage(FileStorage):
         self.config = config
         # One client for the driver's lifetime: a per-request client would pay a
         # TCP+TLS handshake on every object read.
+        # ponytail: only the app lifespan calls aclose(); a Container built by a
+        # script or a worker leaks the client — register aclose() on shutdown there.
         self._client = httpx.AsyncClient(transport=transport, timeout=config.timeout_s)
 
     async def aclose(self) -> None:
         await self._client.aclose()
 
     def _url(self, key: str) -> str:
-        return f"{self.config.endpoint.rstrip('/')}/{self.config.bucket}/{quote(key, safe='/')}"
+        return (
+            f"{self.config.endpoint.rstrip('/')}"
+            f"/{quote(self.config.bucket, safe='')}/{quote(key, safe='/')}"
+        )
+
+    def _uri(self, key: str) -> str:
+        # The signed path must be the one sent on the wire, so a path-prefixed
+        # S3_ENDPOINT (https://gateway.example.com/s3) is signed with its prefix.
+        return urlsplit(self._url(key)).path
 
     def _auth_headers(
         self, *, method: str, key: str, payload_hash: str, content_type: str | None
@@ -76,7 +86,7 @@ class S3FileStorage(FileStorage):
         now = datetime.now(UTC)
         amz_date = now.strftime("%Y%m%dT%H%M%SZ")
         date_stamp = now.strftime("%Y%m%d")
-        host = self._url(key).split("://", 1)[1].split("/", 1)[0]
+        host = urlsplit(self.config.endpoint).netloc
         headers = {"host": host, "x-amz-date": amz_date, "x-amz-content-sha256": payload_hash}
         if content_type:
             headers["content-type"] = content_type
@@ -84,7 +94,7 @@ class S3FileStorage(FileStorage):
         canonical = "\n".join(
             [
                 method,
-                f"/{self.config.bucket}/{quote(key, safe='/')}",
+                self._uri(key),
                 "",
                 "".join(f"{k}:{headers[k]}\n" for k in sorted(headers)),
                 signed,

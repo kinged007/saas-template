@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+from pathlib import Path
 
 import pytest
 
@@ -30,6 +31,27 @@ async def _setup(app_client):
 
 def _png(name="avatar.png"):
     return {"file": (name, io.BytesIO(PNG), "image/png")}
+
+
+def _stored_files(workspace_id: str) -> list[Path]:
+    from src.settings import settings
+
+    root = Path(settings.storage_dir) / workspace_id
+    return sorted(p for p in root.rglob("*") if p.is_file()) if root.exists() else []
+
+
+class _UnboundedStream:
+    """File-like with no length, so httpx sends chunked encoding (no Content-Length)."""
+
+    def __init__(self, total: int) -> None:
+        self._left = total
+
+    def read(self, size: int = -1) -> bytes:
+        if self._left <= 0:
+            return b""
+        n = min(size if size and size > 0 else 65536, self._left)
+        self._left -= n
+        return b"\x00" * n
 
 
 async def test_upload_store_download_roundtrip(app_client):
@@ -253,8 +275,10 @@ async def test_list_rejects_bad_pagination(app_client):
     assert resp.status_code == 422, resp.text
 
 
-async def test_oversize_upload_is_rejected_without_buffering_whole_body(app_client, monkeypatch):
-    """413 must fire while reading, not after the entire body is buffered."""
+async def test_oversize_chunked_upload_is_rejected_without_buffering_whole_body(
+    app_client, monkeypatch
+):
+    """No Content-Length, so the route's bounded read is what rejects the body."""
     from starlette.datastructures import UploadFile
 
     from src.api.routes import files as files_route
@@ -280,12 +304,140 @@ async def test_oversize_upload_is_rejected_without_buffering_whole_body(app_clie
     body = PNG_BYTES + b"\x00" * (limit + 4 * 1024 * 1024)
     resp = await app_client.post(
         "/api/v1/files",
-        files={"file": ("big.png", io.BytesIO(body), "image/png")},
+        files={"file": ("big.png", _UnboundedStream(len(body)), "image/png")},
         headers=headers,
     )
     assert resp.status_code == 413, resp.text
     # Bounded read stops one chunk past the cap instead of consuming the body.
     assert pulled <= limit + 1024 * 1024, f"route buffered {pulled} bytes"
+
+
+async def test_content_length_oversize_rejected_before_body_is_parsed(app_client, monkeypatch):
+    """The cap must also fire before Starlette spools the body to a temp file."""
+    from starlette.datastructures import UploadFile
+
+    from src.api.routes import files as files_route
+    from tests.conftest import create_workspace, login, register_user, ws_headers
+
+    await register_user(app_client, email="files-cl@example.com")
+    tokens = await login(app_client, email="files-cl@example.com")
+    ws = await create_workspace(app_client, tokens, name="CL WS")
+    headers = ws_headers(tokens, ws["id"])
+
+    limit = files_route.settings.storage_max_upload_bytes
+    pulled = 0
+    real_read = UploadFile.read
+
+    async def counting_read(self, size=-1):
+        nonlocal pulled
+        data = await real_read(self, size)
+        pulled += len(data)
+        return data
+
+    monkeypatch.setattr(UploadFile, "read", counting_read)
+
+    body = PNG_BYTES + b"\x00" * (limit + 4 * 1024 * 1024)
+    resp = await app_client.post(
+        "/api/v1/files",
+        files={"file": ("big.png", io.BytesIO(body), "image/png")},
+        headers=headers,
+    )
+    assert resp.status_code == 413, resp.text
+    assert pulled == 0, f"the parser spooled {pulled} bytes for a rejected upload"
+
+
+async def test_upload_rejects_unknown_purpose(tmp_path):
+    from src.services.files import FileError, FileService
+    from src.storage.local import LocalFileStorage
+
+    class _Session:
+        async def execute(self, *args, **kwargs):
+            class _Result:
+                def scalar_one_or_none(self):
+                    return object()
+
+            return _Result()
+
+    service = FileService(_Session(), LocalFileStorage(tmp_path), len(PNG))
+    with pytest.raises(FileError, match="unknown purpose"):
+        await service.upload(
+            workspace_id="ws1",
+            owner_user_id="user1",
+            filename="avatar.png",
+            content_type="image/png",
+            content=PNG,
+            purpose="invoice",
+        )
+    assert list(tmp_path.rglob("*")) == []
+
+
+async def test_delete_account_removes_stored_bytes(app_client):
+    from tests.conftest import auth_headers, create_workspace, login, register_user, ws_headers
+
+    await register_user(app_client, email="files-del@example.com")
+    tokens = await login(app_client, email="files-del@example.com")
+    ws = await create_workspace(app_client, tokens, name="Del WS")
+    up = await app_client.post("/api/v1/files", files=_png(), headers=ws_headers(tokens, ws["id"]))
+    assert up.status_code == 201, up.text
+    assert _stored_files(ws["id"]), "upload never reached the storage dir"
+
+    resp = await app_client.request(
+        "DELETE",
+        "/api/v1/me",
+        json={"confirm": "DELETE", "password": "Password123!"},
+        headers=auth_headers(tokens),
+    )
+    assert resp.status_code == 204, resp.text
+    assert _stored_files(ws["id"]) == [], "delete_account left the stored object behind"
+
+
+async def test_delete_workspace_removes_stored_bytes(app_client):
+    from tests.conftest import create_workspace, login, register_user, ws_headers
+
+    await register_user(app_client, email="files-wsdel@example.com")
+    tokens = await login(app_client, email="files-wsdel@example.com")
+    ws = await create_workspace(app_client, tokens, name="WS Del")
+    headers = ws_headers(tokens, ws["id"])
+    up = await app_client.post("/api/v1/files", files=_png(), headers=headers)
+    assert up.status_code == 201, up.text
+    assert _stored_files(ws["id"]), "upload never reached the storage dir"
+
+    resp = await app_client.delete(f"/api/v1/workspaces/{ws['id']}", headers=headers)
+    assert resp.status_code == 204, resp.text
+    assert _stored_files(ws["id"]) == [], "delete_workspace left the stored object behind"
+
+
+async def test_s3_signs_the_endpoint_path_prefix():
+    """A path-prefixed endpoint must sign the path it actually sends on the wire."""
+    import httpx
+
+    from src.storage.s3 import S3Config, S3FileStorage
+
+    async def _sign(endpoint: str) -> tuple[str, str]:
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["path"] = request.url.path
+            seen["host"] = request.headers["host"]
+            seen["auth"] = request.headers["authorization"]
+            return httpx.Response(200)
+
+        store = S3FileStorage(
+            S3Config(endpoint=endpoint, bucket="b", access_key="ak", secret_key="sk"),
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            await store.put(key="ws/f.png", content=b"img-bytes", content_type="image/png")
+        finally:
+            await store.aclose()
+        return seen["path"], seen["auth"]
+
+    path, prefixed = await _sign("https://gateway.example.com/s3")
+    assert path == "/s3/b/ws/f.png"
+    assert "SignedHeaders=content-type;host" in prefixed
+    # A canonical URI without the prefix would sign the same bytes as the
+    # unprefixed endpoint, and a real S3 would answer SignatureDoesNotMatch.
+    assert prefixed != (await _sign("https://gateway.example.com"))[1]
 
 
 async def test_empty_upload_rejected(app_client):

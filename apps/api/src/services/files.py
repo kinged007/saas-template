@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -22,6 +23,13 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_AVATAR_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+# The /files route stores more than avatars eventually; each purpose names the
+# (content types, extensions) it accepts.
+# ponytail: purpose is validated but not stored on the row — add a column when a
+# second purpose needs to be listed or filtered on.
+_PURPOSES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "avatar": (frozenset(ALLOWED_AVATAR_TYPES), frozenset(ALLOWED_EXTENSIONS)),
+}
 _FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
@@ -48,6 +56,24 @@ class FileTypeRejected(FileError):
 def _safe_filename(name: str) -> str:
     base = (name or "upload").rsplit("/", 1)[-1].rsplit("\\", 1)[-1].strip() or "upload"
     return _FILENAME_SAFE.sub("_", base)[:200]
+
+
+async def purge_objects(storage: FileStorage | None, keys: Sequence[str]) -> None:
+    """Drop the stored bytes behind rows that are being deleted.
+
+    Best-effort by design: a storage failure must not fail an account or
+    workspace deletion, so every error is logged and the sweep continues.
+    """
+    if not keys:
+        return
+    if storage is None:
+        logger.warning("no storage driver configured; %d stored objects orphaned", len(keys))
+        return
+    for key in keys:
+        try:
+            await storage.delete(key=key)
+        except Exception:
+            logger.exception("failed to delete stored object %s", key)
 
 
 class FileService:
@@ -98,13 +124,18 @@ class FileService:
         content_type: str | None,
         content: bytes,
         ip_address: str | None = None,
+        purpose: str = "avatar",
     ) -> dict:
         await self._ensure_membership(workspace_id, owner_user_id)
+        allowed = _PURPOSES.get(purpose)
+        if allowed is None:
+            raise FileError(f"unknown purpose: {purpose}")
+        allowed_types, allowed_extensions = allowed
         mime = (content_type or "").split(";")[0].strip().lower()
-        if mime not in ALLOWED_AVATAR_TYPES:
+        if mime not in allowed_types:
             raise FileTypeRejected(f"unsupported content type: {content_type or 'unknown'}")
         ext = Path(_safe_filename(filename)).suffix.lower()
-        if ext not in ALLOWED_EXTENSIONS:
+        if ext not in allowed_extensions:
             raise FileTypeRejected(f"unsupported file extension: {ext or 'none'}")
         if len(content) > self._max_bytes:
             raise FileTooLarge(f"file exceeds {self._max_bytes} bytes")
