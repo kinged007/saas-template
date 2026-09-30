@@ -180,7 +180,21 @@ def build_workflows(
         if not user_id or not workspace_id:
             return
         workspace_name = payload.get("workspace_name", "workspace")
-        changed_by = payload.get("changed_by_name", "A member")
+        from_role = payload.get("from_role") or "unknown"
+        to_role = payload.get("to_role") or "unknown"
+        changed_by = payload.get("changed_by_name") or "A member"
+        # The member is the actor (a self-demotion, or an ownership transfer):
+        # naming them in their own notification reads as "you changed your
+        # own role". set_member_role refuses to touch the owner's role, so a
+        # self-change from owner is always a transfer.
+        if user_id == payload.get("changed_by_user_id"):
+            body = (
+                f"You transferred ownership. Your role is now {to_role}."
+                if from_role == "owner"
+                else f"Your role is now {to_role}."
+            )
+        else:
+            body = f"{changed_by} changed your role from {from_role} to {to_role}."
         async with SessionFactory() as session:
             await _create_notification(
                 session,
@@ -189,10 +203,7 @@ def build_workflows(
                 workspace_id=workspace_id,
                 type="member_role_changed",
                 title=f"Your role changed in {workspace_name}",
-                body=(
-                    f"{changed_by} changed your role from {payload.get('from_role')} "
-                    f"to {payload.get('to_role')}."
-                ),
+                body=body,
                 metadata={
                     "workspace_id": workspace_id,
                     "workspace_name": workspace_name,
