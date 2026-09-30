@@ -48,6 +48,17 @@ async def _create_workspace(bus, owner_id, *, slug, name="Acme Corp"):
         )
 
 
+async def _expire(invitation_id: str) -> None:
+    from datetime import timedelta
+
+    from src.core.dates import now_utc
+    from src.models.core import Invitation
+
+    async with SessionFactory() as session:
+        row = await session.get(Invitation, invitation_id)
+        row.expires_at = now_utc() - timedelta(minutes=5)
+        await session.commit()
+
 async def _invite_member(bus, owner_id, workspace, email, role_name="editor"):
     async with SessionFactory() as session:
         service = WorkspaceService(session, bus)
@@ -204,8 +215,8 @@ async def test_resend_invitation_emits_delivery_event(bus, owner):
     invite = await _invite_member(bus, owner.id, workspace, "stranger@example.com")
     bus.events.clear()
     async with SessionFactory() as session:
+        await _expire(invite.id)
         service = WorkspaceService(session, bus)
-        await service.revoke_invitation(workspace.id, invite.id, actor=owner)
         await service.resend_invitation(workspace.id, invite.id, actor=owner)
 
     invitations = bus.by_subject(Subjects.WORKSPACE_INVITATION_CREATED)
