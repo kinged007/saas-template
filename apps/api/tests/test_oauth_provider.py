@@ -18,6 +18,7 @@ import json
 import socket
 import threading
 import time
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs
@@ -210,15 +211,23 @@ def _closed_port() -> int:
         return int(s.getsockname()[1])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="claims_from_id_token passes audience= to jwt.decode but no issuer=, and PyJWT's "
-    "_validate_iss returns immediately when issuer is None — so the iss entry in "
-    "options['require'] enforces presence only, never value. Filed as #340; the "
-    "strict xfail flips red the day issuer= is added.",
-)
 def test_claims_from_id_token_rejects_wrong_issuer(provider, idp):
     assert claims_from_id_token(provider, idp.doc, idp.mint(iss="http://evil.example")) is None
+
+
+def test_claims_from_id_token_rejects_wrong_issuer_without_discovery_doc(provider, idp):
+    """A provider configured with explicit endpoints and no discovery document: the
+    expected issuer comes from the config, so a foreign `iss` is still rejected."""
+    doc = {k: v for k, v in idp.doc.items() if k != "issuer"}
+    assert claims_from_id_token(provider, doc, idp.mint(iss="http://evil.example")) is None
+
+
+def test_claims_from_id_token_without_issuer_checks_presence_only(provider, idp):
+    """Deliberate ceiling: a provider that names no issuer anywhere (the explicit-URL
+    shape, e.g. the GitHub config) has nothing to compare `iss` against, so only
+    presence is enforced. Configure `issuer` to pin the value."""
+    doc = {k: v for k, v in idp.doc.items() if k != "issuer"}
+    assert claims_from_id_token(replace(provider, issuer=None), doc, idp.mint()) is not None
 
 
 def test_claims_from_id_token_accepts_valid_rs256(provider, idp):
