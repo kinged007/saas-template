@@ -1,4 +1,5 @@
 import hashlib
+from datetime import datetime
 
 from tests.conftest import (
     auth_headers,
@@ -51,6 +52,38 @@ async def test_owner_can_create_list_and_use_api_key(app_client):
     assert "key" not in item
     assert item["key_prefix"].startswith("sk_live_")
     assert item["last_used_at"] is not None  # touch() ran on the members call
+
+
+async def test_api_key_timestamps_are_offset_aware(app_client):
+    """Every timestamp in the payload carries its UTC offset.
+
+    A naive ISO string makes `new Date(...)` parse as local time in the
+    browser, so a key renders at a different wall clock than `Expires`.
+    """
+    client = app_client
+    owner = await register_user(client, "tess@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    key = await _create_key(
+        client,
+        headers,
+        permissions=["member:read"],
+        body={"expires_at": "2027-01-01T00:00:00Z"},
+    )
+    # a real call so touch() populates last_used_at, then revoke
+    key_headers = {"Authorization": f"Bearer {key['key']}", "X-Workspace-ID": ws["id"]}
+    assert (await client.get("/api/v1/members", headers=key_headers)).status_code == 200
+    resp = await client.delete(f"/api/v1/api-keys/{key['id']}", headers=headers)
+    assert resp.status_code == 204
+
+    listed = await client.get("/api/v1/api-keys", headers=headers)
+    assert listed.status_code == 200
+    item = next(k for k in listed.json() if k["id"] == key["id"])
+    for field in ("created_at", "expires_at", "last_used_at", "revoked_at"):
+        assert item[field] is not None, field
+        stamp = datetime.fromisoformat(item[field])
+        assert stamp.utcoffset() is not None, f"{field}: {item[field]}"
 
 
 async def test_api_key_is_capped_by_owner_permissions(app_client):
