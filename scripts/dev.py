@@ -60,6 +60,29 @@ def api_env_file(key: str) -> str:
         pass
     return value
 
+def dev_allowed_origins(web_port: str = WEB_PORT) -> list[str]:
+    """Origins the API must accept for `make dev`.
+
+    The API's cookie endpoints allowlist the browser origin, so a non-default
+    web port needs its own entry. Vite serves every loopback name
+    (server.host: true), so both are listed: a browser opened on 127.0.0.1 sends
+    that Origin and gets a 403 cross-origin on the refresh call otherwise. The
+    default 5173 stays allowed so a later plain `make dev` in the same shell
+    still authenticates, and anything the user configured in .env is kept."""
+    web_origin = f"http://localhost:{web_port}"
+    return [
+        o
+        for o in dict.fromkeys(
+            [
+                "http://localhost:5173",
+                web_origin,
+                f"http://127.0.0.1:{web_port}",
+                *(os.environ.get("CORS_ORIGINS") or api_env_file("CORS_ORIGINS")).split(","),
+            ]
+        )
+        if o
+    ]
+
 def main() -> int:
     stop_signal = None
     procs = {}
@@ -78,19 +101,10 @@ def main() -> int:
     exit_code = None
     try:
         web_origin = f"http://localhost:{WEB_PORT}"
-        # The API's cookie endpoints allowlist the browser origin, so a
-        # non-default web port needs it too. Keep the default 5173 allowed so
-        # a later plain `make dev` in the same shell still authenticates.
-        allowed = dict.fromkeys(
-            [
-                "http://localhost:5173",
-                web_origin,
-                *(os.environ.get("CORS_ORIGINS") or api_env_file("CORS_ORIGINS")).split(","),
-            ]
-        )
+        cors_origins = ",".join(dev_allowed_origins())
         for s in SERVERS:
             env = os.environ.copy()
-            env["CORS_ORIGINS"] = ",".join(o for o in allowed if o)
+            env["CORS_ORIGINS"] = cors_origins
             env["FRONTEND_URL"] = (
                 os.environ.get("FRONTEND_URL") or api_env_file("FRONTEND_URL") or web_origin
             )

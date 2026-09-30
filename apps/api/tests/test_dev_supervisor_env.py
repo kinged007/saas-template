@@ -1,4 +1,6 @@
-"""`make dev` must not clobber the CORS origins the user set in apps/api/.env."""
+"""`make dev` must not clobber the CORS origins the user set in apps/api/.env,
+and must allowlist every loopback name vite serves (127.0.0.1 as well as
+localhost) so the CSRF check accepts the proxied refresh call."""
 
 import importlib.util
 import os
@@ -41,6 +43,22 @@ def test_missing_file_and_key_are_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(dev, "ROOT", str(tmp_path))
     assert dev.api_env_file("CORS_ORIGINS") == ""
 
+
+def test_allowed_origins_cover_both_loopback_names(api_env):
+    origins = api_env.dev_allowed_origins("5318")
+    assert "http://localhost:5318" in origins
+    assert "http://127.0.0.1:5318" in origins
+    # The user's own entries survive the lift.
+    assert "*.coder.munyard.biz" in origins
+
+def test_allowed_origins_pass_the_csrf_check(api_env, monkeypatch):
+    """The supervisor's env is only useful if the API accepts these origins."""
+    from src.core.security import cookies
+
+    origins = api_env.dev_allowed_origins("5318")
+    monkeypatch.setattr(cookies.settings, "cors_origins", ",".join(origins))
+    # A `*` entry is a pattern for the CORS middleware, not a browser origin.
+    assert all(cookies._origin_allowed(o) for o in origins if "*" not in o)
 
 def test_shell_env_wins_over_file(tmp_path, monkeypatch):
     (tmp_path / "apps" / "api").mkdir(parents=True)

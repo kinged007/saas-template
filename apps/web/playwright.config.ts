@@ -8,6 +8,8 @@ const baseURL = `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({
   testDir: "./e2e",
+  // dev-session.spec.ts needs the real stack — playwright.dev.config.ts.
+  testIgnore: "**/dev-session.spec.ts",
   forbidOnly: !!process.env.CI,
   // The first spec pays the cold cost of vite transforming the app module
   // graph, which exceeds the 30s default on a GitHub runner. Both of these are
