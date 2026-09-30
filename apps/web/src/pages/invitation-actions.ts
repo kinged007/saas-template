@@ -13,3 +13,10 @@ export const canResendInvitation = (i: InvitationRow) =>
   i.status !== "accepted" &&
   i.status !== "revoked" &&
   (i.status !== "pending" || !!i.expired);
+
+/**
+ * Display status. The API flags a pending row past its expiry as `expired`,
+ * so a `pending` badge next to a past expiry date reads as still live.
+ */
+export const invitationStatus = (i: InvitationRow) =>
+  i.expired && i.status === "pending" ? "expired" : i.status;
