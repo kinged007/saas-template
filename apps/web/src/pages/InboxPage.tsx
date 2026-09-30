@@ -5,7 +5,8 @@ import Markdown from "react-markdown";
 import { ArrowLeft, Inbox, Mail, MailOpen, ExternalLink, SendHorizontal, Pencil, Archive, ArchiveRestore, Search, MessageSquare, PanelLeftClose, PanelLeftOpen, X, Check, UserPlus } from "lucide-react";
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
-import { markdownComponents, markdownComponentsInverted, highlightMentions, mentionUrlTransform, stripMarkdown, truncate as truncatePreview } from "@/lib/markdown";
+import { markdownComponents, markdownComponentsInverted, stripMarkdown, truncate as truncatePreview } from "@/lib/markdown";
+import { mentionRemarkPlugin, mentionUrlTransform, type MentionTarget } from "@/lib/mentions";
 import { activeWorkspacePermissions } from "../utils/permissions";
 
 import { Badge } from "@/components/ui/badge";
@@ -21,7 +22,7 @@ import { cn } from "@/lib/utils";
 import type { Notification, Conversation, Message, Identity, Member } from "../types";
 import { getDisplayName, getParticipantDisplayName, getMemberDisplayName } from "../types";
 import { ComposeDialog } from "../components/inbox/ComposeDialog";
-import { TiptapEditor, type MentionTarget } from "../components/inbox/TiptapEditor";
+import { TiptapEditor } from "../components/inbox/TiptapEditor";
 import { EditParticipantsDialog } from "../components/inbox/EditParticipantsDialog";
 import {
   applyConversationRead,
@@ -247,6 +248,9 @@ export function InboxPage() {
       ),
     [selectedConversation],
   );
+
+  // Built once per participant list, not once per message bubble.
+  const mentionPlugins = useMemo(() => [mentionRemarkPlugin(participantNames)], [participantNames]);
 
   const { mutate: updateConv } = useUpdate();
   const { mutate: customMutate } = useCustomMutation();
@@ -973,9 +977,10 @@ export function InboxPage() {
                               <div className={cn("prose prose-sm dark:prose-invert max-w-none break-words", isSelf ? "prose-invert" : "")}>
                                 <Markdown
                                   components={isSelf ? markdownComponentsInverted : markdownComponents}
+                                  remarkPlugins={mentionPlugins}
                                   urlTransform={mentionUrlTransform}
                                 >
-                                  {highlightMentions(m.body, participantNames)}
+                                  {m.body}
                                 </Markdown>
                               </div>
                               <p className={cn("mt-1 text-[11px]", isSelf ? "text-primary-foreground/70" : "text-muted-foreground")}>
