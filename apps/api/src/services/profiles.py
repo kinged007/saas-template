@@ -64,6 +64,7 @@ class ProfileService:
         is_put: bool,
         ip_address: str | None = None,
         actor_user_id: str | None = None,
+        workspace_id: str | None = None,
     ) -> UserProfile:
         """
         Update profile. `data` is the validated payload dict (exclude_unset semantics
@@ -182,7 +183,7 @@ class ProfileService:
         try:
             await publish_audit(
                 self._bus,
-                workspace_id=None,
+                workspace_id=workspace_id,
                 resource_type="user_profile",
                 resource_id=user_id,
                 action="profile.updated",

@@ -25,6 +25,7 @@ from src.schemas.api import NotificationAck, NotificationPreferencesUpdate
 from src.services.notifications import (
     CHANNELS,
     DIGEST_TYPE,
+    KNOWN_TYPES,
     NotificationService,
 )
 from src.services.serializers import notification_to_dict
@@ -127,7 +128,7 @@ async def update_preferences(
     db: AsyncSession = Depends(get_db),
 ):
     for type, channel in body.channels.items():
-        if len(type) > 50:
+        if type not in KNOWN_TYPES:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"unknown type {type!r}")
         if channel not in CHANNELS:
             raise HTTPException(

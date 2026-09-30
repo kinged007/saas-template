@@ -16,7 +16,6 @@ from src.api.deps import (
     require_target_profile_update,
     resolve_auth_principal,
 )
-from src.core.dates import ensure_utc, now_utc
 from src.db.session import get_db
 from src.models.workspace import User
 from src.schemas.api import (
@@ -26,8 +25,8 @@ from src.schemas.api import (
     ProfileUpdate,
     SessionRead,
 )
-from src.services.auth import AuthError, AuthService
-from src.services.notifications import CHANNELS, DIGEST_TYPE, NotificationService
+from src.services.auth import AuthError, AuthService, CurrentSessionError
+from src.services.notifications import DIGEST_TYPE, NotificationService
 from src.services.profiles import ProfileService
 from src.services.serializers import profile_to_dict, session_to_dict
 from src.services.workspaces import WorkspaceService
@@ -109,9 +108,14 @@ async def get_user_profile(
     container=Depends(get_container),
 ):
     """Redacted co-member projection, or the full editable profile for a caller
-    holding `profile:update` on a workspace the target also belongs to."""
+    holding `profile:update` on a workspace the target also belongs to.
+
+    Self keeps the projection it always got (email, display_name, contact
+    fields redacted); only a delegated `profile:update` read is editable."""
     service = ProfileService(db, container.bus)
-    if await can_target_profile_update(user_id, response, db, principal, workspace_id):
+    if user_id != principal.user.id and await can_target_profile_update(
+        user_id, response, db, principal, workspace_id
+    ):
         target = await db.get(User, user_id)
         if target is None:
             raise HTTPException(status_code=404, detail="user or profile not found")
@@ -127,21 +131,24 @@ async def get_user_profile(
 
 
 @router.patch("/users/{user_id}/profile")
+@router.put("/users/{user_id}/profile")
 async def update_user_profile(
     user_id: str,
     body: ProfileUpdate,
     request: Request,
     target_id: str = Depends(require_target_profile_update),
     principal: AuthPrincipal = Depends(resolve_auth_principal),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
     profile = await ProfileService(db, container.bus).update(
         target_id,
         _profile_payload(body),
-        is_put=False,
+        is_put=request.method == "PUT",
         ip_address=_client_ip(request),
         actor_user_id=principal.user.id,
+        workspace_id=workspace_id,
     )
     return profile_to_dict(profile)
 
@@ -169,16 +176,13 @@ async def update_user_notification_preferences(
     target_id: str = Depends(require_target_profile_update),
     db: AsyncSession = Depends(get_db),
 ):
-    for type, channel in body.channels.items():
-        if len(type) > 50:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"unknown type {type!r}")
-        if channel not in CHANNELS:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, f"invalid channel {channel!r}"
-            )
     service = NotificationService(db)
     if body.channels:
-        await service.upsert_channels(target_id, body.channels)
+        try:
+            await service.upsert_channels(target_id, body.channels)
+        except ValueError as exc:
+            # upsert_channels owns type/channel validation (see KNOWN_TYPES).
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     if body.digest_enabled is not None:
         await service.set_digest(target_id, body.digest_enabled)
     return _preferences_response(await service.get_preferences(target_id))
@@ -192,13 +196,16 @@ async def list_user_sessions(
 ):
     """Live sessions of the target. A delegated view has no "current" session —
     the caller's own session belongs to a different user."""
-    now = now_utc()
-    rows = await AuthService(db).list_sessions(target_id)
-    return [
-        session_to_dict(r, current=False)
-        for r in rows
-        if r.revoked_at is None and ensure_utc(r.expires_at) >= now
-    ]
+    rows = await AuthService(db).list_sessions(target_id, active_only=True)
+    return [session_to_dict(r, current=False) for r in rows]
+
+
+def _refuse_self_session_target(target_id: str, principal: AuthPrincipal) -> None:
+    """The delegated session routes manage *another* member. Self goes through
+    /auth/sessions: revoking here would sign the caller out mid-request or,
+    under an API key, kill its creator's session."""
+    if target_id == principal.user.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "use /auth/sessions for your own sessions")
 
 
 @router.delete("/users/{user_id}/sessions", status_code=204)
@@ -206,38 +213,43 @@ async def revoke_all_user_sessions(
     request: Request,
     target_id: str = Depends(require_target_profile_update),
     principal: AuthPrincipal = Depends(resolve_auth_principal),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> None:
+    _refuse_self_session_target(target_id, principal)
     await AuthService(db, container.bus).revoke_other_sessions(
         target_id,
         current_session_id=None,
         ip_address=_client_ip(request),
         actor_user_id=principal.user.id,
+        workspace_id=workspace_id,
     )
 
 
 @router.delete("/users/{user_id}/sessions/{session_id}", status_code=204)
 async def revoke_user_session(
-    user_id: str,
     session_id: str,
     request: Request,
     target_id: str = Depends(require_target_profile_update),
     principal: AuthPrincipal = Depends(resolve_auth_principal),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> None:
+    _refuse_self_session_target(target_id, principal)
     try:
         await AuthService(db, container.bus).revoke_session(
             target_id,
             session_id,
-            current_session_id=principal.session_id if target_id == principal.user.id else None,
+            current_session_id=None,
             ip_address=_client_ip(request),
             actor_user_id=principal.user.id,
+            workspace_id=workspace_id,
         )
+    except CurrentSessionError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
     except AuthError as exc:
-        if str(exc) == "cannot revoke the current session":
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
 
 
@@ -268,7 +280,7 @@ async def set_user_password(
     if target.is_superuser:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "cannot change a superuser's password")
     membership = await WorkspaceService(db).get_membership(workspace_id, target_id)
-    if membership is not None and membership[1].name == "owner":
+    if membership is not None and "*" in (membership[1].permissions or []):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "cannot change the workspace owner's password"
         )
@@ -277,6 +289,7 @@ async def set_user_password(
         body.new_password,
         ip_address=_client_ip(request),
         actor_user_id=principal.user.id,
+        workspace_id=workspace_id,
     )
 
 

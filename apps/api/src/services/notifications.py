@@ -22,6 +22,15 @@ DIGEST_TYPE = "*"
 DIGEST_EXCLUDED_TYPES = ("conversation_message",)
 CHANNELS = ("in-app", "email", "off")
 DEFAULT_CHANNEL = "in-app"
+# Preferences may only be written for a type the notification workflows emit,
+# so nobody can fill a member's table with rows nothing ever reads.
+KNOWN_TYPES = (
+    "workspace_invitation",
+    "member_joined",
+    "member_role_changed",
+    "member_removed",
+    *DIGEST_EXCLUDED_TYPES,
+)
 
 
 def unsubscribe_url_for(token: str, type: str, frontend_url: str) -> str:
@@ -286,9 +295,12 @@ class NotificationService:
     async def upsert_channels(
         self, user_id: str, channels: dict[str, str]
     ) -> list[NotificationPreference]:
-        """Bulk upsert of per-type channels; generates tokens on email opt-in."""
+        """Bulk upsert of per-type channels; generates tokens on email opt-in.
+        Raises ValueError on an unknown type or channel."""
         rows: list[NotificationPreference] = []
         for type, channel in channels.items():
+            if type not in KNOWN_TYPES:
+                raise ValueError(f"unknown type {type!r}")
             if channel not in CHANNELS:
                 raise ValueError(f"invalid channel {channel!r}")
             result = await self._session.execute(

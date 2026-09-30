@@ -79,7 +79,8 @@ class TwoFactorDisable(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=8)
-    new_password: str = Field(min_length=8)
+    # 72 is bcrypt's limit; longer input must be a 422, never a 500.
+    new_password: str = Field(min_length=8, max_length=72)
     code: str | None = Field(default=None, min_length=6, max_length=10)
 
 
@@ -87,7 +88,7 @@ class MemberPasswordUpdate(BaseModel):
     """Admin-set password: no current_password. The caller already holds
     `profile:update` on the target's workspace."""
 
-    new_password: str = Field(min_length=8)
+    new_password: str = Field(min_length=8, max_length=72)
 
 
 class SessionRead(BaseModel):

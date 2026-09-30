@@ -1,9 +1,13 @@
 """`profile:update`: editing another member's profile from a workspace.
 
 Guards the target-scoped routes in `api/routes/profiles.py`. The scope is
-workspace-scoped, so the target must be an active member of the same workspace
-the permission is evaluated in.
+workspace-scoped, so the target must belong to the same workspace the
+permission is evaluated in.
 """
+
+import asyncio
+
+from sqlalchemy import select
 
 from src.core.permissions import ALL_PERMISSIONS, PROFILE_UPDATE, permissions_for_role
 from tests.conftest import (
@@ -20,6 +24,21 @@ async def _user_id(client, tokens: dict) -> str:
     resp = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
     assert resp.status_code == 200, resp.text
     return resp.json()["id"]
+
+
+async def _membership_id(client, tokens: dict, ws: dict, user_id: str) -> str:
+    resp = await client.get("/api/v1/members", headers=ws_headers(tokens, ws["id"]))
+    assert resp.status_code == 200, resp.text
+    return next(m["membership_id"] for m in resp.json() if m["id"] == user_id)
+
+async def _wait_for(predicate, timeout_secs: float = 3.0, interval: float = 0.02) -> bool:
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout_secs
+    while loop.time() < deadline:
+        if await predicate():
+            return True
+        await asyncio.sleep(interval)
+    return False
 
 
 async def _add_member(client, owner_tokens, ws, email: str, role_name: str) -> dict:
@@ -210,9 +229,60 @@ async def test_self_profile_routes_are_unchanged(app_client):
 
     # No workspace header needed, no permission needed.
     user_id = await _user_id(client, user)
+    await client.patch(
+        "/api/v1/me/profile",
+        json={"phone_number": "+49 555"},
+        headers=auth_headers(user),
+    )
     resp = await client.get(f"/api/v1/users/{user_id}/profile", headers=auth_headers(user))
     assert resp.status_code == 200, resp.text
-    assert resp.json()["phone_number"] is None
+    body = resp.json()
+    # The projection self always got: identity fields, contact fields redacted.
+    assert body["email"] == "ada@example.com"
+    assert "display_name" in body
+    assert body["phone_number"] is None
+    # The editable fields live on the target route only, not on self.
+    own = await client.get("/api/v1/me/profile", headers=auth_headers(user))
+    assert own.json()["phone_number"] == "+49 555"
+
+
+async def test_put_replaces_the_target_profile(app_client):
+    """PUT is the isPut branch of useUpdateProfile; without the route it 405s."""
+    client = app_client
+    owner = await register_user(client, "ada@example.com")
+    ws = await create_workspace(client, owner)
+    admin = await _add_member(client, owner, ws, "abby@example.com", "admin")
+    target = await _add_member(client, owner, ws, "bob@example.com", "viewer")
+
+    resp = await client.put(
+        f"/api/v1/users/{target['id']}/profile",
+        json={"first_name": "Put", "last_name": "NotPatch"},
+        headers=ws_headers(admin, ws["id"]),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["first_name"] == "Put"
+
+
+async def test_suspended_member_is_still_editable(app_client):
+    """The guard takes any membership row, not only active ones: a suspended
+    member's profile is still theirs to fix."""
+    client = app_client
+    owner = await register_user(client, "ada@example.com")
+    ws = await create_workspace(client, owner)
+    admin = await _add_member(client, owner, ws, "abby@example.com", "admin")
+    target = await _add_member(client, owner, ws, "bob@example.com", "viewer")
+    membership = await _membership_id(client, owner, ws, target["id"])
+    suspended = await client.post(
+        f"/api/v1/members/{membership}/suspend", headers=ws_headers(owner, ws["id"])
+    )
+    assert suspended.status_code == 200, suspended.text
+
+    resp = await client.patch(
+        f"/api/v1/users/{target['id']}/profile",
+        json={"bio": "still editable"},
+        headers=ws_headers(admin, ws["id"]),
+    )
+    assert resp.status_code == 200, resp.text
 
 
 # ------------------------------------------------- notification settings
@@ -252,6 +322,30 @@ async def test_target_notification_preferences_reject_an_unknown_channel(app_cli
         headers=ws_headers(admin, ws["id"]),
     )
     assert resp.status_code == 422, resp.text
+
+
+async def test_target_notification_preferences_reject_an_unknown_type(app_client):
+    """Only types the notification workflows emit are writable, so nobody can
+    fill a member's preference table with rows nothing reads."""
+    client = app_client
+    owner = await register_user(client, "ada@example.com")
+    ws = await create_workspace(client, owner)
+    admin = await _add_member(client, owner, ws, "abby@example.com", "admin")
+    target = await _add_member(client, owner, ws, "bob@example.com", "viewer")
+
+    resp = await client.put(
+        f"/api/v1/users/{target['id']}/notification-preferences",
+        json={"channels": {"junk_preference_row": "email"}},
+        headers=ws_headers(admin, ws["id"]),
+    )
+    assert resp.status_code == 422, resp.text
+    # The self route enforces the same set.
+    own = await client.put(
+        "/api/v1/notifications/preferences",
+        json={"channels": {"junk_preference_row": "email"}},
+        headers=auth_headers(owner),
+    )
+    assert own.status_code == 422, own.text
 
 
 async def test_editor_cannot_read_target_notification_preferences(app_client):
@@ -383,6 +477,9 @@ async def test_admin_revokes_every_target_session(app_client):
 
 
 async def test_admin_cannot_revoke_another_users_sessions(app_client):
+    """The delegated session routes target other members only: self goes
+    through /auth/sessions, so neither a session user nor an API key can sign
+    its own account out through them."""
     client = app_client
     owner = await register_user(client, "ada@example.com")
     ws = await create_workspace(client, owner)
@@ -393,11 +490,151 @@ async def test_admin_cannot_revoke_another_users_sessions(app_client):
     resp = await client.delete(
         f"/api/v1/users/{admin['id']}/sessions/{mine}", headers=ws_headers(admin, ws["id"])
     )
-    assert resp.status_code == 400, resp.text  # cannot revoke your own current session
+    assert resp.status_code == 400, resp.text
+    assert "use /auth/sessions" in resp.json()["detail"]
+
+    resp = await client.delete(
+        f"/api/v1/users/{admin['id']}/sessions", headers=ws_headers(admin, ws["id"])
+    )
+    assert resp.status_code == 400, resp.text
+
+    still_there = await client.get("/api/v1/auth/sessions", headers=auth_headers(admin))
+    assert still_there.status_code == 200
+    assert mine in [row["id"] for row in still_there.json()]
+
+
+async def test_api_key_cannot_revoke_its_creator_sessions(app_client):
+    client = app_client
+    owner = await register_user(client, "ada@example.com")
+    ws = await create_workspace(client, owner)
+    admin = await _add_member(client, owner, ws, "abby@example.com", "admin")
+
+    key = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "script", "permissions": [PROFILE_UPDATE]},
+        headers=ws_headers(admin, ws["id"]),
+    )
+    key_headers = {
+        "Authorization": f"Bearer {key.json()['key']}",
+        "X-Workspace-ID": ws["id"],
+    }
+    resp = await client.delete(f"/api/v1/users/{admin['id']}/sessions", headers=key_headers)
+    assert resp.status_code == 400, resp.text
     assert (
         await client.get("/api/v1/auth/sessions", headers=auth_headers(admin))
     ).status_code == 200
 
+
+async def test_passwords_longer_than_bcrypt_allows_are_422(app_client):
+    """bcrypt raises above 72 bytes; the schema must refuse before hashing."""
+    client = app_client
+    owner = await register_user(client, "ada@example.com")
+    ws = await create_workspace(client, owner)
+    admin = await _add_member(client, owner, ws, "abby@example.com", "admin")
+    target = await _add_member(client, owner, ws, "bob@example.com", "viewer")
+
+    resp = await client.post(
+        f"/api/v1/users/{target['id']}/password",
+        json={"new_password": "A" * 100},
+        headers=ws_headers(admin, ws["id"]),
+    )
+    assert resp.status_code == 422, resp.text
+    resp = await client.post(
+        "/api/v1/auth/change-password",
+        json={"current_password": "Password123!", "new_password": "A" * 100},
+        headers=auth_headers(admin),
+    )
+    assert resp.status_code == 422, resp.text
+
+
+async def test_a_renamed_owner_role_is_still_protected(app_client):
+    """Owner-level power is `"*"` in the role, not the name "owner": a role that
+    carries it stays protected even when the name is different."""
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    client = app_client
+    owner = await register_user(client, "ada@example.com")
+    ws = await create_workspace(client, owner)
+    admin = await _add_member(client, owner, ws, "abby@example.com", "admin")
+    owner_id = await _user_id(client, owner)
+
+    async with SessionFactory() as session:
+        role = await session.scalar(
+            select(Role).where(Role.workspace_id == ws["id"], Role.name == "owner")
+        )
+        role.name = "chief"
+        await session.commit()
+
+    resp = await client.post(
+        f"/api/v1/users/{owner_id}/password",
+        json={"new_password": "BrandNewPass1!"},
+        headers=ws_headers(admin, ws["id"]),
+    )
+    assert resp.status_code == 403, resp.text
+
+
+async def test_superuser_target_password_is_refused(app_client):
+    from src.db.session import SessionFactory
+    from src.models.workspace import User
+
+    client = app_client
+    owner = await register_user(client, "ada@example.com")
+    ws = await create_workspace(client, owner)
+    admin = await _add_member(client, owner, ws, "abby@example.com", "admin")
+    target = await _add_member(client, owner, ws, "root@example.com", "viewer")
+
+    async with SessionFactory() as session:
+        row = await session.get(User, target["id"])
+        row.is_superuser = True
+        await session.commit()
+
+    resp = await client.post(
+        f"/api/v1/users/{target['id']}/password",
+        json={"new_password": "BrandNewPass1!"},
+        headers=ws_headers(admin, ws["id"]),
+    )
+    assert resp.status_code == 403, resp.text
+    assert (
+        await client.post(
+            "/api/v1/auth/login", json={"email": "root@example.com", "password": "Password123!"}
+        )
+    ).status_code == 200
+
+
+async def test_delegated_writes_are_audited_under_the_workspace(app_client):
+    """A delegated write lands in the acting workspace's audit log, not in a
+    user-scoped orphan row."""
+    from src.db.session import SessionFactory
+    from src.models.audit import AuditLogEntry
+
+    client = app_client
+    owner = await register_user(client, "ada@example.com")
+    ws = await create_workspace(client, owner)
+    admin = await _add_member(client, owner, ws, "abby@example.com", "admin")
+    target = await _add_member(client, owner, ws, "bob@example.com", "viewer")
+
+    resp = await client.post(
+        f"/api/v1/users/{target['id']}/password",
+        json={"new_password": "BrandNewPass1!"},
+        headers=ws_headers(admin, ws["id"]),
+    )
+    assert resp.status_code == 204, resp.text
+
+    async def password_event() -> AuditLogEntry | None:
+        async with SessionFactory() as session:
+            result = await session.execute(
+                select(AuditLogEntry).where(AuditLogEntry.action == "user.password_changed")
+            )
+            return result.scalars().first()
+
+    async def recorded() -> bool:
+        return await password_event() is not None
+
+    assert await _wait_for(recorded)
+    row = await password_event()
+    assert row.workspace_id == ws["id"]
+    assert row.actor_user_id == admin["id"]
 
 async def test_editor_cannot_list_target_sessions(app_client):
     client = app_client
