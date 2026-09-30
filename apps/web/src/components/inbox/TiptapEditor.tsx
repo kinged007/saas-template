@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { Bold, Italic, Code2, SquareCode, List, ListOrdered, Link2, Quote } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { pickerIndex, rankMentionTargets, type MentionTarget } from "@/lib/mentions";
 
 const turndownService = new TurndownService({
   headingStyle: "atx",
@@ -23,22 +24,6 @@ turndownService.addRule("mention", {
   replacement: (_content, node) => `@${node.getAttribute("data-label") ?? ""}`,
 });
 
-/**
- * An entity the `@` picker can insert. This array is the extension point:
- * adding agents or any other mentionable later means appending entries, not
- * changing the picker.
- */
-export type MentionTarget = {
-  id: string;
-  type: string;
-  label: string;
-  email?: string | null;
-  avatar_url?: string | null;
-  first_name?: string | null;
-  last_name?: string | null;
-  role?: string | null;
-};
-
 type MentionListRef = {
   onKeyDown: (props: SuggestionKeyDownProps) => boolean;
 };
@@ -47,8 +32,11 @@ const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(f
   props,
   ref,
 ) {
-  const [index, setIndex] = useState(0);
+  // The picked person, not their position: a keystroke re-ranks the list, and
+  // a position would land on whoever moved into that slot.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const items = props.items;
+  const index = pickerIndex(selectedId, items, props.query);
 
   const select = (i: number) => {
     const item = items[i];
@@ -57,15 +45,19 @@ const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(f
 
   useImperativeHandle(ref, () => ({
     onKeyDown: ({ event }) => {
+      if (items.length === 0) return false;
       if (event.key === "ArrowUp") {
-        setIndex((i) => (i + items.length - 1) % items.length);
+        setSelectedId(items[index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length].id);
         return true;
       }
       if (event.key === "ArrowDown") {
-        setIndex((i) => (i + 1) % items.length);
+        setSelectedId(items[index < 0 ? 0 : (index + 1) % items.length].id);
         return true;
       }
       if (event.key === "Enter" || event.key === "Tab") {
+        // Nothing to highlight: pass the key on to the editor rather than
+        // swallowing it, so Enter still inserts a newline.
+        if (index < 0) return false;
         select(index);
         return true;
       }
@@ -83,7 +75,8 @@ const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(f
 
   return (
     <div className="bg-popover text-popover-foreground overflow-hidden rounded-md border shadow-md">
-      <ul className="max-h-60 overflow-y-auto p-1">
+      {/* max-h-72 is 288px, so all MENTION_PICKER_LIMIT (8) rows of 32px fit. */}
+      <ul className="max-h-72 overflow-y-auto p-1">
         {items.map((item, i) => (
           <li key={item.id}>
             <button
@@ -162,12 +155,7 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           ],
           suggestion: {
             char: "@",
-            // ponytail: naive substring match, so "an" also matches "Ann". Swap in a
-            // fuzzy matcher if the workspace member list ever gets large.
-            items: ({ query }) => {
-              const q = query.toLowerCase();
-              return (mentionsRef.current ?? []).filter((m) => m.label.toLowerCase().includes(q));
-            },
+            items: ({ query }) => rankMentionTargets(mentionsRef.current ?? [], query),
             render: () => {
               let component: ReactRenderer<MentionListRef> | null = null;
               let unmount: (() => void) | null = null;

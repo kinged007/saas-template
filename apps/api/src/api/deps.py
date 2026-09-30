@@ -148,12 +148,6 @@ async def get_optional_workspace_id(
     return x_workspace_id
 
 
-def _check_key_quota(api_key: ApiKey) -> None:
-    """Reject keys that exhausted their usage quota (None = unlimited)."""
-    if api_key.usage_quota is not None and api_key.usage_count >= api_key.usage_quota:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "api key quota exceeded")
-
-
 def _quota_headers(api_key: ApiKey) -> dict[str, str]:
     """Quota/remaining headers for key-authenticated responses (empty = unlimited)."""
     if api_key.usage_quota is None:
@@ -165,12 +159,17 @@ def _quota_headers(api_key: ApiKey) -> dict[str, str]:
 
 
 async def record_key_use(api_key: ApiKey, db: AsyncSession, response: Response) -> None:
-    """Quota-check + touch + headers for key-authenticated requests.
+    """Charge one unit of the key's quota and publish the quota headers.
 
-    Shared by require_key_permission and require_permission so the two
-    branches cannot drift."""
-    _check_key_quota(api_key)
-    await ApiKeyService(db).touch(api_key)
+    Invariant: every branch that authorizes an API key must charge through
+    this function, or the key is unmetered — a hand-rolled `api_key is not
+    None` branch that skips it is the bug this guards against. The 403 comes
+    from the conditional UPDATE's rowcount, never from a pre-read, so two
+    concurrent requests cannot both spend the last unit. `response` is what
+    makes the charge observable (the quota headers); a caller that omits it
+    still charges, but cannot see the balance it just spent."""
+    if not await ApiKeyService(db).touch(api_key):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "api key quota exceeded")
     for k, v in _quota_headers(api_key).items():
         response.headers[k] = v
 

@@ -129,7 +129,14 @@ function SidebarNav() {
 
   const renderGroup = (group: (typeof visibleGroups)[number]) => (
     <SidebarGroup key={group.id}>
-      {group.title && <SidebarGroupLabel>{group.title}</SidebarGroupLabel>}
+      {/* The label element is the heading. `h2` matches the level the app gives its
+          landmark titles (ListView, PageHeader); the sidebar sits beside <main>, so
+          a group title is not subordinate to the page heading. */}
+      {group.title && (
+        <SidebarGroupLabel asChild>
+          <h2>{group.title}</h2>
+        </SidebarGroupLabel>
+      )}
       <SidebarMenu>
         {group.items.map((item, index) => {
           const Icon = item.icon;
@@ -166,12 +173,16 @@ function SidebarNav() {
   const topGroups = visibleGroups.filter((g) => g.position === "top");
   const bottomGroups = visibleGroups.filter((g) => g.position === "bottom");
 
+  // The landmark belongs at the call site, not in the shared shadcn primitive.
+  // It takes over the flex classes SidebarContent used to give the groups, so
+  // the scroll and collapsed layout are unchanged. Named because the settings
+  // pages render a nav of their own.
   return (
-    <>
+    <nav aria-label="Main" className="flex min-h-0 flex-1 flex-col gap-2">
       {topGroups.map(renderGroup)}
       {topGroups.length > 0 && bottomGroups.length > 0 && <SidebarSeparator />}
       {bottomGroups.map(renderGroup)}
-    </>
+    </nav>
   );
 }
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, apply_query, parse_query
@@ -32,6 +34,16 @@ router = APIRouter(prefix="/api-keys", tags=["api-keys"])
 
 _APIKEY_FILTERABLE = {"name"}
 _APIKEY_SORTABLE = {"name", "created_at", "last_used_at", "expires_at"}
+# offset/limit page stably only against a total order. created_at is
+# server_default=now() (second granularity on SQLite), so keys minted in the
+# same second tie and id breaks it. An explicit client sort replaces this.
+_APIKEY_DEFAULT_ORDER = (ApiKey.created_at.desc(), ApiKey.id.desc())
+
+
+def _iso(value: datetime | None) -> str | None:
+    # SQLite drops the offset from DateTime(timezone=True); a naive ISO string
+    # makes the browser's new Date() read it as local time.
+    return ensure_utc(value).isoformat() if value else None
 
 
 def _key_dict(k: ApiKey) -> dict:
@@ -44,10 +56,10 @@ def _key_dict(k: ApiKey) -> dict:
         "created_by_user_id": k.created_by_user_id,
         "usage_count": k.usage_count,
         "usage_quota": k.usage_quota,
-        "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
-        "expires_at": ensure_utc(k.expires_at).isoformat() if k.expires_at else None,
-        "revoked_at": k.revoked_at.isoformat() if k.revoked_at else None,
-        "created_at": k.created_at.isoformat() if k.created_at else None,
+        "last_used_at": _iso(k.last_used_at),
+        "expires_at": _iso(k.expires_at),
+        "revoked_at": _iso(k.revoked_at),
+        "created_at": _iso(k.created_at),
     }
 
 
@@ -60,18 +72,20 @@ async def list_api_keys(
     _=Depends(require_permission(APIKEY_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    # Query parsing is the HTTP layer's job; the service owns the personal
-    # scope predicate, so no filter or sort can widen it.
+    # Query parsing is the HTTP layer's job; the service runners own the
+    # personal scope predicate, so no filter or sort can widen it.
     service = ApiKeyService(db)
     try:
         spec = parse_query(request)
         stmt = apply_query(
-            service.owner_scope(workspace_id, user.id),
+            select(ApiKey),
             ApiKey,
             spec,
             sortable=_APIKEY_SORTABLE,
             filterable=_APIKEY_FILTERABLE,
         )
+        if not spec.sort_by:
+            stmt = stmt.order_by(*_APIKEY_DEFAULT_ORDER)
         total = await service.count_for_user(workspace_id, user.id, stmt)
         rows = await service.list_for_user(
             workspace_id, user.id, stmt.offset(spec.offset).limit(spec.limit)

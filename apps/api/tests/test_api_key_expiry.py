@@ -1,16 +1,25 @@
 """API key expiry: creation validation, auth rejection, and the cleanup job."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta, timezone
+
+from sqlalchemy import select
 
 from src.core.dates import ensure_utc, now_utc
 from src.db.session import SessionFactory
 from src.events.subjects import Subjects
 from src.jobs.builtin import api_key_cleanup
-from src.jobs.registry import job_registry
 from src.models.api_key import ApiKey
+from src.models.audit import AuditLogEntry
+from src.models.jobs import JobDefinition
 from src.settings import settings
 from tests.bus_doubles import RecordingBus
-from tests.conftest import create_workspace, register_user, ws_headers
+from tests.conftest import (
+    create_workspace,
+    register_user,
+    run_job_via_scheduler,
+    ws_headers,
+)
 
 
 async def _create_key(client, headers, *, name="expiring", body=None):
@@ -223,8 +232,61 @@ class _FakeCtx:
         return SessionFactory()
 
 
-def test_job_is_registered_as_a_global_daily_job():
-    spec = job_registry.get("apikeys.cleanup")
-    assert spec is not None
-    assert spec.scope == "global"
-    assert spec.default_enabled is True
+async def test_job_is_dispatched_by_the_scheduler(app_client):
+    """Production wiring: the provisioned global job runs on the daily
+    schedule, is claimed by a scheduler tick, and reaches its handler with the
+    app's real bus — none of which `_FakeCtx` can observe."""
+    client = app_client
+    owner = await register_user(client, "odette@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    async with SessionFactory() as session:
+        definition = (
+            await session.execute(
+                select(JobDefinition).where(
+                    JobDefinition.key == "apikeys.cleanup",
+                    JobDefinition.workspace_id.is_(None),
+                )
+            )
+        ).scalar_one()
+        assert definition.enabled is True
+        assert definition.cron_schedule == "0 5 * * *"
+        assert definition.missed_policy == "single"
+
+    expired = (await _create_key(client, headers, name="expired")).json()
+    async with SessionFactory() as session:
+        row = await session.get(ApiKey, expired["id"])
+        row.expires_at = now_utc() - timedelta(days=2)
+        await session.commit()
+
+    run, messages = await run_job_via_scheduler("apikeys.cleanup")
+    assert run.trigger == "scheduled"
+    assert run.status == "success", run.error
+    assert any("api key cleanup — 1 key(s) revoked as expired" in m for m in messages), messages
+
+    async with SessionFactory() as session:
+        assert (await session.get(ApiKey, expired["id"])).revoked_at is not None
+
+    # `publish_audit` no-ops without a bus, so this row exists only if the
+    # executor really passed the app's bus to the handler.
+    audited = await _wait_for_audit(expired["id"])
+    assert audited.details.get("reason") == "expired"
+
+
+async def _wait_for_audit(resource_id: str, timeout_s: float = 10.0):
+    """The audit consumer is a background handler — poll for its row."""
+    for _ in range(int(timeout_s * 10)):
+        async with SessionFactory() as session:
+            entry = (
+                await session.execute(
+                    select(AuditLogEntry).where(
+                        AuditLogEntry.resource_id == resource_id,
+                        AuditLogEntry.action == "apikey.revoked",
+                    )
+                )
+            ).scalar_one_or_none()
+            if entry is not None:
+                return entry
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"no apikey.revoked audit entry for {resource_id}")

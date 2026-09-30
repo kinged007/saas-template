@@ -54,10 +54,10 @@ async def _add_member(client, owner_headers, ws_id, email, role_name):
     return member
 
 
-async def _create_key(client, headers, name, permissions):
+async def _create_key(client, headers, name, permissions, usage_quota=None):
     resp = await client.post(
         "/api/v1/api-keys",
-        json={"name": name, "permissions": permissions},
+        json={"name": name, "permissions": permissions, "usage_quota": usage_quota},
         headers=headers,
     )
     assert resp.status_code == 201, resp.text
@@ -80,14 +80,26 @@ async def _seed_runs(workspace_id: str) -> dict[str, str]:
     import uuid
 
     from src.core.dates import now_utc
-    from src.models.jobs import JobRun
+    from src.models.jobs import JobDefinition, JobRun
 
     ids: dict[str, str] = {}
     async with SessionFactory() as session:
-        for name, ws_id in (("global", None), ("workspace", workspace_id)):
+        definition = JobDefinition(
+            id=str(uuid.uuid4()),
+            key="test.seeded",
+            workspace_id=workspace_id,
+            name="Seeded",
+            cron_schedule="0 0 * * *",
+        )
+        session.add(definition)
+        ids["definition"] = definition.id
+        for name, ws_id, definition_id in (
+            ("global", None, str(uuid.uuid4())),
+            ("workspace", workspace_id, definition.id),
+        ):
             run = JobRun(
                 id=str(uuid.uuid4()),
-                definition_id=str(uuid.uuid4()),
+                definition_id=definition_id,
                 workspace_id=ws_id,
                 status="success",
                 scheduled_at=now_utc(),
@@ -471,6 +483,7 @@ async def test_users_only_see_their_own_api_keys(app_client):
 
     seen_by_owner = await client.get("/api/v1/api-keys", headers=owner_headers)
     assert seen_by_owner.status_code == 200
+    assert seen_by_owner.headers["X-Total-Count"] == "2"
     owner_ids = {k["id"] for k in seen_by_owner.json()}
     assert owner_ids == {admin_a["id"], admin_b["id"]}
     assert editor_key["id"] not in owner_ids
@@ -478,6 +491,7 @@ async def test_users_only_see_their_own_api_keys(app_client):
 
     seen_by_editor = await client.get("/api/v1/api-keys", headers=ws_headers(editor, ws["id"]))
     assert seen_by_editor.status_code == 200
+    assert seen_by_editor.headers["X-Total-Count"] == "1"
     editor_ids = {k["id"] for k in seen_by_editor.json()}
     assert editor_ids == {editor_key["id"]}
     assert {admin_a["id"], admin_b["id"]}.isdisjoint(editor_ids)
@@ -516,10 +530,30 @@ async def test_runners_reapply_the_owner_predicate(app_client):
         assert {k.id for k in rows} == {editor_key["id"]}
         assert await service.count_for_user(ws["id"], editor_id, select(ApiKey)) == 1
 
+        # a statement scoped to somebody else narrows to empty rather than
+        # borrowing theirs: the re-applied predicate ANDs, it never replaces
+        other_owner = select(ApiKey).where(ApiKey.created_by_user_id == editor_id)
+        other_ws_stmt = select(ApiKey).where(ApiKey.workspace_id == other_ws["id"])
+        already = select(ApiKey).where(
+            ApiKey.workspace_id == ws["id"], ApiKey.created_by_user_id == owner_id
+        )
+
+        async def run_ids(stmt: object) -> set[str]:
+            rows = await service.list_for_user(ws["id"], owner_id, stmt)
+            return {k.id for k in rows}
+
+        assert await run_ids(other_owner) == set()
+        assert await service.count_for_user(ws["id"], owner_id, other_owner) == 0
+        assert await run_ids(other_ws_stmt) == set()
+        assert await service.count_for_user(ws["id"], owner_id, other_ws_stmt) == 0
+        # a statement that already carries the caller's own scope is unchanged
+        assert await run_ids(already) == {owner_key["id"]}
+
     # the unscoped statement really does reach every key — the runners narrowed it
     async with SessionFactory() as session:
         all_rows = list((await session.execute(select(ApiKey))).scalars().all())
     assert {k.id for k in all_rows} == {owner_key["id"], editor_key["id"], elsewhere["id"]}
+
 
 async def test_user_cannot_revoke_anothers_api_key(app_client):
     """Revoking someone else's key 404s — even for wildcard-permission admins."""
@@ -870,6 +904,75 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
         assert resp.status_code == 403, (url, resp.text)
     resp = await client.get(f"/api/v1/jobs/runs/{foreign}", headers=viewer_headers)
     assert resp.status_code == 404, resp.text
+
+    # A key-authorized hit is metered like any other key route: every read and
+    # write route spends one unit and reports what is left. Regression test for
+    # #311 — the key branch of _require_run_access and _require_job_access used
+    # to return without record_key_use.
+    for method, url, key_name, charged_status, body, refused_body in [
+        ("get", f"/api/v1/jobs/runs/{runs['workspace']}", "quota-run", 200, None, None),
+        ("get", f"/api/v1/jobs/runs/{runs['workspace']}/logs", "quota-logs", 200, None, None),
+        ("get", f"/api/v1/jobs/{runs['definition']}", "quota-definition", 200, None, None),
+        ("get", f"/api/v1/jobs/{runs['definition']}/runs", "quota-runs", 200, None, None),
+        (
+            "patch",
+            f"/api/v1/jobs/{runs['definition']}",
+            "quota-patch",
+            200,
+            {"cron_schedule": "30 4 * * *"},
+            {"cron_schedule": "45 5 * * *"},
+        ),
+        ("post", f"/api/v1/jobs/{runs['definition']}/execute", "quota-execute", 201, {}, {}),
+    ]:
+        capped = await _create_key(
+            client, headers, key_name, ["jobs:read", "jobs:update"], usage_quota=1
+        )
+        capped_headers = _key_headers(capped["key"], ws["id"])
+        first = await client.request(method, url, json=body, headers=capped_headers)
+        assert first.status_code == charged_status, (url, first.text)
+        assert first.headers["X-API-Key-Quota"] == "1", url
+        assert first.headers["X-API-Key-Remaining"] == "0", url
+        if url.endswith("/runs"):
+            # the charge must not clobber the list route's own header
+            assert first.headers["X-Total-Count"] == "1", url
+
+        # quota exhausted → 403, and the refusal does not spend again
+        second = await client.request(method, url, json=refused_body, headers=capped_headers)
+        assert second.status_code == 403, (url, second.text)
+        assert "quota" in second.json()["detail"].lower(), url
+
+    # The refused PATCH never reached the write: the definition still holds
+    # the schedule the charged request set.
+    after = await client.get(f"/api/v1/jobs/{runs['definition']}", headers=auth_headers(owner))
+    assert after.json()["cron_schedule"] == "30 4 * * *", after.text
+
+
+async def test_one_quota_unit_cannot_be_spent_twice(app_client):
+    """Two callers that read the counter before either writes must not both
+    spend the last unit — the quota check and the increment are one
+    statement, not a read followed by a write."""
+    from src.models.api_key import ApiKey
+    from src.services.api_keys import ApiKeyService
+
+    client = app_client
+    owner = await register_user(client, "quota-race@example.com")
+    ws = await create_workspace(client, owner, "Quota Race Inc")
+    capped = await _create_key(
+        client, ws_headers(owner, ws["id"]), "race", ["member:read"], usage_quota=1
+    )
+
+    async with SessionFactory() as first, SessionFactory() as second:
+        # Both sessions read the key while usage_count is still 0 — the
+        # interleaving that used to let both commit usage_count = 1.
+        one, two = await first.get(ApiKey, capped["id"]), await second.get(ApiKey, capped["id"])
+        assert (one.usage_count, two.usage_count) == (0, 0)
+
+        assert await ApiKeyService(first).touch(one) is True
+        assert await ApiKeyService(second).touch(two) is False
+
+    async with SessionFactory() as verify:
+        row = await verify.get(ApiKey, capped["id"])
+        assert row.usage_count == 1, "a refused charge must not be spent"
 
 
 async def test_key_cannot_enroll_two_factor(app_client):

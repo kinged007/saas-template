@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import uuid
 
 from sqlalchemy import func, select
 
@@ -51,6 +52,19 @@ async def _count_eq(user_id: str, type: str, expected: int) -> bool:
 
 async def _wait_for_count(user_id: str, type: str, expected: int) -> None:
     assert await _wait_for(lambda: _count_ge(user_id, type, expected))
+
+
+async def _latest_role_change(user_id: str):
+    async with SessionFactory() as session:
+        result = await session.execute(
+            select(Notification)
+            .where(
+                Notification.user_id == user_id,
+                Notification.type == "member_role_changed",
+            )
+            .order_by(Notification.created_at.desc())
+        )
+        return result.scalars().first()
 
 
 async def _roles_by_name(client, tokens, workspace_id) -> dict[str, str]:
@@ -179,6 +193,133 @@ async def test_member_role_changed_notifies_the_member(app_client):
         row = result.scalars().first()
     assert row.payload["from_role"] == "editor"
     assert row.payload["to_role"] == "viewer"
+    # Someone else made the change: the body stays third person.
+    assert row.body.endswith("changed your role from editor to viewer.")
+
+
+async def test_admin_demoting_themselves_reads_neutrally(app_client):
+    """The actor is the member, so the body must not name them."""
+    from tests.conftest import create_workspace, register_user
+
+    owner = await register_user(app_client, "owner@wf-self.com")
+    admin = await register_user(app_client, "admin@wf-self.com")
+    admin_me = await _me(app_client, admin)
+    ws = await create_workspace(app_client, owner)
+    roles = await _roles_by_name(app_client, owner, ws["id"])
+
+    invite = await _invite(app_client, owner, ws["id"], roles["admin"], "admin@wf-self.com")
+    await _accept(app_client, admin, invite["token"])
+
+    admin_row = next(
+        m for m in await _members(app_client, owner, ws["id"]) if m["email"] == "admin@wf-self.com"
+    )
+    resp = await app_client.patch(
+        f"/api/v1/members/{admin_row['membership_id']}",
+        json={"role_id": roles["viewer"]},
+        headers={
+            "Authorization": f"Bearer {admin['access_token']}",
+            "X-Workspace-ID": ws["id"],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert await _wait_for(lambda: _count_eq(admin_me["id"], "member_role_changed", 1))
+    row = await _latest_role_change(admin_me["id"])
+    assert row.body == "Your role is now viewer."
+    assert admin_me["display_name"] not in row.body
+
+
+async def test_transfer_ownership_notifies_both_users(app_client):
+    from tests.conftest import create_workspace, register_user
+
+    owner = await register_user(app_client, "owner@wf-transfer.com")
+    heir = await register_user(app_client, "heir@wf-transfer.com")
+    owner_me = await _me(app_client, owner)
+    heir_me = await _me(app_client, heir)
+    ws = await create_workspace(app_client, owner)
+    roles = await _roles_by_name(app_client, owner, ws["id"])
+
+    invite = await _invite(app_client, owner, ws["id"], roles["admin"], "heir@wf-transfer.com")
+    await _accept(app_client, heir, invite["token"])
+
+    heir_row = next(
+        m
+        for m in await _members(app_client, owner, ws["id"])
+        if m["email"] == "heir@wf-transfer.com"
+    )
+    resp = await app_client.post(
+        f"/api/v1/workspaces/{ws['id']}/transfer",
+        json={"new_owner_membership_id": heir_row["membership_id"]},
+        headers={"Authorization": f"Bearer {owner['access_token']}", "X-Workspace-ID": ws["id"]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    await _wait_for_count(heir_me["id"], "member_role_changed", 1)
+    await _wait_for_count(owner_me["id"], "member_role_changed", 1)
+
+    async def _roles(user_id: str) -> tuple:
+        async with SessionFactory() as session:
+            result = await session.execute(
+                select(Notification)
+                .where(
+                    Notification.user_id == user_id,
+                    Notification.type == "member_role_changed",
+                )
+                .order_by(Notification.created_at.desc())
+            )
+            row = result.scalars().first()
+        return (row.payload["from_role"], row.payload["to_role"])
+
+    assert await _roles(heir_me["id"]) == ("admin", "owner")
+    assert await _roles(owner_me["id"]) == ("owner", "admin")
+
+    # The demoted owner is the actor: told they transferred, not that they
+    # changed their own role.
+    owner_row = await _latest_role_change(owner_me["id"])
+    assert owner_row.body == "You transferred ownership. Your role is now admin."
+    assert owner_me["display_name"] not in owner_row.body
+    # The heir was changed by someone else, so the name still shows.
+    heir_row = await _latest_role_change(heir_me["id"])
+    assert heir_row.body.endswith("changed your role from admin to owner.")
+    assert owner_me["display_name"] in heir_row.body
+
+
+async def test_role_changed_body_never_renders_none():
+    """A null from_role must not reach the sentence.
+
+    Driven through the handler directly: the API cannot publish a null
+    from_role, so only a synthetic payload reaches this branch.
+    """
+    from src.events.bus import EventMetadata
+    from src.events.subjects import Subjects
+    from src.workflows import build_workflows
+
+    class _CaptureRegistry:
+        def __init__(self) -> None:
+            self.handlers: dict[str, object] = {}
+
+        def register(self, subject, handler, *, fanout: bool = False) -> None:
+            self.handlers[subject] = handler
+
+    registry = _CaptureRegistry()
+    build_workflows(registry, None, None)
+    user_id = str(uuid.uuid4())
+    await registry.handlers[Subjects.WORKSPACE_MEMBER_ROLE_CHANGED](
+        {
+            "workspace_id": str(uuid.uuid4()),
+            "workspace_name": "Acme Corp",
+            "user_id": user_id,
+            "from_role": None,
+            "to_role": "owner",
+            "changed_by_user_id": str(uuid.uuid4()),
+            "changed_by_name": "Test U.",
+        },
+        EventMetadata(subject=Subjects.WORKSPACE_MEMBER_ROLE_CHANGED),
+    )
+
+    row = await _latest_role_change(user_id)
+    assert "None" not in row.body
+    assert "from unknown to owner" in row.body
 
 
 async def test_member_removed_notifies_the_removed_member(app_client):
