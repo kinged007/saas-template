@@ -46,6 +46,7 @@ async def _add_key_only_to_role(role_id: str, permission: str) -> None:
 
     async with SessionFactory() as session:
         role = await session.get(Role, role_id)
+        assert role is not None, role_id
         role.permissions = [*role.permissions, permission]
         await session.commit()
 
@@ -91,33 +92,36 @@ async def test_permission_catalog_filtered_to_assignable(app_client):
     owner = await register_user(client, "cat-owner@example.com")
     ws = await create_workspace(client, owner)
     owner_headers = ws_headers(owner, ws["id"])
+    # Seed the key-only scope before the member joins. accept_invitation stores
+    # role_id and copies no permissions, so this way the viewer holds the scope
+    # from the moment it joins and the test does not depend on get_membership
+    # joining Role live on WorkspaceMember.role_id. The intersection at
+    # roles.py:92 is only reachable for a non-owner caller.
+    await _add_key_only_to_role(
+        await _role_id(client, owner_headers, "viewer"), perms.NOTIFICATION_READ
+    )
     viewer = await _add_member(client, owner, ws, "cat-viewer@example.com", "viewer")
 
-    owner_catalog = (
-        await client.get("/api/v1/roles/permission-catalog", headers=owner_headers)
-    ).json()
+    resp = await client.get("/api/v1/roles/permission-catalog", headers=owner_headers)
+    assert resp.status_code == 200, resp.text
+    owner_catalog = resp.json()
     assert set(owner_catalog["catalog"]) == set(perms.ALL_PERMISSIONS)
     assert set(owner_catalog["permissions"]) == set(perms.ALL_PERMISSIONS)
     assert not (set(owner_catalog["catalog"]) & set(perms.KEY_ONLY_PERMISSIONS))
     assert not (set(owner_catalog["permissions"]) & set(perms.KEY_ONLY_PERMISSIONS))
 
-    viewer_catalog = (
-        await client.get("/api/v1/roles/permission-catalog", headers=ws_headers(viewer, ws["id"]))
-    ).json()
+    resp = await client.get(
+        "/api/v1/roles/permission-catalog", headers=ws_headers(viewer, ws["id"])
+    )
+    assert resp.status_code == 200, resp.text
+    viewer_catalog = resp.json()
     assert set(viewer_catalog["catalog"]) == set(perms.ALL_PERMISSIONS)
     assert set(viewer_catalog["permissions"]) < set(perms.ALL_PERMISSIONS)
     assert "workspace:delete" not in viewer_catalog["permissions"]
-
-    # viewer's own scopes hold no key-only scope, so seed one: the intersection
-    # at roles.py:92 is only reachable for a non-owner caller.
-    await _add_key_only_to_role(
-        await _role_id(client, owner_headers, "viewer"), perms.NOTIFICATION_READ
-    )
-    stale_viewer_catalog = (
-        await client.get("/api/v1/roles/permission-catalog", headers=ws_headers(viewer, ws["id"]))
-    ).json()
-    assert not (set(stale_viewer_catalog["catalog"]) & set(perms.KEY_ONLY_PERMISSIONS))
-    assert not (set(stale_viewer_catalog["permissions"]) & set(perms.KEY_ONLY_PERMISSIONS))
+    # The seed above is what makes these two lines a check: the viewer's own
+    # scopes carry a key-only scope, so the intersection must drop it.
+    assert not (set(viewer_catalog["catalog"]) & set(perms.KEY_ONLY_PERMISSIONS))
+    assert not (set(viewer_catalog["permissions"]) & set(perms.KEY_ONLY_PERMISSIONS))
 
 
 # ------------------------------------------------------------------ create
@@ -205,9 +209,11 @@ async def test_permission_catalog_excludes_legacy_key_only_scope(app_client):
     headers = ws_headers(owner, ws["id"])
     await _add_key_only_to_role(await _role_id(client, headers, "editor"), perms.NOTIFICATION_READ)
     editor = await _add_member(client, owner, ws, "cat-legacy-editor@example.com", "editor")
-    catalog = (
-        await client.get("/api/v1/roles/permission-catalog", headers=ws_headers(editor, ws["id"]))
-    ).json()
+    resp = await client.get(
+        "/api/v1/roles/permission-catalog", headers=ws_headers(editor, ws["id"])
+    )
+    assert resp.status_code == 200, resp.text
+    catalog = resp.json()
     assert perms.NOTIFICATION_READ not in catalog["permissions"]
     assert perms.NOTIFICATION_READ not in catalog["catalog"]
     # The editor's own scopes survive the intersection, so this is not an empty response.
