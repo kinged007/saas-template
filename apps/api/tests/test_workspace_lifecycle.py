@@ -16,6 +16,18 @@ async def _member_by_email(client, headers, email: str) -> dict:
     return next(m for m in members.json() if m["email"] == email)
 
 
+async def _expire_invitation(invitation_id: str) -> None:
+    from datetime import timedelta
+
+    from src.core.dates import now_utc
+    from src.db.session import SessionFactory
+    from src.models.core import Invitation
+
+    async with SessionFactory() as session:
+        row = await session.get(Invitation, invitation_id)
+        row.expires_at = now_utc() - timedelta(minutes=5)
+        await session.commit()
+
 async def _invite_and_join(client, owner_tokens, ws, email: str, role_name: str = "viewer"):
     owner_headers = ws_headers(owner_tokens, ws["id"])
     invite = await client.post(
@@ -155,9 +167,8 @@ async def test_resend_expired_invitation(app_client):
     assert invite.status_code == 201, invite.text
     old_token = invite.json()["token"]
 
-    # Revoke, then resend to prove a dead invite becomes usable again.
-    rev = await client.delete(f"/api/v1/invitations/{invite.json()['id']}", headers=owner_headers)
-    assert rev.status_code == 204, rev.text
+    # Backdate the expiry, then resend to prove a dead invite becomes usable again.
+    await _expire_invitation(invite.json()["id"])
     resp = await client.post(
         f"/api/v1/invitations/{invite.json()['id']}/resend", headers=owner_headers
     )
@@ -230,6 +241,31 @@ async def test_resend_rejects_accepted_invitation(app_client):
         f"/api/v1/invitations/{invite.json()['id']}/resend", headers=owner_headers
     )
     assert resp.status_code == 409, resp.text
+
+async def test_resend_rejects_revoked_invitation(app_client):
+    """Revoke is terminal: Re-send must not put the row back in the invitee's inbox."""
+    client = app_client
+    owner = await register_user(client, "own9@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+    invite = await client.post(
+        "/api/v1/invitations",
+        json={
+            "email": "cut@example.com",
+            "role_id": await _role_id(client, owner_headers, "viewer"),
+        },
+        headers=owner_headers,
+    )
+    assert invite.status_code == 201, invite.text
+    rev = await client.delete(f"/api/v1/invitations/{invite.json()['id']}", headers=owner_headers)
+    assert rev.status_code == 204, rev.text
+
+    resp = await client.post(
+        f"/api/v1/invitations/{invite.json()['id']}/resend", headers=owner_headers
+    )
+    assert resp.status_code == 409, resp.text
+    rows = (await client.get("/api/v1/invitations", headers=owner_headers)).json()
+    assert next(r for r in rows if r["id"] == invite.json()["id"])["status"] == "revoked"
 
 
 async def test_member_status_constraint_rejects_unknown_value(app_client):

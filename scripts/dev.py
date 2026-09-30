@@ -43,6 +43,23 @@ GRACE_SECONDS = 3.0
 HANDLED = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 
+def api_env_file(key: str) -> str:
+    """Value of `key` in apps/api/.env, or "" when absent (last line wins).
+
+    The API reads that file itself, but a real env var beats it — and dev.py
+    always sets CORS_ORIGINS / FRONTEND_URL, so without this the origins the
+    user configured in .env never reach the app. An exported shell variable
+    still wins; only the dev web origin is added on top."""
+    value = ""
+    try:
+        with open(os.path.join(ROOT, "apps", "api", ".env"), encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith(key + "="):
+                    value = line[len(key) + 1 :].strip().strip("\"'")
+    except OSError:
+        pass
+    return value
+
 def main() -> int:
     stop_signal = None
     procs = {}
@@ -65,12 +82,18 @@ def main() -> int:
         # non-default web port needs it too. Keep the default 5173 allowed so
         # a later plain `make dev` in the same shell still authenticates.
         allowed = dict.fromkeys(
-            ["http://localhost:5173", web_origin, *os.environ.get("CORS_ORIGINS", "").split(",")]
+            [
+                "http://localhost:5173",
+                web_origin,
+                *(os.environ.get("CORS_ORIGINS") or api_env_file("CORS_ORIGINS")).split(","),
+            ]
         )
         for s in SERVERS:
             env = os.environ.copy()
             env["CORS_ORIGINS"] = ",".join(o for o in allowed if o)
-            env["FRONTEND_URL"] = os.environ.get("FRONTEND_URL") or web_origin
+            env["FRONTEND_URL"] = (
+                os.environ.get("FRONTEND_URL") or api_env_file("FRONTEND_URL") or web_origin
+            )
             if s["name"] == "web":
                 env["API_PORT"] = API_PORT
             procs[s["name"]] = subprocess.Popen(

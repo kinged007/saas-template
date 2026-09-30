@@ -1,8 +1,41 @@
+import asyncio
 import csv
 import io
 import json
 
+from sqlalchemy import select
+
+from src.db.session import SessionFactory
+from src.models.audit import AuditLogEntry
 from tests.conftest import create_workspace, register_user, ws_headers
+
+
+async def _wait_for_audit_export(
+    client, headers, workspace_id, params=None, timeout_secs: float = 5.0
+):
+    """Return the export, requested once the bus has committed `workspace.created`.
+
+    Audit rows are written by a background event-bus task, so an export issued
+    right after setup can be served before they land. The gate polls the audit
+    table instead of re-reading the export: every export call publishes its own
+    `workspace.exported` audit event, so retrying the export would add work to
+    the bus this waits on. One export is issued, after the gate.
+    """
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout_secs
+    while True:
+        async with SessionFactory() as session:
+            result = await session.execute(
+                select(AuditLogEntry.action).where(AuditLogEntry.workspace_id == workspace_id)
+            )
+            landed = "workspace.created" in set(result.scalars().all())
+        if landed or loop.time() >= deadline:
+            break
+        await asyncio.sleep(0.02)
+    assert landed, f"event bus did not commit workspace.created within {timeout_secs}s"
+    resp = await client.get("/api/v1/workspaces/export", params=params, headers=headers)
+    assert resp.status_code == 200, resp.text
+    return resp
 
 
 async def _me_id(client, tokens):
@@ -194,8 +227,7 @@ async def test_search_rejects_blank_and_short_and_non_member(app_client):
 
 async def test_export_json_and_csv(app_client):
     client, h, ws, conv = await _setup(app_client)
-    resp = await client.get("/api/v1/workspaces/export", headers=h)
-    assert resp.status_code == 200, resp.text
+    resp = await _wait_for_audit_export(client, h, ws["id"])
     assert "attachment" in resp.headers["content-disposition"]
     bundle = json.loads(resp.text)
     for key in (
@@ -309,16 +341,13 @@ async def test_export_audit_csv(app_client):
     from src.services.search_export import CSV_RESOURCES
 
     client, h, ws, conv = await _setup(app_client)
-    resp = await client.get(
-        "/api/v1/workspaces/export", params={"format": "csv", "resource": "audit"}, headers=h
+    resp = await _wait_for_audit_export(
+        client, h, ws["id"], params={"format": "csv", "resource": "audit"}
     )
-    assert resp.status_code == 200, resp.text
     assert resp.headers["content-type"].startswith("text/csv")
     assert "attachment" in resp.headers["content-disposition"]
-    assert (
-        resp.text.splitlines()[0]
-        == "created_at,actor_email,action,resource_type,resource_id,ip_address"
-    )
+    expected = "id,created_at,actor_email,action,resource_type,resource_id,ip_address"
+    assert resp.text.splitlines()[0] == expected
     rows = list(csv.DictReader(io.StringIO(resp.text)))
     assert rows, "expected audit rows"
     # Every row carries the full column set; unset values are empty, not dropped.
@@ -333,6 +362,104 @@ async def test_export_audit_csv(app_client):
     assert created[0]["resource_type"] == "workspace"
     assert created[0]["resource_id"] == ws["id"]
     assert created[0]["created_at"]
+    # The id column round-trips, so a single row traces back to its own entry.
+    json_entries = (await client.get("/api/v1/workspaces/export", headers=h)).json()["audit"]
+    assert created[0]["id"]
+    assert created[0]["id"] in {e["id"] for e in json_entries}
+
+
+def test_export_csv_sanitises_formula_cells_for_every_resource():
+    """A cell starting with = + - @ or a control character must not execute.
+
+    Covers every resource in one place: export_csv is the only writer of
+    tabular output, so a bug in the choke point reaches all of them.
+    """
+    from src.services.search_export import SearchExportService
+
+    injections = {
+        "members": {"email": "=cmd|' /C calc'!A0", "display_name": "+1+1", "avatar_url": None},
+        "invitations": {"email": "@SUM(1+1)"},
+        "api_keys": {"name": "-1+1", "key_prefix": None, "permissions": ["=evil"]},
+        "jobs": {"key": "=1", "name": "@x"},
+        "conversations": {"title": "-cmd", "last_message_preview": None},
+        "notifications": {"title": "=1", "type": None},
+        "audit": {"actor_email": "+1", "id": "=1"},
+    }
+    for resource, payload in injections.items():
+        text = SearchExportService.export_csv({resource: [payload]}, resource)
+        row = next(csv.DictReader(io.StringIO(text)))
+        for key, value in payload.items():
+            if value is None:
+                continue
+            cell = row[key]
+            # Structured values stay valid JSON; only the leading formula
+            # character is prefixed, so the original text is still recoverable.
+            raw = value if isinstance(value, str) else json.dumps(value)
+            if isinstance(value, list):
+                raw = ";".join(value)
+            assert cell == f"'{raw}", (resource, key, cell)
+
+    # Excel discards a leading control character and evaluates what follows, so
+    # a tab, CR or LF in front of a formula is the same payload.
+    for control in ("\t", "\r", "\n"):
+        payload = f"{control}=1+1"
+        text = SearchExportService.export_csv({"members": [{"display_name": payload}]}, "members")
+        assert next(csv.DictReader(io.StringIO(text)))["display_name"] == f"'{payload}", control
+
+
+def test_export_csv_leaves_safe_values_untouched():
+    """Sanitising must not rewrite ordinary cells, non-strings, or empty ones."""
+    from src.services.search_export import SearchExportService
+
+    payload = {
+        "id": "abc-123",
+        "email": "person@example.com",
+        "display_name": "Ada Lovelace",
+        "email_verified": True,
+        "avatar_url": None,
+    }
+    text = SearchExportService.export_csv({"members": [payload]}, "members")
+    row = next(csv.DictReader(io.StringIO(text)))
+    assert row["id"] == "abc-123"
+    assert row["email"] == "person@example.com"
+    assert row["display_name"] == "Ada Lovelace"
+    assert row["email_verified"] == "True"
+    assert row["avatar_url"] == ""
+
+
+async def test_export_members_csv_neutralises_injected_display_name(app_client):
+    """End to end: a formula-shaped display_name is prefixed in the response."""
+    from sqlalchemy import select
+
+    from src.db.session import SessionFactory
+    from src.models.workspace import User
+
+    client, h, ws, conv = await _setup(app_client)
+    payload = "=cmd|' /C calc'!A0"
+    async with SessionFactory() as session:
+        user_id = (
+            (
+                await session.execute(
+                    select(User).where(User.email == "teammate@example.com").limit(1)
+                )
+            )
+            .scalar_one()
+            .id
+        )
+        user = await session.get(User, user_id)
+        user.display_name = payload
+        await session.commit()
+
+    resp = await client.get(
+        "/api/v1/workspaces/export", params={"format": "csv", "resource": "members"}, headers=h
+    )
+    assert resp.status_code == 200, resp.text
+    rows = {r["email"]: r for r in csv.DictReader(io.StringIO(resp.text))}
+    assert rows["teammate@example.com"]["display_name"] == f"'{payload}"
+    # The same value is untouched in the JSON export, which is not a
+    # spreadsheet: only the CSV is defused.
+    json_rows = (await client.get("/api/v1/workspaces/export", headers=h)).json()["members"]
+    assert any(m["display_name"] == payload for m in json_rows)
 
 
 async def test_export_resources_endpoint_is_the_selector_source(app_client):

@@ -39,6 +39,17 @@ async def _role_id(client, headers, name: str) -> str:
     return next(r for r in await _roles(client, headers) if r["name"] == name)["id"]
 
 
+async def _add_key_only_to_role(role_id: str, permission: str) -> None:
+    """Stale key-only scope on a role row; the catalog intersection must drop it."""
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    async with SessionFactory() as session:
+        role = await session.get(Role, role_id)
+        role.permissions = [*role.permissions, permission]
+        await session.commit()
+
+
 async def _add_member(client, owner_tokens, ws, email: str, role_name: str):
     roles = await _roles(client, ws_headers(owner_tokens, ws["id"]))
     role = next(r for r in roles if r["name"] == role_name)
@@ -97,6 +108,17 @@ async def test_permission_catalog_filtered_to_assignable(app_client):
     assert set(viewer_catalog["permissions"]) < set(perms.ALL_PERMISSIONS)
     assert "workspace:delete" not in viewer_catalog["permissions"]
 
+    # viewer's own scopes hold no key-only scope, so seed one: the intersection
+    # at roles.py:92 is only reachable for a non-owner caller.
+    await _add_key_only_to_role(
+        await _role_id(client, owner_headers, "viewer"), perms.NOTIFICATION_READ
+    )
+    stale_viewer_catalog = (
+        await client.get("/api/v1/roles/permission-catalog", headers=ws_headers(viewer, ws["id"]))
+    ).json()
+    assert not (set(stale_viewer_catalog["catalog"]) & set(perms.KEY_ONLY_PERMISSIONS))
+    assert not (set(stale_viewer_catalog["permissions"]) & set(perms.KEY_ONLY_PERMISSIONS))
+
 
 # ------------------------------------------------------------------ create
 
@@ -128,23 +150,68 @@ async def test_create_role_rejects_duplicate_name(app_client):
     assert resp.status_code == 409
 
 
+async def test_create_role_strips_padded_name(app_client):
+    # A padded name is stored stripped, so it stays reachable as an
+    # auto-join target instead of existing under a name nothing matches.
+    client = app_client
+    owner = await register_user(client, "cr3@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    resp = await client.post(
+        "/api/v1/roles", json={"name": "  ops  ", "permissions": []}, headers=headers
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == "ops"
+    assert await _role_id(client, headers, "ops")
+
+
+async def test_create_role_rejects_blank_name(app_client):
+    client = app_client
+    owner = await register_user(client, "cr4@example.com")
+    ws = await create_workspace(client, owner)
+    resp = await client.post(
+        "/api/v1/roles",
+        json={"name": "   ", "permissions": []},
+        headers=ws_headers(owner, ws["id"]),
+    )
+    assert resp.status_code == 422
+
+
+async def test_update_role_strips_padded_name(app_client):
+    client = app_client
+    owner = await register_user(client, "up3@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    created = (
+        await client.post("/api/v1/roles", json={"name": "ops", "permissions": []}, headers=headers)
+    ).json()
+    resp = await client.patch(
+        f"/api/v1/roles/{created['id']}", json={"name": "  operators  "}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["name"] == "operators"
+    resp = await client.patch(
+        f"/api/v1/roles/{created['id']}", json={"name": "   "}, headers=headers
+    )
+    assert resp.status_code == 422
+
+
 async def test_permission_catalog_excludes_legacy_key_only_scope(app_client):
     # A stale role row holding a legacy key-only scope must not resurface it.
-    from src.db.session import SessionFactory
-    from src.models.workspace import Role
-
+    # Read as an editor: the owner holds "*" and short-circuits the intersection.
     client = app_client
     owner = await register_user(client, "cat-legacy@example.com")
     ws = await create_workspace(client, owner)
     headers = ws_headers(owner, ws["id"])
-    editor_id = await _role_id(client, headers, "editor")
-    async with SessionFactory() as session:
-        role = await session.get(Role, editor_id)
-        role.permissions = [*role.permissions, "notification:read"]
-        await session.commit()
-    catalog = (await client.get("/api/v1/roles/permission-catalog", headers=headers)).json()
-    assert "notification:read" not in catalog["permissions"]
-    assert "notification:read" not in catalog["catalog"]
+    await _add_key_only_to_role(await _role_id(client, headers, "editor"), perms.NOTIFICATION_READ)
+    editor = await _add_member(client, owner, ws, "cat-legacy-editor@example.com", "editor")
+    catalog = (
+        await client.get("/api/v1/roles/permission-catalog", headers=ws_headers(editor, ws["id"]))
+    ).json()
+    assert perms.NOTIFICATION_READ not in catalog["permissions"]
+    assert perms.NOTIFICATION_READ not in catalog["catalog"]
+    # The editor's own scopes survive the intersection, so this is not an empty response.
+    assert set(catalog["permissions"]) == set(perms.permissions_for_role("editor"))
 
 
 async def test_create_role_rejects_key_only_permissions(app_client):

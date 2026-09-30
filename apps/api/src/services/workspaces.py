@@ -42,8 +42,8 @@ class WorkspaceNotFound(WorkspaceError):
 class WorkspaceService:
     DEFAULT_ROLES = ["owner", "admin", "editor", "viewer"]
 
-    # Auto-join role for single-workspace mode (SINGLE_WORKSPACE). Viewer:
-    # edit access requires explicit designation.
+    # Fallback auto-join role for single-workspace mode (SINGLE_WORKSPACE).
+    # Viewer: edit access requires explicit designation.
     SINGLE_WORKSPACE_ROLE = "viewer"
 
     def __init__(self, session: AsyncSession, bus: EventBus | None = None) -> None:
@@ -69,7 +69,8 @@ class WorkspaceService:
         """Ensure the shared workspace exists, then add the user idempotently.
 
         First arrival creates it (owned by them, normally the superadmin);
-        everyone else joins as viewer. Existing members keep their role."""
+        everyone else joins as single_workspace_default_role. Existing
+        members keep their role."""
         workspace = await self.get_single_workspace()
         if workspace is None:
             try:
@@ -343,8 +344,14 @@ class WorkspaceService:
         return await self._session.get(Workspace, workspace_id)
 
     async def get_membership(
-        self, workspace_id: str, user_id: str, *, active_only: bool = False
+        self, workspace_id: str, user_id: str, *, active_only: bool = True
     ) -> tuple[WorkspaceMember, Role] | None:
+        """Resolve (member, role) for a user in a workspace.
+
+        Defaults to active rows only, so a caller that forgets the flag cannot
+        read a suspended member as active. A caller asking about the row itself
+        rather than about access must pass `active_only=False`.
+        """
         stmt = (
             select(WorkspaceMember, Role)
             .join(Role, Role.id == WorkspaceMember.role_id)
@@ -613,25 +620,31 @@ class WorkspaceService:
             raise WorkspaceConflict("you already own this workspace")
         owner_role = await self._role_by_name(workspace_id, "owner")
         admin_role = await self._role_by_name(workspace_id, "admin")
+        target_role = await self._session.get(Role, target.role_id)
+        target_previous_role = target_role.name if target_role is not None else None
         target.role_id = owner_role.id
         actor_member.role_id = admin_role.id
         await self._session.commit()
 
         workspace = await self._session.get(Workspace, workspace_id)
         workspace_name = workspace.name if workspace else "workspace"
-        await publish_event(
-            self._bus,
-            Subjects.WORKSPACE_MEMBER_ROLE_CHANGED,
-            {
-                "workspace_id": workspace_id,
-                "workspace_name": workspace_name,
-                "user_id": target.user_id,
-                "from_role": None,
-                "to_role": "owner",
-                "changed_by_user_id": actor.id,
-                "changed_by_name": actor.display_name,
-            },
-        )
+        base = {
+            "workspace_id": workspace_id,
+            "workspace_name": workspace_name,
+            "changed_by_user_id": actor.id,
+            "changed_by_name": actor.display_name,
+        }
+        # The actor is the current owner (checked above), so both role changes
+        # belong to a user: the promotion and the owner's own demotion.
+        for user_id, from_role, to_role in (
+            (target.user_id, target_previous_role, owner_role.name),
+            (actor_member.user_id, owner_role.name, admin_role.name),
+        ):
+            await publish_event(
+                self._bus,
+                Subjects.WORKSPACE_MEMBER_ROLE_CHANGED,
+                {**base, "user_id": user_id, "from_role": from_role, "to_role": to_role},
+            )
         await publish_audit(
             self._bus,
             workspace_id=workspace_id,
@@ -661,8 +674,10 @@ class WorkspaceService:
         invite = await self._session.get(Invitation, invitation_id)
         if invite is None or invite.workspace_id != workspace_id:
             raise WorkspaceError("invitation not found")
-        if invite.status == "accepted":
-            raise WorkspaceConflict("invitation has already been accepted")
+        if invite.status in ("accepted", "revoked"):
+            raise WorkspaceConflict(
+                f"invitation is {invite.status} and cannot be re-sent; invite this address again"
+            )
         if invite.status == "pending" and ensure_utc(invite.expires_at) >= now_utc():
             return invite
         invite.status = "pending"
@@ -963,23 +978,22 @@ class WorkspaceService:
         return role
 
     async def _single_workspace_role(self, workspace_id: str) -> Role:
-        """Auto-join role: viewer, else the lowest non-owner system role.
+        """Auto-join role: SINGLE_WORKSPACE_DEFAULT_ROLE, else viewer.
 
-        Falls back when the viewer role was renamed/removed so a missing
-        role does not brick every later login in single-workspace mode."""
-        stmt = select(Role).where(Role.workspace_id == workspace_id)
-        result = await self._session.execute(stmt)
-        roles = list(result.scalars().all())
-        for role in roles:
-            if role.name == self.SINGLE_WORKSPACE_ROLE:
+        Matched by exact name over the workspace's non-owner roles, so a
+        custom role works too and an unknown, blank or "owner" value resolves
+        viewer. The wider chain keeps logins working when the viewer role
+        was renamed or removed, instead of bricking every later login."""
+        from src.settings import settings
+
+        result = await self._session.execute(select(Role).where(Role.workspace_id == workspace_id))
+        roles = {role.name: role for role in result.scalars() if role.name != "owner"}
+        names = (settings.single_workspace_default_role.strip(), self.SINGLE_WORKSPACE_ROLE)
+        for name in (*names, "editor", "admin"):
+            if role := roles.get(name):
                 return role
-        for fallback in ("editor", "admin"):
-            for role in roles:
-                if role.name == fallback:
-                    return role
-        non_owner = [r for r in roles if r.name != "owner"]
-        if non_owner:
-            return non_owner[0]
+        if roles:
+            return next(iter(roles.values()))
         raise WorkspaceError(f"role {self.SINGLE_WORKSPACE_ROLE} not found")
 
     async def _role_by_name(self, workspace_id: str, name: str) -> Role:
@@ -1036,7 +1050,7 @@ class WorkspaceService:
         assignable: set[str] = set()
         is_owner = False
         if actor is not None:
-            membership = await self.get_membership(workspace_id, actor.id)
+            membership = await self.get_membership(workspace_id, actor.id, active_only=True)
             if membership is not None:
                 _, actor_role = membership
                 is_owner = "*" in actor_role.permissions
@@ -1090,7 +1104,7 @@ class WorkspaceService:
             assignable: set[str] = set()
             is_owner = False
             if actor is not None:
-                membership = await self.get_membership(workspace_id, actor.id)
+                membership = await self.get_membership(workspace_id, actor.id, active_only=True)
                 if membership is not None:
                     _, actor_role = membership
                     is_owner = "*" in actor_role.permissions

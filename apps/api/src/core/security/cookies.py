@@ -8,6 +8,9 @@ reuse these helpers instead of reimplementing flags.
 
 from __future__ import annotations
 
+import re
+from urllib.parse import urlsplit
+
 from fastapi import HTTPException, Request, Response, status
 
 from src.settings import settings
@@ -19,10 +22,17 @@ CSRF_HEADER_VALUE = "XMLHttpRequest"
 def _is_https_request(request: Request | None) -> bool:
     """True when the request arrived over TLS (proxy-aware).
 
-    Uvicorn runs with --proxy-headers in prod, so request.url.scheme already
-    honors X-Forwarded-Proto; the explicit header check covers test clients
-    and servers without proxy-header handling. Port suffix (:443) covers
-    X-Forwarded-Host forms that carry no scheme."""
+    Uvicorn runs with --proxy-headers in prod (infra/docker/docker-compose.prod.yml:71),
+    so request.url.scheme already honors X-Forwarded-Proto; the explicit header
+    check covers test clients and servers without proxy-header handling. Port
+    suffix (:443) covers X-Forwarded-Host forms that carry no scheme, for a
+    proxy that forwards the host only.
+
+    The header reads are client-controlled and deliberately ignore uvicorn's
+    forwarded_allow_ips (prod sets --forwarded-allow-ips='*', so there is no
+    trusted boundary to check). They are fail-secure: they can only return
+    True, never strip Secure from a real https request. Narrowing
+    forwarded_allow_ips must come with a re-check of this function."""
     if request is None:
         return False
     if request.url.scheme == "https":
@@ -48,7 +58,9 @@ def cookie_secure_for(request: Request | None = None) -> bool:
     return settings.refresh_cookie_secure_effective
 
 
-def set_refresh_cookie(response: Response, token: str, request: Request | None = None) -> None:
+def set_refresh_cookie(response: Response, token: str, request: Request) -> None:
+    """Set the refresh cookie. `request` is required: the Secure flag is derived
+    from it, and a default would silently restore the ENVIRONMENT-based flag."""
     kwargs: dict = {
         "key": settings.refresh_cookie_name,
         "value": token,
@@ -94,20 +106,32 @@ def browser_flow(request: Request, body: object | None = None) -> bool:
     return request.headers.get("X-Session-Flow") == "cookie"
 
 
+def _origin_allowed(url: str) -> bool:
+    """True when an Origin (or Referer) URL is covered by CORS_ORIGINS.
+
+    Same rules as the CORS middleware: the exact entries plus the regex built
+    from the `*` entries, so a wildcard origin is not rejected as cross-site."""
+    parts = urlsplit(url)
+    if not parts.scheme or not parts.netloc:
+        return False
+    origin = f"{parts.scheme}://{parts.netloc}"
+    if origin in {o.rstrip("/") for o in settings.cors_origin_list}:
+        return True
+    pattern = settings.cors_origin_regex
+    return bool(pattern) and re.fullmatch(pattern, origin) is not None
+
+
 def require_csrf(request: Request) -> None:
     """Reject cross-site forged cookie requests on cookie-authenticated endpoints."""
     origin = request.headers.get("origin")
     referer = request.headers.get("referer")
-    allowed = set(settings.cors_origin_list)
     if origin is not None:
-        if origin.rstrip("/") not in {o.rstrip("/") for o in allowed}:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "cross-origin request rejected")
+        allowed = _origin_allowed(origin)
     elif referer is not None:
-        allowed_ref = any(
-            referer.startswith(o.rstrip("/") + "/") or referer.rstrip("/") == o.rstrip("/")
-            for o in allowed
-        )
-        if not allowed_ref:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "cross-origin request rejected")
+        allowed = _origin_allowed(referer)
+    else:
+        allowed = True
+    if not allowed:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "cross-origin request rejected")
     if request.headers.get(CSRF_HEADER) != CSRF_HEADER_VALUE:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "missing CSRF header")

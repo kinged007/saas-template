@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import func, select
 
 from src.db.session import SessionFactory
+from src.models.oauth import OAuthAccount
 from src.models.workspace import User
 from src.services import oauth as oauth_svc
 from src.settings import settings
@@ -24,6 +25,71 @@ PROVIDERS = [
     }
 ]
 
+# GitHub is plain OAuth2: no discovery document, no id_token, and /user hides
+# the address when the user keeps it private (emails_url carries it).
+GITHUB = {
+    "id": "github",
+    "display_name": "GitHub",
+    "authorize_url": "https://github.com/login/oauth/authorize",
+    "token_url": "https://github.com/login/oauth/access_token",
+    "userinfo_url": "https://api.github.com/user",
+    "emails_url": "https://api.github.com/user/emails",
+    "client_id": "cid",
+    "client_secret": "csecret",
+    "scopes": "read:user user:email",
+}
+
+
+class _Resp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+def _fake_httpx(monkeypatch, *, user, emails):
+    """Serve the token exchange, /user and /user/emails from literals; returns
+    the URLs requested. emails=None marks that endpoint as off-limits."""
+    calls: list[str] = []
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, **kwargs):
+            calls.append(url)
+            return _Resp({"access_token": "at", "access_token_type": "bearer"})
+
+        async def get(self, url, **kwargs):
+            calls.append(url)
+            if url.endswith("/emails"):
+                if emails is None:
+                    raise AssertionError(f"emails endpoint must not be called ({url})")
+                return _Resp(emails)
+            return _Resp(user)
+
+    monkeypatch.setattr(oauth_svc.httpx, "AsyncClient", _Client)
+    return calls
+
+
+@pytest.fixture
+def github_on(monkeypatch):
+    monkeypatch.setattr(settings, "oauth_providers", json.dumps([GITHUB]))
+    monkeypatch.setattr(settings, "auth_allow_registration", True)
+    yield
+    monkeypatch.setattr(settings, "oauth_providers", "")
+    monkeypatch.setattr(settings, "auth_allow_registration", True)
+
 
 @pytest.fixture
 def oauth_on(monkeypatch):
@@ -39,6 +105,11 @@ def oauth_on(monkeypatch):
 async def _user_count() -> int:
     async with SessionFactory() as s:
         return (await s.execute(select(func.count()).select_from(User))).scalar_one()
+
+
+async def _link_count() -> int:
+    async with SessionFactory() as s:
+        return (await s.execute(select(func.count()).select_from(OAuthAccount))).scalar_one()
 
 
 async def test_config_reflects_flags(app_client, oauth_on, monkeypatch):
@@ -96,7 +167,7 @@ def _mock_oauth(monkeypatch, *, sub="sub-1", email="sso@example.com"):
     monkeypatch.setattr(oauth_routes, "fetch_userinfo", fake_userinfo)
 
 
-async def _callback(app_client, monkeypatch, state="s"):
+async def _callback(app_client, monkeypatch, state="s", provider="testidp"):
     # Seed a valid state entry the way /authorize would.
     import src.api.routes.oauth as oauth_routes
 
@@ -104,10 +175,10 @@ async def _callback(app_client, monkeypatch, state="s"):
     from src.main import app as fastapi_app
 
     fastapi_app.state.container.cache.set(
-        oauth_svc.STATE_TTL_HINT + state, {"provider": "testidp", "redirect_uri": "http://test/cb"}
+        oauth_svc.STATE_TTL_HINT + state, {"provider": provider, "redirect_uri": "http://test/cb"}
     )
     resp = await app_client.get(
-        f"/api/v1/auth/oauth/testidp/callback?code=authcode&state={state}",
+        f"/api/v1/auth/oauth/{provider}/callback?code=authcode&state={state}",
         follow_redirects=False,
     )
     return fastapi_app.state.container.cache, resp
@@ -141,16 +212,19 @@ async def test_oauth_existing_user_links_by_subject(app_client, oauth_on, monkey
     assert await _user_count() == before  # linked, not duplicated
 
 
-async def test_oauth_multi_provider_same_email_links(app_client, oauth_on, monkeypatch):
+async def test_oauth_same_provider_new_subject_links_same_user(app_client, oauth_on, monkeypatch):
     _mock_oauth(monkeypatch)
     _, first = await _callback(app_client, monkeypatch, state="s1")
     assert first.status_code == 302
     before = await _user_count()
-    # Same email from a different subject still links to the same user.
+    # Same email from a different subject still links to the same user, which
+    # leaves two rows under one (user_id, provider) -- the documented
+    # one-to-many cardinality, not a duplicate user.
     _mock_oauth(monkeypatch, sub="sub-other")
     _, second = await _callback(app_client, monkeypatch, state="s2")
     assert second.status_code == 302
     assert await _user_count() == before
+    assert await _link_count() == 2
 
 
 async def test_oauth_new_user_blocked_when_registration_disabled(app_client, oauth_on, monkeypatch):
@@ -232,6 +306,81 @@ async def test_password_reset_blocked_when_password_disabled(app_client, monkeyp
         assert resp.json()["detail"] == "password login is disabled"
     finally:
         monkeypatch.setattr(settings, "auth_password_enabled", True)
+
+
+async def test_github_callback_uses_emails_endpoint_when_profile_email_null(
+    app_client, github_on, monkeypatch
+):
+    calls = _fake_httpx(
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None, "name": "The Octocat"},
+        emails=[
+            {"email": "alt@example.com", "primary": False, "verified": True},
+            {"email": "Octo@Example.com", "primary": True, "verified": True},
+        ],
+    )
+    before = await _user_count()
+    _, resp = await _callback(app_client, monkeypatch, state="g1", provider="github")
+    assert resp.status_code == 302
+    assert "https://api.github.com/user/emails" in calls
+    assert await _user_count() == before + 1
+    tokens = await app_client.post(
+        "/api/v1/auth/oauth/token", json={"code": resp.headers["location"].split("code=")[1]}
+    )
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens.json()))
+    assert me.status_code == 200, me.text
+    assert me.json()["email"] == "octo@example.com"  # primary, lowercased
+    async with SessionFactory() as s:
+        link = (
+            await s.execute(select(OAuthAccount).where(OAuthAccount.provider == "github"))
+        ).scalar_one()
+    assert link.subject == "4242"  # numeric account id, not the login
+
+
+async def test_github_refuses_unverified_email(app_client, github_on, monkeypatch):
+    _fake_httpx(
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=[{"email": "octo@example.com", "primary": True, "verified": False}],
+    )
+    before = await _user_count()
+    _, resp = await _callback(app_client, monkeypatch, state="g2", provider="github")
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+async def test_github_public_email_skips_emails_endpoint(app_client, github_on, monkeypatch):
+    calls = _fake_httpx(
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": "octo@example.com", "name": "The Octocat"},
+        emails=None,
+    )
+    before = await _user_count()
+    _, resp = await _callback(app_client, monkeypatch, state="g3", provider="github")
+    assert resp.status_code == 302
+    assert "/oauth/callback?code=" in resp.headers["location"]
+    assert not [c for c in calls if c.endswith("/emails")]
+    assert await _user_count() == before + 1
+
+
+async def test_github_subject_is_numeric_account_id(app_client, github_on, monkeypatch):
+    _fake_httpx(
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": "octo@example.com"},
+        emails=None,
+    )
+    _, first = await _callback(app_client, monkeypatch, state="g4", provider="github")
+    assert first.status_code == 302
+    # Renamed account: same numeric id, different login and email, same user.
+    _fake_httpx(
+        monkeypatch,
+        user={"id": 4242, "login": "octo-renamed", "email": "renamed@example.com"},
+        emails=None,
+    )
+    before = await _user_count()
+    _, second = await _callback(app_client, monkeypatch, state="g5", provider="github")
+    assert second.status_code == 302
+    assert await _user_count() == before
 
 
 async def test_oauth_error_redirect_allowlisted(app_client, oauth_on):

@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 from pydantic import Field, field_validator
@@ -39,7 +40,8 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
     # Browser session refresh cookie (HttpOnly; JS can never read it).
-    # refresh_cookie_secure=None (default) → Secure unless development.
+    # refresh_cookie_secure=None (default) → Secure on https requests; plain http
+    # falls back to Secure unless ENVIRONMENT is development or test.
     refresh_cookie_name: str = "st_refresh"
     refresh_cookie_domain: str = ""
     refresh_cookie_path: str = "/api/v1/auth"
@@ -68,9 +70,23 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = True
     smtp_timeout_s: float = 10.0
 
-    # CORS / frontend (comma-separated)
+    # CORS / frontend. cors_origins is comma-separated; an entry containing `*`
+    # is a pattern, where `*` stands for any run of origin characters and the
+    # scheme is optional (`*.example.com`, `http://localhost:*`). frontend_url
+    # is the single base URL for the links in emails and OAuth redirects.
     cors_origins: str = "http://localhost:5173"
     frontend_url: str = "http://localhost:5173"
+
+    @field_validator("frontend_url", mode="before")
+    @classmethod
+    def _frontend_url_keeps_first_concrete_entry(cls, v):
+        # Emails and redirects need one real URL, so a wildcard entry (or a
+        # copied comma list) resolves to the first origin without a `*`, and
+        # to the default when every entry is a pattern.
+        if not isinstance(v, str):
+            return v
+        entries = [o.strip() for o in v.split(",") if o.strip() and "*" not in o]
+        return entries[0] if entries else cls.model_fields["frontend_url"].default
 
     # Superadmin. The user who registers with this email becomes the
     # superuser (global jobs, etc.). Empty disables the bootstrap.
@@ -92,10 +108,15 @@ class Settings(BaseSettings):
     auth_rate_limit_window_seconds: int = 300
     # Single-workspace mode. When true, the first login/register creates the
     # one shared workspace (owned by whoever arrives first, normally the
-    # superadmin) and every later login/register auto-joins it as viewer.
-    # Creating a second workspace and deleting the workspace are rejected;
-    # the sidebar switcher and the delete danger-zone are hidden.
+    # superadmin) and every later login/register auto-joins it as
+    # single_workspace_default_role. Creating a second workspace and deleting
+    # the workspace are rejected; the sidebar switcher and the delete
+    # danger-zone are hidden.
     single_workspace: bool = False
+    # Role given to users who auto-join the single workspace: any of its
+    # system or custom role names. An unknown or blank name falls back to
+    # viewer (SINGLE_WORKSPACE_DEFAULT_ROLE=editor).
+    single_workspace_default_role: str = "viewer"
 
     # Scheduled jobs
     jobs_scheduler_tick_seconds: float = 10.0
@@ -107,6 +128,9 @@ class Settings(BaseSettings):
     jobs_log_retention_days: int = Field(default=90, ge=0)
     notifications_retention_days: int = Field(default=90, ge=0)
     audit_log_retention_days: int = Field(default=0, ge=0)
+    # Days a revoked or expired API key is kept before the apikeys.cleanup job
+    # hard-deletes it. 0 disables deletion.
+    api_key_retention_days: int = Field(default=30, ge=0)
 
     @property
     def database_url_sqlite(self) -> bool:
@@ -136,8 +160,34 @@ class Settings(BaseSettings):
         return self.environment not in ("development", "test")
 
     @property
-    def cors_origin_list(self) -> list[str]:
+    def _cors_origin_entries(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o for o in self._cors_origin_entries if "*" not in o]
+
+    @property
+    def cors_origin_regex(self) -> str | None:
+        """Origin regex from the wildcard CORS_ORIGINS entries; None when there are none.
+
+        Starlette fullmatches this against the Origin header. Every other part
+        of the entry is escaped, so only `*` stays open (it never matches a
+        `/`, so a pattern cannot span past the origin); an entry without a
+        scheme matches http and https, and the port is optional because an
+        Origin rarely carries it."""
+        patterns = []
+        for entry in self._cors_origin_entries:
+            if "*" not in entry:
+                continue
+            scheme, has_scheme, host = entry.partition("://")
+            if not has_scheme:
+                scheme, host = "", entry
+            patterns.append(
+                f"{re.escape(scheme) if has_scheme else 'https?'}://"
+                f"{re.escape(host).replace(re.escape('*'), '[^/]+')}(?::[0-9]+)?"
+            )
+        return "|".join(patterns) or None
 
     @property
     def oauth_provider_list(self) -> list[dict]:

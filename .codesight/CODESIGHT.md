@@ -350,7 +350,6 @@
 - **WorkspaceProvider** — `apps/web/src/contexts/WorkspaceContext.tsx`
 - **MOBILE_BREAKPOINT** — `apps/web/src/hooks/use-mobile.tsx`
 - **LinkBase** — props: href, className — `apps/web/src/lib/markdown.tsx`
-- **AdminPage** — `apps/web/src/pages/AdminPage.tsx`
 - **ApiKeyCreatePage** — `apps/web/src/pages/ApiKeyCreatePage.tsx`
 - **ApiKeysPage** — `apps/web/src/pages/ApiKeysPage.tsx`
 - **DashboardPage** — `apps/web/src/pages/DashboardPage.tsx`

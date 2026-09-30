@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+from datetime import datetime
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.dates import now_utc
+from src.core.dates import ensure_utc, now_utc
 from src.core.permissions import ALL_PERMISSIONS_INCLUDING_KEY_ONLY, KEY_ONLY_PERMISSIONS
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
@@ -77,6 +78,7 @@ class ApiKeyService:
         ip_address: str | None = None,
         minting_key: ApiKey | None = None,
         usage_quota: int | None = None,
+        expires_at: datetime | None = None,
     ) -> tuple[ApiKey, str]:
         """Create a key whose permissions are capped by the actor's own.
 
@@ -108,6 +110,8 @@ class ApiKeyService:
 
         if usage_quota is not None and usage_quota < 0:
             raise ApiKeyError("usage quota cannot be negative")
+        if expires_at is not None and ensure_utc(expires_at) <= now_utc():
+            raise ApiKeyError("expiry must be in the future")
 
         raw = self.generate()
         key = ApiKey(
@@ -118,6 +122,9 @@ class ApiKeyService:
             permissions=sorted(requested),
             created_by_user_id=actor.id,
             usage_quota=usage_quota,
+            # Normalize to UTC on write: SQLite's DateTime drops the offset and
+            # stores the wall clock, which would shift the instant auth compares.
+            expires_at=ensure_utc(expires_at) if expires_at is not None else None,
         )
         self._session.add(key)
         await self._session.commit()
@@ -133,6 +140,7 @@ class ApiKeyService:
                 "permissions": key.permissions,
                 "created_by_user_id": actor.id,
                 "created_by_name": actor.display_name,
+                "expires_at": key.expires_at.isoformat() if key.expires_at else None,
             },
         )
         await publish_audit(
@@ -216,22 +224,48 @@ class ApiKeyService:
         return key
 
     async def authenticate(self, raw: str) -> ApiKey | None:
-        """Resolve a raw bearer secret to an active key, or None."""
+        """Resolve a raw bearer secret to an active key, or None.
+
+        A key past its `expires_at` is rejected here rather than relying on the
+        cleanup job, so expiry takes effect the moment it passes.
+        """
         stmt = select(ApiKey).where(ApiKey.key_hash == self._hash(raw))
         result = await self._session.execute(stmt)
         key = result.scalar_one_or_none()
         if key is None or key.revoked_at is not None:
             return None
+        if key.expires_at is not None and ensure_utc(key.expires_at) <= now_utc():
+            return None
         return key
 
-    async def touch(self, key: ApiKey) -> None:
+    async def touch(self, key: ApiKey) -> bool:
         # ponytail: lifetime counter, never reset (usage_quota is a lifetime
         # cap); add a window start column + rollover here when true monthly
         # quotas are needed.
-        """Record a successful use: bump the usage counter + last_used_at."""
-        key.usage_count += 1
-        key.last_used_at = now_utc()
+        """Record a successful use: bump the usage counter + last_used_at.
+
+        Returns False and leaves the row alone when the quota is already
+        spent. The counter bump and the quota test are one conditional
+        UPDATE, so two requests that read usage_count before either writes
+        race on this statement alone and only the first can spend the last
+        unit. `refresh` keeps the caller's key in step with the row (the
+        session does not expire on commit), so quota headers read
+        post-increment values and a later flush cannot write the old count
+        back."""
+        result = await self._session.execute(
+            update(ApiKey)
+            .where(
+                ApiKey.id == key.id,
+                or_(ApiKey.usage_quota.is_(None), ApiKey.usage_count < ApiKey.usage_quota),
+            )
+            .values(usage_count=ApiKey.usage_count + 1, last_used_at=now_utc())
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount == 0:
+            return False
         await self._session.commit()
+        await self._session.refresh(key)
+        return True
 
     async def set_quota(
         self,

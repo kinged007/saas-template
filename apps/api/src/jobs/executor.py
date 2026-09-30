@@ -19,6 +19,7 @@ from sqlalchemy import update
 from src.core.dates import now_utc
 from src.core.security.crypto import SecretCipher
 from src.db.session import SessionFactory
+from src.events.bus import EventBus
 from src.jobs.capture import (
     CapturedEntry,
     RunLogCollector,
@@ -129,7 +130,7 @@ class _LogPersister:
         self._collector.requeue(entries)
 
 
-async def execute_run(run_id: str) -> None:
+async def execute_run(run_id: str, bus: EventBus | None = None) -> None:
     """Claim and execute one job run. Safe to call for an unknown/claimed run.
 
     Workspace runs whose workspace (or definition) no longer exists fail fast
@@ -211,6 +212,7 @@ async def execute_run(run_id: str) -> None:
         job_key=definition.key,
         workspace_id=definition.workspace_id,
         params=params,
+        bus=bus,
     )
 
     install_run_capture()

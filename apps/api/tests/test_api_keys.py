@@ -1,4 +1,5 @@
 import hashlib
+from datetime import datetime
 
 from tests.conftest import (
     auth_headers,
@@ -8,10 +9,10 @@ from tests.conftest import (
 )
 
 
-async def _create_key(client, headers, name="ci-deploy", permissions=None):
+async def _create_key(client, headers, name="ci-deploy", permissions=None, body=None):
     resp = await client.post(
         "/api/v1/api-keys",
-        json={"name": name, "permissions": permissions or []},
+        json={"name": name, "permissions": permissions or [], **(body or {})},
         headers=headers,
     )
     assert resp.status_code == 201, resp.text
@@ -51,6 +52,38 @@ async def test_owner_can_create_list_and_use_api_key(app_client):
     assert "key" not in item
     assert item["key_prefix"].startswith("sk_live_")
     assert item["last_used_at"] is not None  # touch() ran on the members call
+
+
+async def test_api_key_timestamps_are_offset_aware(app_client):
+    """Every timestamp in the payload carries its UTC offset.
+
+    A naive ISO string makes `new Date(...)` parse as local time in the
+    browser, so a key renders at a different wall clock than `Expires`.
+    """
+    client = app_client
+    owner = await register_user(client, "tess@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    key = await _create_key(
+        client,
+        headers,
+        permissions=["member:read"],
+        body={"expires_at": "2027-01-01T00:00:00Z"},
+    )
+    # a real call so touch() populates last_used_at, then revoke
+    key_headers = {"Authorization": f"Bearer {key['key']}", "X-Workspace-ID": ws["id"]}
+    assert (await client.get("/api/v1/members", headers=key_headers)).status_code == 200
+    resp = await client.delete(f"/api/v1/api-keys/{key['id']}", headers=headers)
+    assert resp.status_code == 204
+
+    listed = await client.get("/api/v1/api-keys", headers=headers)
+    assert listed.status_code == 200
+    item = next(k for k in listed.json() if k["id"] == key["id"])
+    for field in ("created_at", "expires_at", "last_used_at", "revoked_at"):
+        assert item[field] is not None, field
+        stamp = datetime.fromisoformat(item[field])
+        assert stamp.utcoffset() is not None, f"{field}: {item[field]}"
 
 
 async def test_api_key_is_capped_by_owner_permissions(app_client):
@@ -310,3 +343,68 @@ async def test_list_requires_workspace_header(app_client):
     await create_workspace(client, owner)
     resp = await client.get("/api/v1/api-keys", headers=auth_headers(owner))
     assert resp.status_code == 400
+
+
+async def test_unsorted_list_defaults_to_created_at_desc(app_client):
+    """No sort in the request must still yield a total order: created_at desc,
+    id desc as tiebreaker. created_at is server_default=now() (second
+    granularity on SQLite), so a burst of keys ties — the tiebreaker is what
+    keeps the order total, and the tie is asserted so it cannot silently go."""
+    client = app_client
+    owner = await register_user(client, "wren@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    for i in range(5):
+        await _create_key(client, headers, name=f"k{i}")
+
+    resp = await client.get("/api/v1/api-keys", params={"limit": 10}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert len({k["created_at"] for k in rows}) < len(rows), "expected a created_at tie"
+
+    expected = sorted(rows, key=lambda k: (k["created_at"], k["id"]), reverse=True)
+    assert [k["id"] for k in rows] == [k["id"] for k in expected]
+
+
+async def test_unsorted_paging_partitions_the_set(app_client):
+    """With the default order, every row lands on exactly one page."""
+    client = app_client
+    owner = await register_user(client, "vera@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    for i in range(5):
+        await _create_key(client, headers, name=f"k{i}")
+
+    async def page(offset, limit):
+        resp = await client.get(
+            "/api/v1/api-keys",
+            params={"offset": offset, "limit": limit},
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    full = await page(0, 10)
+    paged = [k for offset in (0, 2, 4) for k in await page(offset, 2)]
+    assert [k["id"] for k in paged] == [k["id"] for k in full]
+
+
+async def test_explicit_sort_overrides_the_default_order(app_client):
+    client = app_client
+    owner = await register_user(client, "xena@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    for i in range(3):
+        await _create_key(client, headers, name=f"k{i}")
+
+    resp = await client.get(
+        "/api/v1/api-keys",
+        params={"sort[]": "created_at", "order[]": "asc", "limit": 10},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert [k["name"] for k in rows] == ["k0", "k1", "k2"]
