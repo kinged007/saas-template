@@ -233,7 +233,8 @@ def build_workflows(
 
         Delivery failure is not fatal: the invitation row is already committed
         and this handler runs after the response, so a failed send is audited
-        (`invitation.email_failed`) for the workspace to resend.
+        (`invitation.email_failed`). `resend` skips a still-pending, unexpired
+        invitation, so that audit entry is the signal to revoke and re-invite.
         """
         if payload.get("is_registered"):
             return
@@ -274,6 +275,8 @@ def build_workflows(
         logger.error("invitation email failed for %s (invitation %s)", email, invitation_id)
         if not invitation_id:
             return
+        # Published after the send, so a failing publish nacks the message and
+        # the invite email is delivered again.
         await publish_audit(
             bus,
             correlation_id=metadata.correlation_id,
@@ -281,7 +284,11 @@ def build_workflows(
             resource_type="invitation",
             resource_id=invitation_id,
             action="invitation.email_failed",
-            details={"email": email},
+            details={
+                "email": email,
+                "invited_by_user_id": payload.get("invited_by_user_id"),
+                "invited_by_name": payload.get("invited_by_name"),
+            },
         )
 
     async def on_workspace_created(payload: dict, metadata) -> None:

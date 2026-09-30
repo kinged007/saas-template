@@ -743,8 +743,9 @@ class WorkspaceService:
         is_registered = existing is not None
 
         # Fired for every invitation. The workflow emails unregistered
-        # recipients; a failed send is audited, not raised, and the
-        # invitation stays pending for `POST /invitations/{id}/resend`.
+        # recipients; a failed send is audited (`invitation.email_failed`),
+        # not raised. `resend` skips a still-pending, unexpired invitation, so
+        # the audit entry is the signal to revoke the row and invite again.
         await publish_event(
             self._bus,
             Subjects.WORKSPACE_INVITATION_CREATED,
