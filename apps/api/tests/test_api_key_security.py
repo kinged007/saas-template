@@ -50,10 +50,10 @@ async def _add_member(client, owner_headers, ws_id, email, role_name):
     return member
 
 
-async def _create_key(client, headers, name, permissions):
+async def _create_key(client, headers, name, permissions, usage_quota=None):
     resp = await client.post(
         "/api/v1/api-keys",
-        json={"name": name, "permissions": permissions},
+        json={"name": name, "permissions": permissions, "usage_quota": usage_quota},
         headers=headers,
     )
     assert resp.status_code == 201, resp.text
@@ -76,14 +76,26 @@ async def _seed_runs(workspace_id: str) -> dict[str, str]:
     import uuid
 
     from src.core.dates import now_utc
-    from src.models.jobs import JobRun
+    from src.models.jobs import JobDefinition, JobRun
 
     ids: dict[str, str] = {}
     async with SessionFactory() as session:
-        for name, ws_id in (("global", None), ("workspace", workspace_id)):
+        definition = JobDefinition(
+            id=str(uuid.uuid4()),
+            key="test.seeded",
+            workspace_id=workspace_id,
+            name="Seeded",
+            cron_schedule="0 0 * * *",
+        )
+        session.add(definition)
+        ids["definition"] = definition.id
+        for name, ws_id, definition_id in (
+            ("global", None, str(uuid.uuid4())),
+            ("workspace", workspace_id, definition.id),
+        ):
             run = JobRun(
                 id=str(uuid.uuid4()),
-                definition_id=str(uuid.uuid4()),
+                definition_id=definition_id,
                 workspace_id=ws_id,
                 status="success",
                 scheduled_at=now_utc(),
@@ -829,6 +841,27 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
         assert resp.status_code == 403, (url, resp.text)
     resp = await client.get(f"/api/v1/jobs/runs/{foreign}", headers=viewer_headers)
     assert resp.status_code == 404, resp.text
+
+    # A key-authorized hit is metered like any other key route: the run, its
+    # logs and the definition routes all spend one unit and report what is
+    # left. Regression test for #311 — the key branch of _require_run_access
+    # and _require_job_access used to return without record_key_use.
+    for url, key_name in [
+        (f"/api/v1/jobs/runs/{runs['workspace']}", "quota-run"),
+        (f"/api/v1/jobs/runs/{runs['workspace']}/logs", "quota-logs"),
+        (f"/api/v1/jobs/{runs['definition']}", "quota-definition"),
+    ]:
+        capped = await _create_key(client, headers, key_name, ["jobs:read"], usage_quota=1)
+        capped_headers = _key_headers(capped["key"], ws["id"])
+        first = await client.get(url, headers=capped_headers)
+        assert first.status_code == 200, (url, first.text)
+        assert first.headers["X-API-Key-Quota"] == "1", url
+        assert first.headers["X-API-Key-Remaining"] == "0", url
+
+        # quota exhausted → 403, and the refusal does not spend again
+        second = await client.get(url, headers=capped_headers)
+        assert second.status_code == 403, (url, second.text)
+        assert "quota" in second.json()["detail"].lower(), url
 
 
 async def test_key_cannot_enroll_two_factor(app_client):
