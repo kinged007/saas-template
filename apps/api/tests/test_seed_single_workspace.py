@@ -110,11 +110,15 @@ async def test_seed_registers_fixture_when_canonical_workspace_has_no_owner_memb
     No membership holds the owner role, so the guard's `owner is None` arm is
     what admits the workspace. The app blocks every route to this state —
     `remove_member`, `leave_workspace` and `set_member_role` all refuse the
-    owner, and roles cannot be deleted — so the branch is defensive. The test
-    reaches it the only way the seed could see it in production: an
-    out-of-band write of `role_id`. The demo admin is not a member here, so the
-    fixture attaches on registration and the seed creates API keys,
-    invitations and notifications for the workspace.
+    owner, and roles can be neither deleted nor renamed (`update_role` refuses
+    the owner role too) — so the branch is defensive. The test reaches it the
+    only way the seed could see it in production: an out-of-band write of
+    `role_id`.
+
+    The demo admin is not a member here, so `seed.py` drops `ci-deploy` and
+    `automation` at its membership guard; `editor-script` still lands because the
+    `MEMBERSHIPS` loop made `user1` an editor of this workspace. Invitations and
+    notifications are keyed on the slug alone and are not gated on membership.
     """
     monkeypatch.setattr(settings, "single_workspace", False)
     async with SessionFactory() as session:
