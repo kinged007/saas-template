@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { canResendInvitation, canRevokeInvitation } from "./invitation-actions.ts";
+import { canResendInvitation, canRevokeInvitation, invitationStatus } from "./invitation-actions.ts";
 
 const inv = (status: string, expired = false) => ({ status, expired });
 
@@ -29,4 +29,16 @@ test("canResendInvitation needs an expired pending row", () => {
   // A fresh pending row is a no-op server-side: the service returns it unchanged.
   assert.equal(canResendInvitation(inv("pending", false)), false);
   assert.equal(canResendInvitation(inv("pending", true)), true);
+});
+
+test("invitationStatus reports an expired pending row as expired", () => {
+  // A plain pending badge next to a past expiry date reads as still live.
+  assert.equal(invitationStatus(inv("pending", true)), "expired");
+  assert.equal(invitationStatus(inv("pending", false)), "pending");
+});
+
+test("invitationStatus leaves the other statuses alone", () => {
+  assert.equal(invitationStatus(inv("accepted")), "accepted");
+  assert.equal(invitationStatus(inv("revoked", true)), "revoked");
+  assert.equal(invitationStatus(inv("declined")), "declined");
 });
