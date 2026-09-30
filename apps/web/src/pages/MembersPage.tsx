@@ -312,7 +312,8 @@ export function MembersPage() {
                     <TableCell className="text-muted-foreground">{formatDate(i.expires_at)}</TableCell>
                     <TableCell className="text-muted-foreground">{formatDate(i.created_at)}</TableCell>
                     <TableCell className="text-right">
-                      {i.status === "pending" && !i.expired && (
+                      {/* revoke and resend are owner/admin role checks server-side */}
+                      {canManageRoles && i.status === "pending" && !i.expired && (
                         <DeleteButton
                           resource="invitations"
                           recordItemId={i.id}
@@ -320,7 +321,9 @@ export function MembersPage() {
                           size="sm"
                         />
                       )}
-                      {(i.status !== "pending" || i.expired) && i.status !== "accepted" && (
+                      {canManageRoles &&
+                        (i.status !== "pending" || i.expired) &&
+                        i.status !== "accepted" && (
                         <Button
                           variant="ghost"
                           size="sm"

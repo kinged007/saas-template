@@ -2,6 +2,7 @@ import asyncio  # noqa: E402
 
 import pytest
 
+import src.core.permissions as perms
 from tests.conftest import (
     auth_headers,
     create_workspace,
@@ -453,6 +454,7 @@ async def test_resend_invitation_requires_a_manager_actor(app_client):
     async with SessionFactory() as session:
         service = WorkspaceService(session)
         viewer_user = await session.get(User, viewer_id)
+        assert viewer_user is not None
         with pytest.raises(WorkspaceForbidden):
             await service.resend_invitation(ws["id"], target.json()["id"], actor=viewer_user)
         with pytest.raises(TypeError):
@@ -461,3 +463,91 @@ async def test_resend_invitation_requires_a_manager_actor(app_client):
             ws["id"], target.json()["id"], actor=await session.get(User, owner_id)
         )
         assert resent.status == "pending"
+
+
+async def test_resend_invitation_route_403s_a_non_manager_recruiter(app_client):
+    """The route guard is a role check, so a `member:create` recruiter is refused
+    with 403 (not 404) even for an id that does not exist — the guard runs before
+    the lookup, so the response is not an existence oracle."""
+    client = app_client
+    owner = await register_user(client, "recruiter-owner@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+
+    role = await client.post(
+        "/api/v1/roles",
+        json={"name": "invite-op", "permissions": [perms.MEMBER_CREATE]},
+        headers=owner_headers,
+    )
+    assert role.status_code == 201, role.text
+    role_id = role.json()["id"]
+
+    recruiter_invite = await client.post(
+        "/api/v1/invitations",
+        json={"email": "recruiter@example.com", "role_id": role_id},
+        headers=owner_headers,
+    )
+    assert recruiter_invite.status_code == 201, recruiter_invite.text
+    recruiter = await register_user(client, "recruiter@example.com")
+    accepted = await client.post(
+        "/api/v1/invitations/accept",
+        params={"token": recruiter_invite.json()["token"]},
+        headers=auth_headers(recruiter),
+    )
+    assert accepted.status_code == 200, accepted.text
+    recruiter_headers = ws_headers(recruiter, ws["id"])
+
+    # the recruiter can still create invites: the denial is role-scoped
+    recruiter_target = await client.post(
+        "/api/v1/invitations",
+        json={"email": "recruiter-target@example.com", "role_id": role_id},
+        headers=recruiter_headers,
+    )
+    assert recruiter_target.status_code == 201, recruiter_target.text
+
+    for invitation_id in (recruiter_target.json()["id"], "does-not-exist"):
+        resp = await client.post(
+            f"/api/v1/invitations/{invitation_id}/resend", headers=recruiter_headers
+        )
+        assert resp.status_code == 403, (invitation_id, resp.status_code, resp.text)
+
+
+async def test_revoke_invitation_route_403s_a_non_manager(app_client):
+    """`revoke_invitation` carries the same owner/admin guard as `resend_invitation`."""
+    client = app_client
+    owner = await register_user(client, "revoke-owner@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+    viewer = next(
+        r
+        for r in (await client.get("/api/v1/roles", headers=owner_headers)).json()
+        if r["name"] == "viewer"
+    )
+
+    viewer_invite = await client.post(
+        "/api/v1/invitations",
+        json={"email": "revoke-viewer@example.com", "role_id": viewer["id"]},
+        headers=owner_headers,
+    )
+    assert viewer_invite.status_code == 201, viewer_invite.text
+    viewer_tokens = await register_user(client, "revoke-viewer@example.com")
+    accepted = await client.post(
+        "/api/v1/invitations/accept",
+        params={"token": viewer_invite.json()["token"]},
+        headers=auth_headers(viewer_tokens),
+    )
+    assert accepted.status_code == 200, accepted.text
+    viewer_headers = ws_headers(viewer_tokens, ws["id"])
+
+    target = await client.post(
+        "/api/v1/invitations",
+        json={"email": "revoke-target@example.com", "role_id": viewer["id"]},
+        headers=owner_headers,
+    )
+    assert target.status_code == 201, target.text
+
+    resp = await client.delete(f"/api/v1/invitations/{target.json()['id']}", headers=viewer_headers)
+    assert resp.status_code == 403, (resp.status_code, resp.text)
+
+    ok = await client.delete(f"/api/v1/invitations/{target.json()['id']}", headers=owner_headers)
+    assert ok.status_code == 204, (ok.status_code, ok.text)

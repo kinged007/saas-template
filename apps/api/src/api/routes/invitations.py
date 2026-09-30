@@ -14,6 +14,7 @@ from src.api.deps import (
     get_optional_workspace_id,
     require_key_permission,
     require_permission,
+    require_session_user,
     resolve_auth_principal,
 )
 from src.core.dates import ensure_utc, now_utc
@@ -115,7 +116,9 @@ async def revoke_invitation(
     invitation_id: str,
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
-    user=Depends(get_current_user),
+    # Session-only: the service-layer guard is an owner/admin *role* check, which
+    # an API key would inherit from its creator.
+    user=Depends(require_session_user),
     _=Depends(require_permission(MEMBER_DELETE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
@@ -127,6 +130,8 @@ async def revoke_invitation(
             actor=user,
             ip_address=request.client.host if request.client else None,
         )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
 
@@ -187,7 +192,9 @@ async def resend_invitation(
     invitation_id: str,
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
-    user=Depends(get_current_user),
+    # Session-only: the service-layer guard is an owner/admin *role* check, which
+    # an API key would inherit from its creator and use to act as the owner.
+    user=Depends(require_session_user),
     _=Depends(require_permission(MEMBER_CREATE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
