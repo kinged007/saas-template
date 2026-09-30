@@ -28,6 +28,7 @@ async def _expire_invitation(invitation_id: str) -> None:
         row.expires_at = now_utc() - timedelta(minutes=5)
         await session.commit()
 
+
 async def _invite_and_join(client, owner_tokens, ws, email: str, role_name: str = "viewer"):
     owner_headers = ws_headers(owner_tokens, ws["id"])
     invite = await client.post(
@@ -241,6 +242,7 @@ async def test_resend_rejects_accepted_invitation(app_client):
         f"/api/v1/invitations/{invite.json()['id']}/resend", headers=owner_headers
     )
     assert resp.status_code == 409, resp.text
+
 
 async def test_resend_rejects_revoked_invitation(app_client):
     """Revoke is terminal: Re-send must not put the row back in the invitee's inbox."""

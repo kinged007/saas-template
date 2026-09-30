@@ -117,7 +117,10 @@ def permissions_for_role(role_name: str) -> list[str]:
         case "owner":
             return [*all_, "*"]
         case "admin":
-            # everything except deleting the workspace itself
+            # everything except deleting the workspace itself. Adding a
+            # capability here also grants it to every existing unedited admin
+            # role at the next boot (sync_system_role_permissions), so a
+            # takeover-capable scope like profile:update needs a callout.
             return [p for p in all_ if p not in {WORKSPACE_DELETE}]
         case "editor":
             return [

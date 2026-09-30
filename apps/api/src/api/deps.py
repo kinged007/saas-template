@@ -278,7 +278,7 @@ async def can_target_profile_update(
     """True when the caller may read and edit `user_id`'s full profile.
 
     Self and deployment admins always may. Everyone else needs `profile:update`
-    in `X-Workspace-ID` plus a membership for the target in that same
+    in `X-Workspace-ID` plus an active membership for the target in that same
     workspace, so the scope never reaches a user outside the caller's own
     workspace. Without the header there is no workspace to evaluate the
     permission against, so only self and deployment admins pass — the redacted
@@ -309,9 +309,10 @@ async def _target_profile_update(
     if workspace_id is None:
         return False
     await require_permission(PROFILE_UPDATE)(response, db, principal, workspace_id)
-    # Any membership row, not only active ones: a suspended member's profile is
-    # still theirs to fix, and the caller already passed an active-membership
-    # check of their own inside require_permission.
+    # Any membership row that counts for access, i.e. an *active* one: a
+    # suspended member is out of the workspace's editable set, so the target
+    # lookup 404s exactly like a user who was never a member. The caller still
+    # passed an active-membership check of their own inside require_permission.
     membership = await WorkspaceService(db).get_membership(workspace_id, user_id)
     if membership is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found in this workspace")

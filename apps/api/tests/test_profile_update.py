@@ -31,6 +31,7 @@ async def _membership_id(client, tokens: dict, ws: dict, user_id: str) -> str:
     assert resp.status_code == 200, resp.text
     return next(m["membership_id"] for m in resp.json() if m["id"] == user_id)
 
+
 async def _wait_for(predicate, timeout_secs: float = 3.0, interval: float = 0.02) -> bool:
     loop = asyncio.get_event_loop()
     deadline = loop.time() + timeout_secs
@@ -263,9 +264,10 @@ async def test_put_replaces_the_target_profile(app_client):
     assert resp.json()["first_name"] == "Put"
 
 
-async def test_suspended_member_is_still_editable(app_client):
-    """The guard takes any membership row, not only active ones: a suspended
-    member's profile is still theirs to fix."""
+async def test_suspended_target_is_not_editable(app_client):
+    """The guard asks about access, so it takes active membership rows only: a
+    suspended target is out of the editable set and reads as absent (404), the
+    same as a user who was never a member. The guard's docstring says so."""
     client = app_client
     owner = await register_user(client, "ada@example.com")
     ws = await create_workspace(client, owner)
@@ -279,10 +281,10 @@ async def test_suspended_member_is_still_editable(app_client):
 
     resp = await client.patch(
         f"/api/v1/users/{target['id']}/profile",
-        json={"bio": "still editable"},
+        json={"bio": "not editable"},
         headers=ws_headers(admin, ws["id"]),
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 404, resp.text
 
 
 # ------------------------------------------------- notification settings
@@ -545,6 +547,11 @@ async def test_passwords_longer_than_bcrypt_allows_are_422(app_client):
         headers=auth_headers(admin),
     )
     assert resp.status_code == 422, resp.text
+    resp = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "long@example.com", "first_name": "Long", "password": "A" * 100},
+    )
+    assert resp.status_code == 422, resp.text
 
 
 async def test_a_renamed_owner_role_is_still_protected(app_client):
@@ -635,6 +642,7 @@ async def test_delegated_writes_are_audited_under_the_workspace(app_client):
     row = await password_event()
     assert row.workspace_id == ws["id"]
     assert row.actor_user_id == admin["id"]
+
 
 async def test_editor_cannot_list_target_sessions(app_client):
     client = app_client
