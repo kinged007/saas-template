@@ -23,7 +23,10 @@ export const ACCESS_TOKEN = [
  * (@refinedev/simple-rest maps the body straight to `data`); `/auth/config`
  * must report registration_enabled, or RegisterPage bounces to /login.
  */
-export async function mockApi(page: Page, { signedIn }: { signedIn: boolean }) {
+export async function mockApi(
+  page: Page,
+  { signedIn, identity = IDENTITY }: { signedIn: boolean; identity?: unknown },
+) {
   await page.route("**/api/v1/**", async (route) => {
     const reply = (status: number, body: unknown) =>
       route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
@@ -34,7 +37,7 @@ export async function mockApi(page: Page, { signedIn }: { signedIn: boolean }) {
     }
     if (pathname.endsWith("/auth/me")) {
       if (!signedIn) return reply(401, { detail: "Not authenticated" });
-      return reply(200, IDENTITY);
+      return reply(200, identity);
     }
     if (pathname.endsWith("/auth/config")) {
       return reply(200, {

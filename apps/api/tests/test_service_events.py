@@ -61,6 +61,7 @@ async def _expire(invitation_id: str) -> None:
         row.expires_at = now_utc() - timedelta(minutes=5)
         await session.commit()
 
+
 async def _invite_member(bus, owner_id, workspace, email, role_name="editor"):
     async with SessionFactory() as session:
         service = WorkspaceService(session, bus)
