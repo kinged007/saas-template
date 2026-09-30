@@ -929,8 +929,8 @@ async def test_one_quota_unit_cannot_be_spent_twice(app_client):
         one, two = await first.get(ApiKey, capped["id"]), await second.get(ApiKey, capped["id"])
         assert (one.usage_count, two.usage_count) == (0, 0)
 
-        assert await ApiKeyService(first).touch(one) is True
-        assert await ApiKeyService(second).touch(two) is False
+        assert await ApiKeyService(first).record_use(one) is True
+        assert await ApiKeyService(second).record_use(two) is False
 
     async with SessionFactory() as verify:
         row = await verify.get(ApiKey, capped["id"])

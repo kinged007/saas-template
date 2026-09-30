@@ -92,6 +92,7 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 | Password (non-browser) | `POST /auth/login` → access + refresh in JSON; `POST /auth/refresh` takes `{"refresh_token"}` as before |
 | 2FA / OAuth (browser) | `POST /auth/2fa/login` / `POST /auth/oauth/token` with `use_cookies: true` set the same cookie and omit the JSON refresh; the OAuth one-time code handoff carries only the access token for cookie callers |
 | API keys | `Authorization: Bearer <key>`; permissions resolved per workspace (untouched by the cookie flow) |
+| Identity | `GET /auth/me` → current user + workspaces + permissions + embedded `profile` (auto-created, same shape as `GET /me/profile`) |
 
 API key quota: a key with a `usage_quota` is capped per calendar month (UTC).
 `X-API-Key-Quota` / `X-API-Key-Remaining` report the month's limit and the uses
@@ -108,12 +109,11 @@ use a short negative-cache on `(sid -> revoked)` with TTL, not a redesign.
 Pre-deploy access tokens without `sid` are grandfathered (valid until
 expiry, ≤15 min residual window).
 
-Upgrading from a release without the quota window: migration `0017` seeds
+Upgrading from a release without the quota window: migration `0019` seeds
 `usage_window_count` from the lifetime `usage_count`, so a key that had already
 exhausted its old lifetime quota stays rejected until the next month boundary.
 From that boundary on every key gets a fresh monthly budget, so a key that had
 *not* exhausted its old lifetime cap is now renewable rather than one-shot.
-| Identity | `GET /auth/me` → current user + workspaces + permissions + embedded `profile` (auto-created, same shape as `GET /me/profile`) |
 
 ## 6. Events & pub/sub
 
