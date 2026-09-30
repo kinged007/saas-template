@@ -4,6 +4,7 @@ import dataProviderModule from "@refinedev/simple-rest";
 
 import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId, sessionHint } from "../utils/storage";
 import { clearAllCaches, queryClient } from "./queryClient";
+import { withRefreshLock } from "./refreshLock";
 
 // Same-origin API path: the vite dev proxy (and nginx in production) forwards
 // /api → backend, so no CORS/absolute-URL issues regardless of how the app is
@@ -79,7 +80,7 @@ async function tryRefresh(): Promise<boolean> {
     // The refresh token travels in the HttpOnly cookie (withCredentials) —
     // JS never sees it.
     const capturedAccess = tokenStore.getAccess();
-    refreshPromise = (async () => {
+    refreshPromise = withRefreshLock(async () => {
       try {
         const { data } = await axios.post(
           `${API_URL}/auth/refresh`,
@@ -100,7 +101,7 @@ async function tryRefresh(): Promise<boolean> {
       } finally {
         refreshPromise = null;
       }
-    })();
+    });
   }
   return refreshPromise;
 }

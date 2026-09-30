@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Literal
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +22,11 @@ VERIFY_TOKEN_TTL = timedelta(hours=24)
 
 RESET_PURPOSE = "password_reset"
 VERIFY_PURPOSE = "email_verification"
+
+# The only revoke reason that arms the refresh-token-reuse signal.
+ROTATED = "rotated"
+
+RevokeSessionsAction = Literal["user.sessions_revoked", "user.refresh_token_reuse"]
 
 logger = logging.getLogger(__name__)
 
@@ -323,22 +329,41 @@ class AuthService:
         row = result.scalar_one_or_none()
         if row is None:
             raise AuthError("invalid refresh token")
+        # Expired first: an old rotated row is a replay of a dead token, not a
+        # compromise, and must not take the user's live sessions down with it.
+        if ensure_utc(row.expires_at) < now_utc():
+            raise AuthError("refresh token expired")
         if row.revoked_at is not None:
-            # already rotated: presenting it again is a compromise signal
+            if row.revoke_reason != ROTATED:
+                # Revoked by a user action (logout, "revoke other sessions",
+                # password change). Replaying it is a stale cookie, not theft.
+                raise AuthError("invalid refresh token")
+            # Already rotated: presenting it again is a compromise signal.
             logger.warning("refresh token reuse user=%s session=%s", row.user_id, row.id)
-            await self.revoke_other_sessions(
+            revoked = await self.revoke_other_sessions(
                 row.user_id,
                 current_session_id=None,
                 ip_address=ip_address,
                 action="user.refresh_token_reuse",
+                revoke_reason="reuse",
+                # The replay proves a token escaped, not who sent it, and one
+                # rotation can be two tabs of a browser racing. The attacker
+                # holds a token older than every session still live.
+                actor_user_id=None,
+                details={"session_id": row.id, "revoked_at": row.revoked_at.isoformat()},
             )
+            if revoked:
+                logger.warning(
+                    "sessions revoked after refresh token reuse user=%s count=%d",
+                    row.user_id,
+                    revoked,
+                )
             raise AuthError("invalid refresh token")
-        if ensure_utc(row.expires_at) < now_utc():
-            raise AuthError("refresh token expired")
         user = await self._session.get(User, row.user_id)
         if user is None or not user.is_active:
             raise AuthError("account is disabled")
         row.revoked_at = now_utc()
+        row.revoke_reason = ROTATED
         await self._session.commit()
         pair = await self.issue_tokens(user, ip_address=ip_address, user_agent=user_agent)
         await publish_audit(
@@ -370,6 +395,7 @@ class AuthService:
             raise AuthError("session not found")
         if row.revoked_at is None:
             row.revoked_at = now_utc()
+            row.revoke_reason = "user"
             await self._session.commit()
             logger.info("session revoked user=%s session=%s", user_id, session_id)
             await publish_audit(
@@ -389,18 +415,30 @@ class AuthService:
         *,
         current_session_id: str | None,
         ip_address: str | None = None,
-        action: str = "user.sessions_revoked",
+        action: RevokeSessionsAction = "user.sessions_revoked",
+        revoke_reason: str = "user",
+        actor_user_id: str | None = None,
+        details: dict[str, object] | None = None,
     ) -> int:
-        """Revoke every live session except the current one; returns the count."""
-        rows = await self.list_sessions(user_id)
+        """Revoke every live session except the current one; returns the count.
+
+        ``actor_user_id`` defaults to ``user_id`` (the user did it themselves);
+        pass ``None`` for actions with no known actor, such as token reuse.
+        """
         now = now_utc()
-        count = 0
-        for r in rows:
-            if r.id == current_session_id:
-                continue
-            if r.revoked_at is None and ensure_utc(r.expires_at) >= now:
-                r.revoked_at = now
-                count += 1
+        conditions = [
+            RefreshToken.user_id == user_id,
+            RefreshToken.revoked_at.is_(None),
+            RefreshToken.expires_at >= now,
+        ]
+        if current_session_id is not None:
+            conditions.append(RefreshToken.id != current_session_id)
+        result = await self._session.execute(
+            update(RefreshToken)
+            .where(*conditions)
+            .values(revoked_at=now, revoke_reason=revoke_reason)
+        )
+        count = int(result.rowcount or 0)
         if count:
             await self._session.commit()
             logger.info("other sessions revoked user=%s count=%d", user_id, count)
@@ -410,8 +448,8 @@ class AuthService:
                 resource_type="user",
                 resource_id=user_id,
                 action=action,
-                actor_user_id=user_id,
-                details={"revoked_count": count},
+                actor_user_id=user_id if actor_user_id is None else actor_user_id,
+                details={**(details or {}), "revoked_count": count},
                 ip_address=ip_address,
             )
         return count
@@ -445,6 +483,7 @@ class AuthService:
         if row is not None:
             user_id = row.user_id
             row.revoked_at = now_utc()
+            row.revoke_reason = "logout"
             await self._session.commit()
             await publish_audit(
                 self._bus,
@@ -532,7 +571,7 @@ class AuthService:
                 RefreshToken.user_id == user.id,
                 RefreshToken.revoked_at.is_(None),
             )
-            .values(revoked_at=now_utc())
+            .values(revoked_at=now_utc(), revoke_reason="password")
         )
         await self._session.commit()
         await publish_audit(
@@ -560,7 +599,7 @@ class AuthService:
                 RefreshToken.user_id == user.id,
                 RefreshToken.revoked_at.is_(None),
             )
-            .values(revoked_at=now_utc())
+            .values(revoked_at=now_utc(), revoke_reason="password")
         )
         await self._session.commit()
         await publish_audit(

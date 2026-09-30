@@ -560,6 +560,7 @@ async def revoke_all_sessions(
         principal.user.id,
         current_session_id=principal.session_id,
         ip_address=_client_ip(request),
+        actor_user_id=principal.user.id,
     )
 
 

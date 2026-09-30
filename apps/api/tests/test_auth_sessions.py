@@ -1,3 +1,6 @@
+from datetime import timedelta
+
+from src.core.dates import now_utc
 from tests.conftest import auth_headers, login, register_user
 
 
@@ -19,13 +22,11 @@ async def test_revoked_session_access_token_rejected(app_client):
     resp = await client.get("/api/v1/auth/me", headers=h1)
     assert resp.status_code == 401, resp.text
     assert resp.json()["detail"] == "session revoked"
-    # the surviving session keeps working until the revoked token is replayed
+    # the surviving session keeps working — t1 died by user action, not rotation,
+    # so replaying it is a stale cookie and must not arm the compromise path
     resp = await client.get("/api/v1/auth/me", headers=h2)
     assert resp.status_code == 200, resp.text
     resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
-    assert resp.status_code == 401, resp.text
-    # replaying it is refresh-token reuse: the surviving session goes too
-    resp = await client.get("/api/v1/auth/me", headers=h2)
     assert resp.status_code == 401, resp.text
 
 
@@ -137,10 +138,76 @@ async def test_revoke_all_sessions(app_client):
     remaining = resp.json()
     assert len(remaining) == 1
     assert remaining[0]["current"] is True
-    # replaying the revoked token is reuse, and takes the surviving session too
+    # t1 was revoked by the user, not by a rotation: stale cookie, not a replay.
+    # t2's live session is untouched.
     resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
     assert resp.status_code == 401
     resp = await client.post(
         "/api/v1/auth/refresh", json={"refresh_token": rotated["refresh_token"]}
     )
-    assert resp.status_code == 401
+    assert resp.status_code == 200, resp.text
+
+async def test_concurrent_refresh_of_one_token_is_deterministic(app_client):
+    """Two racing rotations of one token: exactly one wins, nobody is locked out.
+
+    The SPA serialises this with the Web Locks API (see providers/refreshLock.ts),
+    so the server only sees it from a client that does not. The invariant that
+    matters is that it stays deterministic and reversible: one 200, one 401, and
+    the account is never disabled.
+    """
+    import asyncio
+
+    client = app_client
+    await register_user(client, "race@example.com")
+    t2 = await login(client, "race@example.com")
+
+    first, second = await asyncio.gather(
+        client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]}),
+        client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]}),
+    )
+    assert sorted([first.status_code, second.status_code]) == [200, 401]
+    loser = first if first.status_code == 401 else second
+    assert loser.json()["detail"] == "invalid refresh token"
+
+    # signed out, not disabled: the user can always get back in
+    t3 = await login(client, "race@example.com")
+    resp = await client.get("/api/v1/auth/me", headers=auth_headers(t3))
+    assert resp.status_code == 200, resp.text
+
+
+async def test_expired_rotated_token_does_not_revoke_sessions(app_client):
+    """A rotated row that has since expired is dead, not stolen — expiry wins."""
+    from src.core.security.tokens import OpaqueToken
+    from src.db.session import SessionFactory
+    from src.models.workspace import RefreshToken
+    from sqlalchemy import select
+
+    client = app_client
+    await register_user(client, "expired-rotate@example.com")
+    keep = await login(client, "expired-rotate@example.com")
+    stale = await login(client, "expired-rotate@example.com")
+
+    rotated = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": stale["refresh_token"]}
+    )
+    assert rotated.status_code == 200, rotated.text
+
+    async with SessionFactory() as session:
+        row = (
+            await session.execute(
+                select(RefreshToken).where(
+                    RefreshToken.token_hash == OpaqueToken.hash(stale["refresh_token"])
+                )
+            )
+        ).scalar_one()
+        assert row.revoke_reason == "rotated"
+        row.expires_at = now_utc() - timedelta(minutes=1)
+        await session.commit()
+
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": stale["refresh_token"]})
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["detail"] == "refresh token expired"
+
+    # the untouched session is still live: an expired replay revoked nothing
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": keep["refresh_token"]})
+    assert resp.status_code == 200, resp.text

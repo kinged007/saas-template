@@ -68,6 +68,10 @@ class RefreshToken(Base, TimestampMixin):
     token_hash: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     expires_at: Mapped[object] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Why the row died: rotated | user | logout | password | reuse.
+    # Only "rotated" means "was exchanged, so a replay is a compromise" — the
+    # other values are ordinary user actions and must not arm that signal.
+    revoke_reason: Mapped[str | None] = mapped_column(String(20), nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
 

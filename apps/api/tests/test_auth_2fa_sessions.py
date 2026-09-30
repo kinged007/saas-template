@@ -60,11 +60,12 @@ async def test_sessions_list_and_revoke(app_client):
     # revoked sessions disappear from the list; the current one remains
     resp = await client.get("/api/v1/auth/sessions", headers=headers)
     assert [s["id"] for s in resp.json()] == [sessions[0]["id"]]
-    # replaying the revoked token is refresh-token reuse: 401, current session revoked
+    # replaying a token the user revoked by hand is not a compromise signal:
+    # the acting session survives, and the replay is a plain 401.
     resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": other["refresh_token"]})
     assert resp.status_code == 401
-    resp = await client.get("/api/v1/auth/sessions", headers=headers)
-    assert resp.status_code == 401, resp.text
+    resp = await client.get("/api/v1/auth/me", headers=headers)
+    assert resp.status_code == 200, resp.text
 
 
 async def test_revoked_session_access_token_rejected(app_client):
