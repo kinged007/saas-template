@@ -301,10 +301,12 @@ async def test_cookie_secure_follows_forwarded_proto(app_client):
     assert "Secure" in resp.headers.get("set-cookie", ""), resp.headers.get("set-cookie")
     plain = await app_client.post(
         "/api/v1/auth/login",
-        json={"email": "fwdproto@example.com", "password": "Password123!"},
+        json={"email": "fwdproto@example.com", "password": "Password123!", "use_cookies": True},
     )
     assert plain.status_code == 200, plain.text
-    assert "Secure" not in plain.headers.get("set-cookie", "")
+    raw = plain.headers.get("set-cookie", "")
+    assert _cookie_name() in raw, raw
+    assert "Secure" not in raw, raw
 
 
 async def test_cookie_secure_explicit_override_wins(monkeypatch, app_client):
@@ -333,6 +335,24 @@ async def test_cookie_secure_explicit_override_wins(monkeypatch, app_client):
     plain = await app_client.post("/api/v1/auth/login", json=body)
     assert plain.status_code == 200, plain.text
     assert "Secure" in plain.headers.get("set-cookie", ""), plain.headers.get("set-cookie")
+
+
+async def test_cookie_secure_plain_http_in_production_is_secure(monkeypatch, app_client):
+    """Fallback clause: plain http with nothing set is Secure outside dev/test.
+
+    The other two clauses are pinned by the tests above; this is the branch
+    that returns `refresh_cookie_secure_effective`. Under ENVIRONMENT=test the
+    suite only ever sees its non-Secure side, so the production-like side
+    needs its own login to be covered.
+    """
+    await register_user(app_client, "prodsec@example.com")
+    monkeypatch.setattr(settings, "environment", "production")
+    resp = await app_client.post(
+        "/api/v1/auth/login",
+        json={"email": "prodsec@example.com", "password": "Password123!", "use_cookies": True},
+    )
+    assert resp.status_code == 200, resp.text
+    assert "Secure" in _set_cookie(resp)
 
 
 def _plain_request(headers: dict[str, str] | None = None, scheme: str = "http"):
