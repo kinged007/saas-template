@@ -173,10 +173,19 @@ def _quota_headers(api_key: ApiKey, now: datetime) -> dict[str, str]:
 async def record_key_use(api_key: ApiKey, db: AsyncSession, response: Response) -> None:
     """Count the use + emit quota headers for key-authenticated requests.
 
+    Invariant: every branch that authorizes an API key must charge through
+    this function, or the key is unmetered — a hand-rolled `api_key is not
+    None` branch that skips it is the bug this guards against. The 403 comes
+    from the conditional UPDATE's rowcount, never from a pre-read, so two
+    concurrent requests cannot both spend the last unit.
+
     Shared by require_key_permission and require_permission so the two
     branches cannot drift. One clock read feeds the rollover, the counter and
     the reset header, so they cannot disagree. The rejection carries the same
     headers, which a client that has run out needs more than one that has not.
+    `response` is what makes the charge observable (the quota headers); a
+    caller that omits it still charges, but cannot see the balance it just
+    spent.
     """
     now = now_utc()
     if not await ApiKeyService(db).record_use(api_key, now):
