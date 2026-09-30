@@ -344,8 +344,14 @@ class WorkspaceService:
         return await self._session.get(Workspace, workspace_id)
 
     async def get_membership(
-        self, workspace_id: str, user_id: str, *, active_only: bool = False
+        self, workspace_id: str, user_id: str, *, active_only: bool = True
     ) -> tuple[WorkspaceMember, Role] | None:
+        """Resolve (member, role) for a user in a workspace.
+
+        Defaults to active rows only, so a caller that forgets the flag cannot
+        read a suspended member as active. A caller asking about the row itself
+        rather than about access must pass `active_only=False`.
+        """
         stmt = (
             select(WorkspaceMember, Role)
             .join(Role, Role.id == WorkspaceMember.role_id)
@@ -1042,7 +1048,7 @@ class WorkspaceService:
         assignable: set[str] = set()
         is_owner = False
         if actor is not None:
-            membership = await self.get_membership(workspace_id, actor.id)
+            membership = await self.get_membership(workspace_id, actor.id, active_only=True)
             if membership is not None:
                 _, actor_role = membership
                 is_owner = "*" in actor_role.permissions
@@ -1096,7 +1102,7 @@ class WorkspaceService:
             assignable: set[str] = set()
             is_owner = False
             if actor is not None:
-                membership = await self.get_membership(workspace_id, actor.id)
+                membership = await self.get_membership(workspace_id, actor.id, active_only=True)
                 if membership is not None:
                     _, actor_role = membership
                     is_owner = "*" in actor_role.permissions

@@ -275,7 +275,9 @@ async def main() -> None:
             )
             if existing.scalar_one_or_none() is not None:
                 continue
-            if await ws_service.get_membership(workspace.id, user.id) is None:
+            # `active_only=False`: the question is whether a member row exists
+            # for the demo admin at all, and a suspended row is still a row.
+            if await ws_service.get_membership(workspace.id, user.id, active_only=False) is None:
                 # The canonical workspace pre-existed and its owner is not the
                 # demo admin, who never auto-joins (no login event yet).
                 logger.info("skipped api key %s in %s: %s is not a member", name, slug, email)
