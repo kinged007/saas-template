@@ -6,6 +6,7 @@ import { ArrowLeft, Inbox, Mail, MailOpen, ExternalLink, SendHorizontal, Pencil,
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { markdownComponents, markdownComponentsInverted, highlightMentions, mentionUrlTransform, stripMarkdown, truncate as truncatePreview } from "@/lib/markdown";
+import { notificationLinkUrl } from "@/lib/notificationLink";
 import { activeWorkspacePermissions } from "../utils/permissions";
 
 import { Badge } from "@/components/ui/badge";
@@ -366,7 +367,6 @@ export function InboxPage() {
     if (next.acknowledged) markNotifRead(cur.id);
     else markNotifUnread(cur.id);
   };
-  const linkUrl = (n: Notification) => (n.payload as Record<string, unknown> | undefined)?.url as string | undefined;
 
   // Conversation actions
   const handleSelectConv = (id: string) => {
@@ -1175,9 +1175,9 @@ export function InboxPage() {
                   <Markdown components={markdownComponents}>{selectedNotif.body || ""}</Markdown>
                 </div>
                 <div className="border-border mt-6 flex items-center gap-2 border-t pt-4">
-                  {linkUrl(selectedNotif) && (
+                  {notificationLinkUrl(selectedNotif) && (
                     <Button size="sm" variant="outline" asChild>
-                      <a href={linkUrl(selectedNotif)} target="_blank" rel="noopener noreferrer">
+                      <a href={notificationLinkUrl(selectedNotif)} target="_blank" rel="noopener noreferrer">
                         <ExternalLink className="mr-1 h-3.5 w-3.5" />
                         Open link
                       </a>
