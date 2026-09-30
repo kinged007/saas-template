@@ -44,6 +44,7 @@ import type { Identity, Member } from "@/types";
 import { getMemberDisplayName } from "@/types";
 import { WorkspaceExportCard } from "@/components/WorkspaceExportCard";
 import { workspaceStore } from "@/utils/storage";
+import { resolveTransferTarget, transferEligibleMembers } from "./transfer-ownership";
 
 const schema = z.object({
   name: z.string().min(1, "Name is required").max(150, "Max 150 characters"),
@@ -78,23 +79,23 @@ export function GeneralSection() {
   const invalidate = useInvalidate();
   const [transferId, setTransferId] = useState("");
   const isOwner = workspace?.role === "owner";
-  const transferCandidates = (membersResult?.data ?? []).filter(
-    (m) => m.role !== "owner" && m.status === "active",
-  );
+  const transferCandidates = transferEligibleMembers(membersResult?.data ?? []);
   // SelectValue without children renders the placeholder forever, so the trigger
   // needs the picked member as its own text — same expression the options use.
-  const transferTarget = transferCandidates.find((m) => m.membership_id === transferId);
+  // A transferId that stopped resolving on a refetch leaves transferTarget
+  // undefined, which is what disarms the button below.
+  const transferTarget = resolveTransferTarget(transferCandidates, transferId);
   const transferTargetLabel = transferTarget
     ? `${getMemberDisplayName(transferTarget)} (${transferTarget.email})`
     : "";
 
   const transferOwnership = () => {
-    if (!workspace || !transferId) return;
+    if (!workspace || !transferTarget) return;
     transfer(
       {
         url: `workspaces/${workspace.id}/transfer`,
         method: "post",
-        values: { new_owner_membership_id: transferId },
+        values: { new_owner_membership_id: transferTarget.membership_id },
         successNotification: false,
         errorNotification: false,
       },
@@ -321,7 +322,7 @@ export function GeneralSection() {
                     variant="destructive"
                     className="sm:self-end"
                     onClick={transferOwnership}
-                    disabled={!transferId || transferMutation.isPending}
+                    disabled={!transferTarget || transferMutation.isPending}
                   >
                     {transferMutation.isPending ? "Transferring…" : "Transfer ownership"}
                   </Button>
