@@ -48,6 +48,10 @@ from src.services.notifications import NotificationService
 
 logger = logging.getLogger(__name__)
 
+# Frontend route the invitation notification's "Open" button links to. The dev
+# seed (src/seed.py) imports it, so the two payload sides cannot drift.
+INVITATIONS_ROUTE = "/invitations"
+
 
 async def _create_notification(
     session, bus: EventBus, *, correlation_id: str | None = None, **kwargs
@@ -115,7 +119,7 @@ def build_workflows(
                     # NotificationCenter renders an "Open" button only when
                     # the payload carries a url; without it the invite is a
                     # dead end.
-                    "url": "/invitations",
+                    "url": INVITATIONS_ROUTE,
                 },
                 correlation_id=metadata.correlation_id,
             )
