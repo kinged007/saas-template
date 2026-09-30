@@ -14,7 +14,20 @@ export default defineConfig({
   // per-test options, so they sit at the top level rather than under `use`.
   timeout: 90_000,
   expect: { timeout: 10_000 },
-  use: { baseURL },
+  // Without a reporter a CI run is a dot log and an exit code, so a red job
+  // said nothing about which spec failed or why. The HTML report is what gets
+  // uploaded; `open: "never"` because a failing run must not hang on a server.
+  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
+  use: {
+    baseURL,
+    // A retained trace is the only record of the DOM, network and console of a
+    // failure that is gone by the time anyone reads the log.
+    trace: "retain-on-failure",
+    // "on-first-retry" would never fire with retries: 0, so every failure
+    // gets one. ponytail: no retries, a flake is red rather than green on a
+    // second run; add `retries` when a flake actually shows up.
+    screenshot: "only-on-failure",
+  },
   webServer: {
     command: `npm run dev -- --port ${PORT} --strictPort`,
     url: baseURL,
