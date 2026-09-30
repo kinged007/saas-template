@@ -310,3 +310,68 @@ async def test_list_requires_workspace_header(app_client):
     await create_workspace(client, owner)
     resp = await client.get("/api/v1/api-keys", headers=auth_headers(owner))
     assert resp.status_code == 400
+
+
+async def test_unsorted_list_defaults_to_created_at_desc(app_client):
+    """No sort in the request must still yield a total order: created_at desc,
+    id desc as tiebreaker. created_at is server_default=now() (second
+    granularity on SQLite), so a burst of keys ties — the tiebreaker is what
+    keeps the order total, and the tie is asserted so it cannot silently go."""
+    client = app_client
+    owner = await register_user(client, "wren@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    for i in range(5):
+        await _create_key(client, headers, name=f"k{i}")
+
+    resp = await client.get("/api/v1/api-keys", params={"limit": 10}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert len({k["created_at"] for k in rows}) < len(rows), "expected a created_at tie"
+
+    expected = sorted(rows, key=lambda k: (k["created_at"], k["id"]), reverse=True)
+    assert [k["id"] for k in rows] == [k["id"] for k in expected]
+
+
+async def test_unsorted_paging_partitions_the_set(app_client):
+    """With the default order, every row lands on exactly one page."""
+    client = app_client
+    owner = await register_user(client, "vera@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    for i in range(5):
+        await _create_key(client, headers, name=f"k{i}")
+
+    async def page(offset, limit):
+        resp = await client.get(
+            "/api/v1/api-keys",
+            params={"offset": offset, "limit": limit},
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    full = await page(0, 10)
+    paged = [k for offset in (0, 2, 4) for k in await page(offset, 2)]
+    assert [k["id"] for k in paged] == [k["id"] for k in full]
+
+
+async def test_explicit_sort_overrides_the_default_order(app_client):
+    client = app_client
+    owner = await register_user(client, "xena@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    for i in range(3):
+        await _create_key(client, headers, name=f"k{i}")
+
+    resp = await client.get(
+        "/api/v1/api-keys",
+        params={"sort[]": "created_at", "order[]": "asc", "limit": 10},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert [k["name"] for k in rows] == ["k0", "k1", "k2"]
