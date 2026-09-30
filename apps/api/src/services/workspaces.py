@@ -4,7 +4,7 @@ import secrets
 import uuid
 from datetime import timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1031,11 +1031,18 @@ class WorkspaceService:
     async def _check_name_free(
         self, workspace_id: str, name: str, *, exclude_id: str | None = None
     ) -> None:
-        stmt = select(Role).where(Role.workspace_id == workspace_id, Role.name == name)
+        # Case-insensitive: an "Admin" beside the seeded "admin" is a second,
+        # indistinguishable row in listings and selects. `.first()`, not
+        # `scalar_one_or_none()`: a workspace created before the case-insensitive
+        # check can already hold such a pair, and the predicate then matches both.
+        stmt = select(Role).where(
+            Role.workspace_id == workspace_id, func.lower(Role.name) == name.lower()
+        )
         if exclude_id is not None:
             stmt = stmt.where(Role.id != exclude_id)
-        if (await self._session.execute(stmt)).scalar_one_or_none() is not None:
-            raise WorkspaceConflict(f"a role named '{name}' already exists")
+        existing = (await self._session.execute(stmt)).scalars().first()
+        if existing is not None:
+            raise WorkspaceConflict(f"a role named '{existing.name}' already exists")
 
     async def create_custom_role(
         self,
