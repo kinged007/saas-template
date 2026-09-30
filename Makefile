@@ -91,6 +91,7 @@ setup:
 		fi; \
 		if command -v node >/dev/null 2>&1; then \
 			echo "==> Node.js ready: $$(node --version)"; \
+			$(MAKE) --no-print-directory check-node; \
 		else \
 			echo "==> Done — open a new terminal (or run: source ~/.bashrc) so node is on PATH"; \
 		fi; \
@@ -103,6 +104,7 @@ check-node:
 		NODE_VERSION=$$(node --version); NODE_VERSION=$${NODE_VERSION#v}; \
 		NODE_MAJOR=$${NODE_VERSION%%.*}; \
 		NODE_MINOR=$${NODE_VERSION#*.}; NODE_MINOR=$${NODE_MINOR%%.*}; NODE_MINOR=$${NODE_MINOR:-0}; \
+		case "$$NODE_MAJOR$$NODE_MINOR" in *[!0-9]*) exit 0;; esac; \
 		if [ "$$NODE_MAJOR" -lt $(WEB_NODE_MAJOR) ] || \
 		   { [ "$$NODE_MAJOR" -eq $(WEB_NODE_MAJOR) ] && [ "$$NODE_MINOR" -lt $(WEB_NODE_MINOR) ]; }; then \
 			echo "    warning: apps/web requires Node >= $(WEB_NODE_MAJOR).$(WEB_NODE_MINOR) (found $$NODE_VERSION) — 'make web-test' needs its native TS type stripping"; \
@@ -162,9 +164,11 @@ web:
 	cd apps/web && API_PORT=$(API_PORT) WEB_PORT=$(WEB_PORT) npm run dev
 
 web-build:
+	@$(MAKE) --no-print-directory check-node
 	cd apps/web && npm run build
 
 web-test:
+	@$(MAKE) --no-print-directory check-node
 	cd apps/web && npm test
 
 web-typecheck:
