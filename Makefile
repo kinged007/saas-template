@@ -151,6 +151,7 @@ web-test:
 	cd apps/web && npm test
 
 web-typecheck:
+	@if [ ! -x apps/web/node_modules/.bin/tsc ]; then echo "error: apps/web/node_modules/.bin/tsc missing — run 'make web-install' first"; exit 1; fi
 	cd apps/web && npx tsc -p tsconfig.json --noEmit
 
 web-test-e2e:
