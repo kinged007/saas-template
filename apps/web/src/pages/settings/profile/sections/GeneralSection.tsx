@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { useGetIdentity, useNavigation } from "@refinedev/core";
+import { useGetIdentity, useGo, useNavigation } from "@refinedev/core";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -144,6 +145,11 @@ export function GeneralSection() {
   const { mutate: deleteAccount, mutation: deleteMutation } = useDeleteAccount();
   const isDeleting = deleteMutation.isPending;
   const { list } = useNavigation();
+  const go = useGo();
+  // The member editor is reachable from Members and from Workspace Settings →
+  // Users; `?from` keeps Cancel returning to whichever list opened it.
+  const [searchParams] = useSearchParams();
+  const returnTo = searchParams.get("from");
 
   const [initialized, setInitialized] = useState(false);
   // A new target means new values: re-initialize the form for them.
@@ -193,8 +199,8 @@ export function GeneralSection() {
         location: (getProfileField(profile, "location", "") as string) || "",
         avatar_url:
           (getProfileField(profile, "avatar_url", "") as string) ||
-          (identity?.avatar_url as string) ||
-          "",
+          // identity.avatar_url is the signed-in user's: only a fallback here.
+          (targetId ? "" : ((identity?.avatar_url as string) ?? "")),
       });
       setInitialized(true);
     }
@@ -451,7 +457,7 @@ export function GeneralSection() {
               />
 
               <div className="flex justify-end gap-2 pt-4">
-                <Button type="button" variant="outline" onClick={() => list(targetId ? "members" : "workspaces")}>
+                <Button type="button" variant="outline" onClick={() => (returnTo ? go({ to: returnTo }) : list(targetId ? "members" : "workspaces"))}>
                   Cancel
                 </Button>
                 <Button type="submit" disabled={isSaving}>

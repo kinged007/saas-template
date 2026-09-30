@@ -14,9 +14,14 @@ export { getProfileField };
  * The target editor is routed as `users/:id/settings/*`; the self routes carry
  * no `:id`, so the route itself is the switch. Every section in a settings
  * registry reads it, which is what makes a new tab target-aware for free.
+ *
+ * Your own id is the self page, not a delegated editor: the editor's routes
+ * manage other members and the entries are hidden on your own row.
  */
 export function useTargetUserId(): string | null {
-  return useParams().id ?? null;
+  const { data: identity } = useGetIdentity<Identity>();
+  const id = useParams().id ?? null;
+  return id && id !== identity?.id ? id : null;
 }
 
 import { API_URL, httpClient } from "../providers/dataProvider";

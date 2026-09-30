@@ -1,4 +1,4 @@
-import { useCan, useGo } from "@refinedev/core";
+import { useCan, useGetIdentity, useGo } from "@refinedev/core";
 import { useWorkspaceList } from "../../../../hooks/useWorkspaceQuery";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,7 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import { EmptyRow, formatDate } from "@/components/ui";
 import { UserAvatar } from "@/components/ui/user-avatar";
-import type { Member } from "@/types";
+import type { Identity, Member } from "@/types";
 import { getMemberDisplayName } from "@/types";
 
 export function UsersSection() {
@@ -15,6 +15,7 @@ export function UsersSection() {
   const isLoading = query.isPending;
   // Profile editing is a distinct scope from role management (member:update).
   const { data: canEditProfiles } = useCan({ resource: "member-profiles", action: "edit" });
+  const { data: identity } = useGetIdentity<Identity>();
   const go = useGo();
 
   return (
@@ -80,11 +81,15 @@ export function UsersSection() {
                           <TableCell className="capitalize">{m.status}</TableCell>
                           <TableCell className="text-muted-foreground">{formatDate(m.joined_at)}</TableCell>
                           <TableCell className="text-right">
-                            {canEditProfiles?.can && (
+                            {/* The editor targets other members: your own profile
+                                lives in Settings → Profile. */}
+                            {canEditProfiles?.can && m.id !== identity?.id && (
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => go({ to: `/users/${m.id}/settings` })}
+                                onClick={() =>
+                                  go({ to: `/users/${m.id}/settings?from=/settings/workspace/users` })
+                                }
                               >
                                 Edit
                               </Button>

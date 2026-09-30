@@ -194,7 +194,10 @@ export function MembersPage() {
                 <TableCell className="text-muted-foreground">{formatDate(m.joined_at)}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-1">
-                    {canEditProfiles?.can && (
+                    {/* The editor targets other members: your own profile lives
+                        in Settings → Profile, where the delegated session and
+                        password routes would refuse to act on you. */}
+                    {canEditProfiles?.can && m.id !== identity?.id && (
                       <Button
                         variant="ghost"
                         size="sm"
