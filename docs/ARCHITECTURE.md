@@ -152,7 +152,7 @@ Durable subjects (persisted, one workflow per subject, load-balanced):
 | `workspaces.member.joined` | notify the inviter + other active members |
 | `workspaces.member.role_changed` | notify the member whose role changed |
 | `workspaces.member.removed` | notify the removed member |
-| `workspaces.invitation.created` | email hook for unregistered invites (TODO) |
+| `workspaces.invitation.created` | email hook for unregistered invites |
 | `workspaces.created` | provisioning/analytics hook (TODO) |
 | `audit.entry.created` | persist an AuditLogEntry row |
 | `apikeys.created` / `apikeys.revoked` | security/monitoring hook (TODO) |

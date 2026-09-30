@@ -1,6 +1,6 @@
 """API-level tests: member workflows (joined / role_changed / removed) produce
 in-app notifications for the right users, and invitation workflows notify
-registered invitees.
+registered invitees and email unregistered ones.
 
 The app wires the full workflow registry into the in-process bus, so a
 published member event must end up as Notification rows after the background
@@ -217,6 +217,46 @@ async def test_member_removed_notifies_the_removed_member(app_client):
         )
         row = result.scalars().first()
     assert row.payload["removed_by"] == "Test U."
+
+
+async def test_unregistered_invite_emails_accept_link(app_client, monkeypatch):
+    """The invitation workflow emails unregistered recipients an accept link
+    built from the committed row's token, and stays silent for registered ones.
+    """
+    import src.email.factory as email_factory
+    from tests.conftest import create_workspace, register_user
+
+    captured: list = []
+
+    async def _capture(message):
+        captured.append(message)
+        return True
+
+    monkeypatch.setattr(email_factory, "send_email", _capture)
+
+    # Registering sends a verification email, so scope assertions per recipient.
+    def sent_to(address: str) -> list:
+        return [m for m in captured if m.to == address]
+
+    owner = await register_user(app_client, "owner@wf5.com")
+    ws = await create_workspace(app_client, owner)
+    roles = await _roles_by_name(app_client, owner, ws["id"])
+
+    invite = await _invite(app_client, owner, ws["id"], roles["editor"], "stranger@wf5.com")
+    assert await _wait_for(lambda: len(sent_to("stranger@wf5.com")) == 1)
+    link = f"/invitations/accept?token={invite['token']}"
+    assert link in sent_to("stranger@wf5.com")[0].text_body
+    assert link in sent_to("stranger@wf5.com")[0].html_body
+
+    member = await register_user(app_client, "member@wf5.com")
+    member_me = await _me(app_client, member)
+    captured.clear()  # drop the registration verification email
+    await _invite(app_client, owner, ws["id"], roles["editor"], "member@wf5.com")
+    # The in-app notification proves the event was delivered; the handler returns
+    # early for registered recipients, so no email follows.
+    await _wait_for_count(member_me["id"], "workspace_invitation", 1)
+    await asyncio.sleep(0.1)
+    assert sent_to("member@wf5.com") == []
 
 
 async def test_unregistered_invite_emits_no_in_app_notification(app_client):
