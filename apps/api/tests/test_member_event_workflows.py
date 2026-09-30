@@ -181,6 +181,51 @@ async def test_member_role_changed_notifies_the_member(app_client):
     assert row.payload["to_role"] == "viewer"
 
 
+async def test_transfer_ownership_notifies_both_users(app_client):
+    from tests.conftest import create_workspace, register_user
+
+    owner = await register_user(app_client, "owner@wf-transfer.com")
+    heir = await register_user(app_client, "heir@wf-transfer.com")
+    owner_me = await _me(app_client, owner)
+    heir_me = await _me(app_client, heir)
+    ws = await create_workspace(app_client, owner)
+    roles = await _roles_by_name(app_client, owner, ws["id"])
+
+    invite = await _invite(app_client, owner, ws["id"], roles["admin"], "heir@wf-transfer.com")
+    await _accept(app_client, heir, invite["token"])
+
+    heir_row = next(
+        m
+        for m in await _members(app_client, owner, ws["id"])
+        if m["email"] == "heir@wf-transfer.com"
+    )
+    resp = await app_client.post(
+        f"/api/v1/workspaces/{ws['id']}/transfer",
+        json={"new_owner_membership_id": heir_row["membership_id"]},
+        headers={"Authorization": f"Bearer {owner['access_token']}", "X-Workspace-ID": ws["id"]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    await _wait_for_count(heir_me["id"], "member_role_changed", 1)
+    await _wait_for_count(owner_me["id"], "member_role_changed", 1)
+
+    async def _roles(user_id: str) -> tuple:
+        async with SessionFactory() as session:
+            result = await session.execute(
+                select(Notification)
+                .where(
+                    Notification.user_id == user_id,
+                    Notification.type == "member_role_changed",
+                )
+                .order_by(Notification.created_at.desc())
+            )
+            row = result.scalars().first()
+        return (row.payload["from_role"], row.payload["to_role"])
+
+    assert await _roles(heir_me["id"]) == ("admin", "owner")
+    assert await _roles(owner_me["id"]) == ("owner", "admin")
+
+
 async def test_member_removed_notifies_the_removed_member(app_client):
     from tests.conftest import create_workspace, register_user
 

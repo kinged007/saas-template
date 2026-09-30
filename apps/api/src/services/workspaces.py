@@ -614,25 +614,31 @@ class WorkspaceService:
             raise WorkspaceConflict("you already own this workspace")
         owner_role = await self._role_by_name(workspace_id, "owner")
         admin_role = await self._role_by_name(workspace_id, "admin")
+        target_role = await self._session.get(Role, target.role_id)
+        target_previous_role = target_role.name if target_role is not None else None
         target.role_id = owner_role.id
         actor_member.role_id = admin_role.id
         await self._session.commit()
 
         workspace = await self._session.get(Workspace, workspace_id)
         workspace_name = workspace.name if workspace else "workspace"
-        await publish_event(
-            self._bus,
-            Subjects.WORKSPACE_MEMBER_ROLE_CHANGED,
-            {
-                "workspace_id": workspace_id,
-                "workspace_name": workspace_name,
-                "user_id": target.user_id,
-                "from_role": None,
-                "to_role": "owner",
-                "changed_by_user_id": actor.id,
-                "changed_by_name": actor.display_name,
-            },
-        )
+        base = {
+            "workspace_id": workspace_id,
+            "workspace_name": workspace_name,
+            "changed_by_user_id": actor.id,
+            "changed_by_name": actor.display_name,
+        }
+        # The actor is the current owner (checked above), so both role changes
+        # belong to a user: the promotion and the owner's own demotion.
+        for user_id, from_role, to_role in (
+            (target.user_id, target_previous_role, owner_role.name),
+            (actor_member.user_id, owner_role.name, admin_role.name),
+        ):
+            await publish_event(
+                self._bus,
+                Subjects.WORKSPACE_MEMBER_ROLE_CHANGED,
+                {**base, "user_id": user_id, "from_role": from_role, "to_role": to_role},
+            )
         await publish_audit(
             self._bus,
             workspace_id=workspace_id,
