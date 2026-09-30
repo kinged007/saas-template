@@ -107,12 +107,14 @@ async def test_seed_registers_fixture_when_canonical_workspace_has_no_owner_memb
 ):
     """A canonical workspace with nobody in its owner role still gets the fixture.
 
-    The owner was demoted to viewer, so no membership holds the owner role and
-    the guard's `owner is None` arm is what admits the workspace. It is
-    reachable without the app: a workspace whose owner left keeps its owner
-    role row but no membership pointing at it. The demo admin is not a member
-    here, so the fixture attaches on registration and the seed adds it the
-    membership, invitations, API keys and notifications.
+    No membership holds the owner role, so the guard's `owner is None` arm is
+    what admits the workspace. The app blocks every route to this state —
+    `remove_member`, `leave_workspace` and `set_member_role` all refuse the
+    owner, and roles cannot be deleted — so the branch is defensive. The test
+    reaches it the only way the seed could see it in production: an
+    out-of-band write of `role_id`. The demo admin is not a member here, so the
+    fixture attaches on registration and the seed creates API keys,
+    invitations and notifications for the workspace.
     """
     monkeypatch.setattr(settings, "single_workspace", False)
     async with SessionFactory() as session:
@@ -177,3 +179,34 @@ async def test_seed_keeps_both_workspaces_when_single_mode_is_off(monkeypatch):
     await seed_main()
 
     assert set((await _workspaces()).values()) == {"acme-corp", "globex"}
+
+
+async def test_seed_api_key_guard_looks_for_the_row_not_the_status(single_workspace_on):
+    """The seed guard asks whether a member row exists at all, not its status.
+
+    A suspended owner row is still a row, so the guard admits the workspace and
+    ApiKeyService — which resolves the actor with `active_only=True` — is what
+    refuses the mint. With a status-blind default this holds; with an
+    `active_only` default of True and no explicit opt-out the guard would skip
+    the key silently instead.
+    """
+    from src.services.api_keys import ApiKeyForbidden
+
+    async with SessionFactory() as session:
+        admin = await AuthService(session).register(
+            email="admin@example.com",
+            password=DEMO_PASSWORD,
+            first_name="Admin",
+            last_name="User",
+        )
+        workspace = await WorkspaceService(session).create_workspace(
+            name="Acme", slug="acme-corp", description=None, owner=admin
+        )
+        member = await session.execute(
+            select(WorkspaceMember).where(WorkspaceMember.workspace_id == workspace.id)
+        )
+        member.scalar_one().status = "suspended"
+        await session.commit()
+
+    with pytest.raises(ApiKeyForbidden):
+        await seed_main()

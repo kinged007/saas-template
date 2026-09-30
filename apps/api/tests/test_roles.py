@@ -150,6 +150,52 @@ async def test_create_role_rejects_duplicate_name(app_client):
     assert resp.status_code == 409
 
 
+async def test_create_role_strips_padded_name(app_client):
+    # A padded name is stored stripped, so it stays reachable as an
+    # auto-join target instead of existing under a name nothing matches.
+    client = app_client
+    owner = await register_user(client, "cr3@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    resp = await client.post(
+        "/api/v1/roles", json={"name": "  ops  ", "permissions": []}, headers=headers
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == "ops"
+    assert await _role_id(client, headers, "ops")
+
+
+async def test_create_role_rejects_blank_name(app_client):
+    client = app_client
+    owner = await register_user(client, "cr4@example.com")
+    ws = await create_workspace(client, owner)
+    resp = await client.post(
+        "/api/v1/roles",
+        json={"name": "   ", "permissions": []},
+        headers=ws_headers(owner, ws["id"]),
+    )
+    assert resp.status_code == 422
+
+
+async def test_update_role_strips_padded_name(app_client):
+    client = app_client
+    owner = await register_user(client, "up3@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    created = (
+        await client.post("/api/v1/roles", json={"name": "ops", "permissions": []}, headers=headers)
+    ).json()
+    resp = await client.patch(
+        f"/api/v1/roles/{created['id']}", json={"name": "  operators  "}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["name"] == "operators"
+    resp = await client.patch(
+        f"/api/v1/roles/{created['id']}", json={"name": "   "}, headers=headers
+    )
+    assert resp.status_code == 422
+
+
 async def test_permission_catalog_excludes_legacy_key_only_scope(app_client):
     # A stale role row holding a legacy key-only scope must not resurface it.
     # Read as an editor: the owner holds "*" and short-circuits the intersection.
