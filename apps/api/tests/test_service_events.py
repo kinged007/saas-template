@@ -7,6 +7,8 @@ NATS or the in-process delivery machinery.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from src.db.session import SessionFactory
@@ -402,6 +404,30 @@ async def test_api_key_create_and_revoke_emit_events_and_audit(bus, owner):
     audit = bus.audit()[-1][0]
     assert audit["resource_type"] == "apikey"
     assert audit["ip_address"] == "10.0.0.1"
+
+
+async def test_api_key_created_event_expiry_is_offset_aware(bus, owner):
+    """The published expiry carries its offset, like the HTTP payload does.
+
+    A naive ISO string makes a consumer's `new Date(...)` parse it as local
+    time. What SQLite stores and returns is naive, so the service normalizes
+    on the way out rather than trusting the instance it just built.
+    """
+    workspace = await _create_workspace(bus, owner.id, slug="acme8")
+    async with SessionFactory() as session:
+        key, _ = await ApiKeyService(session, bus).create_api_key(
+            workspace_id=workspace.id,
+            name="ci-key",
+            permissions=["workspace:read"],
+            actor=owner,
+            expires_at=datetime(2027, 1, 1, tzinfo=UTC),
+        )
+        await session.refresh(key)  # the column comes back naive on SQLite
+        naive = key.expires_at.isoformat()
+
+    payload = bus.by_subject(Subjects.APIKEY_CREATED)[0][0]
+    assert payload["expires_at"] != naive
+    assert datetime.fromisoformat(payload["expires_at"]).utcoffset() is not None
 
 
 # ------------------------------------------------------------------- roles

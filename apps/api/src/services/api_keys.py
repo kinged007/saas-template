@@ -140,7 +140,7 @@ class ApiKeyService:
                 "permissions": key.permissions,
                 "created_by_user_id": actor.id,
                 "created_by_name": actor.display_name,
-                "expires_at": key.expires_at.isoformat() if key.expires_at else None,
+                "expires_at": ensure_utc(key.expires_at).isoformat() if key.expires_at else None,
             },
         )
         await publish_audit(
