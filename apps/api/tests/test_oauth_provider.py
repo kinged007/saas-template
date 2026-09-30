@@ -7,13 +7,15 @@ on `127.0.0.1:0` serving a discovery document, an RS256 JWKS, a token endpoint
 and a userinfo endpoint. No network egress, no mocked seams, no new dependency
 (`pyjwt`, `cryptography` and `httpx` are already runtime deps).
 
-`httpx.MockTransport` would not do: `jwt.PyJWKClient` fetches keys with
-`urllib.request`, so a transport-level httpx mock never sees the key fetch. A
-real socket is the only way to exercise signature handling as written.
+`httpx.MockTransport` would not do: the key set has to come off a real socket
+for the fetch itself to be measurable. A real HTTP server is the only way to
+exercise key resolution and signature handling as written.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import socket
 import threading
@@ -41,6 +43,7 @@ from src.settings import settings
 CLIENT_ID = "cid"
 CLIENT_SECRET = "csecret"
 KID = "stub-key-1"
+ROTATED_KID = "stub-key-2"
 REDIRECT_URI = "http://localhost:8000/api/v1/auth/oauth/stub/callback"
 
 
@@ -62,6 +65,9 @@ class _StubIdP:
         self.hits: list[str] = []
         self.token_forms: list[dict[str, list[str]]] = []
         self.auth_headers: list[str] = []
+        # Published key set, mutable so a test can rotate it mid-cache.
+        self.published: tuple[rsa.RSAPrivateKey, str] = (self.signing_key, KID)
+        self.jwks_delay = 0.0
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
@@ -129,7 +135,9 @@ class _StubIdP:
                 if self.path.startswith("/.well-known/openid-configuration"):
                     self._send(200, stub.doc)
                 elif self.path == "/jwks":
-                    self._send(200, {"keys": [_jwk(stub.signing_key, KID)]})
+                    if stub.jwks_delay:
+                        time.sleep(stub.jwks_delay)
+                    self._send(200, {"keys": [_jwk(*stub.published)]})
                 elif self.path == "/userinfo":
                     stub.auth_headers.append(self.headers.get("Authorization", ""))
                     self._send(
@@ -203,6 +211,11 @@ def provider(idp, monkeypatch) -> ProviderConfig:
     return get_provider("stub")
 
 
+@pytest.fixture
+def cache() -> TtlCache:
+    return TtlCache(ttl_seconds=60)
+
+
 def _closed_port() -> int:
     """A port nothing listens on: bound, then released."""
     with socket.socket() as s:
@@ -217,46 +230,105 @@ def _closed_port() -> int:
     "options['require'] enforces presence only, never value. Filed as #340; the "
     "strict xfail flips red the day issuer= is added.",
 )
-def test_claims_from_id_token_rejects_wrong_issuer(provider, idp):
-    assert claims_from_id_token(provider, idp.doc, idp.mint(iss="http://evil.example")) is None
+async def test_claims_from_id_token_rejects_wrong_issuer(provider, idp, cache):
+    assert (
+        await claims_from_id_token(provider, idp.doc, idp.mint(iss="http://evil.example"), cache)
+        is None
+    )
 
 
-def test_claims_from_id_token_accepts_valid_rs256(provider, idp):
+async def test_claims_from_id_token_accepts_valid_rs256(provider, idp, cache):
     """Positive control: if this fails the harness itself is broken."""
-    claims = claims_from_id_token(provider, idp.doc, idp.mint())
+    claims = await claims_from_id_token(provider, idp.doc, idp.mint(), cache)
     assert claims is not None
     assert claims["sub"] == "sub-1"
     assert claims["email"] == "user@example.com"
 
 
-def test_claims_from_id_token_rejects_wrong_audience(provider, idp):
-    assert claims_from_id_token(provider, idp.doc, idp.mint(aud="another-client")) is None
+async def test_claims_from_id_token_rejects_wrong_audience(provider, idp, cache):
+    assert (
+        await claims_from_id_token(provider, idp.doc, idp.mint(aud="another-client"), cache) is None
+    )
 
 
-def test_claims_from_id_token_rejects_expired_token(provider, idp):
-    assert claims_from_id_token(provider, idp.doc, idp.mint(exp=int(time.time()) - 10)) is None
+async def test_claims_from_id_token_rejects_expired_token(provider, idp, cache):
+    token = idp.mint(exp=int(time.time()) - 10)
+    assert await claims_from_id_token(provider, idp.doc, token, cache) is None
 
 
-def test_claims_from_id_token_rejects_unknown_kid(provider, idp):
-    assert claims_from_id_token(provider, idp.doc, idp.mint(kid="rotated-away")) is None
+async def test_claims_from_id_token_rejects_unknown_kid(provider, idp, cache):
+    assert (
+        await claims_from_id_token(provider, idp.doc, idp.mint(kid="rotated-away"), cache) is None
+    )
 
 
-def test_claims_from_id_token_rejects_token_signed_by_another_key(provider, idp):
+async def test_claims_from_id_token_rejects_token_signed_by_another_key(provider, idp, cache):
     """Same kid, different private key: only a real signature check catches this."""
-    assert claims_from_id_token(provider, idp.doc, idp.mint(key=idp.other_key)) is None
+    assert await claims_from_id_token(provider, idp.doc, idp.mint(key=idp.other_key), cache) is None
 
 
-def test_claims_from_id_token_rejects_unsigned_token(provider, idp):
-    assert claims_from_id_token(provider, idp.doc, idp.mint(alg="none")) is None
+async def test_claims_from_id_token_rejects_unsigned_token(provider, idp, cache):
+    assert await claims_from_id_token(provider, idp.doc, idp.mint(alg="none"), cache) is None
 
 
-def test_claims_from_id_token_returns_none_without_jwks_uri(provider, idp):
+async def test_claims_from_id_token_returns_none_without_jwks_uri(provider, idp, cache):
     doc = {k: v for k, v in idp.doc.items() if k != "jwks_uri"}
-    assert claims_from_id_token(provider, doc, idp.mint()) is None
+    assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
 
 
-async def test_discovery_fetches_and_caches(provider, idp):
-    cache = TtlCache(ttl_seconds=60)
+async def test_jwks_is_fetched_once_and_reused(provider, idp, cache):
+    """#341: the key set belongs in the TTL cache next to discovery, not refetched per login."""
+    before = idp.hits.count("/jwks")
+    first = await claims_from_id_token(provider, idp.doc, idp.mint(), cache)
+    second = await claims_from_id_token(provider, idp.doc, idp.mint(), cache)
+    assert first is not None and second is not None
+    assert idp.hits.count("/jwks") == before + 1
+
+
+async def test_jwks_is_refetched_for_a_rotated_kid(provider, idp, cache):
+    """A new kid must not wait out the cache TTL, or every login fails after a key rotation."""
+    assert await claims_from_id_token(provider, idp.doc, idp.mint(), cache) is not None
+    before = idp.hits.count("/jwks")
+    idp.published = (idp.other_key, ROTATED_KID)
+    try:
+        claims = await claims_from_id_token(
+            provider, idp.doc, idp.mint(key=idp.other_key, kid=ROTATED_KID), cache
+        )
+    finally:
+        idp.published = (idp.signing_key, KID)
+    assert claims is not None
+    assert idp.hits.count("/jwks") == before + 1
+
+
+async def test_claims_from_id_token_keeps_the_event_loop_responsive(provider, idp, cache):
+    """#341: the key fetch has to be async — blocking it on the loop stalls every request."""
+    idp.jwks_delay = 0.4
+    ticks = 0
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    beat = asyncio.create_task(ticker())
+    try:
+        claims = await claims_from_id_token(provider, idp.doc, idp.mint(), cache)
+    finally:
+        beat.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await beat
+        idp.jwks_delay = 0.0
+    assert claims is not None
+    assert ticks > 5, f"event loop stalled while the JWKS host was slow (ticks={ticks})"
+
+
+async def test_claims_from_id_token_returns_none_when_the_jwks_host_is_down(provider, idp, cache):
+    doc = dict(idp.doc, jwks_uri=f"http://127.0.0.1:{_closed_port()}/jwks")
+    assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+
+
+async def test_discovery_fetches_and_caches(provider, idp, cache):
     before = len(idp.hits)
 
     doc = await _discovery(provider, cache)

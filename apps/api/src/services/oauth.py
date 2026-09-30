@@ -163,22 +163,57 @@ async def exchange_code(
         raise OAuthError("code exchange failed") from exc
 
 
-def _jwks_client(provider: ProviderConfig, doc: dict[str, Any]) -> jwt.PyJWKClient | None:
+async def _jwks(
+    provider: ProviderConfig, doc: dict[str, Any], cache: TtlCache, refresh: bool = False
+) -> dict[str, Any]:
+    """The provider's key set, cached next to discovery so a login does not refetch it.
+
+    Fetched over httpx rather than `jwt.PyJWKClient` so the round trip is awaited
+    (PyJWKClient fetches with blocking urllib) and covered by the same 10s timeout
+    as the module's other IdP calls.
+    """
     uri = doc.get("jwks_uri") or provider.jwks_uri
     if not uri:
-        return None
-    return jwt.PyJWKClient(uri)
+        raise OAuthError(f"oauth provider '{provider.id}' has no jwks_uri")
+    key = f"oauth:jwks:{provider.id}"
+    cached = None if refresh else cache.get(key)
+    if cached is not None:
+        return cached
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(uri)
+            resp.raise_for_status()
+            keys = resp.json()
+        if not isinstance(keys, dict):
+            raise ValueError("JWKS response is not a JSON object")
+    except Exception as exc:
+        raise OAuthError("could not load signing keys") from exc
+    cache.set(key, keys)
+    return keys
 
 
-def claims_from_id_token(
-    provider: ProviderConfig, doc: dict[str, Any], id_token: str
+def _signing_key(keys: dict[str, Any], id_token: str) -> jwt.PyJWK | None:
+    """The signing key whose kid the token names, or None when the set has no match."""
+    kid = jwt.get_unverified_header(id_token).get("kid")
+    jwks = jwt.PyJWKSet.from_dict(keys)
+    signing = [k for k in jwks.keys if k.public_key_use in (None, "sig")]
+    for key in signing:
+        if key.key_id == kid:
+            return key
+    return signing[0] if kid is None and len(signing) == 1 else None
+
+
+async def claims_from_id_token(
+    provider: ProviderConfig, doc: dict[str, Any], id_token: str, cache: TtlCache
 ) -> dict[str, Any] | None:
     """Verify the id_token signature via JWKS; None when unverifiable."""
-    client = _jwks_client(provider, doc)
-    if client is None:
-        return None
     try:
-        key = client.get_signing_key_from_jwt(id_token).key
+        key = _signing_key(await _jwks(provider, doc, cache), id_token)
+        if key is None:
+            # A kid the cached set has never seen is the one case a refetch can fix.
+            key = _signing_key(await _jwks(provider, doc, cache, refresh=True), id_token)
+        if key is None:
+            raise OAuthError("no matching signing key")
         return jwt.decode(
             id_token,
             key,
