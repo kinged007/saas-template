@@ -15,6 +15,7 @@ real socket is the only way to exercise signature handling as written.
 from __future__ import annotations
 
 import json
+import logging
 import socket
 import threading
 import time
@@ -230,21 +231,35 @@ def test_claims_from_id_token_rejects_wrong_issuer_without_discovery_doc(provide
     assert claims_from_id_token(provider, doc, idp.mint(iss="http://evil.example")) is None
 
 
-def test_claims_from_id_token_rejects_disagreeing_discovery_issuer(provider, idp):
+def test_claims_from_id_token_rejects_disagreeing_discovery_issuer(provider, idp, caplog):
     """The config is the pin: a discovery document naming another issuer is
     refused outright, so a compromised or misconfigured IdP cannot repoint the
     check even when it also signs the token it wants accepted."""
     doc = {**idp.doc, "issuer": "http://evil.example"}
-    assert claims_from_id_token(provider, doc, idp.mint(iss="http://evil.example")) is None
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        assert claims_from_id_token(provider, doc, idp.mint(iss="http://evil.example")) is None
+    assert "discovery issuer mismatch" in caplog.text
 
 
 def test_claims_from_id_token_ignores_trailing_slash_on_issuer(provider, idp):
-    """PyJWT compares `iss` exactly, so a cosmetic slash must not decide the
-    outcome — on either the config or the discovery-document side."""
+    """PyJWT compares `iss` byte for byte, so a cosmetic slash must not decide the
+    outcome — on the config, the discovery-document or the token side. A
+    slash-terminated issuer is a legal OIDC shape (Discovery 1.0 §3)."""
     slashed = replace(provider, issuer=f"{idp.base}/")
     slashed_doc = {**idp.doc, "issuer": f"{idp.base}/"}
+    assert claims_from_id_token(provider, idp.doc, idp.mint(iss=f"{idp.base}/")) is not None
     assert claims_from_id_token(slashed, idp.doc, idp.mint()) is not None
-    assert claims_from_id_token(slashed, slashed_doc, idp.mint()) is not None
+    assert claims_from_id_token(slashed, slashed_doc, idp.mint(iss=f"{idp.base}/")) is not None
+    assert claims_from_id_token(provider, slashed_doc, idp.mint(iss=f"{idp.base}/")) is not None
+
+
+def test_claims_from_id_token_rejects_non_string_issuer(provider, idp):
+    """The document is network-sourced JSON and the config is unvalidated env, so
+    `issuer` is untrusted in type as well as value: anything but a string is
+    refused, not raised. The callback only catches `OAuthError`, so an escaping
+    exception is a 500 with a stack trace."""
+    assert claims_from_id_token(provider, {**idp.doc, "issuer": ["http://x"]}, idp.mint()) is None
+    assert claims_from_id_token(replace(provider, issuer=12345), idp.doc, idp.mint()) is None
 
 
 def test_claims_from_id_token_without_issuer_checks_presence_only(provider, idp):

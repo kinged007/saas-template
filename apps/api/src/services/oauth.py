@@ -66,7 +66,7 @@ def get_provider(provider_id: str) -> ProviderConfig:
                 client_secret=client_secret,
                 scopes=str(raw.get("scopes") or DEFAULT_SCOPES),
                 discovery_url=raw.get("discovery_url"),
-                issuer=raw.get("issuer"),
+                issuer=str(raw.get("issuer")) if raw.get("issuer") else None,
                 authorize_url=raw.get("authorize_url"),
                 token_url=raw.get("token_url"),
                 userinfo_url=raw.get("userinfo_url"),
@@ -173,8 +173,12 @@ def _jwks_client(provider: ProviderConfig, doc: dict[str, Any]) -> jwt.PyJWKClie
 
 
 def _norm_issuer(issuer: str | None) -> str | None:
-    """PyJWT compares `iss` byte for byte, so a trailing slash is normalized away."""
-    return issuer.rstrip("/") if issuer else None
+    """Trailing slash normalized away, so a cosmetic slash decides nothing.
+
+    Non-strings (the discovery document is network-sourced JSON) normalize to
+    None, which fails the pin closed rather than raising.
+    """
+    return issuer.rstrip("/") if isinstance(issuer, str) and issuer else None
 
 
 def claims_from_id_token(
@@ -187,7 +191,11 @@ def claims_from_id_token(
     # The operator's configured issuer is the pin; the discovery document only
     # fills in a provider that names none. A document naming a different one is
     # refused rather than preferred, so a compromised or misconfigured IdP cannot
-    # repoint the check.
+    # repoint the check. This is a consistency check, not a standalone pin: the
+    # document still names the verifying keys via `jwks_uri` above, so document,
+    # config and token must agree. A disagreement is a hard login failure, not a
+    # fallback -- a repointed or hijacked IdP fails closed instead of silently
+    # overriding the pinned issuer.
     doc_issuer = doc.get("issuer")
     if provider.issuer and doc_issuer and _norm_issuer(provider.issuer) != _norm_issuer(doc_issuer):
         logger.warning("discovery issuer mismatch for provider %s", provider.id)
@@ -198,14 +206,20 @@ def claims_from_id_token(
         logger.warning("no issuer configured for provider %s; id_token iss not pinned", provider.id)
     try:
         key = client.get_signing_key_from_jwt(id_token).key
-        return jwt.decode(
+        claims = jwt.decode(
             id_token,
             key,
             algorithms=["RS256", "ES256"],
             audience=provider.client_id,
-            issuer=issuer,
-            options={"require": ["exp", "iss", "sub"]},
+            # `iss` is checked below instead of by PyJWT: it matches byte for
+            # byte, and a slash-terminated issuer is a legal OIDC shape
+            # (Discovery 1.0 §3), so the token's value needs the same
+            # normalization the expected one already gets.
+            options={"require": ["exp", "iss", "sub"], "verify_iss": False},
         )
+        if issuer and _norm_issuer(claims["iss"]) != issuer:
+            raise jwt.InvalidIssuerError("Issuer does not match")
+        return claims
     except Exception:
         logger.warning("id_token verification failed for provider %s", provider.id)
         return None
