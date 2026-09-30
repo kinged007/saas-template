@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.crud import InvalidQuery, apply_query, parse_query
 from src.api.deps import (
     AuthPrincipal,
+    deployment_admin_denied,
     get_container,
     get_current_workspace_id,
     require_permission,
@@ -200,7 +201,7 @@ async def _require_run_access(db: AsyncSession, principal: AuthPrincipal, run: J
     """
     if run.workspace_id is None:
         if not principal.is_deployment_admin:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "superuser access required")
+            raise deployment_admin_denied(principal)
         return
     if principal.api_key is not None:
         api_key = principal.api_key
@@ -231,7 +232,7 @@ async def _require_job_access(
     required = JOB_UPDATE if need_edit else JOB_READ
     if definition.workspace_id is None:
         if not principal.is_deployment_admin:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "superuser access required")
+            raise deployment_admin_denied(principal)
         return
     # workspace-scoped job — check the workspace of the definition, not the header
     if principal.api_key is not None:
