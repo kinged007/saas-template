@@ -81,6 +81,12 @@ export function GeneralSection() {
   const transferCandidates = (membersResult?.data ?? []).filter(
     (m) => m.role !== "owner" && m.status === "active",
   );
+  // SelectValue without children renders the placeholder forever, so the trigger
+  // needs the picked member as its own text — same expression the options use.
+  const transferTarget = transferCandidates.find((m) => m.membership_id === transferId);
+  const transferTargetLabel = transferTarget
+    ? `${getMemberDisplayName(transferTarget)} (${transferTarget.email})`
+    : "";
 
   const transferOwnership = () => {
     if (!workspace || !transferId) return;
@@ -279,24 +285,16 @@ export function GeneralSection() {
       {!singleWorkspace && (
         <>
           <Separator />
-          <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 flex flex-col gap-3">
+          <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 flex flex-col gap-4">
             <div>
               <h4 className="font-semibold text-destructive">Danger zone</h4>
               <p className="text-muted-foreground mt-1 text-sm">
-                Deleting a workspace is <span className="font-semibold">permanent and irreversible</span>. The workspace
-                and all its scoped data will be removed: members, roles, invitations, API keys, scheduled jobs and run
-                history, conversations and messages, notifications, and stored secrets. User accounts themselves are
-                global and are not deleted — members simply lose access to this workspace. Audit log entries are retained
-                for compliance.
-              </p>
-              <p className="text-muted-foreground mt-2 text-sm">
-                This action is gated on <code>workspace:delete</code> (owners only). Admins, editors and viewers cannot
-                delete workspaces.
+                The actions below are permanent and cannot be undone.
               </p>
             </div>
 
             {isOwner && (
-              <div className="flex flex-col gap-3 border-b border-destructive/30 pb-4">
+              <div className="grid grid-cols-1 gap-3 border-t border-destructive/30 pt-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
                 <div>
                   <h4 className="font-semibold text-destructive">Transfer ownership</h4>
                   <p className="text-muted-foreground mt-1 text-sm">
@@ -305,24 +303,23 @@ export function GeneralSection() {
                     transfer ownership.
                   </p>
                 </div>
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                  <div className="flex flex-1 flex-col gap-2">
-                    <Label>New owner</Label>
-                    <Select value={transferId} onValueChange={setTransferId}>
-                      <SelectTrigger className="w-full sm:w-72">
-                        <SelectValue placeholder="Select member" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {transferCandidates.map((m) => (
-                          <SelectItem key={m.membership_id} value={m.membership_id}>
-                            {getMemberDisplayName(m)} ({m.email})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="transfer-member">New owner</Label>
+                  <Select value={transferId} onValueChange={setTransferId}>
+                    <SelectTrigger id="transfer-member" className="w-full sm:w-72">
+                      <SelectValue placeholder="Select member">{transferTargetLabel}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {transferCandidates.map((m) => (
+                        <SelectItem key={m.membership_id} value={m.membership_id}>
+                          {getMemberDisplayName(m)} ({m.email})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <Button
                     variant="destructive"
+                    className="sm:self-end"
                     onClick={transferOwnership}
                     disabled={!transferId || transferMutation.isPending}
                   >
@@ -332,83 +329,102 @@ export function GeneralSection() {
               </div>
             )}
 
-            <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-              <DialogTrigger asChild>
-                <Button variant="destructive" disabled={!canDelete?.can}>
-                  Delete workspace
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Delete workspace “{workspace.name}”?</DialogTitle>
-                  <DialogDescription>
-                    This will permanently delete <span className="font-semibold">{workspace.name}</span> (
-                    <code>{workspace.slug}</code>) and all workspace-scoped data listed above. Users who were members
-                    will remain in the system but will no longer have access to this workspace. This cannot be undone.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="flex flex-col gap-3 py-2">
-                  <Label htmlFor="confirm-name">
-                    Type <code className="font-semibold">{workspace.name}</code> to confirm
-                  </Label>
-                  <Input
-                    id="confirm-name"
-                    placeholder={workspace.name}
-                    value={confirmName}
-                    onChange={(e) => setConfirmName(e.target.value)}
-                    autoComplete="off"
-                  />
-                  <p className="text-muted-foreground text-xs">
-                    The workspace and its memberships, roles, invites, keys, jobs, conversations and notifications will be
-                    permanently removed. Audit entries are retained.
-                  </p>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={isDeleting}>
-                    Cancel
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    disabled={confirmName !== workspace.name || isDeleting}
-                    onClick={() => {
-                      deleteWorkspace(
-                        {
-                          resource: "workspaces",
-                          id: workspace.id,
-                          successNotification: false,
-                          errorNotification: false,
-                        },
-                        {
-                          onSuccess: () => {
-                            toast.success(`Workspace “${workspace.name}” deleted`);
-                            // Clear the stored workspace id if we just deleted the active one —
-                            // WorkspaceProvider will auto-pick the next workspace after refresh,
-                            // but clearing the stale id avoids a flash of “not a member”.
-                            if (workspaceStore.get() === workspace.id) {
-                              workspaceStore.clear();
-                            }
-                            setDeleteOpen(false);
-                            setConfirmName("");
-                            refresh();
-                            navigate("/", { replace: true });
-                          },
-                          onError: (err: unknown) => {
-                            const msg =
-                              (err as { message?: string })?.message || "Failed to delete workspace";
-                            toast.error(msg);
-                          },
-                        },
-                      );
-                    }}
-                  >
-                    {isDeleting ? "Deleting…" : "Delete workspace"}
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
-            {!canDelete?.can && (
-              <p className="text-muted-foreground text-xs">You need owner permission to delete this workspace.</p>
-            )}
+            <div className="grid grid-cols-1 gap-3 border-t border-destructive/30 pt-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+              <div>
+                <h4 className="font-semibold text-destructive">Delete workspace</h4>
+                <p className="text-muted-foreground mt-1 text-sm">
+                  Deleting a workspace is <span className="font-semibold">permanent and irreversible</span>. The
+                  workspace and all its scoped data will be removed: members, roles, invitations, API keys, scheduled
+                  jobs and run history, conversations and messages, notifications, and stored secrets. User accounts
+                  themselves are global and are not deleted — members simply lose access to this workspace. Audit log
+                  entries are retained for compliance.
+                </p>
+                <p className="text-muted-foreground mt-2 text-sm">
+                  This action is gated on <code>workspace:delete</code> (owners only). Admins, editors and viewers cannot
+                  delete workspaces.
+                </p>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+                  <DialogTrigger asChild>
+                    <Button variant="destructive" disabled={!canDelete?.can}>
+                      Delete workspace
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Delete workspace “{workspace.name}”?</DialogTitle>
+                      <DialogDescription>
+                        This will permanently delete <span className="font-semibold">{workspace.name}</span> (
+                        <code>{workspace.slug}</code>) and all workspace-scoped data listed in this section. Users who
+                        were members will remain in the system but will no longer have access to this workspace. This cannot
+                        be undone.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="flex flex-col gap-3 py-2">
+                      <Label htmlFor="confirm-name">
+                        Type <code className="font-semibold">{workspace.name}</code> to confirm
+                      </Label>
+                      <Input
+                        id="confirm-name"
+                        placeholder={workspace.name}
+                        value={confirmName}
+                        onChange={(e) => setConfirmName(e.target.value)}
+                        autoComplete="off"
+                      />
+                      <p className="text-muted-foreground text-xs">
+                        The workspace and its memberships, roles, invites, keys, jobs, conversations and notifications will be
+                        permanently removed. Audit entries are retained.
+                      </p>
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={isDeleting}>
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        disabled={confirmName !== workspace.name || isDeleting}
+                        onClick={() => {
+                          deleteWorkspace(
+                            {
+                              resource: "workspaces",
+                              id: workspace.id,
+                              successNotification: false,
+                              errorNotification: false,
+                            },
+                            {
+                              onSuccess: () => {
+                                toast.success(`Workspace “${workspace.name}” deleted`);
+                                // Clear the stored workspace id if we just deleted the active one —
+                                // WorkspaceProvider will auto-pick the next workspace after refresh,
+                                // but clearing the stale id avoids a flash of “not a member”.
+                                if (workspaceStore.get() === workspace.id) {
+                                  workspaceStore.clear();
+                                }
+                                setDeleteOpen(false);
+                                setConfirmName("");
+                                refresh();
+                                navigate("/", { replace: true });
+                              },
+                              onError: (err: unknown) => {
+                                const msg =
+                                  (err as { message?: string })?.message || "Failed to delete workspace";
+                                toast.error(msg);
+                              },
+                            },
+                          );
+                        }}
+                      >
+                        {isDeleting ? "Deleting…" : "Delete workspace"}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+                {!canDelete?.can && (
+                  <p className="text-muted-foreground text-xs">You need owner permission to delete this workspace.</p>
+                )}
+              </div>
+            </div>
           </div>
         </>
       )}
