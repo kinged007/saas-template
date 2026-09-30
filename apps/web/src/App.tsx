@@ -168,10 +168,10 @@ export function App() {
                 </div>
               }
             />
-            {/* Unreachable guard: react-router ranks a splat nested in a layout above a
-                top-level splat, so a path matching no top-level static route is caught by
-                the "/" layout's nested path="*" (NotFoundPage) rather than by this one.
-                Authenticated's fallback is what sends a signed-out visitor to /login. */}
+            {/* Unreachable guard: both splats score the same, so the "/" layout's nested
+                path="*" (declared first) wins and renders NotFoundPage — moving this route
+                above "/" would flip that. Authenticated's fallback sends a signed-out
+                visitor to /login. */}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
           <Toaster />
