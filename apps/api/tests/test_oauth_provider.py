@@ -230,6 +230,23 @@ def test_claims_from_id_token_rejects_wrong_issuer_without_discovery_doc(provide
     assert claims_from_id_token(provider, doc, idp.mint(iss="http://evil.example")) is None
 
 
+def test_claims_from_id_token_rejects_disagreeing_discovery_issuer(provider, idp):
+    """The config is the pin: a discovery document naming another issuer is
+    refused outright, so a compromised or misconfigured IdP cannot repoint the
+    check even when it also signs the token it wants accepted."""
+    doc = {**idp.doc, "issuer": "http://evil.example"}
+    assert claims_from_id_token(provider, doc, idp.mint(iss="http://evil.example")) is None
+
+
+def test_claims_from_id_token_ignores_trailing_slash_on_issuer(provider, idp):
+    """PyJWT compares `iss` exactly, so a cosmetic slash must not decide the
+    outcome — on either the config or the discovery-document side."""
+    slashed = replace(provider, issuer=f"{idp.base}/")
+    slashed_doc = {**idp.doc, "issuer": f"{idp.base}/"}
+    assert claims_from_id_token(slashed, idp.doc, idp.mint()) is not None
+    assert claims_from_id_token(slashed, slashed_doc, idp.mint()) is not None
+
+
 def test_claims_from_id_token_without_issuer_checks_presence_only(provider, idp):
     """Deliberate ceiling: a provider that names no issuer anywhere (the explicit-URL
     shape, e.g. the GitHub config) has nothing to compare `iss` against, so only

@@ -172,6 +172,11 @@ def _jwks_client(provider: ProviderConfig, doc: dict[str, Any]) -> jwt.PyJWKClie
     return jwt.PyJWKClient(uri)
 
 
+def _norm_issuer(issuer: str | None) -> str | None:
+    """PyJWT compares `iss` byte for byte, so a trailing slash is normalized away."""
+    return issuer.rstrip("/") if issuer else None
+
+
 def claims_from_id_token(
     provider: ProviderConfig, doc: dict[str, Any], id_token: str
 ) -> dict[str, Any] | None:
@@ -179,9 +184,15 @@ def claims_from_id_token(
     client = _jwks_client(provider, doc)
     if client is None:
         return None
-    # The document's issuer is what the IdP itself states, so it wins over the
-    # configured one; the config covers providers that skip discovery.
-    issuer = doc.get("issuer") or provider.issuer
+    # The operator's configured issuer is the pin; the discovery document only
+    # fills in a provider that names none. A document naming a different one is
+    # refused rather than preferred, so a compromised or misconfigured IdP cannot
+    # repoint the check.
+    doc_issuer = doc.get("issuer")
+    if provider.issuer and doc_issuer and _norm_issuer(provider.issuer) != _norm_issuer(doc_issuer):
+        logger.warning("discovery issuer mismatch for provider %s", provider.id)
+        return None
+    issuer = _norm_issuer(provider.issuer or doc_issuer)
     if not issuer:
         # Nothing to compare `iss` against, so only its presence is enforced.
         logger.warning("no issuer configured for provider %s; id_token iss not pinned", provider.id)
