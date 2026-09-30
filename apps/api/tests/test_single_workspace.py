@@ -19,6 +19,7 @@ def _default_role_is_viewer(monkeypatch):
     # SINGLE_WORKSPACE_DEFAULT_ROLE (env or .env) would reach these tests.
     monkeypatch.setattr(settings, "single_workspace_default_role", "viewer")
 
+
 @pytest.fixture
 def single_workspace_on(monkeypatch):
     monkeypatch.setattr(settings, "single_workspace", True)
