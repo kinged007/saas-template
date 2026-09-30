@@ -48,6 +48,18 @@ async def _create_workspace(bus, owner_id, *, slug, name="Acme Corp"):
         )
 
 
+async def _expire(invitation_id: str) -> None:
+    from datetime import timedelta
+
+    from src.core.dates import now_utc
+    from src.models.core import Invitation
+
+    async with SessionFactory() as session:
+        row = await session.get(Invitation, invitation_id)
+        row.expires_at = now_utc() - timedelta(minutes=5)
+        await session.commit()
+
+
 async def _invite_member(bus, owner_id, workspace, email, role_name="editor"):
     async with SessionFactory() as session:
         service = WorkspaceService(session, bus)
@@ -204,8 +216,8 @@ async def test_resend_invitation_emits_delivery_event(bus, owner):
     invite = await _invite_member(bus, owner.id, workspace, "stranger@example.com")
     bus.events.clear()
     async with SessionFactory() as session:
+        await _expire(invite.id)
         service = WorkspaceService(session, bus)
-        await service.revoke_invitation(workspace.id, invite.id, actor=owner)
         await service.resend_invitation(workspace.id, invite.id, actor=owner)
 
     invitations = bus.by_subject(Subjects.WORKSPACE_INVITATION_CREATED)
@@ -286,6 +298,34 @@ async def test_role_change_emits_event_and_audit(bus, owner):
     assert audit["actor_user_id"] == owner.id
     assert audit["details"]["from_role"] == "editor"
     assert audit["details"]["to_role"] == "viewer"
+
+
+async def test_transfer_ownership_emits_event_for_both_members(bus, owner):
+    heir = await _register(bus, "heir@example.com", "Heir")
+    workspace = await _create_workspace(bus, owner.id, slug="acme-transfer")
+    invite = await _invite_member(bus, owner.id, workspace, "heir@example.com", role_name="admin")
+    await _accept_invitation(bus, invite.token, heir)
+    bus.events.clear()
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session, bus)
+        heir_member = next(
+            m for m, _, _ in await service.list_members(workspace.id) if m.user_id == heir.id
+        )
+        await service.transfer_ownership(
+            workspace.id, heir_member.id, actor=owner, ip_address="10.0.0.1"
+        )
+
+    changed = bus.by_subject(Subjects.WORKSPACE_MEMBER_ROLE_CHANGED)
+    assert len(changed) == 2
+    by_user = {payload["user_id"]: payload for payload, _, _ in changed}
+    assert by_user[heir.id]["from_role"] == "admin"
+    assert by_user[heir.id]["to_role"] == "owner"
+    assert by_user[owner.id]["from_role"] == "owner"
+    assert by_user[owner.id]["to_role"] == "admin"
+    assert all(p["changed_by_user_id"] == owner.id for p, _, _ in changed)
+
+    assert bus.actions() == ["workspace.ownership_transferred"]
 
 
 async def test_member_removed_emits_event_and_audit(bus, owner):

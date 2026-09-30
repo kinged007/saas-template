@@ -21,6 +21,7 @@ from src.api.deps import (
     AuthPrincipal,
     get_container,
     get_current_workspace_id,
+    record_key_use,
     require_permission,
     require_superuser,
     resolve_auth_principal,
@@ -162,6 +163,7 @@ async def list_global_job_runs(
 
 @router.get("/runs/{run_id}")
 async def get_job_run(
+    response: Response,
     run_id: str,
     principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
@@ -169,7 +171,7 @@ async def get_job_run(
     run = await JobService(db).get_run(run_id)
     if run is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
-    await _require_run_access(db, principal, run)
+    await _require_run_access(db, principal, run, response)
     schema = {}
     definition = await JobService(db).get_definition(run.definition_id)
     if definition is not None:
@@ -179,6 +181,7 @@ async def get_job_run(
 
 @router.get("/runs/{run_id}/logs")
 async def get_job_run_logs(
+    response: Response,
     run_id: str,
     principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
@@ -187,17 +190,25 @@ async def get_job_run_logs(
     run = await service.get_run(run_id)
     if run is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
-    await _require_run_access(db, principal, run)
+    await _require_run_access(db, principal, run, response)
     return [job_log_to_dict(e) for e in await service.list_run_logs(run_id)]
 
 
-async def _require_run_access(db: AsyncSession, principal: AuthPrincipal, run: JobRun) -> None:
+async def _require_run_access(
+    db: AsyncSession,
+    principal: AuthPrincipal,
+    run: JobRun,
+    response: Response,
+) -> None:
     """Global runs are superuser-only; workspace runs need jobs:read there.
 
     An API key is authorized by its own permission list and stays inside its
     own workspace — never by the creator's role, and never over a global run.
     A key outside the run's workspace gets 404, a session user who is not a
-    member gets 403.
+    member gets 403. A key that passes spends one unit of its usage quota, the
+    same charge require_permission makes, and `response` is what makes that
+    charge observable (the quota headers) — so callers must thread their own
+    Response through, never drop it.
     """
     if run.workspace_id is None:
         if not principal.is_deployment_admin:
@@ -209,6 +220,7 @@ async def _require_run_access(db: AsyncSession, principal: AuthPrincipal, run: J
             # A key learns nothing about runs outside its own workspace.
             raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
         if "*" in api_key.permissions or JOB_READ in api_key.permissions:
+            await record_key_use(api_key, db, response)
             return
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"missing permission: {JOB_READ}") from None
     membership = await WorkspaceService(db).get_membership(
@@ -225,13 +237,17 @@ async def _require_job_access(
     db: AsyncSession,
     principal: AuthPrincipal,
     definition: JobDefinition,
+    response: Response,
     *,
     need_edit: bool = False,
 ) -> None:
     """Unified check: global → superuser, workspace → jobs:read/update.
 
     A key outside the definition's workspace gets 404, a session user who is
-    not a member gets 403.
+    not a member gets 403. A key that passes spends one unit of its usage quota
+    through record_key_use, and `response` is what makes that charge observable
+    (the quota headers) — callers must thread their own Response through, never
+    drop it.
     """
     required = JOB_UPDATE if need_edit else JOB_READ
     if definition.workspace_id is None:
@@ -244,6 +260,7 @@ async def _require_job_access(
         if api_key.workspace_id != definition.workspace_id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
         if "*" in api_key.permissions or required in api_key.permissions:
+            await record_key_use(api_key, db, response)
             return
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"missing permission: {required}") from None
     membership = await WorkspaceService(db).get_membership(
@@ -271,6 +288,7 @@ async def list_workspace_jobs(
 
 @router.get("/{definition_id}")
 async def get_job(
+    response: Response,
     definition_id: str,
     principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
@@ -278,12 +296,13 @@ async def get_job(
     definition = await JobService(db).get_definition(definition_id)
     if definition is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
-    await _require_job_access(db, principal, definition, need_edit=False)
+    await _require_job_access(db, principal, definition, response, need_edit=False)
     return job_to_dict(definition)
 
 
 @router.patch("/{definition_id}")
 async def update_job(
+    response: Response,
     definition_id: str,
     body: JobUpdate,
     request: Request,
@@ -295,7 +314,7 @@ async def update_job(
     definition = await JobService(db).get_definition(definition_id)
     if definition is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
-    await _require_job_access(db, principal, definition, need_edit=True)
+    await _require_job_access(db, principal, definition, response, need_edit=True)
     try:
         updated = await JobService(db, container.bus, container.cipher).update_definition(
             definition,
@@ -327,6 +346,7 @@ async def update_job(
 
 @router.post("/{definition_id}/execute", status_code=201)
 async def execute_job(
+    response: Response,
     definition_id: str,
     principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
@@ -335,7 +355,7 @@ async def execute_job(
     definition = await JobService(db).get_definition(definition_id)
     if definition is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
-    await _require_job_access(db, principal, definition, need_edit=True)
+    await _require_job_access(db, principal, definition, response, need_edit=True)
     return await _execute_now(
         definition.id, definition.workspace_id, principal.user.id, db, container
     )
@@ -352,7 +372,7 @@ async def list_job_runs(
     definition = await JobService(db).get_definition(definition_id)
     if definition is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
-    await _require_job_access(db, principal, definition, need_edit=False)
+    await _require_job_access(db, principal, definition, response, need_edit=False)
     return await _list_runs(request, response, definition_id, definition.workspace_id, db)
 
 
