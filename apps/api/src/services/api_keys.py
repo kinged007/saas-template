@@ -163,6 +163,12 @@ class ApiKeyService:
     def _scope(
         workspace_id: str, created_by_user_id: str, stmt: Select[tuple[ApiKey]]
     ) -> Select[tuple[ApiKey]]:
+        """AND the owner predicate onto `stmt`, so it can only narrow.
+
+        Only `Select` is accepted: a subquery or compound select has no
+        `.where`, so it raises here rather than executing unscoped. Do not
+        wrap this call in try/except — a swallowed error would skip the scope.
+        """
         return stmt.where(
             ApiKey.workspace_id == workspace_id,
             ApiKey.created_by_user_id == created_by_user_id,
