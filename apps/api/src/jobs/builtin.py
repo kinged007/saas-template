@@ -310,14 +310,24 @@ async def api_key_cleanup(ctx: JobContext) -> None:
             .all()
         )
         revoked = 0
+        revoked_ids: set[str] = set()
         if expired:
+            # `revoked_at IS NULL` is re-asserted: a key the user revoked between the
+            # SELECT and this UPDATE keeps its own revoked_at, so its retention clock is
+            # not restarted. The returned ids are exactly the rows the audit trail below
+            # describes — `rowcount` is unavailable once RETURNING is used.
             result = await session.execute(
                 update(ApiKey)
-                .where(ApiKey.id.in_([e[0] for e in expired]))
+                .where(
+                    ApiKey.id.in_([e[0] for e in expired]),
+                    ApiKey.revoked_at.is_(None),
+                )
                 .values(revoked_at=now)
                 .execution_options(synchronize_session=False)
+                .returning(ApiKey.id)
             )
-            revoked = result.rowcount or 0
+            revoked_ids = {row[0] for row in result.all()}
+            revoked = len(revoked_ids)
 
         removed = 0
         if settings.api_key_retention_days > 0:
@@ -329,27 +339,37 @@ async def api_key_cleanup(ctx: JobContext) -> None:
             removed = result.rowcount or 0
         await session.commit()
 
+    unpublished: list[str] = []
     for key_id, workspace_id, name, key_prefix in expired:
-        await publish_event(
-            ctx.bus,
-            Subjects.APIKEY_REVOKED,
-            {
-                "apikey_id": key_id,
-                "workspace_id": workspace_id,
-                "name": name,
-                "key_prefix": key_prefix,
-                "revoked_by_user_id": None,
-            },
-        )
-        await publish_audit(
-            ctx.bus,
-            workspace_id=workspace_id,
-            resource_type="apikey",
-            resource_id=key_id,
-            action="apikey.revoked",
-            actor_user_id=None,
-            details={"name": name, "key_prefix": key_prefix, "reason": "expired"},
-        )
+        if key_id not in revoked_ids:
+            continue
+        try:
+            await publish_event(
+                ctx.bus,
+                Subjects.APIKEY_REVOKED,
+                {
+                    "apikey_id": key_id,
+                    "workspace_id": workspace_id,
+                    "name": name,
+                    "key_prefix": key_prefix,
+                    "revoked_by_user_id": None,
+                },
+            )
+            await publish_audit(
+                ctx.bus,
+                workspace_id=workspace_id,
+                resource_type="apikey",
+                resource_id=key_id,
+                action="apikey.revoked",
+                actor_user_id=None,
+                details={"name": name, "key_prefix": key_prefix, "reason": "expired"},
+            )
+        except Exception:
+            # The commit is not transactional with the bus, so a failed publish leaves a
+            # revoked key with no event and no audit entry. Record it and keep going; the
+            # run fails below with the count of what was lost.
+            logger.exception("api key cleanup — audit publish failed for key %s", key_id)
+            unpublished.append(key_id)
 
     logger.info(
         "api key cleanup — %d key(s) revoked as expired, %d key(s) deleted",
@@ -357,6 +377,11 @@ async def api_key_cleanup(ctx: JobContext) -> None:
         removed,
     )
     print(f"api key cleanup — {revoked} key(s) revoked as expired, {removed} key(s) deleted")
+    if unpublished:
+        raise RuntimeError(
+            f"api key cleanup — {revoked} key(s) revoked as expired, but the event or audit "
+            f"entry was not published for {len(unpublished)} of them: {', '.join(unpublished)}"
+        )
 
 
 @job_registry.register(
