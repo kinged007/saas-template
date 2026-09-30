@@ -15,22 +15,27 @@ const DB = "sqlite+aiosqlite:///./e2e-dev.db";
 export default defineConfig({
   // dev-session.spec.ts drives the real stack; routing.spec.ts mocks the API
   // and belongs to playwright.config.ts.
+  testDir: "./e2e",
   testMatch: "**/dev-session.spec.ts",
   forbidOnly: !!process.env.CI,
   timeout: 90_000,
   expect: { timeout: 10_000 },
   use: { baseURL },
+  // Manual only, not in CI: it migrates, seeds and boots the whole dev stack.
   webServer: {
     command: [
       `export USE_SQLITE=1 API_PORT=${API_PORT} WEB_PORT=${WEB_PORT} DATABASE_URL=${DB}`,
       "cd ../api",
-      ".venv/bin/alembic upgrade head",
-      ".venv/bin/python -m src.seed",
+      "uv run alembic upgrade head",
+      "uv run python -m src.seed",
       "cd ../..",
       "exec python3 scripts/dev.py",
     ].join(" && "),
     url: baseURL,
     reuseExistingServer: false,
     timeout: 180_000,
+    // dev.py re-arms SIGTERM and tears down its own uvicorn/vite process
+    // groups; without this Playwright SIGKILLs it and orphans both servers.
+    gracefulShutdown: { signal: "SIGTERM", timeout: 10_000 },
   },
 });

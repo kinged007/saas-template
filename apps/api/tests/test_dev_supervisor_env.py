@@ -51,6 +51,7 @@ def test_allowed_origins_cover_both_loopback_names(api_env):
     # The user's own entries survive the lift.
     assert "*.coder.munyard.biz" in origins
 
+
 def test_allowed_origins_pass_the_csrf_check(api_env, monkeypatch):
     """The supervisor's env is only useful if the API accepts these origins."""
     from src.core.security import cookies
@@ -59,6 +60,7 @@ def test_allowed_origins_pass_the_csrf_check(api_env, monkeypatch):
     monkeypatch.setattr(cookies.settings, "cors_origins", ",".join(origins))
     # A `*` entry is a pattern for the CORS middleware, not a browser origin.
     assert all(cookies._origin_allowed(o) for o in origins if "*" not in o)
+
 
 def test_shell_env_wins_over_file(tmp_path, monkeypatch):
     (tmp_path / "apps" / "api").mkdir(parents=True)

@@ -63,20 +63,20 @@ def api_env_file(key: str) -> str:
 def dev_allowed_origins(web_port: str = WEB_PORT) -> list[str]:
     """Origins the API must accept for `make dev`.
 
-    The API's cookie endpoints allowlist the browser origin, so a non-default
-    web port needs its own entry. Vite serves every loopback name
-    (server.host: true), so both are listed: a browser opened on 127.0.0.1 sends
-    that Origin and gets a 403 cross-origin on the refresh call otherwise. The
-    default 5173 stays allowed so a later plain `make dev` in the same shell
-    still authenticates, and anything the user configured in .env is kept."""
-    web_origin = f"http://localhost:{web_port}"
+    The API's cookie endpoints allowlist the browser origin, so every web port
+    needs its own entries. Vite serves every loopback name (server.host: true),
+    so both names of the default port and of `web_port` are listed: a browser
+    opened on 127.0.0.1 sends that Origin and gets a 403 cross-origin on the
+    refresh call otherwise. Anything the user configured in .env is kept."""
     return [
         o
         for o in dict.fromkeys(
             [
-                "http://localhost:5173",
-                web_origin,
-                f"http://127.0.0.1:{web_port}",
+                *(
+                    f"http://{host}:{port}"
+                    for port in ("5173", web_port)
+                    for host in ("localhost", "127.0.0.1")
+                ),
                 *(os.environ.get("CORS_ORIGINS") or api_env_file("CORS_ORIGINS")).split(","),
             ]
         )
