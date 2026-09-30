@@ -435,3 +435,87 @@ async def test_update_role_duplicate_name_conflicts(app_client):
         f"/api/v1/roles/{created['id']}", json={"name": "editor"}, headers=headers
     )
     assert resp.status_code == 409
+
+
+# ------------------------------------------------------------------- listing
+
+# 4 system roles + 8 custom = 12, past the default page size of 10.
+_CUSTOM_ROLE_NAMES = ["zulu", "alpha", "mike", "bravo", "yankee", "delta", "echo", "foxtrot"]
+
+
+async def _roles_past_ten(client, prefix: str):
+    owner = await register_user(client, f"{prefix}@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    for name in _CUSTOM_ROLE_NAMES:
+        resp = await client.post(
+            "/api/v1/roles", json={"name": name, "permissions": []}, headers=headers
+        )
+        assert resp.status_code == 201, resp.text
+    return headers
+
+
+async def test_roles_list_is_not_capped_at_ten(app_client):
+    """#258: the full set is retrievable, and the count says how big it is."""
+    client = app_client
+    headers = await _roles_past_ten(client, "list-cap")
+    resp = await client.get("/api/v1/roles", params={"_start": 0, "_end": 100}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["X-Total-Count"] == "12"
+    assert len(resp.json()) == 12
+
+
+async def test_roles_default_order_is_system_first(app_client):
+    client = app_client
+    headers = await _roles_past_ten(client, "list-order")
+    resp = await client.get("/api/v1/roles", params={"_start": 0, "_end": 100}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    names = [r["name"] for r in resp.json()]
+    assert names[:4] == ["owner", "admin", "editor", "viewer"]
+    assert names[4:] == sorted(_CUSTOM_ROLE_NAMES)
+
+
+async def test_roles_client_sort_does_not_split_the_system_block(app_client):
+    client = app_client
+    headers = await _roles_past_ten(client, "list-sorted")
+    resp = await client.get(
+        "/api/v1/roles",
+        params={"_start": 0, "_end": 100, "sort[]": "name", "order[]": "asc"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert [r["name"] for r in resp.json()][:4] == ["owner", "admin", "editor", "viewer"]
+
+
+async def test_roles_client_sort_desc_reverses_only_within_the_rank_groups(app_client):
+    client = app_client
+    headers = await _roles_past_ten(client, "list-sorted-desc")
+    resp = await client.get(
+        "/api/v1/roles",
+        params={"_start": 0, "_end": 100, "sort[]": "name", "order[]": "desc"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    names = [r["name"] for r in resp.json()]
+    assert names[:4] == ["owner", "admin", "editor", "viewer"]
+    assert names[4:] == sorted(_CUSTOM_ROLE_NAMES, reverse=True)
+
+
+async def test_roles_paging_tiles_the_set_without_gaps(app_client):
+    """Rank + name is a total order, so pages tile the set in that one order.
+
+    The expectation is built here rather than fetched from a full-set request:
+    two runs of the same endpoint agree even when the order is not total.
+    """
+    client = app_client
+    headers = await _roles_past_ten(client, "list-page")
+    paged: list[dict] = []
+    for start in (0, 5, 10):
+        resp = await client.get(
+            "/api/v1/roles", params={"_start": start, "_end": start + 5}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        paged += resp.json()
+    expected = ["owner", "admin", "editor", "viewer", *sorted(_CUSTOM_ROLE_NAMES)]
+    assert [r["name"] for r in paged] == expected
+    assert len({r["id"] for r in paged}) == 12
