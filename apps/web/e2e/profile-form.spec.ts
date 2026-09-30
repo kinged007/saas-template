@@ -1,6 +1,7 @@
 import { expect, type Page } from "playwright/test";
 
 import { test } from "./fixtures";
+import { ACCESS_TOKEN, IDENTITY } from "./mock-api";
 
 /**
  * The general profile form must render the saved profile on a hard reload
@@ -43,21 +44,7 @@ const NULL_PROFILE = {
   updated_at: null,
 };
 
-const IDENTITY = {
-  id: "user-1",
-  email: "e2e@example.com",
-  display_name: "Reviewer U",
-  is_superuser: true,
-  permissions: ["*"],
-  workspaces: [{ id: "ws-1", name: "Acme Corp", role: "owner" }],
-  single_workspace: true,
-};
 
-const ACCESS_TOKEN = [
-  btoa(JSON.stringify({ alg: "HS256", typ: "JWT" })),
-  btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600, sub: "user-1" })),
-  "sig",
-].join(".");
 
 /** Holds `GET /me/profile` until `release` is called. */
 function hold() {
