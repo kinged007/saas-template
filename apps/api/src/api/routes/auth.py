@@ -86,6 +86,24 @@ async def _maybe_join_single_workspace(db: AsyncSession, container, user) -> Non
     await WorkspaceService(db, container.bus).join_single_workspace(user)
 
 
+async def _join_single_workspace_best_effort(db: AsyncSession, container, user):
+    """Join the single workspace; on failure log, roll back, return a usable user.
+
+    A failed join does not fail authentication: the caller gets a valid session
+    with no membership, and every workspace-scoped route still 403s without one.
+    The rollback expires every loaded instance, so the user is re-read instead
+    of being handed back needing a lazy refresh.
+    """
+    user_id = user.id
+    try:
+        await _maybe_join_single_workspace(db, container, user)
+    except Exception:
+        logger.exception("failed to join single workspace for user %s", user_id)
+        await db.rollback()
+        return await AuthService(db).get_user(user_id) or user
+    return user
+
+
 @router.get("/config")
 async def auth_config() -> dict:
     """Public auth capabilities for the login UI (no secrets)."""
@@ -142,10 +160,7 @@ async def register(
     pair = await service.issue_tokens(
         user, ip_address=_client_ip(request), user_agent=_user_agent(request)
     )
-    try:
-        await _maybe_join_single_workspace(db, container, user)
-    except Exception:
-        logger.exception("failed to join single workspace for user %s", user.id)
+    user = await _join_single_workspace_best_effort(db, container, user)
     try:
         await _send_verification(service, user)
     except Exception:
@@ -261,11 +276,7 @@ async def login(
             raise HTTPException(status.HTTP_403_FORBIDDEN, msg) from None
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, msg) from None
     get_auth_limiter().reset(key)
-    try:
-        await _maybe_join_single_workspace(db, container, user)
-    except Exception:
-        await db.rollback()
-        logger.exception("failed to join single workspace for user %s", user.id)
+    user = await _join_single_workspace_best_effort(db, container, user)
     if user.totp_enabled:
         challenge = TwoFactorService(db, container.cipher, container.bus).issue_challenge(user.id)
         raise HTTPException(
@@ -318,10 +329,9 @@ async def refresh(
             # pair.refresh_token is the NEW token; its owner is the rotated user.
             user = await service.get_user_by_refresh_token(pair.refresh_token)
             if user is not None:
-                await _maybe_join_single_workspace(db, container, user)
+                await _join_single_workspace_best_effort(db, container, user)
         except Exception:
-            await db.rollback()
-            logger.exception("failed to join single workspace on refresh")
+            logger.exception("failed to resolve single workspace on refresh")
     if cookie_token is not None or browser_flow(request, body):
         set_refresh_cookie(response, pair.refresh_token, request=request)
         return TokenResponse(

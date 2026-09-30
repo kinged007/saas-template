@@ -10,7 +10,13 @@ the flag is on.
 import pytest
 
 from src.settings import settings
-from tests.conftest import auth_headers, create_workspace, login, register_user
+from tests.conftest import (
+    auth_headers,
+    break_single_workspace_join,
+    create_workspace,
+    login,
+    register_user,
+)
 
 
 @pytest.fixture
@@ -185,28 +191,36 @@ async def test_join_survives_missing_viewer_role(app_client, single_workspace_on
     assert [w["id"] for w in me.json()["workspaces"]] == [ws_id]
 
 
-async def test_join_failure_does_not_break_login(app_client, single_workspace_on, monkeypatch):
-    import src.api.routes.auth as auth_routes
+async def test_login_survives_join_failure(app_client, single_workspace_on):
+    # A failed join is log-only: the rollback it needs expires every loaded
+    # instance, so the reads after it must not be lazy loads.
+    await break_single_workspace_join(app_client)
+    await register_user(app_client, "newcomer@example.com")
 
-    async def boom(*args, **kwargs):
-        raise RuntimeError("db down")
+    tokens = await login(app_client, "newcomer@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert me.status_code == 200, me.text
+    assert me.json()["workspaces"] == []
+    assert me.json()["single_workspace"] is True
 
-    monkeypatch.setattr(auth_routes.WorkspaceService, "join_single_workspace", boom)
+
+async def test_refresh_survives_join_failure(app_client, single_workspace_on):
+    await break_single_workspace_join(app_client)
+    tokens = await register_user(app_client, "newcomer@example.com")
+
     resp = await app_client.post(
-        "/api/v1/auth/login",
-        json={"email": "ghost@example.com", "password": "Password123!"},
-    )
-    # Unknown user still 401; the point is no 500 from the join path —
-    # covered below with a real user.
-    assert resp.status_code == 401
-    monkeypatch.setattr(settings, "single_workspace", False)
-    await register_user(app_client, "real@example.com")
-    monkeypatch.setattr(settings, "single_workspace", True)
-    resp = await app_client.post(
-        "/api/v1/auth/login",
-        json={"email": "real@example.com", "password": "Password123!"},
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
     )
     assert resp.status_code == 200, resp.text
+
+
+async def test_register_survives_join_failure(app_client, single_workspace_on):
+    await break_single_workspace_join(app_client)
+    tokens = await register_user(app_client, "newcomer@example.com")
+
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert me.status_code == 200, me.text
+    assert me.json()["workspaces"] == []
 
 
 async def test_delete_nonexistent_returns_404_in_single_mode(app_client, single_workspace_on):
