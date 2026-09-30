@@ -10,7 +10,7 @@
     "dev": "vite",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "preview": "vite preview",
-    "test": "node --test \"src/**/*.test.ts\"",
+    "test": "node --test --test-reporter=tap \"src/**/*.test.ts\"",
     "test:e2e": "playwright test"
   },
   "dependencies": {
