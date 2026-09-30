@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -35,7 +35,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDeleteAccount, useExportProfile, useProfile, useUpdateProfile } from "@/hooks/useProfile";
-import type { Identity, UserProfile } from "@/types";
+import type { Identity } from "@/types";
 import { getProfileField } from "@/types";
 
 const profileSchema = z.object({
@@ -132,7 +132,7 @@ function getDetectedTimezone(): string {
 export function GeneralSection() {
   const { data: identity } = useGetIdentity<Identity>();
   const profileHook = useProfile();
-  const profile = (profileHook.data as UserProfile | undefined) ?? identity?.profile;
+  const profile = profileHook.data;
   const { mutate, mutation: updateMutation } = useUpdateProfile();
   const isSaving = updateMutation.isPending;
   const { exportMyData } = useExportProfile();
@@ -140,7 +140,6 @@ export function GeneralSection() {
   const isDeleting = deleteMutation.isPending;
   const { list } = useNavigation();
 
-  const [initialized, setInitialized] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [deletePassword, setDeletePassword] = useState("");
@@ -150,42 +149,30 @@ export function GeneralSection() {
   // Ensure detected timezone is selectable even if fallback list is used.
   const allTimezones = detectedTimezone && !tzOptions.includes(detectedTimezone) ? [detectedTimezone, ...tzOptions] : tzOptions;
 
+  // react-hook-form reads `defaultValues` once, on mount; `values` resyncs the
+  // form whenever the profile query resolves, so no reset-on-first-render latch
+  // (which used to close on the not-yet-loaded profile and blank the form).
+  const values = useMemo<ProfileFormData>(
+    () => ({
+      first_name: (getProfileField(profile, "first_name", "") as string) || "",
+      last_name: (getProfileField(profile, "last_name", "") as string) || "",
+      bio: (getProfileField(profile, "bio", "") as string) || "",
+      phone_number: (getProfileField(profile, "phone_number", "") as string) || "",
+      timezone: (getProfileField(profile, "timezone", "") as string) || detectedTimezone || "",
+      locale: (getProfileField(profile, "locale", "") as string) || "en",
+      date_of_birth: (getProfileField(profile, "date_of_birth", "") as string) || "",
+      website_url: (getProfileField(profile, "website_url", "") as string) || "",
+      location: (getProfileField(profile, "location", "") as string) || "",
+      avatar_url: identity?.avatar_url || "",
+    }),
+    [profile, identity?.avatar_url, detectedTimezone],
+  );
+
   const form = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
-    defaultValues: {
-      first_name: "",
-      last_name: "",
-      bio: "",
-      phone_number: "",
-      timezone: "",
-      locale: "",
-      date_of_birth: "",
-      website_url: "",
-      location: "",
-      avatar_url: "",
-    },
+    defaultValues: values,
+    values,
   });
-
-  // Initialize form when profile loads — preselect detected timezone when empty.
-  useEffect(() => {
-    if (profile && !initialized) {
-      const tzFromProfile = (getProfileField(profile, "timezone", "") as string) || "";
-      const localeFromProfile = (getProfileField(profile, "locale", "") as string) || "";
-      form.reset({
-        first_name: (getProfileField(profile, "first_name", "") as string) || "",
-        last_name: (getProfileField(profile, "last_name", "") as string) || "",
-        bio: (getProfileField(profile, "bio", "") as string) || "",
-        phone_number: (getProfileField(profile, "phone_number", "") as string) || "",
-        timezone: tzFromProfile || detectedTimezone || "",
-        locale: localeFromProfile || "en",
-        date_of_birth: (getProfileField(profile, "date_of_birth", "") as string) || "",
-        website_url: (getProfileField(profile, "website_url", "") as string) || "",
-        location: (getProfileField(profile, "location", "") as string) || "",
-        avatar_url: (identity?.avatar_url as string) || "",
-      });
-      setInitialized(true);
-    }
-  }, [profile, identity, initialized, form, detectedTimezone]);
 
   const onSubmit = (data: ProfileFormData) => {
     const payload: Record<string, unknown> = {};

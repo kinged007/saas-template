@@ -13,15 +13,18 @@ import { clearAllCaches } from "../providers/queryClient";
 
 export function useProfile() {
   const { data: identity } = useGetIdentity<Identity>();
-  const enabled = !identity?.profile;
   const custom = useCustom<UserProfile>({
     url: "me/profile",
     method: "get",
-    queryOptions: { enabled },
   });
-  const data = (identity?.profile as UserProfile | undefined) ?? (custom.result?.data as UserProfile | undefined);
-  const isLoading = enabled ? (custom.query.isPending as boolean) : false;
-  const isError = enabled ? (custom.query.isError as boolean) : false;
+  // `simple-rest` wraps a `custom` response as `{ data }`, so read the query
+  // payload: `result.data` is a frozen, always-truthy `{}` until the request
+  // settles, which is what left the form blank. `/auth/me`'s embed is only the
+  // first-paint fallback — it can arrive with all-null fields.
+  const data = ((custom.query.data as { data?: UserProfile } | undefined)?.data ??
+    identity?.profile) as UserProfile | undefined;
+  const isLoading = custom.query.isPending as boolean;
+  const isError = custom.query.isError as boolean;
   return {
     data,
     isLoading,
