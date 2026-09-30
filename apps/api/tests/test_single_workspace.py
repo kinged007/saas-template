@@ -192,16 +192,22 @@ async def _retire_system_roles(app_client, created_at: list) -> str:
     return ws_id
 
 
-async def test_last_resort_role_is_the_oldest_remaining_role(app_client, single_workspace_on):
+async def test_last_resort_role_is_the_oldest_remaining_role(
+    app_client, single_workspace_on, caplog
+):
+    import logging
     from datetime import timedelta
 
     from src.core.dates import now_utc
 
     base = now_utc()
     ws_id = await _retire_system_roles(app_client, [base + timedelta(days=1), base])
-    tokens = await register_user(app_client, "second@example.com")
+    with caplog.at_level(logging.WARNING, logger="src.services.workspaces"):
+        tokens = await register_user(app_client, "second@example.com")
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
     assert [(w["id"], w["role"]) for w in me.json()["workspaces"]] == [(ws_id, "alpha")]
+    # The last resort is the branch an operator most needs to know about.
+    assert "granting oldest remaining role 'alpha'" in caplog.text
 
 
 async def test_last_resort_role_breaks_timestamp_ties_by_name(app_client, single_workspace_on):
@@ -220,12 +226,41 @@ async def test_unresolvable_default_role_is_logged(
 ):
     import logging
 
-    await _first_workspace(app_client)
+    from sqlalchemy import delete
+
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    _, ws_id = await _first_workspace(app_client)
+    # Only viewer is gone, so the chain lands on editor: the log must name the
+    # role actually granted, not the constant it no longer reaches.
+    async with SessionFactory() as session:
+        await session.execute(delete(Role).where(Role.workspace_id == ws_id, Role.name == "viewer"))
+        await session.commit()
     monkeypatch.setattr(settings, "single_workspace_default_role", "edtior")
     with caplog.at_level(logging.WARNING, logger="src.services.workspaces"):
-        await register_user(app_client, "second@example.com")
-    assert "SINGLE_WORKSPACE_DEFAULT_ROLE" in caplog.text
-    assert "edtior" in caplog.text
+        tokens = await register_user(app_client, "second@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert me.json()["workspaces"][0]["role"] == "editor"
+    assert "SINGLE_WORKSPACE_DEFAULT_ROLE='edtior'" in caplog.text
+    assert "granted 'editor'" in caplog.text
+
+
+async def test_resolvable_default_role_logs_nothing(
+    app_client, single_workspace_on, monkeypatch, caplog
+):
+    import logging
+
+    await _first_workspace(app_client)
+    for value in ("viewer", "owner"):
+        monkeypatch.setattr(settings, "single_workspace_default_role", value)
+        with caplog.at_level(logging.WARNING, logger="src.services.workspaces"):
+            tokens = await register_user(app_client, f"{value}-cfg@example.com")
+        me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+        # "owner" is a documented input that resolves viewer: not a misconfiguration.
+        assert me.json()["workspaces"][0]["role"] == "viewer"
+        assert "SINGLE_WORKSPACE_DEFAULT_ROLE" not in caplog.text
+        assert "granting oldest remaining role" not in caplog.text
 
 
 async def test_join_failure_does_not_break_login(app_client, single_workspace_on, monkeypatch):
