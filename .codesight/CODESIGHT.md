@@ -1,11 +1,11 @@
-# saas-template — AI Context Map
+# 267 — AI Context Map
 
 > **Stack:** fastapi | sqlalchemy | react | typescript
 > **Monorepo:** api, saas-template-web
 
-> 94 routes | 23 models | 61 components | 99 lib files | 35 env vars | 3 middleware | 21% test coverage
-> **Token savings:** this file is ~10,900 tokens. Without it, AI exploration would cost ~117,800 tokens. **Saves ~106,900 tokens per conversation.**
-> **Last scanned:** 2026-09-23 16:03 — re-run after significant changes
+> 102 routes | 23 models | 64 components | 106 lib files | 39 env vars | 4 middleware | 22% test coverage
+> **Token savings:** this file is ~11,900 tokens. Without it, AI exploration would cost ~125,600 tokens. **Saves ~113,700 tokens per conversation.**
+> **Last scanned:** 2026-09-30 19:01 — re-run after significant changes
 
 ---
 
@@ -26,22 +26,24 @@
 - `GET` `/audit` params() [db]
 - `GET` `/effective-permissions` params()
 - `GET` `/config` params() → out: TokenResponse [auth]
-- `POST` `/register` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/register` params() → in: RegisterRequest, out: TokenResponse [auth] ✓
 - `POST` `/forgot-password` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/reset-password` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/verify-email` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/resend-verification` params() → in: RegisterRequest, out: TokenResponse [auth, email]
-- `POST` `/login` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/login` params() → in: RegisterRequest, out: TokenResponse [auth] ✓
 - `POST` `/refresh` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/change-password` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `GET` `/2fa/status` params() → out: TokenResponse
-- `POST` `/2fa/setup` params() → in: RegisterRequest, out: TokenResponse
-- `POST` `/2fa/enable` params() → in: RegisterRequest, out: TokenResponse
+- `POST` `/2fa/setup` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/2fa/enable` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/2fa/disable` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/2fa/backup-codes` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/2fa/login` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/logout` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `GET` `/me` params() → out: TokenResponse
 - `GET` `/unread-count` params() → in: st
+- `PATCH` `/{conversation_id}/participants` params(conversation_id)
 - `PATCH` `/{conversation_id}/read` params(conversation_id)
 - `PATCH` `/{conversation_id}/unread` params(conversation_id)
 - `PATCH` `/{conversation_id}/archive` params(conversation_id)
@@ -49,13 +51,16 @@
 - `POST` `/{conversation_id}/messages` params(conversation_id) → in: ConversationCreate
 - `POST` `/accept` params() → in: InvitationCreate [auth, db]
 - `GET` `/mine` params()
+- `POST` `/{invitation_id}/resend` params(invitation_id) → in: InvitationCreate [email]
 - `POST` `/{invitation_id}/decline` params(invitation_id) → in: InvitationCreate
 - `POST` `/global/{definition_id}/execute` params(definition_id)
 - `GET` `/global/{definition_id}/runs` params(definition_id)
-- `GET` `/runs/{run_id}` params(run_id)
-- `GET` `/runs/{run_id}/logs` params(run_id)
+- `GET` `/runs/{run_id}` params(run_id) [auth]
+- `GET` `/runs/{run_id}/logs` params(run_id) [auth]
 - `POST` `/{definition_id}/execute` params(definition_id) [auth]
 - `GET` `/{definition_id}/runs` params(definition_id) [auth]
+- `POST` `/{membership_id}/suspend` params(membership_id)
+- `POST` `/{membership_id}/reactivate` params(membership_id)
 - `GET` `/healthz` params()
 - `GET` `/metrics` params()
 - `GET` `/readyz` params()
@@ -69,7 +74,7 @@
 - `GET` `/me/profile` params() → in: Use
 - `PUT` `/me/profile` params() → in: ProfileUpdate [db]
 - `PATCH` `/me/profile` params() → in: ProfileUpdate [db]
-- `GET` `/users/{user_id}/profile` params(user_id) → in: Use
+- `GET` `/users/{user_id}/profile` params(user_id) → in: Use [auth]
 - `GET` `/me/export` params() → in: Use
 - `GET` `/users/{user_id}/export` params(user_id) → in: Use
 - `DELETE` `/me` params() → in: DeleteMeRequest [db]
@@ -81,7 +86,10 @@
 - `GET` `/deliveries/{delivery_id}` params(delivery_id) [webhook]
 - `POST` `/deliveries/{delivery_id}/redeliver` params(delivery_id) → in: WebhookSubscriptionCreate [webhook]
 - `GET` `/search` params() → out: list
+- `GET` `/export/resources` params() → out: list
 - `GET` `/export` params() → out: list
+- `POST` `/{workspace_id}/transfer` params(workspace_id) → in: WorkspaceCreate, out: list
+- `DELETE` `/{workspace_id}/membership` params(workspace_id) → out: list [db]
 - `GET` `/` params() ✓
 
 ---
@@ -97,9 +105,12 @@
 - permissions: JSON (default)
 - created_by_user_id: str (index)
 - last_used_at: DateTime (nullable)
+- expires_at: DateTime (nullable, index)
 - revoked_at: DateTime (nullable)
 - usage_count: Integer (default)
 - usage_quota: Integer (nullable)
+- usage_window_count: Integer (default)
+- usage_window_start: DateTime (nullable)
 
 ### AuditLogEntry
 - id: str (pk, default)
@@ -329,11 +340,13 @@
 - **AuditLogTable** — props: resource, searchPlaceholder, searchEnabled, showWorkspace — `apps/web/src/components/AuditLogTable.tsx`
 - **SsoButtons** — props: providers, disabled — `apps/web/src/components/AuthConfig.tsx`
 - **NotificationCenter** — `apps/web/src/components/NotificationCenter.tsx`
+- **PendingInvitationsBadge** — `apps/web/src/components/PendingInvitations.tsx`
 - **UserProfileDialog** — props: userId, open, onOpenChange, fallback — `apps/web/src/components/UserProfileDialog.tsx`
 - **WorkspaceExportCard** — `apps/web/src/components/WorkspaceExportCard.tsx`
 - **WorkspaceSearch** — `apps/web/src/components/WorkspaceSearch.tsx`
 - **ComposeDialog** — props: open, onOpenChange, onCreated — `apps/web/src/components/inbox/ComposeDialog.tsx`
-- **TiptapEditor** — props: value, onChange, placeholder, className, minHeight — `apps/web/src/components/inbox/TiptapEditor.tsx`
+- **EditParticipantsDialog** — props: open, onOpenChange, conversationId, participantIds, onSaved — `apps/web/src/components/inbox/EditParticipantsDialog.tsx`
+- **TiptapEditor** — props: value, onChange, placeholder, className, minHeight, mentions, onMention — `apps/web/src/components/inbox/TiptapEditor.tsx`
 - **CreateButton** [client] — props: resource — `apps/web/src/components/refine-ui/buttons/create.tsx`
 - **DeleteButton** [client] — props: resource, recordItemId — `apps/web/src/components/refine-ui/buttons/delete.tsx`
 - **EditButton** [client] — props: resource, recordItemId — `apps/web/src/components/refine-ui/buttons/edit.tsx`
@@ -355,6 +368,7 @@
 - **DashboardPage** — `apps/web/src/pages/DashboardPage.tsx`
 - **ForgotPasswordPage** — `apps/web/src/pages/ForgotPasswordPage.tsx`
 - **InboxPage** — `apps/web/src/pages/InboxPage.tsx`
+- **InvitationAcceptPage** — `apps/web/src/pages/InvitationAcceptPage.tsx`
 - **JobDetailPage** — `apps/web/src/pages/JobDetailPage.tsx`
 - **JobRunPage** — `apps/web/src/pages/JobRunPage.tsx`
 - **JobsPage** — `apps/web/src/pages/JobsPage.tsx`
@@ -378,6 +392,7 @@
 - **GeneralSection** — `apps/web/src/pages/settings/profile/sections/GeneralSection.tsx`
 - **NotificationsSection** — `apps/web/src/pages/settings/profile/sections/NotificationsSection.tsx`
 - **SecuritySection** — `apps/web/src/pages/settings/profile/sections/SecuritySection.tsx`
+- **WorkspacesSection** — `apps/web/src/pages/settings/profile/sections/WorkspacesSection.tsx`
 - **WorkspaceSettingsLayout** — `apps/web/src/pages/settings/workspace/WorkspaceSettingsLayout.tsx`
 - **AuditLogSection** — `apps/web/src/pages/settings/workspace/sections/AuditLogSection.tsx`
 - **GeneralSection** — `apps/web/src/pages/settings/workspace/sections/GeneralSection.tsx`
@@ -409,6 +424,9 @@
 - `apps/api/alembic/versions/0014_session_metadata.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0015_2fa_sessions.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0016_oauth_accounts.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0017_member_suspension.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0018_api_key_expiry.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0019_api_key_quota_window.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/src/api/crud.py`
   - function parse_query: (request, *, max_limit) -> QuerySpec
   - function apply_query: (stmt, model, spec, *, sortable, filterable) -> Select
@@ -434,6 +452,13 @@
   - function reset: () -> None
 - `apps/api/src/core/permissions.py` — function register_permission: (permission, *, resource, action) -> str, function permissions_for_role: (role_name) -> list[str]
 - `apps/api/src/core/request_id.py` — function get_request_id: () -> str, class RequestIdMiddleware
+- `apps/api/src/core/security/cookies.py`
+  - function cookie_secure_for: (request) -> bool
+  - function set_refresh_cookie: (response, token, request) -> None
+  - function clear_refresh_cookie: (response) -> None
+  - function get_refresh_token: (request) -> str | None
+  - function browser_flow: (request, body) -> bool
+  - function require_csrf: (request) -> None
 - `apps/api/src/core/security/crypto.py` — class SecretCipher
 - `apps/api/src/core/security/password.py` — class PasswordHasher
 - `apps/api/src/core/security/ratelimit.py` — function get_auth_limiter: () -> SlidingWindowLimiter, class SlidingWindowLimiter
@@ -498,6 +523,7 @@
   - function expire_stale_invitations: (ctx) -> None
   - function notifications_daily_digest: (ctx) -> None
   - function retention_cleanup: (ctx) -> None
+  - function api_key_cleanup: (ctx) -> None
   - function demo_global_daily_report: (ctx) -> None
 - `apps/api/src/jobs/capture.py`
   - function run_log_collector: () -> RunLogCollector | None
@@ -507,7 +533,7 @@
   - function uninstall_run_capture: () -> None
   - class CapturedEntry
   - _...3 more_
-- `apps/api/src/jobs/executor.py` — function execute_run: (run_id) -> None
+- `apps/api/src/jobs/executor.py` — function execute_run: (run_id, bus) -> None
 - `apps/api/src/jobs/registry.py`
   - function validate_cron_schedule: (expr) -> None
   - function next_cron_occurrence: (expr, after) -> datetime
@@ -562,7 +588,7 @@
   - class RefreshRequest
   - class ForgotPasswordRequest
   - class ResetPasswordRequest
-  - _...32 more_
+  - _...35 more_
 - `apps/api/src/secrets/base.py` — class SecretRecord, class SecretStore
 - `apps/api/src/secrets/db_store.py` — class DbSecretStore
 - `apps/api/src/secrets/factory.py` — function build_secret_store: () -> SecretStore
@@ -610,7 +636,7 @@
 - `apps/api/src/services/serializers.py`
   - function notification_to_dict: (n, *, workspace_name) -> dict
   - function user_to_dict: (u) -> dict
-  - function workspace_to_dict: (w, *, role, permissions) -> dict
+  - function workspace_to_dict: (w, *, role, permissions, joined_at) -> dict
   - function profile_to_dict: (p) -> dict
   - function public_projection: (p, user) -> dict
 - `apps/api/src/services/two_factor.py` — class TwoFactorError, class TwoFactorService
@@ -627,9 +653,14 @@
   - class WorkspaceError
   - class WorkspaceForbidden
   - class WorkspaceConflict
+  - class WorkspaceNotFound
   - class WorkspaceService
 - `apps/api/src/settings.py` — class Settings
 - `apps/api/src/workflows/__init__.py` — function build_workflows: (registry, bus, connection_manager, cipher) -> None
+- `apps/web/e2e/mock-api.ts`
+  - function mockApi: (page, {...}) => void
+  - const IDENTITY
+  - const ACCESS_TOKEN
 - `apps/web/src/hooks/useNotificationPreferences.ts`
   - function humanizeType: (type) => string
   - function useNotificationPreferences: (extraTypes, enabled) => void
@@ -649,10 +680,20 @@
   - function getAvatarSrc: (avatarUrl?) => string | undefined
   - function getAvatarData: (entity, fallbackEmailAsName) => void
   - const UserProfileAvatar
+- `apps/web/src/lib/mentions.ts`
+  - function rankMentionTargets: (targets, query) => MentionTarget[]
+  - function pickerIndex: (selectedId, items, query) => number
+  - function mentionUrlTransform: (url) => string
+  - function mentionRemarkPlugin: (names) => void
+  - type MentionTarget
+  - const MENTION_SCHEME
+  - _...1 more_
+- `apps/web/src/lib/notificationLink.ts` — function notificationLinkUrl: (n) => string | undefined
 - `apps/web/src/lib/utils.ts` — function cn: (...inputs) => void, function oktaAdminConsoleFix: (value?) => string | null
 - `apps/web/src/providers/authProvider.ts` — function seedWorkspace: (identity) => Promise<void>, const authProvider: AuthProvider
 - `apps/web/src/providers/dataProvider.ts`
   - function cancelPendingRefresh: () => void
+  - function ensureSession: () => Promise<boolean>
   - const API_URL
   - const httpClient
   - const dataProvider: DataProvider
@@ -661,6 +702,7 @@
   - function removeThreadMessage: (conversationId, messageId) => void
   - function applyMessageCreated: (frame) => void
   - function applyNotificationCreated: (frame) => void
+  - function invalidateUnreadCounts: () => void
   - function applyConversationRead: (conversationId) => void
 - `apps/web/src/providers/liveProvider.ts`
   - function subscribeLive: (channel, handler) => () => void
@@ -683,10 +725,13 @@
 - `apps/web/src/utils/storage.ts`
   - function getActiveWorkspaceId: () => string | null
   - function setActiveWorkspaceId: (id) => void
+  - const sessionHint
   - const tokenStore
   - const identityStore
   - const workspaceStore
+  - _...2 more_
 - `scripts/dev.py`
+  - function api_env_file: (key) -> str
   - function main: () -> int
   - function kill_all: (procs, sig) -> None
   - function wait_all: (procs, timeout) -> None
@@ -698,10 +743,13 @@
 ## Environment Variables
 
 - `ACCESS_TOKEN_EXPIRE_MINUTES` (has default) — apps/api/.env.example
+- `API_KEY_RETENTION_DAYS` (has default) — apps/api/.env.example
+- `API_PORT` (has default) — apps/web/vite.config.ts
 - `APP_NAME` (has default) — apps/api/.env.example
 - `AUDIT_LOG_RETENTION_DAYS` (has default) — apps/api/.env.example
 - `AUTH_RATE_LIMIT_MAX_ATTEMPTS` (has default) — apps/api/.env.example
 - `AUTH_RATE_LIMIT_WINDOW_SECONDS` (has default) — apps/api/.env.example
+- `CI` **required** — apps/web/playwright.config.ts
 - `CORS_ORIGINS` (has default) — apps/api/.env.example
 - `DATABASE_URL` **required** — apps/api/tests/conftest.py
 - `DEBUG` (has default) — apps/api/.env.example
@@ -732,6 +780,7 @@
 - `SUPERADMIN_EMAIL` **required** — apps/api/.env.example
 - `VITE_API_URL` (has default) — apps/web/src/providers/dataProvider.ts
 - `VITE_WS_URL` (has default) — apps/web/src/providers/liveProvider.ts
+- `WEB_PORT` **required** — apps/web/vite.config.ts
 
 ## Config Files
 
@@ -749,57 +798,62 @@
 - auth — `apps/api/src/services/auth.py`
 - authProvider — `apps/web/src/providers/authProvider.ts`
 
+## cors
+- test_cors_wildcard_origin — `apps/api/tests/test_cors_wildcard_origin.py`
+
 ---
 
 # Dependency Graph
 
 ## Most Imported Files (change these carefully)
 
-- `apps/api/src/db/session.py` — imported by **44** files
-- `apps/api/src/settings.py` — imported by **32** files
-- `apps/api/src/models/workspace.py` — imported by **30** files
-- `apps/web/src/types.ts` — imported by **27** files
-- `apps/api/tests/conftest.py` — imported by **23** files
-- `apps/api/src/models/core.py` — imported by **19** files
-- `apps/api/src/events/bus.py` — imported by **19** files
-- `apps/api/src/core/dates.py` — imported by **18** files
+- `apps/api/src/db/session.py` — imported by **53** files
+- `apps/api/src/settings.py` — imported by **38** files
+- `apps/api/src/models/workspace.py` — imported by **36** files
+- `apps/web/src/types.ts` — imported by **31** files
+- `apps/api/tests/conftest.py` — imported by **30** files
+- `apps/api/src/core/dates.py` — imported by **26** files
+- `apps/api/src/models/core.py` — imported by **23** files
+- `apps/api/src/events/bus.py` — imported by **22** files
+- `apps/api/src/core/permissions.py` — imported by **17** files
+- `apps/api/src/events/subjects.py` — imported by **17** files
+- `apps/api/src/models/api_key.py` — imported by **16** files
+- `apps/api/src/services/workspaces.py` — imported by **16** files
 - `apps/api/src/api/deps.py` — imported by **16** files
-- `apps/api/src/core/permissions.py` — imported by **16** files
+- `apps/api/src/models/jobs.py` — imported by **16** files
+- `apps/api/src/models/audit.py` — imported by **15** files
+- `apps/web/src/hooks/useWorkspaceQuery.ts` — imported by **15** files
 - `apps/api/src/db/base.py` — imported by **14** files
-- `apps/api/src/services/workspaces.py` — imported by **14** files
-- `apps/api/src/events/subjects.py` — imported by **14** files
-- `apps/web/src/hooks/useWorkspaceQuery.ts` — imported by **14** files
-- `apps/api/src/models/jobs.py` — imported by **13** files
-- `apps/api/src/models/api_key.py` — imported by **12** files
-- `apps/api/src/events/publisher.py` — imported by **12** files
+- `apps/api/src/events/publisher.py` — imported by **13** files
 - `apps/api/src/schemas/api.py` — imported by **12** files
-- `apps/api/src/api/crud.py` — imported by **11** files
-- `apps/api/src/models/audit.py` — imported by **11** files
+- `apps/api/src/services/auth.py` — imported by **11** files
 
 ## Import Map (who imports what)
 
-- `apps/api/src/db/session.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/admin.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/auth.py` +39 more
-- `apps/api/src/settings.py` ← `apps/api/alembic/env.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/oauth.py`, `apps/api/src/container.py`, `apps/api/src/core/security/ratelimit.py` +27 more
-- `apps/api/src/models/workspace.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/admin.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py` +25 more
-- `apps/web/src/types.ts` ← `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/NotificationCenter.tsx`, `apps/web/src/contexts/WorkspaceContext.tsx`, `apps/web/src/hooks/useNotificationPreferences.ts` +22 more
-- `apps/api/tests/conftest.py` ← `apps/api/tests/test_admin.py`, `apps/api/tests/test_api_key_security.py`, `apps/api/tests/test_api_keys.py`, `apps/api/tests/test_api_versioning_quotas.py`, `apps/api/tests/test_audit_workflow.py` +18 more
-- `apps/api/src/models/core.py` ← `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/notifications.py`, `apps/api/src/db/cascade.py`, `apps/api/src/jobs/builtin.py`, `apps/api/src/models/__init__.py` +14 more
-- `apps/api/src/events/bus.py` ← `apps/api/src/container.py`, `apps/api/src/events/factory.py`, `apps/api/src/events/inprocess.py`, `apps/api/src/events/nats.py`, `apps/api/src/events/publisher.py` +14 more
-- `apps/api/src/core/dates.py` ← `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/jobs/builtin.py`, `apps/api/src/jobs/executor.py`, `apps/api/src/seed.py` +13 more
-- `apps/api/src/api/deps.py` ← `apps/api/src/api/routes/admin.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/conversations.py` +11 more
-- `apps/api/src/core/permissions.py` ← `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/conversations.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/jobs.py` +11 more
+- `apps/api/src/db/session.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/admin.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/auth.py` +48 more
+- `apps/api/src/settings.py` ← `apps/api/alembic/env.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/oauth.py`, `apps/api/src/container.py`, `apps/api/src/core/security/cookies.py` +33 more
+- `apps/api/src/models/workspace.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/admin.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py` +31 more
+- `apps/web/src/types.ts` ← `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/NotificationCenter.tsx`, `apps/web/src/components/PendingInvitations.tsx`, `apps/web/src/components/inbox/EditParticipantsDialog.tsx` +26 more
+- `apps/api/tests/conftest.py` ← `apps/api/tests/test_admin.py`, `apps/api/tests/test_api_key_expiry.py`, `apps/api/tests/test_api_key_quota_window.py`, `apps/api/tests/test_api_key_security.py`, `apps/api/tests/test_api_keys.py` +25 more
+- `apps/api/src/core/dates.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/jobs/builtin.py` +21 more
+- `apps/api/src/models/core.py` ← `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/notifications.py`, `apps/api/src/db/cascade.py`, `apps/api/src/jobs/builtin.py`, `apps/api/src/models/__init__.py` +18 more
+- `apps/api/src/events/bus.py` ← `apps/api/src/container.py`, `apps/api/src/events/factory.py`, `apps/api/src/events/inprocess.py`, `apps/api/src/events/nats.py`, `apps/api/src/events/publisher.py` +17 more
+- `apps/api/src/core/permissions.py` ← `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/conversations.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/jobs.py` +12 more
+- `apps/api/src/events/subjects.py` ← `apps/api/src/events/nats.py`, `apps/api/src/events/publisher.py`, `apps/api/src/events/webhook_events.py`, `apps/api/src/jobs/builtin.py`, `apps/api/src/services/api_keys.py` +12 more
 
 ---
 
 # Test Coverage
 
-> **21%** of routes and models are covered by tests
-> 35 test files found
+> **22%** of routes and models are covered by tests
+> 58 test files found
 
 ## Covered Routes
 
 - GET:
 - POST:
+- POST:/register
+- POST:/login
 - GET:/
 
 ## Covered Models
@@ -815,6 +869,7 @@
 - JobDefinition
 - JobRun
 - JobLogEntry
+- OAuthAccount
 - StoredSecret
 - UserProfile
 - WebhookSubscription
@@ -834,7 +889,7 @@
 
 | Workflow | Triggers | Jobs | Deploy | Environments |
 |---|---|---|---|---|
-| ci | pull_request, push | 4 | — | — |
+| ci | pull_request, push | 6 | — | — |
 
 ### ci
 
@@ -850,6 +905,12 @@
   - `actions/checkout@v4`
   - `astral-sh/setup-uv@v5`
 - **web-build** on `ubuntu-latest` — 4 steps
+  - `actions/checkout@v4`
+  - `actions/setup-node@v4`
+- **web-test** on `ubuntu-latest` — 4 steps
+  - `actions/checkout@v4`
+  - `actions/setup-node@v4`
+- **web-e2e** on `ubuntu-latest` — 5 steps
   - `actions/checkout@v4`
   - `actions/setup-node@v4`
 
