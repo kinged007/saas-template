@@ -1,5 +1,9 @@
+from __future__ import annotations
+
 import asyncio  # noqa: E402
 import os  # noqa: E402
+from datetime import timedelta  # noqa: E402
+from typing import TYPE_CHECKING  # noqa: E402
 
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_saas_template.db"
 os.environ["SECRET_KEY"] = "test-secret-key-not-for-production"
@@ -20,6 +24,9 @@ from src import models as _models  # noqa: E402,F401  (register tables on Base.m
 from src.db.base import Base  # noqa: E402
 from src.db.session import engine  # noqa: E402
 from src.settings import settings  # noqa: E402
+
+if TYPE_CHECKING:  # noqa: E402
+    from src.models.jobs import JobRun
 
 
 async def _drop_all_with_retry(tries: int = 24, delay: float = 0.25) -> None:
@@ -134,3 +141,69 @@ def ws_headers(tokens: dict, workspace_id: str) -> dict:
     headers = auth_headers(tokens)
     headers["X-Workspace-ID"] = workspace_id
     return headers
+
+
+async def run_job_via_scheduler(
+    key: str,
+    *,
+    missed_by: timedelta = timedelta(hours=3),
+    timeout_s: float = 10.0,
+) -> tuple[JobRun, list[str]]:
+    """Drive a global job through the real scheduler -> bus -> executor path.
+
+    Backdates the provisioned definition's `next_run_at` so a tick claims it as
+    a missed occurrence, then waits for the durable worker to finish the run.
+    Returns the run plus its captured log messages.
+    """
+    from sqlalchemy import select
+
+    from src.core.dates import now_utc
+    from src.db.session import SessionFactory
+    from src.jobs.scheduler import JobScheduler
+    from src.main import app as fastapi_app
+    from src.models.jobs import JobDefinition, JobLogEntry, JobRun
+
+    async with SessionFactory() as session:
+        definition = (
+            await session.execute(
+                select(JobDefinition).where(
+                    JobDefinition.key == key,
+                    JobDefinition.workspace_id.is_(None),
+                )
+            )
+        ).scalar_one()
+        assert definition.enabled is True, f"{key} is not enabled"
+        definition.next_run_at = now_utc() - missed_by
+        definition_id = definition.id
+        await session.commit()
+
+    await JobScheduler(bus=fastapi_app.state.container.bus).tick()
+
+    for _ in range(int(timeout_s * 10)):
+        async with SessionFactory() as session:
+            run = (
+                (
+                    await session.execute(
+                        select(JobRun)
+                        .where(JobRun.definition_id == definition_id)
+                        .order_by(JobRun.created_at.desc())
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if run is not None and run.status in ("success", "failed", "timed_out"):
+                messages = (
+                    (
+                        await session.execute(
+                            select(JobLogEntry.message)
+                            .where(JobLogEntry.run_id == run.id)
+                            .order_by(JobLogEntry.seq)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                return run, list(messages)
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"job {key} did not finish within {timeout_s}s")
