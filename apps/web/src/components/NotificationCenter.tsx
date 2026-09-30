@@ -17,6 +17,7 @@ import { useNavigate } from "react-router";
 import type { Notification } from "../types";
 import { formatDate } from "./ui";
 import { stripMarkdown, truncate } from "@/lib/markdown";
+import { notificationLinkUrl } from "@/lib/notificationLink";
 import { liveChannels, subscribeLive } from "../providers/liveProvider";
 
 function truncateEscaped(text: string | undefined, max: number): string {
@@ -108,11 +109,8 @@ export function NotificationCenter() {
     );
   };
 
-  const linkUrl = (n: Notification) =>
-    (n.payload as Record<string, unknown> | undefined)?.url as string | undefined;
-
   const openNotification = (n: Notification) => {
-    const url = linkUrl(n);
+    const url = notificationLinkUrl(n);
     if (!url) return;
     setOpen(false);
     navigate(url);
@@ -138,7 +136,7 @@ export function NotificationCenter() {
   };
 
   const renderItem = (n: Notification) => {
-    const url = linkUrl(n);
+    const url = notificationLinkUrl(n);
     const isMessage = n.type === "conversation_message";
     const payload = n.payload as Record<string, unknown> | undefined;
     const senderName = payload?.sender_name as string | undefined;
