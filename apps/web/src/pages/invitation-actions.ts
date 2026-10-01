@@ -10,9 +10,12 @@ export const canRevokeInvitation = (i: InvitationRow) => i.status === "pending";
  * `apps/api/src/services/workspaces.py` will act on: it resets `declined` and
  * `expired` to `pending`, ignores a fresh `pending` row, and rejects the
  * terminal `accepted` and `revoked`. The subset drops the fresh `pending` row,
- * where a re-send is a no-op server-side. Adding a member to `InvitationStatus`
- * without deciding it here is a type error, so a status the API grows later is
- * refused until this table is updated with it.
+ * where a re-send is a no-op server-side. A `pending` row is decided by the
+ * `expired` flag in `canResendInvitation` and never by this table, so the
+ * `pending` entry below is unreachable and stays only to keep the record
+ * exhaustive. Adding a member to `InvitationStatus` without deciding it here
+ * is a type error, so a status the API grows later is refused until this table
+ * is updated with it.
  */
 const RESEND_ALLOWED: Record<InvitationStatus, boolean> = {
   pending: false,
