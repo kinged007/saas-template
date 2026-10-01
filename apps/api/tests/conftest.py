@@ -127,6 +127,27 @@ def auth_headers(tokens: dict) -> dict:
     return {"Authorization": f"Bearer {tokens['access_token']}"}
 
 
+async def break_single_workspace_join(client: AsyncClient, email: str = "first@example.com") -> str:
+    """Leave the single workspace with only its owner role, so an auto-join raises.
+
+    Returns the workspace id. The failure is real (no monkeypatch), which
+    matters: a fake failure raises before the join opened a transaction, so the
+    rollback that follows has nothing to expire.
+    """
+    from sqlalchemy import delete
+
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    tokens = await register_user(client, email)
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    ws_id = me.json()["workspaces"][0]["id"]
+    async with SessionFactory() as session:
+        await session.execute(delete(Role).where(Role.workspace_id == ws_id, Role.name != "owner"))
+        await session.commit()
+    return ws_id
+
+
 async def create_workspace(client: AsyncClient, tokens: dict, name: str = "Acme Corp") -> dict:
     resp = await client.post(
         "/api/v1/workspaces",

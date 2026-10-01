@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import get_container
 from src.api.routes.auth import (
     _client_ip,
-    _maybe_join_single_workspace,
+    _join_single_workspace_best_effort,
     _user_agent,
 )
 from src.core.security.cookies import browser_flow, set_refresh_cookie
@@ -164,11 +164,8 @@ async def oauth_callback(
     except Exception:
         logger.exception("oauth token issue failed user=%s", user.id)
         return _error_redirect("sign-in failed")
-    try:
-        await _maybe_join_single_workspace(db, container, user)
-    except Exception:
-        await db.rollback()
-        logger.exception("failed to join single workspace for oauth user %s", user.id)
+    # A failed join stays log-only: the 302 must happen either way.
+    user = await _join_single_workspace_best_effort(db, container, user)
     one_time = secrets.token_urlsafe(32)
     container.cache.set(
         CODE_TTL_HINT + one_time,

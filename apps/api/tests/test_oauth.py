@@ -12,7 +12,7 @@ from src.models.oauth import OAuthAccount
 from src.models.workspace import User
 from src.services import oauth as oauth_svc
 from src.settings import settings
-from tests.conftest import auth_headers, register_user
+from tests.conftest import auth_headers, break_single_workspace_join, register_user
 
 PROVIDERS = [
     {
@@ -245,6 +245,24 @@ async def test_oauth_same_provider_new_subject_links_same_user(app_client, oauth
     assert second.status_code == 302
     assert await _user_count() == before
     assert await _link_count() == 2
+
+
+async def test_oauth_callback_survives_join_failure(app_client, oauth_on, monkeypatch):
+    # A failed join is log-only: the rollback it needs expires every loaded
+    # instance, and reading the user for the log line would be a lazy load.
+    monkeypatch.setattr(settings, "single_workspace", True)
+    await break_single_workspace_join(app_client)
+    _mock_oauth(monkeypatch)
+
+    _, resp = await _callback(app_client, monkeypatch)
+    assert resp.status_code == 302, resp.text
+    assert resp.headers["location"].startswith("http://localhost:5173/oauth/callback?code=")
+    code = resp.headers["location"].split("code=")[1]
+    tokens = await app_client.post("/api/v1/auth/oauth/token", json={"code": code})
+    assert tokens.status_code == 200, tokens.text
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens.json()))
+    assert me.status_code == 200, me.text
+    assert me.json()["workspaces"] == []
 
 
 async def test_oauth_new_user_blocked_when_registration_disabled(app_client, oauth_on, monkeypatch):
