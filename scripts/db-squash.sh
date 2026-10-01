@@ -207,9 +207,8 @@ echo "    ok"
 
 echo "==> replacing versions/ with the baseline"
 cp "$SCRATCH_ROOT/$BASELINE_NAME" alembic/versions/
-# ruff is a dev extra: without --extra dev it cannot spawn, and a squash that
-# ships unformatted code fails CI. Loud on purpose — the EXIT trap restores the
-# old chain, so an abort costs nothing.
+# ruff is a dev extra: it cannot spawn without --extra dev. Lint failures
+# abort the squash; the EXIT trap restores the old chain.
 uv run --extra dev ruff format "$BASELINE"
 uv run --extra dev ruff check --fix "$BASELINE"
 

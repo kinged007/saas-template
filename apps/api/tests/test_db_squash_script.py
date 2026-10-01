@@ -24,5 +24,7 @@ def test_ruff_runs_with_the_dev_extra():
 
 
 def test_ruff_failure_is_not_silenced():
-    for line in _ruff_invocations():
+    invocations = _ruff_invocations()
+    assert invocations, "no `uv run ... ruff` invocation found in db-squash.sh"
+    for line in invocations:
         assert not re.search(r"\|\|\s*true|>\s*/dev/null", line), f"silent ruff step: {line}"

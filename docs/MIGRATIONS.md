@@ -72,9 +72,11 @@ would otherwise point at the head being replaced), and the import of
 class and never emits the matching import, so the file would not import as
 generated). The generated `downgrade()` is kept as-is — it already drops
 every table, which is what a baseline should do. The baseline is then linted
-with `uv run --extra dev ruff format` / `ruff check --fix`; if ruff cannot run
-or reports an unfixable diagnostic, the squash aborts and restores the old
-chain instead of shipping a baseline CI would reject.
+with `uv run --extra dev ruff format` / `ruff check --fix`, which sync the dev
+extra on demand and therefore need PyPI reachable on a checkout that has not
+run `make api-install`; if ruff cannot run or reports an unfixable diagnostic,
+the squash aborts and restores the old chain instead of shipping a baseline CI
+would reject.
 
 Known limitation: `env.py` disables `compare_type` / `compare_server_default`,
 so both proofs confirm tables, columns, indexes and constraints — not that
