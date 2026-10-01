@@ -3,7 +3,6 @@ import { test } from "node:test";
 
 import type { Member } from "@/types";
 import {
-  liveTransferId,
   resolveTransferTarget,
   transferEligibleMembers,
 } from "./transfer-ownership.ts";
@@ -50,10 +49,8 @@ test("resolveTransferTarget is disarmed before a selection is made", () => {
   assert.equal(resolveTransferTarget([member()], ""), undefined);
 });
 
-test("liveTransferId drops a stale id so the Select falls back to the placeholder", () => {
-  const admin = member({ membership_id: "m-1" });
-  const gone = transferEligibleMembers([member({ membership_id: "m-1", status: "suspended" })]);
-  assert.equal(liveTransferId([admin], "m-1"), "m-1");
-  assert.equal(liveTransferId(gone, "m-1"), "");
-  assert.equal(liveTransferId([admin], ""), "");
-});
+// Coverage: these are the pure helpers behind the transfer Select. The effect
+// that clears a stale id in GeneralSection.tsx is wiring over
+// resolveTransferTarget, not a tested unit — `node --test` cannot load .tsx
+// (see AGENTS.md), so that wiring is verified by hand. What it relies on is
+// covered above: an unresolvable id yields undefined.
