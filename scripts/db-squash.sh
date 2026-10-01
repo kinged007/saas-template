@@ -207,8 +207,11 @@ echo "    ok"
 
 echo "==> replacing versions/ with the baseline"
 cp "$SCRATCH_ROOT/$BASELINE_NAME" alembic/versions/
-uv run ruff format "$BASELINE" >/dev/null 2>&1 || true
-uv run ruff check --fix "$BASELINE" >/dev/null 2>&1 || true
+# ruff is a dev extra: without --extra dev it cannot spawn, and a squash that
+# ships unformatted code fails CI. Loud on purpose — the EXIT trap restores the
+# old chain, so an abort costs nothing.
+uv run --extra dev ruff format "$BASELINE"
+uv run --extra dev ruff check --fix "$BASELINE"
 
 echo "PASS: $OLD_COUNT migrations squashed into 1"
 echo "  versions/ now holds $(ls alembic/versions/*.py | wc -l | tr -d ' ') file(s)"
