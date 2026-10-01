@@ -74,17 +74,18 @@ async def _membership_id(client, owner_tokens, ws, email: str) -> str:
     return next(m for m in members.json() if m["email"] == email)["membership_id"]
 
 
-async def _seed_legacy_owner_role(
-    workspace_id: str, *, permissions: list[str] | None = None
+async def _seed_legacy_case_role(
+    workspace_id: str, name: str = "Owner", *, permissions: list[str] | None = None
 ) -> str:
-    """Insert the `Owner` row #328 stopped new writes from creating; return its id."""
+    """Insert a case-variant `Owner`/`Admin` row #328 stopped new writes from
+    creating; return its id. `_check_name_free` still refuses these names."""
     from src.db.session import SessionFactory
     from src.models.workspace import Role
 
     async with SessionFactory() as session:
         role = Role(
             workspace_id=workspace_id,
-            name="Owner",
+            name=name,
             description=None,
             permissions=[] if permissions is None else permissions,
             system=False,
@@ -99,9 +100,9 @@ async def _add_member_holding_role(
 ) -> tuple[dict, str]:
     """Invite a member as viewer, then repoint their role_id at `role_id`.
 
-    A legacy owner row can no longer be invited to or assigned through the API,
-    so a member holding one only exists the way it existed in production: an
-    out-of-band `role_id` write.
+    A legacy case-variant row can no longer be invited to or assigned through
+    the API, so a member holding one only exists the way it existed in
+    production: an out-of-band `role_id` write.
     """
     from src.db.session import SessionFactory
     from src.models.workspace import WorkspaceMember
@@ -735,7 +736,7 @@ async def test_legacy_owner_case_row_is_not_editable(app_client):
     owner = await register_user(client, "ci8@example.com")
     ws = await create_workspace(client, owner)
     headers = ws_headers(owner, ws["id"])
-    role_id = await _seed_legacy_owner_role(ws["id"])
+    role_id = await _seed_legacy_case_role(ws["id"])
 
     desc = await client.patch(
         f"/api/v1/roles/{role_id}", json={"description": "renamed"}, headers=headers
@@ -754,7 +755,7 @@ async def test_legacy_owner_case_row_cannot_be_assigned(app_client):
     owner = await register_user(client, "ci9@example.com")
     ws = await create_workspace(client, owner)
     headers = ws_headers(owner, ws["id"])
-    role_id = await _seed_legacy_owner_role(ws["id"])
+    role_id = await _seed_legacy_case_role(ws["id"])
     await _add_member(client, owner, ws, "ci9t@example.com", "editor")
     target_id = await _membership_id(client, owner, ws, "ci9t@example.com")
 
@@ -779,7 +780,7 @@ async def test_legacy_owner_case_row_cannot_be_removed_suspended_or_left(app_cli
     owner = await register_user(client, "ci10@example.com")
     ws = await create_workspace(client, owner)
     headers = ws_headers(owner, ws["id"])
-    role_id = await _seed_legacy_owner_role(ws["id"])
+    role_id = await _seed_legacy_case_role(ws["id"])
     _holder, membership_id = await _add_member_holding_role(
         client, owner, ws, "ci10r@example.com", role_id
     )
@@ -803,7 +804,7 @@ async def test_legacy_owner_case_row_cannot_be_invited_to(app_client):
     client = app_client
     owner = await register_user(client, "ci11@example.com")
     ws = await create_workspace(client, owner)
-    role_id = await _seed_legacy_owner_role(ws["id"])
+    role_id = await _seed_legacy_case_role(ws["id"])
 
     resp = await client.post(
         "/api/v1/invitations",
@@ -826,7 +827,7 @@ async def test_legacy_owner_case_row_counts_as_owner_for_transfer_and_manager_ga
     owner = await register_user(client, "ci12@example.com")
     ws = await create_workspace(client, owner)
     headers = ws_headers(owner, ws["id"])
-    role_id = await _seed_legacy_owner_role(ws["id"], permissions=["*"])
+    role_id = await _seed_legacy_case_role(ws["id"], permissions=["*"])
     heir, _ = await _add_member_holding_role(client, owner, ws, "ci12h@example.com", role_id)
     heir_headers = ws_headers(heir, ws["id"])
 
@@ -864,6 +865,53 @@ async def test_legacy_owner_case_row_counts_as_owner_for_transfer_and_manager_ga
     assert roles["ci12h@example.com"] == "admin"
 
 
+async def test_legacy_admin_case_row_counts_as_admin_at_the_manager_gates(app_client):
+    """The `admin` half of the manager gate is case-insensitive, and name-only.
+
+    #624 replaced an exact `("owner", "admin")` comparison with
+    `is_manager_role_name`, so a pre-#328 `Admin` row beside the seeded `admin`
+    is admitted at both gates where it used to be refused. The row carries the
+    admin role's own permission set and no `"*"`: `"*"` is reserved for the
+    owner role, so an `Admin` row an admin created never had it. That set holds
+    the `member:update` / `member:delete` the route guards require, so these
+    calls exercise the name-only service gate rather than a permission.
+    """
+    client = app_client
+    owner = await register_user(client, "ci15@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    role_id = await _seed_legacy_case_role(
+        ws["id"], "Admin", permissions=perms.permissions_for_role("admin")
+    )
+    holder, _ = await _add_member_holding_role(client, owner, ws, "ci15h@example.com", role_id)
+    holder_headers = ws_headers(holder, ws["id"])
+
+    # set_member_role's actor gate: admits owner-or-admin.
+    editor_id = await _role_id(client, headers, "editor")
+    await _add_member(client, owner, ws, "ci15t@example.com", "viewer")
+    promoted = await client.patch(
+        f"/api/v1/members/{await _membership_id(client, owner, ws, 'ci15t@example.com')}",
+        json={"role_id": editor_id},
+        headers=holder_headers,
+    )
+    assert promoted.status_code == 200, promoted.text
+
+    # _require_manager, through remove_member: only the owner role is refused.
+    await _add_member(client, owner, ws, "ci15r@example.com", "viewer")
+    removed = await client.delete(
+        f"/api/v1/members/{await _membership_id(client, owner, ws, 'ci15r@example.com')}",
+        headers=holder_headers,
+    )
+    assert removed.status_code == 204, removed.text
+
+    # The holder is on the legacy row itself, not on the seeded `admin`.
+    roles = {
+        m["email"]: m["role"] for m in (await client.get("/api/v1/members", headers=headers)).json()
+    }
+    assert roles["ci15h@example.com"] == "Admin"
+    assert roles["ci15t@example.com"] == "editor"
+
+
 async def test_legacy_owner_case_row_transfers_without_the_owner_permission(app_client):
     """`transfer_ownership` gates on the name alone, whatever the row carries.
 
@@ -876,7 +924,7 @@ async def test_legacy_owner_case_row_transfers_without_the_owner_permission(app_
     owner = await register_user(client, "ci14@example.com")
     ws = await create_workspace(client, owner)
     headers = ws_headers(owner, ws["id"])
-    role_id = await _seed_legacy_owner_role(ws["id"])
+    role_id = await _seed_legacy_case_role(ws["id"])
     heir, _ = await _add_member_holding_role(client, owner, ws, "ci14h@example.com", role_id)
     heir_headers = ws_headers(heir, ws["id"])
     await _add_member(client, owner, ws, "ci14t@example.com", "editor")

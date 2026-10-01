@@ -64,7 +64,24 @@ def is_owner_role_name(name: str | None) -> bool:
 
 
 def is_manager_role_name(name: str | None) -> bool:
-    """Whether a role name may manage members: owner or admin, ignoring case."""
+    """Whether a role name may manage members: owner or admin, ignoring case.
+
+    Both halves case-fold, and that is a widening, not a refactor: #624 replaced
+    an exact `("owner", "admin")` comparison in `set_member_role` and
+    `_require_manager`. A workspace created before the case-insensitive name
+    check (#328) can hold a pre-#328 `Admin` row beside its seeded `admin`, and
+    that row's holder is now admitted at both manager gates, where the exact
+    comparison refused them. `_check_name_free` refuses the name
+    case-insensitively, so such a row can only come from old data; #400's
+    backfill is what removes it.
+
+    Name-only by design, as on the owner half: an `Admin` row an admin created
+    carries no `"*"`, since `"*"` is reserved for the owner role, and the gate
+    admits it anyway. Pinned by
+    `test_legacy_admin_case_row_counts_as_admin_at_the_manager_gates`; the owner
+    half by
+    `test_legacy_owner_case_row_counts_as_owner_for_transfer_and_manager_gates`.
+    """
     lowered = (name or "").lower()
     return lowered == "admin" or is_owner_role_name(lowered)
 
