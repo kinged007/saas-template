@@ -31,10 +31,9 @@ import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceConte
 import { canResendInvitation, canRevokeInvitation, invitationStatus } from "./invitation-actions";
 import { canReactivateMember, canSuspendMember } from "./member-actions";
 import { assignableRoles, rolePickerCapNotice } from "./role-picker-cap";
+import { isManagerRoleName, isOwnerRoleName } from "./role-name";
 import type { Identity, Invitation, Member, Role } from "../types";
 import { getMemberDisplayName } from "../types";
-
-const MANAGER_ROLES = ["owner", "admin"];
 
 const PAGE_SIZE = 10;
 // The role pickers need every role, ordered by the endpoint. Capped at the
@@ -112,7 +111,7 @@ export function MembersPage() {
   }, [invitesPage, invitesTotalPages]);
 
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
-  const canManageRoles = !!canManage?.can && MANAGER_ROLES.includes(myRole ?? "");
+  const canManageRoles = !!canManage?.can && isManagerRoleName(myRole);
   // Describe by the notice only where it renders: it is gated per section, and
   // it stays null until the role page is short.
   const memberRoleCapId = canManageRoles && roleCapNotice ? MEMBERS_ROLE_CAP_ID : undefined;
@@ -193,7 +192,7 @@ export function MembersPage() {
                   </TableCell>
                 <TableCell>{m.role}</TableCell>
                 <TableCell>
-                  {canManageRoles && m.role !== "owner" ? (
+                  {canManageRoles && !isOwnerRoleName(m.role) ? (
                     <Select
                       value={m.role_id}
                       onValueChange={(roleId) =>
@@ -228,7 +227,7 @@ export function MembersPage() {
                 <TableCell className="text-muted-foreground">{formatDate(m.joined_at)}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-1">
-                    {canManageRoles && m.role !== "owner" && canSuspendMember(m) && (
+                    {canManageRoles && !isOwnerRoleName(m.role) && canSuspendMember(m) && (
                       <Button variant="ghost" size="sm" onClick={() => suspend(m, true)}>
                         Suspend
                       </Button>
@@ -238,7 +237,7 @@ export function MembersPage() {
                         Reactivate
                       </Button>
                     )}
-                    {canDelete?.can && m.role !== "owner" && (
+                    {canDelete?.can && !isOwnerRoleName(m.role) && (
                       <DeleteButton
                         resource="members"
                         recordItemId={m.membership_id}
