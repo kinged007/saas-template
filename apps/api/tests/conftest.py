@@ -5,7 +5,8 @@ import os  # noqa: E402
 from datetime import timedelta  # noqa: E402
 from typing import TYPE_CHECKING  # noqa: E402
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_saas_template.db"
+_TEST_DB_NAME = "test_saas_template.db"
+os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///./{_TEST_DB_NAME}"
 os.environ["SECRET_KEY"] = "test-secret-key-not-for-production"
 os.environ["FERNET_KEYS"] = "test-fernet-key-value"
 os.environ["EVENT_BUS_DRIVER"] = "inprocess"
@@ -27,9 +28,6 @@ from src.settings import settings  # noqa: E402
 
 if TYPE_CHECKING:  # noqa: E402
     from src.models.jobs import JobRun
-
-
-_TEST_DB_NAME = "test_saas_template.db"
 
 
 def _db_path() -> Path:
