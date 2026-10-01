@@ -108,6 +108,39 @@ test.describe("invitations", () => {
     );
   });
 
+  test("the invite submit sends the resolved role and disarms on an unpicked one", async ({ page }) => {
+    const ADMIN = { id: "r-admin", workspace_id: "ws-1", name: "Admin", permissions: [], system: true };
+    const EDITOR = { id: "r-editor", workspace_id: "ws-1", name: "Editor", permissions: [], system: true };
+    const sent: unknown[] = [];
+    await mockApi(page, { signedIn: true, identity: inviter, lists: { roles: [ADMIN, EDITOR] } });
+    await page.route(
+      (url) => url.pathname.endsWith("/api/v1/invitations"),
+      async (route) => {
+        if (route.request().method() === "POST") {
+          sent.push(route.request().postDataJSON());
+          return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ id: "inv-new" }) });
+        }
+        return route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      },
+    );
+    await page.goto("/members");
+
+    await page.getByLabel("Email").fill("person@example.com");
+    const invite = page.getByRole("button", { name: "Invite" });
+    // No role picked: the submit stays disarmed.
+    await expect(invite).toBeDisabled();
+
+    await page.getByRole("combobox").click();
+    await page.getByRole("option", { name: "Editor" }).click();
+    await expect(invite).toBeEnabled();
+    await invite.click();
+
+    // The payload carries the resolved role, not the raw picker's state value.
+    await expect.poll(() => sent).toEqual([
+      { email: "person@example.com", role_id: EDITOR.id },
+    ]);
+  });
+
   test("a failed re-send refreshes the list, so the stale button cannot survive it", async ({ page }) => {
     await mockApi(page, { signedIn: true });
     let revoked = false;
