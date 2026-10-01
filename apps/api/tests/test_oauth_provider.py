@@ -262,6 +262,19 @@ def test_claims_from_id_token_rejects_non_string_issuer(provider, idp):
     assert claims_from_id_token(replace(provider, issuer=12345), idp.doc, idp.mint()) is None
 
 
+def test_claims_from_id_token_rejects_unreadable_discovery_issuer(provider, idp, caplog):
+    """A non-string document `issuer` is refused even when no `issuer` is configured,
+    where it would otherwise normalize to None and leave the pin presence-only. It
+    logs as unreadable, not as a mismatch, so a malformed document and a takeover
+    stay distinguishable during triage."""
+    for unconfigured in (provider, replace(provider, issuer=None)):
+        bad_doc = {**idp.doc, "issuer": 12345}
+        with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+            assert claims_from_id_token(unconfigured, bad_doc, idp.mint()) is None
+        assert "unreadable issuer in discovery document" in caplog.text
+        assert "discovery issuer mismatch" not in caplog.text
+
+
 def test_claims_from_id_token_without_issuer_checks_presence_only(provider, idp):
     """Deliberate ceiling: a provider that names no issuer anywhere (the explicit-URL
     shape, e.g. the GitHub config) has nothing to compare `iss` against, so only

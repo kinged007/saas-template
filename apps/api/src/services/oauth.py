@@ -195,6 +195,11 @@ def claims_from_id_token(
     # hostile control still controls the keys. A disagreement is a hard login
     # failure, not a fallback.
     doc_issuer = doc.get("issuer")
+    if doc_issuer is not None and not isinstance(doc_issuer, str):
+        # Malformed input, not a disagreement: log it as such, so a triage of a
+        # suspected takeover is not sent after a compromise that did not happen.
+        logger.warning("unreadable issuer in discovery document for provider %s", provider.id)
+        return None
     if provider.issuer and doc_issuer and _norm_issuer(provider.issuer) != _norm_issuer(doc_issuer):
         logger.warning("discovery issuer mismatch for provider %s", provider.id)
         return None

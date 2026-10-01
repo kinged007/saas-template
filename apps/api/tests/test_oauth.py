@@ -234,6 +234,29 @@ async def test_oauth_new_user_allowed(app_client, oauth_on, monkeypatch):
     assert again.status_code == 400
 
 
+async def test_callback_refused_id_token_fails_login(app_client, oauth_on, monkeypatch):
+    """A provider that sends an `id_token` the pin refuses has failed the login. A
+    conformant OIDC response also carries an `access_token`, so without this the
+    userinfo path completed the login anyway and created the user."""
+    _mock_oauth(monkeypatch)
+
+    async def fake_exchange(provider, doc, *, code, redirect_uri):
+        return {"access_token": "at", "id_token": "refused"}
+
+    def refuse_claims(provider, doc, id_token):
+        return None
+
+    import src.api.routes.oauth as oauth_routes
+
+    monkeypatch.setattr(oauth_routes, "exchange_code", fake_exchange)
+    monkeypatch.setattr(oauth_routes, "claims_from_id_token", refuse_claims)
+    before = await _user_count()
+    _, resp = await _callback(app_client, monkeypatch)
+    assert resp.status_code == 302
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=")
+    assert await _user_count() == before
+
+
 async def test_oauth_existing_user_links_by_subject(app_client, oauth_on, monkeypatch):
     _mock_oauth(monkeypatch)
     _, first = await _callback(app_client, monkeypatch, state="s1")
