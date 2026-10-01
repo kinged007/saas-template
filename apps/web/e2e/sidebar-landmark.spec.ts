@@ -3,8 +3,9 @@ import { expect, test as base } from "playwright/test";
 import { mockApi } from "./mock-api";
 
 /**
- * The sidebar shell must be a navigation landmark. The settings pages already
- * render their own `nav`, so the shell one needs a name to be told apart.
+ * Both navigation landmarks must carry a name, and must stay distinguishable
+ * on the settings pages, where the shell sidebar sits next to the settings
+ * nav of the page itself.
  */
 const test = base.extend<{ pageerrors: Error[] }>({
   pageerrors: [
@@ -31,5 +32,17 @@ test.describe("sidebar landmark", () => {
     await expect(nav.getByRole("link", { name: "Dashboard" })).toBeVisible();
     // The group heading belongs to the navigation, not to the page outline.
     await expect(nav.getByRole("heading", { name: "Demo" })).toBeVisible();
+  });
+
+  test("a settings page names both landmarks it renders", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    await page.goto("/settings/profile/general");
+
+    // Asserted as a pair: naming only one of the two leaves the other
+    // nameless, which is the regression this guards.
+    await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
+    const settingsNav = page.getByRole("navigation", { name: "Settings" });
+    await expect(settingsNav).toBeVisible();
+    await expect(settingsNav.getByRole("link", { name: "General" })).toBeVisible();
   });
 });
