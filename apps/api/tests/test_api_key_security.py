@@ -17,7 +17,7 @@ Covers, end to end over the HTTP API:
     and proof that key permissions never inherit the creator's role
 """
 
-from src.core.permissions import ALL_PERMISSIONS, JOB_READ, permissions_for_role
+from src.core.permissions import ALL_PERMISSIONS, JOB_READ, JOB_UPDATE, permissions_for_role
 from src.db.session import SessionFactory
 from src.services.notifications import NotificationService
 from tests.conftest import (
@@ -842,10 +842,29 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     resp = await client.get(f"/api/v1/jobs/runs/{foreign}", headers=viewer_headers)
     assert resp.status_code == 404, resp.text
 
+    # usage_quota = 0 buys nothing: the conditional UPDATE's
+    # `usage_count < usage_quota` is `0 < 0`, so the very first request is
+    # refused and the counter stays put. The row read is what pins that —
+    # a relaxed `<=` would still 403 on the next unit but hand out this one.
+    from src.models.api_key import ApiKey
+
+    zero = await _create_key(client, headers, "quota-zero", [JOB_READ], usage_quota=0)
+    refused = await client.get(
+        f"/api/v1/jobs/runs/{runs['workspace']}",
+        headers=_key_headers(zero["key"], ws["id"]),
+    )
+    assert refused.status_code == 403, refused.text
+    assert "quota" in refused.json()["detail"].lower(), refused.text
+    async with SessionFactory() as db:
+        row = await db.get(ApiKey, zero["id"])
+        assert row.usage_count == 0, "a zero-quota key must not spend a unit"
+
     # A key-authorized hit is metered like any other key route: every read and
     # write route spends one unit and reports what is left. Regression test for
     # #311 — the key branch of _require_run_access and _require_job_access used
-    # to return without record_key_use.
+    # to return without record_key_use. Each key carries only what its own
+    # route needs — a GET is gated on jobs:read, a write on jobs:update — so
+    # the second request's refusal can only be the quota's doing.
     for method, url, key_name, charged_status, body, refused_body in [
         ("get", f"/api/v1/jobs/runs/{runs['workspace']}", "quota-run", 200, None, None),
         ("get", f"/api/v1/jobs/runs/{runs['workspace']}/logs", "quota-logs", 200, None, None),
@@ -862,7 +881,11 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
         ("post", f"/api/v1/jobs/{runs['definition']}/execute", "quota-execute", 201, {}, {}),
     ]:
         capped = await _create_key(
-            client, headers, key_name, ["jobs:read", "jobs:update"], usage_quota=1
+            client,
+            headers,
+            key_name,
+            [JOB_READ if method == "get" else JOB_UPDATE],
+            usage_quota=1,
         )
         capped_headers = _key_headers(capped["key"], ws["id"])
         first = await client.request(method, url, json=body, headers=capped_headers)
