@@ -29,15 +29,31 @@ if TYPE_CHECKING:  # noqa: E402
     from src.models.jobs import JobRun
 
 
+_TEST_DB_NAME = "test_saas_template.db"
+
+
 def _db_path() -> Path:
-    """Filesystem path of the sqlite file the suite shares."""
-    return Path(make_url(settings.resolved_database_url).database)
+    """Filesystem path of the sqlite file the suite shares.
+
+    sqlite resolves a relative URL against the cwd, so the unlink must use the
+    same path the engine opens. The name is pinned to the suite's scratch file:
+    if DATABASE_URL is ever pointed at a real database, this fails loudly here
+    instead of silently deleting it.
+    """
+    url = make_url(settings.resolved_database_url)
+    assert url.get_backend_name() == "sqlite", f"expected a sqlite test database, got {url}"
+    path = Path(url.database or "")
+    assert path.name == _TEST_DB_NAME, f"refusing to unlink {path}"
+    return path
 
 
 async def _discard_db_file() -> None:
     """Take the sqlite file away from every connection that is still open."""
     await engine.dispose()  # close this suite's pooled connections first
-    _db_path().unlink(missing_ok=True)
+    path = _db_path()
+    path.unlink(missing_ok=True)
+    for suffix in ("-journal", "-wal", "-shm"):  # sidecars outlive the db file
+        path.with_name(path.name + suffix).unlink(missing_ok=True)
 
 
 async def _fresh_db() -> None:

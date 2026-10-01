@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import aiosqlite
+import pytest
 from sqlalchemy import inspect, text
 
 from src.db.session import engine
@@ -8,16 +9,17 @@ from src.db.session import engine
 from .conftest import _db_path
 
 # Connections the tests below deliberately leave behind, standing in for a bus
-# worker or job task that is still draining when a test ends. Closed in
-# `test_schema_survives_a_leaked_connection`, the next test in file order, so
-# each leak is held across at least one full fixture cycle.
+# worker or job task that is still draining when a test ends. Module-scoped
+# teardown holds each leak across every fixture cycle that follows it, and runs
+# however pytest selects from this file, so cleanup is never skipped.
 _leaked: list[aiosqlite.Connection] = []
 
 
-async def _close_leaks() -> None:
-    for conn in _leaked:
-        await conn.close()
-    _leaked.clear()
+@pytest.fixture(scope="module", autouse=True)
+async def _close_leaked_connections():
+    yield
+    while _leaked:
+        await _leaked.pop().close()
 
 
 async def _table_names() -> set[str]:
@@ -36,16 +38,13 @@ async def test_leaked_write_transaction_does_not_break_the_next_test():
 
 
 async def test_schema_survives_a_leaked_connection():
-    try:
-        tables = await _table_names()
-        assert "leak_scratch" not in tables, "the leaked test's table survived the reset"
-        assert {"users", "workspaces", "workspace_members"} <= tables, "schema is incomplete"
-        async with engine.connect() as conn:
-            # A stale snapshot makes create_all a no-op: the table is in the
-            # catalog but not for the next read.
-            assert (await conn.execute(text("SELECT count(*) FROM users"))).scalar_one() >= 0
-    finally:
-        await _close_leaks()
+    tables = await _table_names()
+    assert "leak_scratch" not in tables, "the leaked test's table survived the reset"
+    assert {"users", "workspaces", "workspace_members"} <= tables, "schema is incomplete"
+    async with engine.connect() as conn:
+        # A stale snapshot makes create_all a no-op: the table is in the
+        # catalog but not for the next read.
+        await conn.execute(text("SELECT count(*) FROM users"))  # raises if unreadable
 
 
 async def test_committed_row_does_not_survive_into_the_next_test():
