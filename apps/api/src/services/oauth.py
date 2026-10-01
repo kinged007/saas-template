@@ -217,25 +217,47 @@ async def _verified_email(client: httpx.AsyncClient, url: str, headers: dict[str
     return str(chosen["email"]) if chosen else ""
 
 
+def _failure_detail(exc: Exception) -> str:
+    """HTTP status when the provider answered, else the exception type."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return f"HTTP {status}" if status else type(exc).__name__
+
+
 async def fetch_userinfo(
     provider: ProviderConfig, doc: dict[str, Any], access_token: str
 ) -> dict[str, Any]:
     endpoint = doc.get("userinfo_endpoint") or provider.userinfo_url
     if not endpoint:
         return {}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            headers = {"Authorization": f"Bearer {access_token}"}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        headers = {"Authorization": f"Bearer {access_token}"}
+        try:
             resp = await client.get(endpoint, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-            if not isinstance(data, dict):
-                return {}
-            if not data.get("email") and provider.emails_url:
+        except Exception as exc:
+            raise OAuthError(
+                f"could not fetch user info for '{provider.id}' from {endpoint}: "
+                f"{_failure_detail(exc)}"
+            ) from exc
+        if not isinstance(data, dict):
+            return {}
+        if not data.get("email") and provider.emails_url:
+            try:
                 data["email"] = await _verified_email(client, provider.emails_url, headers)
-            return data
-    except Exception as exc:
-        raise OAuthError("could not fetch user info") from exc
+            except Exception as exc:
+                detail = _failure_detail(exc)
+                # GitHub answers 404 on /user/emails when the token lacks the
+                # email scope: a config fix, so name the scopes to compare.
+                if detail == "HTTP 404":
+                    detail = (
+                        f"HTTP 404, token likely lacks an email scope (asked: {provider.scopes})"
+                    )
+                raise OAuthError(
+                    f"could not fetch verified email for '{provider.id}' from "
+                    f"{provider.emails_url}: {detail}"
+                ) from exc
+        return data
 
 
 def normalize_identity(

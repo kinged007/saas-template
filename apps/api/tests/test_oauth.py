@@ -3,6 +3,7 @@ exchanges are monkeypatched at the service-module boundary."""
 
 import json
 
+import httpx
 import pytest
 from sqlalchemy import func, select
 
@@ -41,19 +42,28 @@ GITHUB = {
 
 
 class _Resp:
-    def __init__(self, payload):
+    def __init__(self, payload, url="https://provider.test/x", status=200):
         self._payload = payload
+        self._request = httpx.Request("GET", url)
+        self._status = status
 
     def raise_for_status(self):
+        if self._status >= 400:
+            raise httpx.HTTPStatusError(
+                f"HTTP {self._status}",
+                request=self._request,
+                response=httpx.Response(self._status, request=self._request),
+            )
         return None
 
     def json(self):
         return self._payload
 
 
-def _fake_httpx(monkeypatch, *, user, emails):
+def _fake_httpx(monkeypatch, *, user, emails, user_status=200, emails_status=200):
     """Serve the token exchange, /user and /user/emails from literals; returns
-    the URLs requested. emails=None marks that endpoint as off-limits."""
+    the URLs requested. emails=None marks that endpoint as off-limits. A
+    *_status above 399 makes that endpoint answer with an error."""
     calls: list[str] = []
 
     class _Client:
@@ -75,8 +85,8 @@ def _fake_httpx(monkeypatch, *, user, emails):
             if url.endswith("/emails"):
                 if emails is None:
                     raise AssertionError(f"emails endpoint must not be called ({url})")
-                return _Resp(emails)
-            return _Resp(user)
+                return _Resp(emails, url, emails_status)
+            return _Resp(user, url, user_status)
 
     monkeypatch.setattr(oauth_svc.httpx, "AsyncClient", _Client)
     return calls
@@ -306,6 +316,50 @@ async def test_password_reset_blocked_when_password_disabled(app_client, monkeyp
         assert resp.json()["detail"] == "password login is disabled"
     finally:
         monkeypatch.setattr(settings, "auth_password_enabled", True)
+
+
+# A GitHub account with a private address: /user answers, with a null email.
+_PRIVATE_GITHUB_USER = {"id": 4242, "login": "octocat", "email": None}
+
+
+def _github_config() -> oauth_svc.ProviderConfig:
+    return oauth_svc.ProviderConfig(
+        id="github",
+        display_name="GitHub",
+        client_id="cid",
+        client_secret="csecret",
+        scopes="read:user user:email",
+        userinfo_url="https://api.github.com/user",
+        emails_url="https://api.github.com/user/emails",
+    )
+
+
+async def test_emails_404_names_the_endpoint_and_the_missing_scope(monkeypatch):
+    _fake_httpx(monkeypatch, user=_PRIVATE_GITHUB_USER, emails=[], emails_status=404)
+    with pytest.raises(oauth_svc.OAuthError) as err:
+        await oauth_svc.fetch_userinfo(_github_config(), {}, "at")
+    msg = str(err.value)
+    assert "could not fetch user info" not in msg  # separable from a /user fault
+    assert "github" in msg and "https://api.github.com/user/emails" in msg
+    assert "404" in msg and "user:email" in msg
+
+
+async def test_emails_500_is_not_reported_as_a_scope_problem(monkeypatch):
+    _fake_httpx(monkeypatch, user=_PRIVATE_GITHUB_USER, emails=[], emails_status=500)
+    with pytest.raises(oauth_svc.OAuthError) as err:
+        await oauth_svc.fetch_userinfo(_github_config(), {}, "at")
+    msg = str(err.value)
+    assert "https://api.github.com/user/emails" in msg and "500" in msg
+    assert "scope" not in msg
+
+
+async def test_userinfo_failure_names_the_userinfo_endpoint(monkeypatch):
+    _fake_httpx(monkeypatch, user={}, emails=[], user_status=500)
+    with pytest.raises(oauth_svc.OAuthError) as err:
+        await oauth_svc.fetch_userinfo(_github_config(), {}, "at")
+    msg = str(err.value)
+    assert "https://api.github.com/user" in msg and "500" in msg
+    assert "/user/emails" not in msg
 
 
 async def test_github_callback_uses_emails_endpoint_when_profile_email_null(
