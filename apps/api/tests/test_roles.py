@@ -69,6 +69,52 @@ async def _add_member(client, owner_tokens, ws, email: str, role_name: str):
     return user
 
 
+async def _membership_id(client, owner_tokens, ws, email: str) -> str:
+    members = await client.get("/api/v1/members", headers=ws_headers(owner_tokens, ws["id"]))
+    return next(m for m in members.json() if m["email"] == email)["membership_id"]
+
+
+async def _seed_legacy_owner_role(
+    workspace_id: str, *, permissions: list[str] | None = None
+) -> str:
+    """Insert the `Owner` row #328 stopped new writes from creating; return its id."""
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    async with SessionFactory() as session:
+        role = Role(
+            workspace_id=workspace_id,
+            name="Owner",
+            description=None,
+            permissions=[] if permissions is None else permissions,
+            system=False,
+        )
+        session.add(role)
+        await session.commit()
+        return role.id
+
+
+async def _add_member_holding_role(
+    client, owner_tokens, ws, email: str, role_id: str
+) -> tuple[dict, str]:
+    """Invite a member as viewer, then repoint their role_id at `role_id`.
+
+    A legacy owner row can no longer be invited to or assigned through the API,
+    so a member holding one only exists the way it existed in production: an
+    out-of-band `role_id` write.
+    """
+    from src.db.session import SessionFactory
+    from src.models.workspace import WorkspaceMember
+
+    user = await _add_member(client, owner_tokens, ws, email, "viewer")
+    membership_id = await _membership_id(client, owner_tokens, ws, email)
+    async with SessionFactory() as session:
+        member = await session.get(WorkspaceMember, membership_id)
+        member.role_id = role_id
+        await session.commit()
+    return user, membership_id
+
+
 # ------------------------------------------------------- registry + catalog
 
 
@@ -677,3 +723,199 @@ async def test_non_ascii_case_variant_is_not_a_conflict_on_sqlite(app_client):
         "/api/v1/roles", json={"name": "élève", "permissions": []}, headers=headers
     )
     assert resp.status_code == 201, resp.text
+
+
+async def test_legacy_owner_case_row_is_not_editable(app_client):
+    """`Owner` is refused the same 403 the seeded `owner` row gets (#593).
+
+    The row is the owner role written with the wrong case, so it inherits the
+    owner guard rather than the custom-role edit path.
+    """
+    client = app_client
+    owner = await register_user(client, "ci8@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    role_id = await _seed_legacy_owner_role(ws["id"])
+
+    desc = await client.patch(
+        f"/api/v1/roles/{role_id}", json={"description": "renamed"}, headers=headers
+    )
+    assert desc.status_code == 403, desc.text
+
+    rename = await client.patch(
+        f"/api/v1/roles/{role_id}", json={"name": "superuser"}, headers=headers
+    )
+    assert rename.status_code == 403, rename.text
+
+
+async def test_legacy_owner_case_row_cannot_be_assigned(app_client):
+    """Assigning the legacy row is the same 409 the seeded `owner` row gets."""
+    client = app_client
+    owner = await register_user(client, "ci9@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    role_id = await _seed_legacy_owner_role(ws["id"])
+    await _add_member(client, owner, ws, "ci9t@example.com", "editor")
+    target_id = await _membership_id(client, owner, ws, "ci9t@example.com")
+
+    assign = await client.patch(
+        f"/api/v1/members/{target_id}", json={"role_id": role_id}, headers=headers
+    )
+    assert assign.status_code == 409, assign.text
+
+    # Same guard on the member who already holds it: the owner role cannot be edited.
+    _holder, held = await _add_member_holding_role(client, owner, ws, "ci9h@example.com", role_id)
+    reassign = await client.patch(
+        f"/api/v1/members/{held}",
+        json={"role_id": await _role_id(client, headers, "editor")},
+        headers=headers,
+    )
+    assert reassign.status_code == 409, reassign.text
+
+
+async def test_legacy_owner_case_row_cannot_be_removed_suspended_or_left(app_client):
+    """remove_member, suspend_member and leave_workspace all refuse the owner role."""
+    client = app_client
+    owner = await register_user(client, "ci10@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    role_id = await _seed_legacy_owner_role(ws["id"])
+    _holder, membership_id = await _add_member_holding_role(
+        client, owner, ws, "ci10r@example.com", role_id
+    )
+
+    removed = await client.delete(f"/api/v1/members/{membership_id}", headers=headers)
+    assert removed.status_code == 409, removed.text
+
+    suspended = await client.post(f"/api/v1/members/{membership_id}/suspend", headers=headers)
+    assert suspended.status_code == 409, suspended.text
+
+    leaver, _ = await _add_member_holding_role(client, owner, ws, "ci10l@example.com", role_id)
+    left = await client.delete(
+        f"/api/v1/workspaces/{ws['id']}/membership",
+        headers=auth_headers(leaver),
+    )
+    assert left.status_code == 409, left.text
+
+
+async def test_legacy_owner_case_row_cannot_be_invited_to(app_client):
+    """Inviting to the legacy owner row is the same 409 as the seeded row."""
+    client = app_client
+    owner = await register_user(client, "ci11@example.com")
+    ws = await create_workspace(client, owner)
+    role_id = await _seed_legacy_owner_role(ws["id"])
+
+    resp = await client.post(
+        "/api/v1/invitations",
+        json={"email": "ci11i@example.com", "role_id": role_id},
+        headers=ws_headers(owner, ws["id"]),
+    )
+    assert resp.status_code == 409, resp.text
+
+
+async def test_legacy_owner_case_row_counts_as_owner_for_transfer_and_manager_gates(
+    app_client,
+):
+    """The actor-gate half: a member holding the legacy row is an owner, not a custom role.
+
+    The row carries `*` because that is what a role meant to be the owner holds;
+    the route guards are permission-based and admit it either way, so what these
+    calls exercise is the name-based gate in the service.
+    """
+    client = app_client
+    owner = await register_user(client, "ci12@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    role_id = await _seed_legacy_owner_role(ws["id"], permissions=["*"])
+    heir, _ = await _add_member_holding_role(client, owner, ws, "ci12h@example.com", role_id)
+    heir_headers = ws_headers(heir, ws["id"])
+
+    # set_member_role's actor gate: admits owner-or-admin.
+    editor_id = await _role_id(client, headers, "editor")
+    await _add_member(client, owner, ws, "ci12t@example.com", "viewer")
+    promoted = await client.patch(
+        f"/api/v1/members/{await _membership_id(client, owner, ws, 'ci12t@example.com')}",
+        json={"role_id": editor_id},
+        headers=heir_headers,
+    )
+    assert promoted.status_code == 200, promoted.text
+
+    # _require_manager: admits owner-or-admin, and remove_member only refuses the owner role.
+    await _add_member(client, owner, ws, "ci12r@example.com", "viewer")
+    removed = await client.delete(
+        f"/api/v1/members/{await _membership_id(client, owner, ws, 'ci12r@example.com')}",
+        headers=heir_headers,
+    )
+    assert removed.status_code == 204, removed.text
+
+    # transfer_ownership: only the owner may transfer.
+    await _add_member(client, owner, ws, "ci12s@example.com", "editor")
+    target_id = await _membership_id(client, owner, ws, "ci12s@example.com")
+    transfer = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/transfer",
+        json={"new_owner_membership_id": target_id},
+        headers=heir_headers,
+    )
+    assert transfer.status_code == 200, transfer.text
+    roles = {
+        m["email"]: m["role"] for m in (await client.get("/api/v1/members", headers=headers)).json()
+    }
+    assert roles["ci12s@example.com"] == "owner"
+    assert roles["ci12h@example.com"] == "admin"
+
+
+async def test_check_name_free_names_the_seeded_row(app_client):
+    """The 409 names the system row, not whichever row `.first()` returns (#592).
+
+    A workspace created before the case-insensitive check can hold `admin` +
+    `Admin`; the two rows are indistinguishable to the predicate, so the order
+    has to be total for the message to be deterministic. The seeded `admin` is
+    deleted and re-added after `Admin`, so storage order disagrees with the
+    intended one and an unordered `.first()` names `Admin`.
+    """
+    from sqlalchemy import select
+
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    client = app_client
+    owner = await register_user(client, "ci13@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    async with SessionFactory() as session:
+        seeded = await session.execute(
+            select(Role).where(Role.workspace_id == ws["id"], Role.name == "admin")
+        )
+        admin = seeded.scalar_one()
+        admin_fields = {"description": admin.description, "permissions": list(admin.permissions)}
+        await session.delete(admin)
+        await session.commit()
+        session.add(
+            Role(
+                workspace_id=ws["id"],
+                name="Admin",
+                description=None,
+                permissions=[],
+                system=False,
+            )
+        )
+        await session.commit()
+        session.add(Role(workspace_id=ws["id"], name="admin", system=True, **admin_fields))
+        await session.commit()
+
+    created = await client.post(
+        "/api/v1/roles", json={"name": "ops", "permissions": []}, headers=headers
+    )
+    assert created.status_code == 201, created.text
+
+    resp = await client.post(
+        "/api/v1/roles", json={"name": "ADMIN", "permissions": []}, headers=headers
+    )
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == "a role named 'admin' already exists"
+
+    renamed = await client.patch(
+        f"/api/v1/roles/{created.json()['id']}", json={"name": "admin"}, headers=headers
+    )
+    assert renamed.status_code == 409, renamed.text
+    assert renamed.json()["detail"] == "a role named 'admin' already exists"

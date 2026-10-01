@@ -46,6 +46,7 @@ from src.realtime.manager import ConnectionManager
 from src.services.audit import AuditService
 from src.services.jobs import JobService
 from src.services.notifications import NotificationService
+from src.services.workspaces import is_owner_role_name
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +217,7 @@ def build_workflows(
         if user_id == payload.get("changed_by_user_id"):
             body = (
                 f"You transferred ownership. Your role is now {to_role}."
-                if from_role == "owner"
+                if is_owner_role_name(from_role)
                 else f"Your role is now {to_role}."
             )
         else:

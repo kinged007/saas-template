@@ -118,8 +118,25 @@ async def test_role_created_with_padded_name_is_granted(
 
 
 async def test_unknown_role_name_falls_back_to_viewer(app_client, single_workspace_on, monkeypatch):
-    await _first_workspace(app_client)
-    for i, value in enumerate(["", "   ", "nope", "owner"]):
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    _tokens, ws_id = await _first_workspace(app_client)
+    # A workspace created before the case-insensitive name check (#328) can hold
+    # `Owner` beside the seeded `owner`; neither auto-joins a newcomer.
+    async with SessionFactory() as session:
+        session.add(
+            Role(
+                workspace_id=ws_id,
+                name="Owner",
+                description=None,
+                permissions=[],
+                system=False,
+            )
+        )
+        await session.commit()
+
+    for i, value in enumerate(["", "   ", "nope", "owner", "Owner"]):
         monkeypatch.setattr(settings, "single_workspace_default_role", value)
         tokens = await register_user(app_client, f"newcomer{i}@example.com")
         me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
