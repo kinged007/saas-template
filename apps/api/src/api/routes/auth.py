@@ -24,6 +24,7 @@ from src.core.security.tokens import OpaqueToken
 from src.db.session import get_db
 from src.email import factory as email_factory
 from src.email import templates
+from src.models.workspace import User
 from src.schemas.api import (
     ChangePasswordRequest,
     ForgotPasswordRequest,
@@ -86,13 +87,14 @@ async def _maybe_join_single_workspace(db: AsyncSession, container, user) -> Non
     await WorkspaceService(db, container.bus).join_single_workspace(user)
 
 
-async def _join_single_workspace_best_effort(db: AsyncSession, container, user):
+async def _join_single_workspace_best_effort(db: AsyncSession, container, user) -> User:
     """Join the single workspace; on failure log, roll back, return a usable user.
 
     A failed join does not fail authentication: the caller gets a valid session
     with no membership, and every workspace-scoped route still 403s without one.
     The rollback expires every loaded instance, so the user is re-read instead
-    of being handed back needing a lazy refresh.
+    of being handed back needing a lazy refresh. An empty re-read drops the
+    session rather than authenticating a detached row.
     """
     user_id = user.id
     try:
@@ -100,7 +102,10 @@ async def _join_single_workspace_best_effort(db: AsyncSession, container, user):
     except Exception:
         logger.exception("failed to join single workspace for user %s", user_id)
         await db.rollback()
-        return await AuthService(db).get_user(user_id) or user
+        fresh = await AuthService(db).get_user(user_id)
+        if fresh is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "account no longer exists") from None
+        return fresh
     return user
 
 
@@ -331,6 +336,9 @@ async def refresh(
             if user is not None:
                 await _join_single_workspace_best_effort(db, container, user)
         except Exception:
+            # No rollback of its own: the helper already rolled back before it
+            # re-read the user, and nothing below here touches the ORM. Do not
+            # move this log ahead of that rollback, or read user.* down here.
             logger.exception("failed to resolve single workspace on refresh")
     if cookie_token is not None or browser_flow(request, body):
         set_refresh_cookie(response, pair.refresh_token, request=request)

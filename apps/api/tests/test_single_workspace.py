@@ -212,6 +212,16 @@ async def test_refresh_survives_join_failure(app_client, single_workspace_on):
         "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
     )
     assert resp.status_code == 200, resp.text
+    # The join's rollback runs after the rotation: the rotated token has to
+    # outlive it, and the one it replaced has to stay dead.
+    rotated = resp.json()["refresh_token"]
+    assert rotated != tokens["refresh_token"]
+    again = await app_client.post("/api/v1/auth/refresh", json={"refresh_token": rotated})
+    assert again.status_code == 200, again.text
+    stale = await app_client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert stale.status_code == 401, stale.text
 
 
 async def test_register_survives_join_failure(app_client, single_workspace_on):
