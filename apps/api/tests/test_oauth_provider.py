@@ -265,6 +265,28 @@ def test_claims_from_id_token_rejects_es256_token_signed_by_another_ec_key(provi
     assert claims is None
 
 
+def test_claims_from_id_token_rejects_es256_token_published_under_the_rsa_kid(provider, idp):
+    """Cross-family control: the JWKS resolves an RSA key for an `alg=ES256` token. Both
+    same-family twins keep the kid's key type and only swap the private key; this re-labels
+    the kid, so only the kid↔key-type binding can reject it. The first mint signs with the
+    published EC key, which makes the signature valid on its own, so a resolver trusting the
+    header `alg` over the kid accepts it; the second is the shape an attacker sends."""
+    from_published_ec_key = idp.mint(kid=KID, key=idp.ec_key, alg="ES256")
+    from_attacker_ec_key = idp.mint(kid=KID, key=idp.other_ec_key, alg="ES256")
+
+    assert claims_from_id_token(provider, idp.doc, from_published_ec_key) is None
+    assert claims_from_id_token(provider, idp.doc, from_attacker_ec_key) is None
+
+
+def test_claims_from_id_token_rejects_rs256_token_published_under_the_ec_kid(provider, idp):
+    """The mirror direction, so neither key family is the one that goes uncovered."""
+    from_published_rsa_key = idp.mint(kid=EC_KID, key=idp.signing_key, alg="RS256")
+    from_attacker_rsa_key = idp.mint(kid=EC_KID, key=idp.other_key, alg="RS256")
+
+    assert claims_from_id_token(provider, idp.doc, from_published_rsa_key) is None
+    assert claims_from_id_token(provider, idp.doc, from_attacker_rsa_key) is None
+
+
 def test_jwk_rejects_unknown_algorithm(idp):
     """An alg outside the map raises here, at the call site. The ternary this replaced
     emitted an RSA key labelled with whatever alg it was handed, so the stub published
