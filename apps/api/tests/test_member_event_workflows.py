@@ -322,6 +322,43 @@ async def test_role_changed_body_never_renders_none():
     assert "from unknown to owner" in row.body
 
 
+async def test_role_changed_from_legacy_owner_names_the_transfer():
+    """A self-change from the case-variant `Owner` row is still a transfer (#593).
+
+    `set_member_role` refuses to touch the owner role, so a self-change from a
+    role named `Owner` is a transfer the same way a self-change from `owner` is.
+    """
+    from src.events.bus import EventMetadata
+    from src.events.subjects import Subjects
+    from src.workflows import build_workflows
+
+    class _CaptureRegistry:
+        def __init__(self) -> None:
+            self.handlers: dict[str, object] = {}
+
+        def register(self, subject, handler, *, fanout: bool = False) -> None:
+            self.handlers[subject] = handler
+
+    registry = _CaptureRegistry()
+    build_workflows(registry, None, None)
+    user_id = str(uuid.uuid4())
+    await registry.handlers[Subjects.WORKSPACE_MEMBER_ROLE_CHANGED](
+        {
+            "workspace_id": str(uuid.uuid4()),
+            "workspace_name": "Acme Corp",
+            "user_id": user_id,
+            "from_role": "Owner",
+            "to_role": "admin",
+            "changed_by_user_id": user_id,
+            "changed_by_name": "Test U.",
+        },
+        EventMetadata(subject=Subjects.WORKSPACE_MEMBER_ROLE_CHANGED),
+    )
+
+    row = await _latest_role_change(user_id)
+    assert row.body == "You transferred ownership. Your role is now admin."
+
+
 async def test_member_removed_notifies_the_removed_member(app_client):
     from tests.conftest import create_workspace, register_user
 
