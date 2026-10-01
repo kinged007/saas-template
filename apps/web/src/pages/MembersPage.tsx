@@ -134,7 +134,8 @@ export function MembersPage() {
 
   const roleName = (roleId: string) => roleOptions.find((r) => r.id === roleId)?.name;
   // Resolved against the picker's own list: an id the picker no longer offers
-  // leaves the submit blocked rather than sending a role the server dropped.
+  // leaves the submit blocked rather than sending a role the server dropped,
+  // and the trigger label reads from it too, as in GeneralSection.
   const inviteRole = resolveInviteRole(assignable, inviteRoleId);
 
   const submit = (e: React.FormEvent) => {
@@ -315,7 +316,7 @@ export function MembersPage() {
               <Label>Role</Label>
               <Select value={inviteRoleId} onValueChange={setInviteRoleId}>
                 <SelectTrigger className="w-40" aria-describedby={inviteRoleCapId}>
-                  <SelectValue placeholder="Role">{roleName(inviteRoleId)}</SelectValue>
+                  <SelectValue placeholder="Role">{inviteRole?.name ?? ""}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {assignable.map((r) => (

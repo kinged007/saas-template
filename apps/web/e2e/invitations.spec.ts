@@ -108,7 +108,7 @@ test.describe("invitations", () => {
     );
   });
 
-  test("the invite submit sends the resolved role and disarms on an unpicked one", async ({ page }) => {
+  test("the invite submit needs a role and posts the picked one", async ({ page }) => {
     const ADMIN = { id: "r-admin", workspace_id: "ws-1", name: "Admin", permissions: [], system: true };
     const EDITOR = { id: "r-editor", workspace_id: "ws-1", name: "Editor", permissions: [], system: true };
     const sent: unknown[] = [];
@@ -125,20 +125,24 @@ test.describe("invitations", () => {
     );
     await page.goto("/members");
 
+    const form = page.locator("form");
+    const role = form.getByRole("combobox");
     await page.getByLabel("Email").fill("person@example.com");
-    const invite = page.getByRole("button", { name: "Invite" });
-    // No role picked: the submit stays disarmed.
+    const invite = form.getByRole("button", { name: "Invite" });
+    // No role picked: the submit is disarmed and the trigger shows the placeholder.
     await expect(invite).toBeDisabled();
+    await expect(role).toHaveText("Role");
 
-    await page.getByRole("combobox").click();
+    await role.click();
     await page.getByRole("option", { name: "Editor" }).click();
+    await expect(role).toHaveText("Editor");
     await expect(invite).toBeEnabled();
     await invite.click();
 
-    // The payload carries the resolved role, not the raw picker's state value.
-    await expect.poll(() => sent).toEqual([
-      { email: "person@example.com", role_id: EDITOR.id },
-    ]);
+    // Happy path only: both assertions also hold before the resolve-role gate,
+    // which has no live trigger here (nothing invalidates the roles query). The
+    // stale-id disarm is covered where it discriminates, in invite-role.test.ts.
+    await expect.poll(() => sent).toEqual([{ email: "person@example.com", role_id: EDITOR.id }]);
   });
 
   test("a failed re-send refreshes the list, so the stale button cannot survive it", async ({ page }) => {
