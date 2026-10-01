@@ -22,7 +22,9 @@ export function hasRefreshLock(): boolean {
 }
 
 /** Run `fn` exclusively; concurrent callers queue and run in order. */
-export function withRefreshLock<T>(fn: () => Promise<T>): Promise<T> {
+export async function withRefreshLock<T>(fn: () => Promise<T>): Promise<T> {
   if (!hasRefreshLock()) return fn();
-  return navigator.locks.request(REFRESH_LOCK, { mode: "exclusive" }, () => fn());
+  // `navigator.locks.request` is typed as returning the callback's own return
+  // type unwrapped, i.e. Promise<Promise<T>>; awaiting flattens it to T.
+  return await navigator.locks.request(REFRESH_LOCK, { mode: "exclusive" }, () => fn());
 }
