@@ -116,7 +116,10 @@ test.describe("composer toolbar", () => {
     const remove = linkDialog.getByRole("button", { name: "Remove link", exact: true });
 
     await url.fill("https://example.com/docs");
-    await apply.click();
+    // Enter has to submit the form, the way the prompt's OK button did, so a
+    // keyboard user never has to reach for Apply. The click path is covered by
+    // the two steps below.
+    await url.press("Enter");
     await expect(editor.locator('a[href="https://example.com/docs"]')).toHaveText("hello");
     // Typing has to continue in the document, not in the dismissed form.
     await expect(editor).toBeFocused();
