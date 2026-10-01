@@ -29,7 +29,7 @@ import { UserProfileDialog } from "@/components/UserProfileDialog";
 
 import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceContext";
 import { canResendInvitation, canRevokeInvitation, invitationStatus } from "./invitation-actions";
-import { rolePickerCapNotice } from "./role-picker-cap";
+import { assignableRoles, rolePickerCapNotice } from "./role-picker-cap";
 import type { Identity, Invitation, Member, Role } from "../types";
 import { getMemberDisplayName } from "../types";
 
@@ -41,8 +41,14 @@ const PAGE_SIZE = 10;
 // carrying a picker disclose it via rolePickerCapNotice.
 const ROLES_PAGE_SIZE = 100;
 
-const RoleCapNotice = ({ text }: { text: string | null }) =>
-  text && <p className="text-muted-foreground text-sm">{text}</p>;
+// One notice per picker, so one id each: aria-describedby resolves to the
+// element carrying the id, and a shared id would point both pickers at the
+// first paragraph.
+const MEMBERS_ROLE_CAP_ID = "members-role-cap";
+const INVITE_ROLE_CAP_ID = "invite-role-cap";
+
+const RoleCapNotice = ({ id, text }: { id: string; text: string | null }) =>
+  text && <p id={id} className="text-muted-foreground text-sm">{text}</p>;
 
 export function MembersPage() {
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
@@ -88,9 +94,10 @@ export function MembersPage() {
   const invitations = invitationsResult?.data ?? [];
   const invitesTotal = invitationsResult?.total ?? 0;
   const invitesTotalPages = Math.max(1, Math.ceil(invitesTotal / PAGE_SIZE));
-  const assignableRoles = roleOptions.filter((r) => r.name !== "owner");
-  // total counts every role, including the owner the pickers filter out.
-  const roleCapNotice = rolePickerCapNotice(rolesResult?.total ?? 0, roleOptions.length);
+  // The pickers and the notice count this one list, so the notice can never
+  // claim a role the dropdown does not offer.
+  const assignable = assignableRoles(roleOptions);
+  const roleCapNotice = rolePickerCapNotice(rolesResult?.total ?? 0, roleOptions);
 
   useEffect(() => {
     if (membersPage > membersTotalPages) setMembersPage(membersTotalPages);
@@ -101,6 +108,10 @@ export function MembersPage() {
 
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
   const canManageRoles = !!canManage?.can && MANAGER_ROLES.includes(myRole ?? "");
+  // Describe by the notice only where it renders: it is gated per section, and
+  // it stays null until the role page is short.
+  const memberRoleCapId = canManageRoles && roleCapNotice ? MEMBERS_ROLE_CAP_ID : undefined;
+  const inviteRoleCapId = canInvite?.can && roleCapNotice ? INVITE_ROLE_CAP_ID : undefined;
   const { mutate: memberAction } = useCustomMutation();
 
   const suspend = (m: Member, suspendIt: boolean) => {
@@ -139,7 +150,7 @@ export function MembersPage() {
   return (
     <ListView>
       <ListViewHeader title="Members" canCreate={false} />
-      {canManageRoles && <RoleCapNotice text={roleCapNotice} />}
+      {canManageRoles && <RoleCapNotice id={MEMBERS_ROLE_CAP_ID} text={roleCapNotice} />}
       <div className="border-border overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>
@@ -189,13 +200,13 @@ export function MembersPage() {
                         })
                       }
                     >
-                      <SelectTrigger className="w-36">
+                      <SelectTrigger className="w-36" aria-describedby={memberRoleCapId}>
                         <SelectValue>
-                          {assignableRoles.find((r) => r.id === m.role_id)?.name ?? m.role}
+                          {assignable.find((r) => r.id === m.role_id)?.name ?? m.role}
                         </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
-                        {assignableRoles.map((r) => (
+                        {assignable.map((r) => (
                           <SelectItem key={r.id} value={r.id}>
                             {r.name}
                           </SelectItem>
@@ -294,18 +305,18 @@ export function MembersPage() {
             <div className="flex flex-col gap-2">
               <Label>Role</Label>
               <Select value={inviteRoleId} onValueChange={setInviteRoleId}>
-                <SelectTrigger className="w-40">
+                <SelectTrigger className="w-40" aria-describedby={inviteRoleCapId}>
                   <SelectValue placeholder="Role">{roleName(inviteRoleId)}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {assignableRoles.map((r) => (
+                  {assignable.map((r) => (
                     <SelectItem key={r.id} value={r.id}>
                       {r.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <RoleCapNotice text={roleCapNotice} />
+              <RoleCapNotice id={INVITE_ROLE_CAP_ID} text={roleCapNotice} />
             </div>
             <Button type="submit" disabled={mutation.isPending || !email.trim() || !inviteRoleId}>
               {mutation.isPending ? "Sending…" : "Invite"}
