@@ -134,7 +134,10 @@ export function DashboardPage() {
           <CardHeader>
             <div className="flex items-start justify-between gap-2">
               <div>
-                <CardTitle tabIndex={-1} ref={restoreHeading}>Get set up</CardTitle>
+                {/* Focus must stay (it is what announces the card is back), but the
+                    heading is not keyboard reachable, so the default ring only reads as a
+                    full-width input. Ring off, focus on. */}
+                <CardTitle tabIndex={-1} ref={restoreHeading} className="outline-none">Get set up</CardTitle>
                 <CardDescription>
                   {workspace ? "Finish these steps to get the most out of your workspace." : "Create a workspace to get started with managing your team."}
                 </CardDescription>
