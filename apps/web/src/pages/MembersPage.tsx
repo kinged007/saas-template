@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import { useCan, useCreate, useCustomMutation, useGetIdentity, useInvalidate, useUpdate } from "@refinedev/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
@@ -47,8 +47,12 @@ const ROLES_PAGE_SIZE = 100;
 const MEMBERS_ROLE_CAP_ID = "members-role-cap";
 const INVITE_ROLE_CAP_ID = "invite-role-cap";
 
-const RoleCapNotice = ({ id, text }: { id: string; text: string | null }) =>
-  text && <p id={id} className="text-muted-foreground text-sm">{text}</p>;
+// The explicit return type keeps the annotation honest: a `text && <p>` body
+// would widen it to `string | ReactElement | null` and fail the typecheck.
+const RoleCapNotice = ({ id, text }: { id: string; text: string | null }): ReactElement | null => {
+  if (!text) return null;
+  return <p id={id} className="text-muted-foreground text-sm">{text}</p>;
+};
 
 export function MembersPage() {
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
