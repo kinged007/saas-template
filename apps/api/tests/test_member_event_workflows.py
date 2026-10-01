@@ -287,8 +287,10 @@ async def test_transfer_ownership_notifies_both_users(app_client):
 async def test_role_changed_body_never_names_an_unknown_role():
     """A null role must not render as a role name, nor as None.
 
-    Driven through the handler directly: the API cannot publish a null
-    role, so only a synthetic payload reaches this branch.
+    Driven through the handler directly. WorkspaceMember.role_id has no
+    foreign key, so session.get(Role, member.role_id) can return None and a
+    publisher emits a null from_role; only a synthetic payload reaches the
+    null to_role branch.
     """
     from src.events.bus import EventMetadata
     from src.events.subjects import Subjects
@@ -305,7 +307,7 @@ async def test_role_changed_body_never_names_an_unknown_role():
     build_workflows(registry, None, None)
     handler = registry.handlers[Subjects.WORKSPACE_MEMBER_ROLE_CHANGED]
 
-    async def _emit(**roles) -> str:
+    async def _emit(*, self_change: bool = False, **roles) -> str:
         # A fresh user per case: two rows created in the same tick have no
         # reliable created_at order.
         user_id = str(uuid.uuid4())
@@ -314,15 +316,13 @@ async def test_role_changed_body_never_names_an_unknown_role():
                 "workspace_id": str(uuid.uuid4()),
                 "workspace_name": "Acme Corp",
                 "user_id": user_id,
-                "changed_by_user_id": str(uuid.uuid4()),
+                "changed_by_user_id": user_id if self_change else str(uuid.uuid4()),
                 "changed_by_name": "Test U.",
                 **roles,
             },
             EventMetadata(subject=Subjects.WORKSPACE_MEMBER_ROLE_CHANGED),
         )
-        row = await _latest_role_change(user_id)
-        assert "None" not in row.body
-        return row.body
+        return (await _latest_role_change(user_id)).body
 
     # A null from_role has no role name to print: say there was one.
     assert await _emit(from_role=None, to_role="owner") == (
@@ -331,6 +331,20 @@ async def test_role_changed_body_never_names_an_unknown_role():
     # A null to_role names no destination, so the clause is dropped rather
     # than filled with a placeholder that reads like a role.
     assert await _emit(from_role="editor", to_role=None) == "Test U. changed your role."
+    # The member is the actor: nobody is named, and the two preserved
+    # wordings and the null-to_role wording are locked together.
+    assert await _emit(self_change=True, from_role="editor", to_role="viewer") == (
+        "Your role is now viewer."
+    )
+    assert await _emit(self_change=True, from_role="owner", to_role="admin") == (
+        "You transferred ownership. Your role is now admin."
+    )
+    assert await _emit(self_change=True, from_role="owner", to_role=None) == (
+        "You transferred ownership."
+    )
+    assert await _emit(self_change=True, from_role="editor", to_role=None) == (
+        "Your role was changed."
+    )
 
 
 async def test_role_changed_from_legacy_owner_names_the_transfer():
