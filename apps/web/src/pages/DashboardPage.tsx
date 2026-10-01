@@ -44,7 +44,7 @@ export function DashboardPage() {
   // Restoring unmounts the button while it holds focus, which drops focus to
   // <body> and tells a screen reader nothing. Move focus to the card heading
   // in the commit that brings the card back.
-  const restoreHeading = useRef<HTMLDivElement>(null);
+  const restoreHeading = useRef<HTMLHeadingElement>(null);
   const focusHeadingOnRender = useRef(false);
   useLayoutEffect(() => {
     if (!focusHeadingOnRender.current) return;
@@ -140,8 +140,9 @@ export function DashboardPage() {
               <div>
                 {/* Focus must stay (it is what announces the card is back), but the
                     heading is not keyboard reachable, so the default ring only reads as a
-                    full-width input. Ring off, focus on. */}
-                <CardTitle tabIndex={-1} ref={restoreHeading} className="outline-none">Get set up</CardTitle>
+                    full-width input. Ring off, focus on. CardTitle renders a div, so the
+                    heading is spelled out here with the classes it applies. */}
+                <h3 tabIndex={-1} ref={restoreHeading} className="font-semibold leading-none tracking-tight outline-none">Get set up</h3>
                 <CardDescription>
                   {workspace ? "Finish these steps to get the most out of your workspace." : "Create a workspace to get started with managing your team."}
                 </CardDescription>

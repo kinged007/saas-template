@@ -33,8 +33,11 @@ test.describe("onboarding restore", () => {
     await restore.focus();
     await page.keyboard.press("Enter");
 
-    const heading = page.getByText("Get set up", { exact: true });
+    // By role, not by text: the focus move only announces a heading if the
+    // title is one, and a plain div matches the text query.
+    const heading = page.getByRole("heading", { name: "Get set up" });
     await expect(heading).toBeVisible();
+    await expect(heading).toHaveAccessibleName("Get set up");
     // The focus move is what tells a screen reader the card is back, so it has
     // to survive the styling fix.
     await expect(heading).toBeFocused();
