@@ -97,8 +97,14 @@ async def _create_notification(
     logger.error(
         "notification email failed for %s (notification %s)", recipient.email, notification.id
     )
-    # Published after the send, so a failing publish nacks the message and the
-    # notification row is created again on redelivery.
+    # Published after the send so the audit entry records the send, not the
+    # intent. Retry semantics differ per driver: on the NATS driver a failed
+    # publish raises PublishError, the handler nacks, and the redelivered run
+    # inserts a *second* Notification row plus a second
+    # notification.email_failed entry for the same failure (create() commits
+    # unconditionally, so this is a duplicate, not an upsert). On the default
+    # in-process driver there is no ack or redelivery: _consume logs the
+    # exception and moves on, so the failure record is lost with it.
     await publish_audit(
         bus,
         correlation_id=correlation_id,
