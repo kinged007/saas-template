@@ -54,6 +54,39 @@ logger = logging.getLogger(__name__)
 INVITATIONS_ROUTE = "/invitations"
 
 
+async def _audit_email_failure(
+    bus: EventBus,
+    notification,
+    *,
+    correlation_id: str | None,
+    user_id: str,
+    n_type: str,
+    email: str | None,
+    reason: str,
+) -> None:
+    """Log and audit one notification email that was not delivered.
+
+    `reason` is `no_recipient`, `no_email` or `send_failed`. Published after
+    the attempt, so a failing publish nacks the message and the in-app
+    notification row is created again on redelivery.
+    """
+    logger.error(
+        "notification email failed for %s (notification %s, reason=%s)",
+        email or f"user {user_id}",
+        notification.id,
+        reason,
+    )
+    await publish_audit(
+        bus,
+        correlation_id=correlation_id,
+        workspace_id=notification.workspace_id,
+        resource_type="notification",
+        resource_id=notification.id,
+        action="notification.email_failed",
+        details={"user_id": user_id, "type": n_type, "email": email, "reason": reason},
+    )
+
+
 async def _create_notification(
     session, bus: EventBus, *, correlation_id: str | None = None, **kwargs
 ) -> None:
@@ -62,7 +95,8 @@ async def _create_notification(
     Honors the recipient's channel preference: `off` skips the insert;
     `email` inserts and sends an immediate email, fail-closed (the in-app
     row is kept and the failure logged and audited
-    (`notification.email_failed`) when sending fails).
+    (`notification.email_failed`) when the recipient is missing, has no
+    address, or sending fails).
     """
     service = NotificationService(session, bus)
     n_type = kwargs.get("type", "")
@@ -81,6 +115,15 @@ async def _create_notification(
 
     recipient = await session.get(User, n_user_id)
     if recipient is None or not recipient.email:
+        await _audit_email_failure(
+            bus,
+            notification,
+            correlation_id=correlation_id,
+            user_id=n_user_id,
+            n_type=n_type,
+            email=recipient.email if recipient else None,
+            reason="no_recipient" if recipient is None else "no_email",
+        )
         return
     token = await service.token_for(n_user_id, n_type)
     sent = await send_email(
@@ -94,23 +137,14 @@ async def _create_notification(
     )
     if sent:
         return
-    logger.error(
-        "notification email failed for %s (notification %s)", recipient.email, notification.id
-    )
-    # Published after the send, so a failing publish nacks the message and the
-    # notification row is created again on redelivery.
-    await publish_audit(
+    await _audit_email_failure(
         bus,
+        notification,
         correlation_id=correlation_id,
-        workspace_id=notification.workspace_id,
-        resource_type="notification",
-        resource_id=notification.id,
-        action="notification.email_failed",
-        details={
-            "user_id": n_user_id,
-            "type": n_type,
-            "email": recipient.email,
-        },
+        user_id=n_user_id,
+        n_type=n_type,
+        email=recipient.email,
+        reason="send_failed",
     )
 
 
