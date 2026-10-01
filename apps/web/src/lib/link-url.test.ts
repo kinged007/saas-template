@@ -24,6 +24,8 @@ describe("normalizeLinkUrl", () => {
   it("rejects a bare word or a relative path, which would resolve against the app origin", () => {
     assert.equal(normalizeLinkUrl("example.com"), null);
     assert.equal(normalizeLinkUrl("/inbox"), null);
+    // The extension's own allow-list accepts this one, resolving it against the app origin.
+    assert.equal(normalizeLinkUrl("//evil.example.com"), null);
   });
 
   it("rejects any scheme other than http and https", () => {

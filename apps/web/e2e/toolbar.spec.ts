@@ -102,24 +102,52 @@ test.describe("composer toolbar", () => {
     await toolbar.getByRole("button", { name: "Link", exact: true }).click();
 
     const url = page.getByRole("textbox", { name: "Link URL" });
+    // Radix renders the popover as a role="dialog" with no name of its own, and
+    // it is the element a screen reader enters first.
+    const linkDialog = page.getByRole("dialog", { name: "Link URL" });
+    await expect(linkDialog).toBeVisible();
     await expect(url).toBeVisible();
     expect(await page.evaluate(() => (window as unknown as { __prompted: boolean }).__prompted)).toBe(false);
 
+    // The compose dialog has its own "Cancel", so every popover button is
+    // looked up inside the popover rather than by name across the page.
+    const apply = linkDialog.getByRole("button", { name: "Apply", exact: true });
+    const cancel = linkDialog.getByRole("button", { name: "Cancel", exact: true });
+    const remove = linkDialog.getByRole("button", { name: "Remove link", exact: true });
+
     await url.fill("https://example.com/docs");
-    await page.getByRole("button", { name: "Apply", exact: true }).click();
+    await apply.click();
     await expect(editor.locator('a[href="https://example.com/docs"]')).toHaveText("hello");
+    // Typing has to continue in the document, not in the dismissed form.
+    await expect(editor).toBeFocused();
+
+    await page.keyboard.press("ControlOrMeta+a");
+    await toolbar.getByRole("button", { name: "Link", exact: true }).click();
+    await expect(url).toHaveValue("https://example.com/docs");
+
+    // An emptied field is a no-op, not a malformed URL to complain about.
+    await url.fill("");
+    await apply.click();
+    await expect(linkDialog).toHaveCount(0);
 
     // Anything that is not an absolute http(s) URL is refused, rather than
     // reaching the document as an href.
     await page.keyboard.press("ControlOrMeta+a");
     await toolbar.getByRole("button", { name: "Link", exact: true }).click();
     await url.fill("javascript:alert(1)");
-    await page.getByRole("button", { name: "Apply", exact: true }).click();
+    await apply.click();
     await expect(page.getByText("Enter an absolute http:// or https:// URL.")).toBeVisible();
     expect(await page.evaluate(() => (window as unknown as { __prompted: boolean }).__prompted)).toBe(false);
 
+    // Backing out leaves the existing href alone and hands focus back.
+    await cancel.click();
+    await expect(linkDialog).toHaveCount(0);
+    await expect(editor.locator('a[href="https://example.com/docs"]')).toHaveCount(1);
+    await expect(editor).toBeFocused();
+
     // The popover still holds the link, so the removal control is there.
-    await page.getByRole("button", { name: "Remove link", exact: true }).click();
+    await toolbar.getByRole("button", { name: "Link", exact: true }).click();
+    await remove.click();
     await expect(editor.locator("a")).toHaveCount(0);
   });
 

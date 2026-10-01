@@ -158,6 +158,11 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           autolink: true,
           linkOnPaste: true,
           HTMLAttributes: { rel: "noopener noreferrer", target: null },
+          // Autolink and linkOnPaste have to refuse the same schemes the
+          // popover's editor does; `protocols` only adds to the extension's
+          // default list, so the allow-list is replaced here. A missing href is
+          // left to the extension, as it is today.
+          isAllowedUri: (url) => !url || normalizeLinkUrl(url) !== null,
         }),
         Mention.configure({
           HTMLAttributes: { class: "mention" },
@@ -297,6 +302,8 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
   };
 
   const applyLink = () => {
+    // An emptied field means "never mind", not a malformed URL.
+    if (!linkUrl.trim()) return setLinkOpen(false);
     const href = normalizeLinkUrl(linkUrl);
     if (href === null) {
       setLinkError("Enter an absolute http:// or https:// URL.");
@@ -456,12 +463,19 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           <PopoverContent
             align="start"
             className="w-80 p-3"
+            aria-label="Link URL"
             // The trigger eats mousedown so the caret survives, which leaves
             // nothing to focus the form for us.
             onOpenAutoFocus={(e) => {
               e.preventDefault();
               linkInputRef.current?.focus();
               linkInputRef.current?.select();
+            }}
+            // Cancel and Escape would otherwise drop focus on the trigger, so
+            // every way out of the popover returns to the document being edited.
+            onCloseAutoFocus={(e) => {
+              e.preventDefault();
+              editor.commands.focus();
             }}
           >
             {/* noValidate: this form reports its own message, not the browser's. */}
