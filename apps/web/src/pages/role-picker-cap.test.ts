@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { rolePickerCapNotice } from "./role-picker-cap.ts";
+import { roleCapNotice, rolePickerCapNotice } from "./role-picker-cap.ts";
 import type { Role } from "../types.ts";
 
 const role = (id: string, name: string): Role => ({
@@ -33,4 +33,10 @@ test("a short page discloses itself with the RolesSection wording", () => {
   // 105 roles in the workspace, 100 of them fetched: the offer stops at the
   // page minus the owner the pickers filter out.
   assert.equal(rolePickerCapNotice(105, page(99)), "Showing 99 of 104 roles.");
+});
+
+test("the roles table counts every fetched row, owner included", () => {
+  assert.equal(roleCapNotice(5, 7), "Showing 5 of 7 roles.");
+  assert.equal(roleCapNotice(4, 4), null);
+  assert.equal(roleCapNotice(0, 0), null);
 });
