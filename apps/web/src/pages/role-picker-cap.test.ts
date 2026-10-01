@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { assignableRoles, rolePickerCapNotice } from "./role-picker-cap.ts";
+import { assignableRoles, roleCapNotice, rolePickerCapNotice } from "./role-picker-cap.ts";
 import type { Role } from "../types.ts";
 
 const role = (id: string, name: string): Role => ({
@@ -63,4 +63,10 @@ test("the owner role is matched case-insensitively, like the backend", () => {
 // 0 rather than going negative and the notice stays suppressed.
 test("no notice when the workspace total is missing", () => {
   assert.equal(rolePickerCapNotice(0, page(99)), null);
+});
+
+test("the roles table counts every fetched row, owner included", () => {
+  assert.equal(roleCapNotice(5, 7), "Showing 5 of 7 roles.");
+  assert.equal(roleCapNotice(4, 4), null);
+  assert.equal(roleCapNotice(0, 0), null);
 });

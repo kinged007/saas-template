@@ -10,6 +10,10 @@ import type { Role } from "../types";
 export const assignableRoles = (roles: Role[]): Role[] =>
   roles.filter((r) => r.name.toLowerCase() !== "owner");
 
+// The one gate and sentence every role list uses; null while the page is complete.
+export const roleCapNotice = (fetched: number, total: number): string | null =>
+  total > fetched ? `Showing ${fetched} of ${total} roles.` : null;
+
 // The roles endpoint answers with one capped page, so a workspace past that cap
 // leaves both MembersPage pickers short of the full role list. Same wording as
 // the roles table in RolesSection, so the cap reads identically on both surfaces.
@@ -19,5 +23,5 @@ export const assignableRoles = (roles: Role[]): Role[] =>
 export const rolePickerCapNotice = (total: number, roles: Role[]): string | null => {
   const assignable = assignableRoles(roles);
   const pickable = Math.max(0, total - (roles.length - assignable.length));
-  return pickable > assignable.length ? `Showing ${assignable.length} of ${pickable} roles.` : null;
+  return roleCapNotice(assignable.length, pickable);
 };
