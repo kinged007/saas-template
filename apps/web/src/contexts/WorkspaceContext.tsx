@@ -80,6 +80,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     () => queryClient.getQueryData<Identity & { workspaces: Workspace[] }>(["auth", "identity"]),
     () => undefined,
   );
+  // The identity cache is written a round-trip after the token, so on its own
+  // this provider keeps its signed-out render (workspaces: [], workspace:
+  // undefined) while the route that just mounted paints the empty state.
+  // Re-rendering on the token lets the isLoading gate cover that gap.
+  const hasAccessToken = useSyncExternalStore(
+    tokenStore.onTokensChanged,
+    () => !!tokenStore.getAccess(),
+    () => false,
+  );
   const storedIdentity = (identityStore.get() as (Identity & { workspaces: Workspace[] }) | null);
   const identity = cachedIdentity ?? storedIdentity ?? undefined;
   const isLoading = identity === undefined;
@@ -111,11 +120,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
   }, [queryClient]);
 
+  // hasAccessToken is a dependency because a sign-in can set the token while
+  // identity is already undefined — without it this effect never runs for that
+  // render and the provider stays on the loading branch with no observer left
+  // to deliver the identity (children are not mounted).
   useEffect(() => {
-    if (tokenStore.getAccess() && identity === undefined) {
+    if (hasAccessToken && identity === undefined) {
       void fetchIdentity();
     }
-  }, [identity, fetchIdentity]);
+  }, [identity, fetchIdentity, hasAccessToken]);
 
   const refetch = () => {
     queryClient.invalidateQueries({ queryKey: ["auth"] });
@@ -315,7 +328,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // Signed out (e.g. on /login): render children and let the Authenticated
   // guard route to the login flow. Caches were already cleared synchronously
   // in authProvider.logout / the 401 interceptor.
-  if (!tokenStore.getAccess()) {
+  if (!hasAccessToken) {
     return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
   }
 
