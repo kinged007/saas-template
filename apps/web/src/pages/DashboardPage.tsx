@@ -97,13 +97,11 @@ export function DashboardPage() {
   const keys = keysResult?.data ?? [];
   const invitations = invitationsResult?.data ?? [];
   // ponytail: step progress is derived per render; only dismissal persists (onboardingStore). Add a tour store when onboarding grows past 3 steps.
-  const steps = workspace
-    ? [
-        { done: invitations.length > 0, title: "Invite your team", hint: "Members get workspace access by role.", to: "/members", cta: "Invite" },
-        { done: keys.length > 0, title: "Create an API key", hint: "Automate with scoped machine credentials.", to: "/api-keys/create", cta: "Create key" },
-      ]
-    : [];
-  const allDone = steps.length > 0 && steps.every((s) => s.done);
+  const steps = [
+    { done: invitations.length > 0, title: "Invite your team", hint: "Members get workspace access by role.", to: "/members", cta: "Invite" },
+    { done: keys.length > 0, title: "Create an API key", hint: "Automate with scoped machine credentials.", to: "/api-keys/create", cta: "Create key" },
+  ];
+  const allDone = steps.every((s) => s.done);
 
   return (
     <div className="flex flex-col gap-6">
@@ -143,7 +141,7 @@ export function DashboardPage() {
                     full-width input. Ring off, focus on. */}
                 <CardTitle tabIndex={-1} ref={restoreHeading} className="outline-none">Get set up</CardTitle>
                 <CardDescription>
-                  {workspace ? "Finish these steps to get the most out of your workspace." : "Create a workspace to get started with managing your team."}
+                  Finish these steps to get the most out of your workspace.
                 </CardDescription>
               </div>
               <Button
@@ -162,14 +160,6 @@ export function DashboardPage() {
             </div>
           </CardHeader>
           <CardContent className="divide-y">
-            {!workspace && (
-              <Link to="/workspaces/create">
-                <Button>
-                  <PlusCircle className="mr-2 h-4 w-4" />
-                  Create workspace
-                </Button>
-              </Link>
-            )}
             {steps.map((s) => (
               <Step key={s.title} {...s} />
             ))}
