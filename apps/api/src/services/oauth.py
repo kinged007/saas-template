@@ -189,13 +189,11 @@ def claims_from_id_token(
     if client is None:
         return None
     # The operator's configured issuer is the pin; the discovery document only
-    # fills in a provider that names none. A document naming a different one is
-    # refused rather than preferred, so a compromised or misconfigured IdP cannot
-    # repoint the check. This is a consistency check, not a standalone pin: the
-    # document still names the verifying keys via `jwks_uri` above, so document,
-    # config and token must agree. A disagreement is a hard login failure, not a
-    # fallback -- a repointed or hijacked IdP fails closed instead of silently
-    # overriding the pinned issuer.
+    # fills in a provider that names none, and one naming a different issuer is
+    # refused. That is a consistency check, not a standalone pin: the document
+    # still names the verifying keys via `jwks_uri` above, so a document under
+    # hostile control still controls the keys. A disagreement is a hard login
+    # failure, not a fallback.
     doc_issuer = doc.get("issuer")
     if provider.issuer and doc_issuer and _norm_issuer(provider.issuer) != _norm_issuer(doc_issuer):
         logger.warning("discovery issuer mismatch for provider %s", provider.id)
