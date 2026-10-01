@@ -208,6 +208,30 @@ async def test_join_survives_missing_viewer_role(app_client, single_workspace_on
     assert [w["id"] for w in me.json()["workspaces"]] == [ws_id]
 
 
+async def test_refresh_surfaces_401_when_user_row_is_gone(
+    app_client, single_workspace_on, monkeypatch
+):
+    # The join failure is real (rollback runs, instances expire), so the only
+    # thing left to fake is the re-read that follows it. get_user has no other
+    # consumer on the refresh path: rotate_refresh uses session.get, and
+    # get_user_by_refresh_token runs before the helper.
+    from src.services.auth import AuthService
+
+    await break_single_workspace_join(app_client)
+    tokens = await register_user(app_client, "newcomer@example.com")
+
+    async def _gone(self, user_id):
+        return None
+
+    monkeypatch.setattr(AuthService, "get_user", _gone)
+    resp = await app_client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["detail"] == "account no longer exists"
+    assert "access_token" not in resp.json()
+
+
 async def test_login_survives_join_failure(app_client, single_workspace_on):
     # A failed join is log-only: the rollback it needs expires every loaded
     # instance, so the reads after it must not be lazy loads.
