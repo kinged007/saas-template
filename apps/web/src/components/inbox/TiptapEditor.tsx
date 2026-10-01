@@ -5,11 +5,15 @@ import Link from "@tiptap/extension-link";
 import Mention from "@tiptap/extension-mention";
 import type { SuggestionProps, SuggestionKeyDownProps } from "@tiptap/suggestion";
 import TurndownService from "turndown";
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { Bold, Italic, Code2, SquareCode, List, ListOrdered, Link2, Quote } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { normalizeLinkUrl } from "@/lib/link-url";
 import { pickerIndex, rankMentionTargets, type MentionTarget } from "@/lib/mentions";
 
 const turndownService = new TurndownService({
@@ -132,6 +136,12 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
   // Which formatting control holds the toolbar's single tab stop.
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [toolbarIndex, setToolbarIndex] = useState(0);
+
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const linkInputRef = useRef<HTMLInputElement>(null);
+  const linkInputId = useId();
 
   const editor = useEditor(
     {
@@ -278,6 +288,29 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
     if (index >= 0) setToolbarIndex(index);
   };
 
+  const onLinkOpenChange = (open: boolean) => {
+    setLinkOpen(open);
+    if (open) {
+      setLinkUrl((editor.getAttributes("link").href as string | undefined) ?? "");
+      setLinkError(null);
+    }
+  };
+
+  const applyLink = () => {
+    const href = normalizeLinkUrl(linkUrl);
+    if (href === null) {
+      setLinkError("Enter an absolute http:// or https:// URL.");
+      return;
+    }
+    editor.chain().focus().setLink({ href }).run();
+    setLinkOpen(false);
+  };
+
+  const removeLink = () => {
+    editor.chain().focus().unsetLink().run();
+    setLinkOpen(false);
+  };
+
   return (
     // Every control below keeps the editor's focus by eating mousedown and
     // acting on `click`, the one event a keyboard activation fires too.
@@ -402,29 +435,83 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
         >
           <Quote className="h-3.5 w-3.5" />
         </Button>
-        <Button
-          type="button"
-          // Link is an action, not a toggle: it prompts for a URL, so it has no pressed state.
-          variant={editor.isActive("link") ? "secondary" : "ghost"}
-          size="icon"
-          className="h-7 w-7"
-          title="Link"
-          aria-label="Link"
-          tabIndex={toolbarIndex === 7 ? 0 : -1}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => {
-            const prev = editor.getAttributes("link").href as string | undefined;
-            const url = window.prompt("Enter URL", prev || "https://");
-            if (url === null) return;
-            if (url === "") {
-              editor.chain().focus().unsetLink().run();
-            } else {
-              editor.chain().focus().setLink({ href: url }).run();
-            }
-          }}
-        >
-          <Link2 className="h-3.5 w-3.5" />
-        </Button>
+        <Popover open={linkOpen} onOpenChange={onLinkOpenChange}>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              // Link is an action, not a toggle: it opens a URL editor rather than
+              // flipping a state, so it carries no aria-pressed. The variant below
+              // still tracks isActive("link") as the pressed look.
+              variant={editor.isActive("link") ? "secondary" : "ghost"}
+              size="icon"
+              className="h-7 w-7"
+              title="Link"
+              aria-label="Link"
+              tabIndex={toolbarIndex === 7 ? 0 : -1}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <Link2 className="h-3.5 w-3.5" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="start"
+            className="w-80 p-3"
+            // The trigger eats mousedown so the caret survives, which leaves
+            // nothing to focus the form for us.
+            onOpenAutoFocus={(e) => {
+              e.preventDefault();
+              linkInputRef.current?.focus();
+              linkInputRef.current?.select();
+            }}
+          >
+            {/* noValidate: this form reports its own message, not the browser's. */}
+            <form
+              noValidate
+              className="space-y-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                applyLink();
+              }}
+            >
+              <Label htmlFor={linkInputId}>Link URL</Label>
+              <Input
+                id={linkInputId}
+                ref={linkInputRef}
+                type="url"
+                inputMode="url"
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                placeholder="https://example.com"
+                value={linkUrl}
+                aria-invalid={linkError ? true : undefined}
+                aria-describedby={linkError ? `${linkInputId}-error` : undefined}
+                onChange={(e) => {
+                  setLinkUrl(e.target.value);
+                  setLinkError(null);
+                }}
+              />
+              {linkError && (
+                <p id={`${linkInputId}-error`} role="alert" className="text-destructive text-xs">
+                  {linkError}
+                </p>
+              )}
+              <div className="flex items-center gap-2">
+                <Button type="submit" size="sm">
+                  Apply
+                </Button>
+                <Button type="button" size="sm" variant="ghost" onClick={() => setLinkOpen(false)}>
+                  Cancel
+                </Button>
+                {editor.isActive("link") && (
+                  <Button type="button" size="sm" variant="ghost" className="ml-auto" onClick={removeLink}>
+                    Remove link
+                  </Button>
+                )}
+              </div>
+            </form>
+          </PopoverContent>
+        </Popover>
       </div>
       <EditorContent
         editor={editor}

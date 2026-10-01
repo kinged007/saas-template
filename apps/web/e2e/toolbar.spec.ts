@@ -73,6 +73,56 @@ test.describe("composer toolbar", () => {
     await expect(bold).toHaveAttribute("aria-pressed", "false");
   });
 
+  test("Link is an action, not a toggle, so it reports no pressed state", async ({ page }) => {
+    const toolbar = await openToolbar(page);
+    const link = toolbar.getByRole("button", { name: "Link", exact: true });
+
+    // The seven toggles above all carry aria-pressed. Link opens an editor, so
+    // it must not claim a state it does not maintain.
+    await expect(link).not.toHaveAttribute("aria-pressed", /.+/);
+  });
+
+  test("Link edits the URL in a popover, not a native prompt", async ({ page }) => {
+    const toolbar = await openToolbar(page);
+    const editor = page.getByRole("dialog").locator('[contenteditable="true"]');
+
+    // A native prompt blocks the main thread and some screen readers drop it,
+    // so the editor has to be a surface in the page.
+    await page.evaluate(() => {
+      const w = window as unknown as { __prompted: boolean };
+      w.__prompted = false;
+      window.prompt = () => {
+        w.__prompted = true;
+        return "https://from-prompt.example.com";
+      };
+    });
+    await editor.click();
+    await page.keyboard.type("hello");
+    await page.keyboard.press("ControlOrMeta+a");
+    await toolbar.getByRole("button", { name: "Link", exact: true }).click();
+
+    const url = page.getByRole("textbox", { name: "Link URL" });
+    await expect(url).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as { __prompted: boolean }).__prompted)).toBe(false);
+
+    await url.fill("https://example.com/docs");
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
+    await expect(editor.locator('a[href="https://example.com/docs"]')).toHaveText("hello");
+
+    // Anything that is not an absolute http(s) URL is refused, rather than
+    // reaching the document as an href.
+    await page.keyboard.press("ControlOrMeta+a");
+    await toolbar.getByRole("button", { name: "Link", exact: true }).click();
+    await url.fill("javascript:alert(1)");
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
+    await expect(page.getByText("Enter an absolute http:// or https:// URL.")).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as { __prompted: boolean }).__prompted)).toBe(false);
+
+    // The popover still holds the link, so the removal control is there.
+    await page.getByRole("button", { name: "Remove link", exact: true }).click();
+    await expect(editor.locator("a")).toHaveCount(0);
+  });
+
   test("the toolbar is a single tab stop with arrow-key navigation", async ({ page }) => {
     const toolbar = await openToolbar(page);
     const buttons = toolbar.getByRole("button");
