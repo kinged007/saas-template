@@ -47,7 +47,7 @@ REDIRECT_URI = "http://localhost:8000/api/v1/auth/oauth/stub/callback"
 
 
 def _jwk(key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey, kid: str, alg: str) -> dict[str, Any]:
-    algo = jwt.algorithms.ECAlgorithm if alg == "ES256" else jwt.algorithms.RSAAlgorithm
+    algo = {"RS256": jwt.algorithms.RSAAlgorithm, "ES256": jwt.algorithms.ECAlgorithm}[alg]
     pub = json.loads(algo.to_jwk(key.public_key()))
     return {**pub, "kid": kid, "use": "sig", "alg": alg}
 
@@ -63,6 +63,7 @@ class _StubIdP:
         self.signing_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         self.ec_key = ec.generate_private_key(ec.SECP256R1())
         self.other_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        self.other_ec_key = ec.generate_private_key(ec.SECP256R1())
         self.hits: list[str] = []
         self.token_forms: list[dict[str, list[str]]] = []
         self.auth_headers: list[str] = []
@@ -252,6 +253,24 @@ def test_claims_from_id_token_accepts_valid_es256(provider, idp):
     )
     assert claims is not None
     assert claims["sub"] == "sub-1"
+    assert claims["email"] == "user@example.com"
+
+
+def test_claims_from_id_token_rejects_es256_token_signed_by_another_ec_key(provider, idp):
+    """Negative control for the ES256 half: same kid, different EC key. Only a real
+    signature check catches this, and the RS256 twin says nothing about EC."""
+    claims = claims_from_id_token(
+        provider, idp.doc, idp.mint(kid=EC_KID, key=idp.other_ec_key, alg="ES256")
+    )
+    assert claims is None
+
+
+def test_jwk_rejects_unknown_algorithm(idp):
+    """An alg outside the map raises here, at the call site. The ternary this replaced
+    emitted an RSA key labelled with whatever alg it was handed, so the stub published
+    a key it could never verify and the failure surfaced as a signature error."""
+    with pytest.raises(KeyError):
+        _jwk(idp.signing_key, "kid-x", "PS256")
 
 
 def test_claims_from_id_token_rejects_wrong_audience(provider, idp):
