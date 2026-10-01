@@ -13,3 +13,11 @@ export const resolveTransferTarget = (
   candidates: Member[],
   membershipId: string,
 ): Member | undefined => candidates.find((m) => m.membership_id === membershipId);
+
+/**
+ * The id the Select stays bound to. A stale id names no item, and an item-less
+ * value renders as an empty box rather than the placeholder, so it collapses to
+ * "" once the picked member is gone.
+ */
+export const liveTransferId = (candidates: Member[], membershipId: string): string =>
+  resolveTransferTarget(candidates, membershipId) ? membershipId : "";

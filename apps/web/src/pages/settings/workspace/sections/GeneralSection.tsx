@@ -44,7 +44,7 @@ import type { Identity, Member } from "@/types";
 import { getMemberDisplayName } from "@/types";
 import { WorkspaceExportCard } from "@/components/WorkspaceExportCard";
 import { workspaceStore } from "@/utils/storage";
-import { resolveTransferTarget, transferEligibleMembers } from "./transfer-ownership";
+import { liveTransferId, resolveTransferTarget, transferEligibleMembers } from "./transfer-ownership";
 
 const schema = z.object({
   name: z.string().min(1, "Name is required").max(150, "Max 150 characters"),
@@ -88,6 +88,12 @@ export function GeneralSection() {
   const transferTargetLabel = transferTarget
     ? `${getMemberDisplayName(transferTarget)} (${transferTarget.email})`
     : "";
+
+  // Drop a stale id so the trigger shows the placeholder again instead of an empty
+  // box. The button stays gated on transferTarget either way.
+  useEffect(() => {
+    if (liveTransferId(transferCandidates, transferId) !== transferId) setTransferId("");
+  }, [transferCandidates, transferId]);
 
   const transferOwnership = () => {
     if (!workspace || !transferTarget) return;
