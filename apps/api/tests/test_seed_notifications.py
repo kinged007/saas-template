@@ -12,14 +12,30 @@ the workflow's.
 pending invitation. ``invitation_id`` / ``invited_by`` stay gated on a real
 invitation row, since those describe an invite that actually exists.
 
-Re-running the seed adds nothing: the seed is idempotent.
+Re-running the seed adds no notification rows. That is scoped to the
+notifications this file reads; the test does not assert idempotency for the
+other tables the seed writes.
 """
 
+import pytest
 from sqlalchemy import select
 
 from src.db.session import SessionFactory
 from src.models.core import Invitation, Notification
 from src.workflows import INVITATIONS_ROUTE
+
+
+def _assert_carries_url(n: Notification) -> None:
+    """Assert one invitation notification carries the frontend route.
+
+    A NULL payload counts as an empty one: it is the defect this test exists for
+    (the bell Open button renders only from ``payload.url``), so it must fail the
+    assertion with the message instead of raising ``AttributeError`` (#583).
+    """
+    assert (n.payload or {}).get("url") == INVITATIONS_ROUTE, (
+        f"seeded invitation notification {n.title!r} is missing payload.url; "
+        "the bell Open button will not render"
+    )
 
 
 def test_seed_and_workflow_share_one_route_constant():
@@ -43,23 +59,22 @@ async def test_seed_invitation_notifications_carry_url():
     assert invitations, "seed should create workspace_invitation notifications"
 
     for n in invitations:
-        assert n.payload.get("url") == INVITATIONS_ROUTE, (
-            f"seeded invitation notification {n.title!r} is missing payload.url; "
-            "the bell Open button will not render"
-        )
+        _assert_carries_url(n)
 
     # Only rows backed by a real pending invitation carry the invite id, one
-    # link per notification.
+    # link per notification. The subset check runs before distinctness: a
+    # dangling id is the worse defect, and the distinctness failure would
+    # otherwise report in its place (#581).
     with_invite = [
-        n.payload["invitation_id"] for n in invitations if n.payload.get("invitation_id")
+        n.payload["invitation_id"] for n in invitations if (n.payload or {}).get("invitation_id")
     ]
     assert with_invite, "seed should link at least one notification to a pending invitation"
-    assert len(with_invite) == len(set(with_invite)), (
-        f"each notification should link to a distinct invitation, got {sorted(with_invite)}"
-    )
     assert set(with_invite) <= pending, (
         f"invitation_id must name a pending invitation; dangling: "
         f"{sorted(set(with_invite) - pending)}"
+    )
+    assert len(with_invite) == len(set(with_invite)), (
+        f"each notification should link to a distinct invitation, got {sorted(with_invite)}"
     )
 
     await seed_main()
@@ -69,3 +84,18 @@ async def test_seed_invitation_notifications_carry_url():
     assert after == len(rows), (
         f"re-running the seed must add no notifications: {len(rows)} -> {after}"
     )
+
+
+def test_null_payload_reports_the_defect():
+    """A NULL payload fails the assertion; it does not error out (#583)."""
+    n = Notification(
+        id="n1",
+        user_id="u1",
+        workspace_id="w1",
+        type="workspace_invitation",
+        title="New invitation sent",
+        payload=None,
+    )
+
+    with pytest.raises(AssertionError, match="missing payload.url"):
+        _assert_carries_url(n)
