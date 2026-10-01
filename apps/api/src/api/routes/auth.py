@@ -335,6 +335,10 @@ async def refresh(
             user = await service.get_user_by_refresh_token(pair.refresh_token)
             if user is not None:
                 await _join_single_workspace_best_effort(db, container, user)
+        except HTTPException:
+            # The helper's "account no longer exists" guard: re-raise it rather
+            # than hand the caller a token pair for an account that is gone.
+            raise
         except Exception:
             # No rollback of its own: the helper already rolled back before it
             # re-read the user, and nothing below here touches the ORM. Do not
