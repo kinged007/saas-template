@@ -1,18 +1,7 @@
-import { expect, test as base, type Locator, type Page } from "playwright/test";
+import { expect, type Locator, type Page } from "playwright/test";
 
+import { test } from "./fixtures";
 import { mockApi } from "./mock-api";
-
-const test = base.extend<{ pageerrors: Error[] }>({
-  pageerrors: [
-    async ({ page }, use) => {
-      const errors: Error[] = [];
-      page.on("pageerror", (error) => errors.push(error));
-      await use(errors);
-      expect(errors).toEqual([]);
-    },
-    { auto: true },
-  ],
-});
 
 /** Dashboard with the card already dismissed, so restoring is the only way back. */
 async function dismissedOnboarding(page: Page): Promise<Locator> {

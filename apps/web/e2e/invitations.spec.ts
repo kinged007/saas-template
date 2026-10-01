@@ -1,5 +1,6 @@
-import { expect, test as base, type Page } from "playwright/test";
+import { expect, type Page } from "playwright/test";
 
+import { test } from "./fixtures";
 import { IDENTITY, mockApi } from "./mock-api";
 
 /**
@@ -49,18 +50,6 @@ const invitations = (page: Page) =>
         body: JSON.stringify([LIVE, EXPIRED, ACCEPTED]),
       }),
   );
-
-const test = base.extend<{ pageerrors: Error[] }>({
-  pageerrors: [
-    async ({ page }, use) => {
-      const errors: Error[] = [];
-      page.on("pageerror", (error) => errors.push(error));
-      await use(errors);
-      expect(errors).toEqual([]);
-    },
-    { auto: true },
-  ],
-});
 
 test.describe("invitations", () => {
   test("Delete is hidden, not disabled, without member:delete", async ({ page }) => {

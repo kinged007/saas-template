@@ -1,5 +1,6 @@
-import { expect, test as base, type Page } from "playwright/test";
+import { expect, type Page } from "playwright/test";
 
+import { test } from "./fixtures";
 import { mockApi } from "./mock-api";
 
 /**
@@ -58,18 +59,6 @@ const members = (page: Page) =>
 const rowTrigger = (page: Page) =>
   page.getByRole("row").filter({ hasText: "member@example.com" }).getByRole("combobox");
 const inviteTrigger = (page: Page) => page.getByRole("combobox").last();
-
-const test = base.extend<{ pageerrors: Error[] }>({
-  pageerrors: [
-    async ({ page }, use) => {
-      const errors: Error[] = [];
-      page.on("pageerror", (error) => errors.push(error));
-      await use(errors);
-      expect(errors).toEqual([]);
-    },
-    { auto: true },
-  ],
-});
 
 test.describe("role cap notice", () => {
   test("both role triggers describe themselves with the cap", async ({ page }) => {
