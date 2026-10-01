@@ -195,6 +195,13 @@ async def test_refresh_joins_single_workspace(app_client, single_workspace_on, m
     assert resp.status_code == 200, resp.text
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(resp.json()))
     assert [w["id"] for w in me.json()["workspaces"]] == [ws_id]
+    # A successful refresh must clear the window, not charge it: with a budget
+    # of one attempt, a charge on the way out answers 429 on the next rotation.
+    monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 1)
+    again = await app_client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": resp.json()["refresh_token"]}
+    )
+    assert again.status_code == 200, again.text
 
 
 async def test_join_survives_missing_viewer_role(app_client, single_workspace_on):
@@ -215,17 +222,31 @@ async def test_join_survives_missing_viewer_role(app_client, single_workspace_on
     assert [w["id"] for w in me.json()["workspaces"]] == [ws_id]
 
 
-async def test_refresh_surfaces_401_when_token_owner_is_gone(
-    app_client, single_workspace_on, monkeypatch
-):
+async def test_refresh_refuses_pair_when_account_deleted_mid_rotation(app_client, monkeypatch):
+    # The real race, no stub of the lookup under test: the account is deleted
+    # out-of-band from a second session after rotate_refresh committed the new
+    # token row, so the token is live and its owner is gone. Default mode has
+    # no join to re-read the user, so this is where the pair used to escape.
+    from sqlalchemy import delete
+
+    from src.db.session import SessionFactory
+    from src.models.workspace import User
     from src.services.auth import AuthService
 
-    tokens = await register_user(app_client, "newcomer@example.com")
+    assert settings.single_workspace is False
+    tokens = await register_user(app_client, "vanishing@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    user_id = me.json()["id"]
+    issue_tokens = AuthService.issue_tokens
 
-    async def _no_owner(self, refresh_token):
-        return None
+    async def _delete_owner_then_issue(self, user, **kwargs):
+        pair = await issue_tokens(self, user, **kwargs)
+        async with SessionFactory() as session:
+            await session.execute(delete(User).where(User.id == user_id))
+            await session.commit()
+        return pair
 
-    monkeypatch.setattr(AuthService, "get_user_by_refresh_token", _no_owner)
+    monkeypatch.setattr(AuthService, "issue_tokens", _delete_owner_then_issue)
     resp = await app_client.post(
         "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
     )
@@ -294,23 +315,34 @@ async def _gone_user_is_gone(app_client, monkeypatch, entry: str):
             "/api/v1/auth/login",
             json={"email": "newcomer@example.com", "password": "Password123!"},
         )
-    else:
+    elif entry == "refresh":
         resp = await app_client.post(
             "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
         )
+    else:
+        pytest.fail(f"unknown entry point: {entry}")
     assert resp.status_code == 401, resp.text
     assert resp.json()["detail"] == "account no longer exists"
     assert "access_token" not in resp.json()
 
 
-@pytest.mark.parametrize("entry", ["register", "login", "refresh"])
+@pytest.mark.parametrize("entry", ["login", "refresh"])
 async def test_account_gone_surfaces_401_on_every_token_entry_point(
     app_client, single_workspace_on, monkeypatch, entry
 ):
-    # Pins the guard on all three entry points. register and login propagate it
-    # only because neither call is wrapped in a try:; wrap either the way
-    # refresh was wrapped and the guard silently stops propagating.
+    # Pins the guard on the entry points that return an existing account. They
+    # propagate it only because neither call is wrapped in a try:; wrap either
+    # the way refresh was wrapped and the guard silently stops propagating.
     await _gone_user_is_gone(app_client, monkeypatch, entry)
+
+
+async def test_register_propagates_the_join_guard(app_client, single_workspace_on, monkeypatch):
+    # /register calls the same join helper, so the guard propagates there too.
+    # The status reads wrong for a registration — the account was committed
+    # milliseconds earlier, and a 401 tells the client to log in, which it
+    # cannot do with an account it never learned the id of. Kept as its own
+    # named test so it reads as inherited helper behavior, not a contract.
+    await _gone_user_is_gone(app_client, monkeypatch, "register")
 
 
 async def test_login_survives_join_failure(app_client, single_workspace_on):
