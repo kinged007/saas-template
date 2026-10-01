@@ -430,6 +430,34 @@ async def test_cleanup_job_error_message_caps_the_id_list(app_client, monkeypatc
     # 10 ids listed by name, the remaining 2 only counted.
     assert sum(1 for key in keys if key["id"] in message) == 10
     assert "(+2 more)" in message
+    # Counting ids does not pin the separator: this asserts the joined form, so a
+    # quote-glued list fails here instead of reading as a quoting bug to an operator.
+    assert ", " in message
+    assert "'" not in message
+
+
+async def test_cleanup_job_logs_only_the_first_publish_failure_with_a_traceback(
+    app_client, monkeypatch, caplog
+):
+    """One traceback per key would flood the log during a bus outage; only the
+    first failure carries one, because nothing retries a FAILED run and that
+    record is the only account of why the publish failed."""
+    monkeypatch.setattr(settings, "api_key_retention_days", 0)
+    client = app_client
+    owner = await register_user(client, "logsplit@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    for n in range(3):
+        await _backdated_key(client, headers, f"key {n}")
+
+    with caplog.at_level(logging.INFO, logger="src.jobs.builtin"):
+        with pytest.raises(RuntimeError):
+            await api_key_cleanup(_FakeCtx(_FailingBus(fail_all=True)))
+
+    records = [r for r in caplog.records if "audit publish failed" in r.getMessage()]
+    assert len(records) == 3
+    assert records[0].exc_info is not None
+    assert [r.exc_info for r in records[1:]] == [None, None]
 
 
 async def test_job_is_dispatched_by_the_scheduler(app_client):
