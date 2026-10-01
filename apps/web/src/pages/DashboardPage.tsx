@@ -79,12 +79,16 @@ export function DashboardPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Link to="/workspaces/create">
-            <Button>
-              <PlusCircle className="mr-2 h-4 w-4" />
-              Create workspace
-            </Button>
-          </Link>
+          {/* /workspaces/create redirects home while the flag is set, so the
+              button would navigate nowhere. */}
+          {identity?.single_workspace !== true && (
+            <Link to="/workspaces/create">
+              <Button>
+                <PlusCircle className="mr-2 h-4 w-4" />
+                Create workspace
+              </Button>
+            </Link>
+          )}
         </CardContent>
       </Card>
     );

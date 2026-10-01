@@ -350,6 +350,7 @@ function UserMenu() {
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const { workspaces } = useWorkspace();
+  const single = useSingleWorkspace();
 
   return (
     <SidebarProvider>
@@ -375,13 +376,17 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               <p className="text-muted-foreground text-sm">
                 You're not a member of any workspace yet.
               </p>
-              <Button
-                onClick={() => navigate("/workspaces/create")}
-                className="gap-2 justify-start"
-              >
-                <Building2 className="h-4 w-4" />
-                Create workspace
-              </Button>
+              {/* /workspaces/create redirects home while the flag is set, so the
+                  button would navigate nowhere. */}
+              {!single && (
+                <Button
+                  onClick={() => navigate("/workspaces/create")}
+                  className="gap-2 justify-start"
+                >
+                  <Building2 className="h-4 w-4" />
+                  Create workspace
+                </Button>
+              )}
             </div>
           ) : (
             <SidebarNav />
