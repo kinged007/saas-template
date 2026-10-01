@@ -26,9 +26,9 @@ def _is_https_request(request: Request | None) -> bool:
     with --proxy-headers, so there request.url.scheme already honors
     X-Forwarded-Proto; the image default CMD (infra/docker/Dockerfile.api) does
     not, so the explicit header check is what covers that case, test clients,
-    and servers without proxy-header handling. Port
-    suffix (:443) covers X-Forwarded-Host forms that carry no scheme, for a
-    proxy that forwards the host only.
+    and servers without proxy-header handling. Port suffix (:443) covers
+    X-Forwarded-Host forms that carry no scheme, for a proxy that forwards
+    the host only.
 
     The header reads are client-controlled and deliberately ignore uvicorn's
     forwarded_allow_ips (prod sets --forwarded-allow-ips='*', so there is no

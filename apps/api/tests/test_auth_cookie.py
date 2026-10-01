@@ -20,12 +20,25 @@ def _attrs(raw: str) -> str:
 def _set_cookie(resp) -> str:
     raw = resp.headers.get("set-cookie", "")
     assert _cookie_name() in raw, f"refresh cookie missing: {raw!r}"
-    assert "HttpOnly" in raw, raw
+    assert "HttpOnly" in _attrs(raw), raw
     assert "SameSite=Lax" in raw or "SameSite=lax" in raw, raw
     assert "Path=/api/v1/auth" in raw, raw
     if settings.environment not in ("development", "test"):
         assert "Secure" in _attrs(raw), raw
     return raw
+
+
+@pytest.mark.parametrize(
+    ("raw", "secure"),
+    [
+        ("st_refresh=eyJ.Secure.x; Path=/api/v1/auth; HttpOnly", False),
+        ("st_refresh=eyJ.x; Path=/api/v1/auth; HttpOnly; Secure", True),
+        ("st_refresh=eyJ.x; Path=/api/v1/auth; HttpOnly", False),
+        ("st_refresh=eyJ.x", False),
+    ],
+)
+def test_attrs_reads_attribute_section_only(raw: str, secure: bool) -> None:
+    assert ("Secure" in _attrs(raw)) is secure
 
 
 async def test_login_cookie_flow_sets_cookie_and_omits_json_refresh(app_client):
@@ -294,8 +307,9 @@ async def test_oauth_token_cookie_flow_omits_json_refresh(app_client, monkeypatc
         monkeypatch.setattr(settings, "oauth_providers", "")
 
 
-async def test_cookie_secure_follows_forwarded_proto(app_client):
+async def test_cookie_secure_follows_forwarded_proto(monkeypatch, app_client):
     """Secure set on https (forwarded-proto) even with ENVIRONMENT=development."""
+    monkeypatch.setattr(settings, "refresh_cookie_secure", None)
     await register_user(app_client, "fwdproto@example.com")
     resp = await app_client.post(
         "/api/v1/auth/login",
@@ -352,6 +366,7 @@ async def test_cookie_secure_plain_http_in_production_is_secure(monkeypatch, app
     """
     await register_user(app_client, "prodsec@example.com")
     monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings, "refresh_cookie_secure", None)
     resp = await app_client.post(
         "/api/v1/auth/login",
         json={"email": "prodsec@example.com", "password": "Password123!", "use_cookies": True},
