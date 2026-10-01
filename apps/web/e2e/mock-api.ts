@@ -58,7 +58,7 @@ export async function mockApi(
     }
     if (pathname.endsWith("/auth/logout")) return route.fulfill({ status: 204, body: "" });
     const resource = pathname.slice("/api/v1/".length);
-    if (lists[resource]) return reply(200, lists[resource]);
+    if (resource in lists) return reply(200, lists[resource]);
     return reply(200, []);
   });
   // The auth check only refreshes when the signed-in marker is set, so seed it

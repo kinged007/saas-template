@@ -1,4 +1,5 @@
-import { expect, test as base, type Locator, type Page } from "playwright/test";
+import { expect, type Locator, type Page } from "playwright/test";
+import { test } from "./fixtures";
 import { mockApi } from "./mock-api";
 
 /**
@@ -18,18 +19,6 @@ const EXPECTED = [
   "Quote",
   "Link",
 ];
-
-const test = base.extend<{ pageerrors: Error[] }>({
-  pageerrors: [
-    async ({ page }, use) => {
-      const errors: Error[] = [];
-      page.on("pageerror", (error) => errors.push(error));
-      await use(errors);
-      expect(errors).toEqual([]);
-    },
-    { auto: true },
-  ],
-});
 
 test.describe("composer toolbar", () => {
   /** The compose dialog's formatting toolbar, opened from the inbox. */
@@ -95,13 +84,28 @@ test.describe("composer toolbar", () => {
     await buttons.first().focus();
     await page.keyboard.press("ArrowRight");
     await expect(buttons.nth(1)).toBeFocused();
+    // The tab stop follows focus, so the walked-over button becomes the tab stop.
+    await expect(buttons.nth(1)).toHaveAttribute("tabindex", "0");
+    await expect(toolbar.locator('button[tabindex="0"]')).toHaveCount(1);
     await page.keyboard.press("End");
     await expect(buttons.last()).toBeFocused();
     await page.keyboard.press("ArrowRight");
     await expect(buttons.first()).toBeFocused();
     await page.keyboard.press("Home");
     await expect(buttons.first()).toBeFocused();
-    // The tab stop follows the focused control.
-    await expect(buttons.last()).toHaveAttribute("tabindex", "-1");
+  });
+
+  test("the tab stop is the last control that had focus", async ({ page }) => {
+    const toolbar = await openToolbar(page);
+    const buttons = toolbar.getByRole("button");
+
+    await buttons.nth(3).focus();
+    await expect(buttons.nth(3)).toHaveAttribute("tabindex", "0");
+    // Leaving the group and re-entering must return to that control, not to the
+    // first one — the tab stop is where focus was left.
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Shift+Tab");
+    await expect(buttons.nth(3)).toBeFocused();
+    await expect(buttons.nth(3)).toHaveAttribute("tabindex", "0");
   });
 });

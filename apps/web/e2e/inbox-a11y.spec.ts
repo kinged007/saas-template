@@ -1,5 +1,6 @@
-import { expect, test as base, type Locator, type Page } from "playwright/test";
+import { expect, type Locator, type Page } from "playwright/test";
 
+import { test } from "./fixtures";
 import { mockApi } from "./mock-api";
 
 /**
@@ -74,8 +75,6 @@ async function expectButtonsNamed(scope: Locator) {
     await expect(button).toHaveAttribute("aria-label", /\S/);
   }
 }
-
-const test = base;
 
 test.describe("inbox icon buttons", () => {
   test("every icon-only button in the list pane is named", async ({ page }) => {
