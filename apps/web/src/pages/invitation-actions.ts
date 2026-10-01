@@ -6,13 +6,15 @@ type InvitationRow = Pick<Invitation, "status" | "expired">;
 export const canRevokeInvitation = (i: InvitationRow) => i.status === "pending";
 
 /**
- * Mirrors the statuses `resend_invitation` will act on: `accepted` and `revoked`
- * are terminal, and a fresh `pending` row is a no-op server-side.
+ * Mirrors the statuses `resend_invitation` will act on: it resets `declined` and
+ * `expired` to `pending`, ignores a fresh `pending` row, and rejects the
+ * terminal `accepted` and `revoked`. A status the API adds later is refused
+ * until this list is updated with it.
  */
 export const canResendInvitation = (i: InvitationRow) =>
-  i.status !== "accepted" &&
-  i.status !== "revoked" &&
-  (i.status !== "pending" || !!i.expired);
+  i.status === "declined" ||
+  i.status === "expired" ||
+  (i.status === "pending" && !!i.expired);
 
 /**
  * Display status. The API flags a pending row past its expiry as `expired`,

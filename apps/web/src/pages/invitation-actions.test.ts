@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import type { InvitationStatus } from "@/types";
 import { canResendInvitation, canRevokeInvitation, invitationStatus } from "./invitation-actions.ts";
 
-const inv = (status: string, expired = false) => ({ status, expired });
+const inv = (status: InvitationStatus, expired = false) => ({ status, expired });
 
 // Delete (revoke) and Re-send must not both offer a one-click reversal of each
 // other, and both must match what the API allows for a given status.
@@ -23,6 +24,17 @@ test("canResendInvitation is off on the terminal statuses", () => {
 
 test("canResendInvitation offers Re-send on a declined row", () => {
   assert.equal(canResendInvitation(inv("declined")), true);
+});
+
+test("canResendInvitation offers Re-send on an expired row", () => {
+  assert.equal(canResendInvitation(inv("expired")), true);
+});
+
+test("canResendInvitation denies a status outside the union", () => {
+  // The cast is the only way to spell "a status this app has never seen"; it
+  // exercises the runtime behaviour, not a type error to fix.
+  const future = { status: "suspended" as unknown as InvitationStatus, expired: false };
+  assert.equal(canResendInvitation(future), false);
 });
 
 test("canResendInvitation needs an expired pending row", () => {

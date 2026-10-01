@@ -151,6 +151,13 @@ export type Member = {
   joined_at?: string;
 };
 
+export type InvitationStatus =
+  | "pending"
+  | "declined"
+  | "accepted"
+  | "revoked"
+  | "expired";
+
 export type Invitation = {
   id: string;
   workspace_id: string;
@@ -158,7 +165,7 @@ export type Invitation = {
   role_id: string;
   invited_by_user_id?: string;
   token: string;
-  status: string;
+  status: InvitationStatus;
   expires_at?: string;
   accepted_at?: string;
   created_at?: string;
