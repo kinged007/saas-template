@@ -182,7 +182,7 @@ def idp():
 async def _clean_db():
     """No-op override of the autouse fixture in conftest.
 
-    These tests never touch the database, and each default drop/recreate cycle
+    These tests never touch the database, and each default unlink/recreate cycle
     churns the SQLite file the whole suite shares (#319). Skipping it here keeps
     13 pointless teardowns out of every full run.
     """
