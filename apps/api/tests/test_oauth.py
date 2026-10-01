@@ -3,6 +3,7 @@ exchanges are monkeypatched at the service-module boundary."""
 
 import json
 
+import httpx
 import pytest
 from sqlalchemy import func, select
 
@@ -41,14 +42,26 @@ GITHUB = {
 
 
 class _Resp:
-    def __init__(self, payload):
+    def __init__(self, payload, status_code=200):
         self._payload = payload
+        self._status_code = status_code
 
     def raise_for_status(self):
-        return None
+        if self._status_code >= 400:
+            raise httpx.HTTPStatusError(f"HTTP {self._status_code}", request=None, response=None)
 
     def json(self):
         return self._payload
+
+
+class _EmailsClient:
+    """One-shot httpx stand-in, so _verified_email can be called directly."""
+
+    def __init__(self, payload, status_code=200):
+        self._resp = _Resp(payload, status_code)
+
+    async def get(self, url, headers=None):
+        return self._resp
 
 
 def _fake_httpx(monkeypatch, *, user, emails):
@@ -347,6 +360,37 @@ async def test_github_refuses_unverified_email(app_client, github_on, monkeypatc
     _, resp = await _callback(app_client, monkeypatch, state="g2", provider="github")
     assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
     assert await _user_count() == before
+
+
+@pytest.mark.parametrize(
+    ("payload", "status", "expected"),
+    [
+        # Payload is not a list: the guard returns "" instead of iterating
+        # a non-iterable body into a TypeError.
+        (None, 200, ""),
+        # Provider errored: raise_for_status() propagates out of the helper.
+        ({"message": "server error"}, 502, httpx.HTTPStatusError),
+        # Several verified addresses, none primary: the provider's list order decides.
+        (
+            [
+                {"email": "first@example.com", "primary": False, "verified": True},
+                {"email": "second@example.com", "primary": False, "verified": True},
+            ],
+            200,
+            "first@example.com",
+        ),
+    ],
+    ids=["non-list-payload", "raise-for-status", "no-primary"],
+)
+async def test_verified_email_edge_branches(payload, status, expected):
+    """The three _verified_email arms the callback tests never reach."""
+    client = _EmailsClient(payload, status)
+    if isinstance(expected, type):
+        with pytest.raises(expected):
+            await oauth_svc._verified_email(client, "https://api.github.com/user/emails", {})
+    else:
+        got = await oauth_svc._verified_email(client, "https://api.github.com/user/emails", {})
+        assert got == expected
 
 
 async def test_github_public_email_skips_emails_endpoint(app_client, github_on, monkeypatch):
