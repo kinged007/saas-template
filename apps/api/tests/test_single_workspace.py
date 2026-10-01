@@ -215,28 +215,102 @@ async def test_join_survives_missing_viewer_role(app_client, single_workspace_on
     assert [w["id"] for w in me.json()["workspaces"]] == [ws_id]
 
 
-async def test_refresh_surfaces_401_when_user_row_is_gone(
+async def test_refresh_surfaces_401_when_token_owner_is_gone(
     app_client, single_workspace_on, monkeypatch
 ):
-    # The join failure is real (rollback runs, instances expire), so the only
-    # thing left to fake is the re-read that follows it. get_user has no other
-    # consumer on the refresh path: rotate_refresh uses session.get, and
-    # get_user_by_refresh_token runs before the helper.
     from src.services.auth import AuthService
 
-    await break_single_workspace_join(app_client)
     tokens = await register_user(app_client, "newcomer@example.com")
 
-    async def _gone(self, user_id):
+    async def _no_owner(self, refresh_token):
         return None
 
-    monkeypatch.setattr(AuthService, "get_user", _gone)
+    monkeypatch.setattr(AuthService, "get_user_by_refresh_token", _no_owner)
     resp = await app_client.post(
         "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
     )
     assert resp.status_code == 401, resp.text
     assert resp.json()["detail"] == "account no longer exists"
     assert "access_token" not in resp.json()
+    assert "set-cookie" not in resp.headers
+
+
+async def test_refresh_account_gone_charges_rate_limiter(
+    app_client, single_workspace_on, monkeypatch
+):
+    # Every sibling 401 on refresh charges the limiter; the account-gone 401
+    # has to as well, or a deleted account's refresh token is free to rotate
+    # (revocation write plus a user.token_refresh audit publish) forever.
+    from src.services.auth import AuthService
+
+    monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 1)
+    tokens = await register_user(app_client, "newcomer@example.com")
+
+    async def _no_owner(self, refresh_token):
+        return None
+
+    monkeypatch.setattr(AuthService, "get_user_by_refresh_token", _no_owner)
+    gone = await app_client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert gone.status_code == 401, gone.text
+    again = await app_client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert again.status_code == 429, again.text
+
+
+async def _gone_user_is_gone(app_client, monkeypatch, entry: str):
+    """Call one token entry point with the account gone after the join's rollback.
+
+    The join failure is real (rollback runs, instances expire), so the only
+    thing left to fake is the re-read that follows it. get_user has no other
+    consumer on these paths: rotate_refresh uses session.get, and
+    get_user_by_refresh_token runs before the helper.
+    """
+    from src.services.auth import AuthService
+
+    await break_single_workspace_join(app_client)
+    # Registered with the join already broken: the entry point under test is
+    # the first call that sees the account gone.
+    tokens = await register_user(app_client, "newcomer@example.com")
+
+    async def _gone(self, user_id):
+        return None
+
+    monkeypatch.setattr(AuthService, "get_user", _gone)
+    if entry == "register":
+        resp = await app_client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "late@example.com",
+                "password": "Password123!",
+                "first_name": "Late",
+                "last_name": "Arrival",
+            },
+        )
+    elif entry == "login":
+        resp = await app_client.post(
+            "/api/v1/auth/login",
+            json={"email": "newcomer@example.com", "password": "Password123!"},
+        )
+    else:
+        resp = await app_client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+        )
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["detail"] == "account no longer exists"
+    assert "access_token" not in resp.json()
+
+
+@pytest.mark.parametrize("entry", ["register", "login", "refresh"])
+async def test_account_gone_surfaces_401_on_every_token_entry_point(
+    app_client, single_workspace_on, monkeypatch, entry
+):
+    # Pins the guard on all three entry points. register and login propagate it
+    # only because neither call is wrapped in a try:; wrap either the way
+    # refresh was wrapped and the guard silently stops propagating.
+    await _gone_user_is_gone(app_client, monkeypatch, entry)
 
 
 async def test_login_survives_join_failure(app_client, single_workspace_on):
