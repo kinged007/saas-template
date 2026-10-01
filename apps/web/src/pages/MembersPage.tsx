@@ -57,6 +57,10 @@ export function MembersPage() {
   });
   const { data: canManage } = useCan({ resource: "members", action: "edit" });
   const { data: canDelete } = useCan({ resource: "members", action: "delete" });
+  // The invitations section is gated on invitations:create, not on the invite
+  // button alone: GET /invitations requires MEMBER_CREATE (invitations.py:64).
+  // A role holding member:delete without member:create therefore gets no section,
+  // which leaves the canRevoke gate below unreachable for it.
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
   const { data: canRevoke } = useCan({ resource: "invitations", action: "delete" });
   const { result: invitationsResult } = useWorkspaceList<Invitation>({
@@ -69,6 +73,7 @@ export function MembersPage() {
   const { mutate: invite, mutation } = useCreate();
   const { mutate: resend } = useCustomMutation();
   const invalidate = useInvalidate();
+  const refreshInvitations = () => invalidate({ resource: "invitations", invalidates: ["list"] });
   const [email, setEmail] = useState("");
   const [inviteRoleId, setInviteRoleId] = useState("");
 
@@ -342,7 +347,12 @@ export function MembersPage() {
                                   values: {},
                                   successNotification: { message: "Invitation re-sent", type: "success" },
                                 },
-                                { onSuccess: () => invalidate({ resource: "invitations", invalidates: ["list"] }) },
+                                {
+                                  // A 409 means the server already made the invitation
+                                  // terminal, so the cached row is stale either way.
+                                  onSuccess: refreshInvitations,
+                                  onError: refreshInvitations,
+                                },
                               )
                             }
                           >
