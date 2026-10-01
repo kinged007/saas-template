@@ -624,6 +624,7 @@ export function InboxPage() {
                     size="icon"
                     onClick={() => setSearchExpanded(true)}
                     aria-label="Search"
+                    title="Search"
                     className={cn("h-9 w-9 shrink-0", searchInput.trim() && "ring-1 ring-ring border-ring")}
                   >
                     <Search className="h-4 w-4" />
@@ -857,7 +858,14 @@ export function InboxPage() {
                       ) : (
                         <div className="flex items-center gap-2">
                           <h3 className="truncate text-lg font-semibold">{selectedConversation.title || "Untitled"}</h3>
-                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditingTitle(true)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6"
+                            onClick={() => setEditingTitle(true)}
+                            aria-label="Edit title"
+                            title="Edit title"
+                          >
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
                         </div>

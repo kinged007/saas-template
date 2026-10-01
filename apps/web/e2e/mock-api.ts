@@ -25,7 +25,16 @@ export const ACCESS_TOKEN = [
  */
 export async function mockApi(
   page: Page,
-  { signedIn, identity = IDENTITY }: { signedIn: boolean; identity?: unknown },
+  {
+    signedIn,
+    identity = IDENTITY,
+    lists = {},
+  }: {
+    signedIn: boolean;
+    identity?: unknown;
+    /** Rows for a bare `/api/v1/<resource>` list call; every other list answers `[]`. */
+    lists?: Record<string, unknown[]>;
+  },
 ) {
   await page.route("**/api/v1/**", async (route) => {
     const reply = (status: number, body: unknown) =>
@@ -48,6 +57,8 @@ export async function mockApi(
       });
     }
     if (pathname.endsWith("/auth/logout")) return route.fulfill({ status: 204, body: "" });
+    const resource = pathname.slice("/api/v1/".length);
+    if (lists[resource]) return reply(200, lists[resource]);
     return reply(200, []);
   });
   // The auth check only refreshes when the signed-in marker is set, so seed it
