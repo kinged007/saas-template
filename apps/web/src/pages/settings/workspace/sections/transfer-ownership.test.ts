@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { Member } from "@/types";
-import { resolveTransferTarget, transferEligibleMembers } from "./transfer-ownership.ts";
+import {
+  liveTransferId,
+  resolveTransferTarget,
+  transferEligibleMembers,
+} from "./transfer-ownership.ts";
 
 const member = (over: Partial<Member> = {}): Member => ({
   id: "u-1",
@@ -44,4 +48,12 @@ test("resolveTransferTarget disarms when the id outlives the candidate set", () 
 
 test("resolveTransferTarget is disarmed before a selection is made", () => {
   assert.equal(resolveTransferTarget([member()], ""), undefined);
+});
+
+test("liveTransferId drops a stale id so the Select falls back to the placeholder", () => {
+  const admin = member({ membership_id: "m-1" });
+  const gone = transferEligibleMembers([member({ membership_id: "m-1", status: "suspended" })]);
+  assert.equal(liveTransferId([admin], "m-1"), "m-1");
+  assert.equal(liveTransferId(gone, "m-1"), "");
+  assert.equal(liveTransferId([admin], ""), "");
 });
