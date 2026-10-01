@@ -6,6 +6,7 @@ from datetime import datetime
 
 from sqlalchemy import Select, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from src.core.dates import ensure_utc, now_utc
 from src.core.permissions import ALL_PERMISSIONS_INCLUDING_KEY_ONLY, KEY_ONLY_PERMISSIONS
@@ -242,16 +243,25 @@ class ApiKeyService:
         # ponytail: lifetime counter, never reset (usage_quota is a lifetime
         # cap); add a window start column + rollover here when true monthly
         # quotas are needed.
-        """Record a successful use: bump the usage counter + last_used_at.
+        """Charge one usage unit: bump the usage counter + last_used_at.
 
-        Returns False and leaves the row alone when the quota is already
-        spent. The counter bump and the quota test are one conditional
-        UPDATE, so two requests that read usage_count before either writes
-        race on this statement alone and only the first can spend the last
-        unit. `refresh` keeps the caller's key in step with the row (the
-        session does not expire on commit), so quota headers read
-        post-increment values and a later flush cannot write the old count
-        back."""
+        Returns True when the unit was charged, False when the quota was
+        already spent and the row was left alone — never ignore the result:
+        False means the request was not metered, so the caller must refuse
+        it. The counter bump and the quota test are one conditional UPDATE,
+        so two callers that both read usage_count = 0 cannot both spend the
+        last unit.
+
+        The post-charge values come back on the UPDATE's own RETURNING
+        clause and are copied onto the caller's key without marking it
+        dirty, so the in-session row matches the database row for two
+        reasons: `_quota_headers` reads key.usage_count after this returns
+        and the session does not expire on commit, so without them the
+        header reads one too high; and a later Python-side assignment to
+        usage_count is then based on the charged value instead of the stale
+        pre-charge one, which would refund the unit. The clean attribute
+        the copy leaves behind — not the copy — is what keeps the next
+        flush from writing anything back."""
         result = await self._session.execute(
             update(ApiKey)
             .where(
@@ -260,11 +270,16 @@ class ApiKeyService:
             )
             .values(usage_count=ApiKey.usage_count + 1, last_used_at=now_utc())
             .execution_options(synchronize_session=False)
+            .returning(ApiKey.usage_count, ApiKey.last_used_at)
         )
-        if result.rowcount == 0:
+        # The verdict comes from the returned rows, never `rowcount`: with
+        # RETURNING on aiosqlite the attribute is -1 or absent entirely.
+        charged = result.first()
+        if charged is None:
             return False
         await self._session.commit()
-        await self._session.refresh(key)
+        set_committed_value(key, "usage_count", charged[0])
+        set_committed_value(key, "last_used_at", charged[1])
         return True
 
     async def set_quota(
