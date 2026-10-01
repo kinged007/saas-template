@@ -213,6 +213,8 @@ async def _verified_email(client: httpx.AsyncClient, url: str, headers: dict[str
         if isinstance(data, list)
         else []
     )
+    # No primary flag: fall back to the provider's list order, so the winner
+    # is deterministic only while that ordering is stable.
     chosen = next((e for e in entries if e.get("primary")), None) or next(iter(entries), None)
     return str(chosen["email"]) if chosen else ""
 
