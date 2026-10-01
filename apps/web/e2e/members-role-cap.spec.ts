@@ -1,14 +1,16 @@
 import { expect, type Page } from "playwright/test";
 
 import { test } from "./fixtures";
-import { mockApi } from "./mock-api";
+import { IDENTITY, mockApi } from "./mock-api";
 
 /**
  * The role pickers on MembersPage drop the tail of a workspace whose role list
  * exceeds one page, and they say so with a notice. The notice has to be the
- * accessible description of the trigger it annotates, and it has to count the
- * list the dropdown offers.
+ * accessible description of the trigger it annotates, it has to count the list
+ * the dropdown offers, and it has to reach the tail it discloses.
  */
+
+const ROLES_ROUTE = "/settings/workspace/roles";
 
 const role = (id: string, name: string) => ({
   id,
@@ -60,6 +62,20 @@ const rowTrigger = (page: Page) =>
   page.getByRole("row").filter({ hasText: "member@example.com" }).getByRole("combobox");
 const inviteTrigger = (page: Page) => page.getByRole("combobox").last();
 
+// The sentence the triggers describe themselves with, and the paragraph that
+// carries it beside the link.
+const cap = (page: Page, id: string) => page.locator(`#${id}`);
+const rolesLink = (page: Page, id: string) =>
+  page.locator(`p:has(>#${id})`).getByRole("link", { name: "View all roles" });
+
+// A role that may read members but may neither change roles (member:update)
+// nor invite (member:create), so both notices stay gated off. "custom" also
+// keeps canManageRoles false independently of the permission check.
+const reader = {
+  ...IDENTITY,
+  workspaces: [{ id: "ws-1", name: "Acme Corp", role: "custom", permissions: ["member:read"] }],
+};
+
 test.describe("role cap notice", () => {
   test("both role triggers describe themselves with the cap", async ({ page }) => {
     await mockApi(page, { signedIn: true });
@@ -67,7 +83,10 @@ test.describe("role cap notice", () => {
     await roles(page, { rest: 99, total: 105 });
     await page.goto("/members");
 
-    await expect(page.getByText(CAP)).toHaveCount(2);
+    // Each id carries exactly the notice sentence, so the fix under test is the
+    // id/text pair a pre-fix notice (no id, "Showing 100 of 105 roles.") fails.
+    await expect(cap(page, "members-role-cap")).toHaveText(CAP);
+    await expect(cap(page, "invite-role-cap")).toHaveText(CAP);
     // The dropdown offers the page minus its owner, so the notice counts that,
     // not the raw page the endpoint returned.
     await expect(rowTrigger(page)).toHaveAccessibleDescription(CAP);
@@ -83,6 +102,38 @@ test.describe("role cap notice", () => {
 
     await rowTrigger(page).click();
     await expect(page.getByRole("option")).toHaveCount(99);
+  });
+
+  test("both notices link to the roles the dropdown drops", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    await members(page);
+    await roles(page, { rest: 99, total: 105 });
+    await page.goto("/members");
+
+    // Disclosure alone leaves the reader to find the route unaided, so the
+    // sentence carries a link to the roles settings list and its create dialog.
+    await expect(rolesLink(page, "members-role-cap")).toHaveAttribute("href", ROLES_ROUTE);
+    await expect(rolesLink(page, "invite-role-cap")).toHaveAttribute("href", ROLES_ROUTE);
+
+    await rolesLink(page, "members-role-cap").click();
+    await expect(page).toHaveURL(ROLES_ROUTE);
+    await expect(page.getByRole("button", { name: "New role" })).toBeVisible();
+  });
+
+  test("without the permissions no notice, link, or description renders", async ({ page }) => {
+    await mockApi(page, { signedIn: true, identity: reader });
+    await members(page);
+    await roles(page, { rest: 99, total: 105 });
+    await page.goto("/members");
+
+    // Both notices are gated on a permission this role does not hold, and the
+    // link rides inside the notice, so nothing of the cap reaches the page.
+    await expect(page.getByText("Showing")).toHaveCount(0);
+    await expect(cap(page, "members-role-cap")).toHaveCount(0);
+    await expect(cap(page, "invite-role-cap")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "View all roles" })).toHaveCount(0);
+    // Nothing may point at a notice that is not on the page.
+    await expect(page.locator("[aria-describedby]")).toHaveCount(0);
   });
 
   test("an uncapped workspace leaves no dangling description", async ({ page }) => {

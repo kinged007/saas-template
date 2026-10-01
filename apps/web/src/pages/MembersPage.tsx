@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { useCan, useCreate, useCustomMutation, useGetIdentity, useInvalidate, useUpdate } from "@refinedev/core";
+import { useCan, useCreate, useCustomMutation, useGetIdentity, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Link } from "react-router";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 
 import { Button } from "@/components/ui/button";
@@ -50,9 +51,21 @@ const INVITE_ROLE_CAP_ID = "invite-role-cap";
 
 // The explicit return type keeps the annotation honest: a `text && <p>` body
 // would widen it to `string | ReactElement | null` and fail the typecheck.
+// The id sits on the span, not the paragraph, so the triggers' aria-describedby
+// resolves to the notice sentence without the link appended to it.
+// `listUrl("roles")` is the settings route holding the full role list and the
+// create-role dialog, so the notice reaches the tail it discloses.
 const RoleCapNotice = ({ id, text }: { id: string; text: string | null }): ReactElement | null => {
+  const { listUrl } = useNavigation();
   if (!text) return null;
-  return <p id={id} className="text-muted-foreground text-sm">{text}</p>;
+  return (
+    <p className="text-muted-foreground text-sm">
+      <span id={id}>{text}</span>{" "}
+      <Link className="underline" to={listUrl("roles")}>
+        View all roles
+      </Link>
+    </p>
+  );
 };
 
 export function MembersPage() {
