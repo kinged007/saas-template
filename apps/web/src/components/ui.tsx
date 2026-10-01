@@ -6,7 +6,7 @@ export function StatusBadge({ status }: { status: string }) {
   const variant =
     status === "connected"
       ? "success"
-      : status === "failed"
+      : status === "failed" || status === "expired"
         ? "destructive"
         : status === "pending"
           ? "warning"

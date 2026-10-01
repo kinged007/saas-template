@@ -107,4 +107,56 @@ test.describe("invitations", () => {
     await expect(row(page, "expired@example.com").getByText("expired", { exact: true })).toBeVisible();
     await expect(row(page, "live@example.com").getByText("pending", { exact: true })).toBeVisible();
   });
+
+  test("an expired invitation badge is destructive, a pending one is not", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    await invitations(page);
+    await page.goto("/members");
+
+    await expect(row(page, "expired@example.com").getByText("expired", { exact: true })).toHaveClass(/bg-destructive/);
+    await expect(row(page, "live@example.com").getByText("pending", { exact: true })).not.toHaveClass(
+      /bg-destructive/,
+    );
+  });
+
+  test("a failed re-send refreshes the list, so the stale button cannot survive it", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    let revoked = false;
+    await page.route(
+      (url) => url.pathname.endsWith("/api/v1/invitations"),
+      (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            LIVE,
+            revoked ? { ...EXPIRED, status: "revoked", expired: false } : EXPIRED,
+            ACCEPTED,
+          ]),
+        }),
+    );
+    await page.route(
+      (url) => url.pathname.endsWith("/api/v1/invitations/inv-expired/resend"),
+      (route) => {
+        revoked = true;
+        return route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({
+            detail: "invitation is revoked and cannot be re-sent; invite this address again",
+          }),
+        });
+      },
+    );
+    await page.goto("/members");
+
+    const resend = row(page, "expired@example.com").getByRole("button", { name: "Re-send" });
+    await expect(resend).toBeVisible();
+    await resend.click();
+
+    // revoked is terminal server-side, so the refused click has to refresh the
+    // cached list instead of leaving the button that made it.
+    await expect(row(page, "expired@example.com").getByText("revoked", { exact: true })).toBeVisible();
+    await expect(resend).toHaveCount(0);
+  });
 });
