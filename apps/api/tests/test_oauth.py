@@ -2,6 +2,7 @@
 exchanges are monkeypatched at the service-module boundary."""
 
 import json
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -70,9 +71,18 @@ class _EmailsClient:
         return self._resp
 
 
-def _fake_httpx(monkeypatch, *, user, emails, user_status=200, emails_status=200):
-    """Serve the token exchange, /user and /user/emails from literals; returns
-    the URLs requested. emails=None marks that endpoint as off-limits. A
+def _fake_httpx(
+    monkeypatch,
+    *,
+    user,
+    emails,
+    user_status=200,
+    emails_status=200,
+    token_status=200,
+    discovery_status=200,
+):
+    """Serve the token exchange, discovery, /user and /user/emails from literals;
+    returns the URLs requested. emails=None marks that endpoint as off-limits. A
     *_status above 399 makes that endpoint answer with an error."""
     calls: list[str] = []
 
@@ -88,10 +98,12 @@ def _fake_httpx(monkeypatch, *, user, emails, user_status=200, emails_status=200
 
         async def post(self, url, **kwargs):
             calls.append(url)
-            return _Resp({"access_token": "at", "access_token_type": "bearer"})
+            return _Resp({"access_token": "at", "access_token_type": "bearer"}, url, token_status)
 
         async def get(self, url, **kwargs):
             calls.append(url)
+            if ".well-known" in url:
+                return _Resp({}, url, discovery_status)
             if url.endswith("/emails"):
                 if emails is None:
                     raise AssertionError(f"emails endpoint must not be called ({url})")
@@ -360,6 +372,43 @@ def _github_config() -> oauth_svc.ProviderConfig:
         userinfo_url="https://api.github.com/user",
         emails_url="https://api.github.com/user/emails",
     )
+
+
+def test_failure_detail_without_a_response():
+    """The no-response half of the helper: DNS, timeout and TLS failures never
+    reach it through the other tests, which all drive a synthetic HTTPStatusError."""
+    assert oauth_svc._failure_detail(httpx.ConnectError("boom")) == "ConnectError"
+
+
+async def test_emails_404_scope_hint_survives_a_reworded_failure_detail(monkeypatch):
+    """The 404 branch keys off the status, not off _failure_detail's wording."""
+    _fake_httpx(monkeypatch, user=_PRIVATE_GITHUB_USER, emails=[], emails_status=404)
+    monkeypatch.setattr(oauth_svc, "_failure_detail", lambda exc: "status 404, not found")
+    with pytest.raises(oauth_svc.OAuthError) as err:
+        await oauth_svc.fetch_userinfo(_github_config(), {}, "at")
+    msg = str(err.value)
+    assert "https://api.github.com/user/emails" in msg
+    assert "user:email" in msg  # the scope hint still fires
+
+
+async def test_exchange_failure_names_the_upstream_status(monkeypatch):
+    _fake_httpx(monkeypatch, user={}, emails=[], token_status=400)
+    cfg = replace(_github_config(), token_url="https://github.com/login/oauth/access_token")
+    with pytest.raises(oauth_svc.OAuthError) as err:
+        await oauth_svc.exchange_code(cfg, {}, code="c", redirect_uri="http://app.test/cb")
+    msg = str(err.value)
+    assert "code exchange failed" in msg
+    assert "400" in msg  # expired code, clock skew or a wrong secret all land here
+
+
+async def test_discovery_failure_names_the_upstream_status(monkeypatch):
+    _fake_httpx(monkeypatch, user={}, emails=[], discovery_status=503)
+    cfg = replace(_github_config(), discovery_url="https://github.com/.well-known/x", issuer=None)
+    with pytest.raises(oauth_svc.OAuthError) as err:
+        await oauth_svc._discovery(cfg, oauth_svc.TtlCache())
+    msg = str(err.value)
+    assert "could not load discovery document" in msg and "github" in msg
+    assert "503" in msg
 
 
 async def test_emails_404_names_the_endpoint_and_the_missing_scope(monkeypatch):
