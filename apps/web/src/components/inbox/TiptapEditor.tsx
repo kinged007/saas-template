@@ -404,6 +404,7 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
         </Button>
         <Button
           type="button"
+          // Link is an action, not a toggle: it prompts for a URL, so it has no pressed state.
           variant={editor.isActive("link") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
