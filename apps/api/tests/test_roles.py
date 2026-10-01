@@ -864,6 +864,37 @@ async def test_legacy_owner_case_row_counts_as_owner_for_transfer_and_manager_ga
     assert roles["ci12h@example.com"] == "admin"
 
 
+async def test_legacy_owner_case_row_transfers_without_the_owner_permission(app_client):
+    """`transfer_ownership` gates on the name alone, whatever the row carries.
+
+    `*` is reserved for the owner role, so a legacy `Owner` row an admin
+    created pre-#328 carries none — the realistic shape. The service gate reads
+    the name only, so such a holder still transfers ownership away from the
+    seeded owner. Pinned as the current contract, per the review on #624.
+    """
+    client = app_client
+    owner = await register_user(client, "ci14@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    role_id = await _seed_legacy_owner_role(ws["id"])
+    heir, _ = await _add_member_holding_role(client, owner, ws, "ci14h@example.com", role_id)
+    heir_headers = ws_headers(heir, ws["id"])
+    await _add_member(client, owner, ws, "ci14t@example.com", "editor")
+    target_id = await _membership_id(client, owner, ws, "ci14t@example.com")
+
+    transfer = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/transfer",
+        json={"new_owner_membership_id": target_id},
+        headers=heir_headers,
+    )
+    assert transfer.status_code == 200, transfer.text
+    roles = {
+        m["email"]: m["role"] for m in (await client.get("/api/v1/members", headers=headers)).json()
+    }
+    assert roles["ci14t@example.com"] == "owner"
+    assert roles["ci14h@example.com"] == "admin"
+
+
 async def test_check_name_free_names_the_seeded_row(app_client):
     """The 409 names the system row, not whichever row `.first()` returns (#592).
 

@@ -46,9 +46,27 @@ def is_owner_role_name(name: str | None) -> bool:
     `Owner` beside the seeded `owner`, and that row was meant to be the owner
     role. Matched on the name rather than on `Role.system`: that flag is exactly
     what tells the legacy row apart, so requiring it would leave the row
-    unprotected. #400 removes those rows.
+    unprotected.
+
+    The name is the whole signal, deliberately: `transfer_ownership` grants on
+    this predicate alone, so a legacy `Owner` row an admin created pre-#328 —
+    which carries no `"*"`, because `*` is reserved for the owner role — can
+    still transfer ownership. Pinned by
+    `test_legacy_owner_case_row_transfers_without_the_owner_permission`.
+
+    The same hardening locks the row: `update_role` refuses it, `set_member_role`
+    refuses both assigning it and taking it from a holder, `remove_member`,
+    `leave_workspace` and `suspend_member` refuse the holder, and there is no
+    role delete. #400's backfill is the only path that removes the row, so it has
+    to reassign holders before dropping rows; #400 is parked on `needs-human`.
     """
     return (name or "").lower() == "owner"
+
+
+def is_manager_role_name(name: str | None) -> bool:
+    """Whether a role name may manage members: owner or admin, ignoring case."""
+    lowered = (name or "").lower()
+    return lowered == "admin" or is_owner_role_name(lowered)
 
 
 class WorkspaceService:
@@ -403,7 +421,7 @@ class WorkspaceService:
         if membership is None:
             raise WorkspaceForbidden("you are not a member of this workspace")
         _, actor_role = membership
-        if actor_role.name.lower() not in ("owner", "admin"):
+        if not is_manager_role_name(actor_role.name):
             raise WorkspaceForbidden("only the workspace owner or an admin can change roles")
         member = await self._session.get(WorkspaceMember, member_id)
         if member is None or member.workspace_id != workspace_id:
@@ -546,7 +564,7 @@ class WorkspaceService:
         membership = await self.get_membership(workspace_id, actor.id, active_only=True)
         if membership is None:
             raise WorkspaceForbidden("you are not a member of this workspace")
-        if membership[1].name.lower() not in ("owner", "admin"):
+        if not is_manager_role_name(membership[1].name):
             raise WorkspaceForbidden("only the workspace owner or an admin can manage members")
         return membership
 
@@ -993,9 +1011,10 @@ class WorkspaceService:
         """Auto-join role: SINGLE_WORKSPACE_DEFAULT_ROLE, else viewer.
 
         Matched by name over the workspace's non-owner roles, so a custom role
-        works too and an unknown, blank or "owner" value resolves viewer. The
-        wider chain keeps logins working when the viewer role was renamed or
-        removed, instead of bricking every later login."""
+        works too and an unknown, blank or "owner" value resolves viewer; a
+        workspace whose only role is a legacy owner-cased row has no candidate
+        left and raises. The wider chain keeps logins working when the viewer
+        role was renamed or removed, instead of bricking every later login."""
         from src.settings import settings
 
         result = await self._session.execute(select(Role).where(Role.workspace_id == workspace_id))
@@ -1050,21 +1069,16 @@ class WorkspaceService:
         # The order is what makes the message deterministic: the system row
         # first, then oldest, then `id` — `created_at` is
         # `server_default=func.now()`, which ties on SQLite's second granularity,
-        # so it cannot be the last key.
+        # so it cannot be the last key. System-first deliberately inverts the
+        # "oldest first" preference in #592: the row a user needs named is the
+        # seeded one, not whichever duplicate was written first.
         stmt = select(Role).where(
             Role.workspace_id == workspace_id, func.lower(Role.name) == name.lower()
         )
         if exclude_id is not None:
             stmt = stmt.where(Role.id != exclude_id)
-        existing = (
-            (
-                await self._session.execute(
-                    stmt.order_by(Role.system.desc(), Role.created_at, Role.id)
-                )
-            )
-            .scalars()
-            .first()
-        )
+        stmt = stmt.order_by(Role.system.desc(), Role.created_at, Role.id).limit(1)
+        existing = (await self._session.execute(stmt)).scalars().first()
         if existing is not None:
             raise WorkspaceConflict(f"a role named '{existing.name}' already exists")
 
