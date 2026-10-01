@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useCustom, useCustomMutation } from "@refinedev/core";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -14,6 +13,7 @@ import {
 } from "@/components/ui/table";
 import { ListView, ListViewHeader } from "../components/refine-ui/views/list-view";
 import { EmptyRow, StatusBadge, formatDate } from "../components/ui";
+import { invitationStatus } from "./invitation-actions";
 import { useWorkspace } from "../contexts/WorkspaceContext";
 import type { Invitation } from "../types";
 
@@ -111,11 +111,7 @@ export function ReceivedInvitationsPage() {
                   <TableCell className="font-medium">{inv.workspace_name ?? "—"}</TableCell>
                   <TableCell>{inv.invited_by_name ?? "—"}</TableCell>
                   <TableCell>
-                    {inv.expired ? (
-                      <Badge variant="destructive">expired</Badge>
-                    ) : (
-                      <StatusBadge status={inv.status} />
-                    )}
+                    <StatusBadge status={invitationStatus(inv)} />
                   </TableCell>
                   <TableCell className="text-muted-foreground">{formatDate(inv.expires_at)}</TableCell>
                   <TableCell className="text-right">
