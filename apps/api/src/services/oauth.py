@@ -98,7 +98,9 @@ async def _discovery(provider: ProviderConfig, cache: TtlCache) -> dict[str, Any
             resp.raise_for_status()
             doc = resp.json()
     except Exception as exc:
-        raise OAuthError(f"could not load discovery document for '{provider.id}'") from exc
+        raise OAuthError(
+            f"could not load discovery document for '{provider.id}': {_failure_detail(exc)}"
+        ) from exc
     cache.set(key, doc)
     return doc
 
@@ -160,7 +162,7 @@ async def exchange_code(
             resp.raise_for_status()
             return resp.json()
     except Exception as exc:
-        raise OAuthError("code exchange failed") from exc
+        raise OAuthError(f"code exchange failed: {_failure_detail(exc)}") from exc
 
 
 def _jwks_client(provider: ProviderConfig, doc: dict[str, Any]) -> jwt.PyJWKClient | None:
@@ -248,10 +250,13 @@ async def fetch_userinfo(
             try:
                 data["email"] = await _verified_email(client, provider.emails_url, headers)
             except Exception as exc:
+                # Branch on the status itself: the rendered detail is wording,
+                # and rewording it must not silence the hint below.
+                status = getattr(getattr(exc, "response", None), "status_code", None)
                 detail = _failure_detail(exc)
                 # GitHub answers 404 on /user/emails when the token lacks the
                 # email scope: a config fix, so name the scopes to compare.
-                if detail == "HTTP 404":
+                if status == 404:
                     detail = (
                         f"HTTP 404, token likely lacks an email scope (asked: {provider.scopes})"
                     )
