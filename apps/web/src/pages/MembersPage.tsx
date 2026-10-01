@@ -29,6 +29,7 @@ import { UserProfileDialog } from "@/components/UserProfileDialog";
 
 import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceContext";
 import { canResendInvitation, canRevokeInvitation, invitationStatus } from "./invitation-actions";
+import { canReactivateMember, canSuspendMember } from "./member-actions";
 import { assignableRoles, rolePickerCapNotice } from "./role-picker-cap";
 import type { Identity, Invitation, Member, Role } from "../types";
 import { getMemberDisplayName } from "../types";
@@ -227,12 +228,12 @@ export function MembersPage() {
                 <TableCell className="text-muted-foreground">{formatDate(m.joined_at)}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-1">
-                    {canManageRoles && m.role !== "owner" && m.status !== "suspended" && (
+                    {canManageRoles && m.role !== "owner" && canSuspendMember(m) && (
                       <Button variant="ghost" size="sm" onClick={() => suspend(m, true)}>
                         Suspend
                       </Button>
                     )}
-                    {canManageRoles && m.status === "suspended" && (
+                    {canManageRoles && canReactivateMember(m) && (
                       <Button variant="ghost" size="sm" onClick={() => suspend(m, false)}>
                         Reactivate
                       </Button>
