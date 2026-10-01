@@ -44,7 +44,11 @@ import type { Identity, Member } from "@/types";
 import { getMemberDisplayName } from "@/types";
 import { WorkspaceExportCard } from "@/components/WorkspaceExportCard";
 import { workspaceStore } from "@/utils/storage";
-import { resolveTransferTarget, transferEligibleMembers } from "./transfer-ownership";
+import { resolveTransferTarget, transferCapNotice, transferEligibleMembers } from "./transfer-ownership";
+
+// One picker on the page, so one id: aria-describedby resolves to the element
+// carrying it, and a second picker would need a second paragraph.
+const TRANSFER_CAP_ID = "transfer-cap";
 
 const schema = z.object({
   name: z.string().min(1, "Name is required").max(150, "Max 150 characters"),
@@ -72,6 +76,8 @@ export function GeneralSection() {
   const [confirmName, setConfirmName] = useState("");
 
   const { mutate: transfer, mutation: transferMutation } = useCustomMutation();
+  // The backend caps the page at its own max_limit, so this is the largest page
+  // the endpoint returns; a longer workspace is disclosed by the cap notice.
   const { result: membersResult } = useWorkspaceList<Member>({
     resource: "members",
     pagination: { pageSize: 100 },
@@ -79,7 +85,9 @@ export function GeneralSection() {
   const invalidate = useInvalidate();
   const [transferId, setTransferId] = useState("");
   const isOwner = workspace?.role === "owner";
-  const transferCandidates = transferEligibleMembers(membersResult?.data ?? []);
+  const memberRows = membersResult?.data ?? [];
+  const transferCandidates = transferEligibleMembers(memberRows);
+  const transferCap = transferCapNotice(membersResult?.total ?? 0, memberRows);
   // A transferId that stopped resolving on a refetch leaves transferTarget
   // undefined, which is what disarms the button below.
   // SelectValue without children renders the placeholder forever, so the trigger
@@ -89,8 +97,7 @@ export function GeneralSection() {
     ? `${getMemberDisplayName(transferTarget)} (${transferTarget.email})`
     : "";
 
-  // Drop a stale id so the trigger shows the placeholder again: an id that names
-  // no item renders as an empty box rather than the placeholder.
+  // A stale id names no item, and an item-less value renders as an empty box, not the placeholder.
   useEffect(() => {
     if (transferId && !transferTarget) setTransferId("");
   }, [transferId, transferTarget]);
@@ -313,7 +320,11 @@ export function GeneralSection() {
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="transfer-member">New owner</Label>
                   <Select value={transferId} onValueChange={setTransferId}>
-                    <SelectTrigger id="transfer-member" className="w-full sm:w-72">
+                    <SelectTrigger
+                      id="transfer-member"
+                      className="w-full sm:w-72"
+                      aria-describedby={transferCap ? TRANSFER_CAP_ID : undefined}
+                    >
                       <SelectValue placeholder="Select member">{transferTargetLabel}</SelectValue>
                     </SelectTrigger>
                     <SelectContent>
@@ -324,6 +335,9 @@ export function GeneralSection() {
                       ))}
                     </SelectContent>
                   </Select>
+                  {transferCap && (
+                    <p id={TRANSFER_CAP_ID} className="text-muted-foreground text-sm">{transferCap}</p>
+                  )}
                   <Button
                     variant="destructive"
                     className="sm:self-end"

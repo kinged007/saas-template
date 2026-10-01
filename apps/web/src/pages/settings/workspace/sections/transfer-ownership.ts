@@ -17,3 +17,19 @@ export const resolveTransferTarget = (
   candidates: Member[],
   membershipId: string,
 ): Member | undefined => candidates.find((m) => m.membership_id === membershipId);
+
+/**
+ * Discloses that the picker offers less than the whole workspace; null while the
+ * page is complete. The /members endpoint caps the page at its own max_limit, so
+ * a workspace past that cap leaves the picker short and nothing else on the
+ * section says so. Same wording as the role pickers, so the cap reads the same
+ * on both surfaces. `pickable` is the workspace total minus the ineligible rows
+ * this page holds — a missing `X-Total-Count` makes the total 0, so it floors
+ * at 0 rather than going negative. The tail's statuses are unknown, so the
+ * denominator counts members, not eligible ones.
+ */
+export const transferCapNotice = (total: number, members: Member[]): string | null => {
+  const eligible = transferEligibleMembers(members);
+  const pickable = Math.max(0, total - (members.length - eligible.length));
+  return pickable > eligible.length ? `Showing ${eligible.length} of ${pickable} members.` : null;
+};
