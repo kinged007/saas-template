@@ -840,7 +840,7 @@ export function InboxPage() {
                             className="h-8 w-8 shrink-0"
                             onClick={handleTitleSave}
                             aria-label="Save title"
-                            title="Save"
+                            title="Save title"
                           >
                             <Check className="h-4 w-4" />
                           </Button>
