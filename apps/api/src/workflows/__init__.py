@@ -241,21 +241,33 @@ def build_workflows(
         if not user_id or not workspace_id:
             return
         workspace_name = payload.get("workspace_name", "workspace")
-        from_role = payload.get("from_role") or "unknown"
-        to_role = payload.get("to_role") or "unknown"
+        from_role = payload.get("from_role")
+        to_role = payload.get("to_role")
         changed_by = payload.get("changed_by_name") or "A member"
         # The member is the actor (a self-demotion, or an ownership transfer):
         # naming them in their own notification reads as "you changed your
         # own role". set_member_role refuses to touch the owner's role, so a
         # self-change from owner is always a transfer.
         if user_id == payload.get("changed_by_user_id"):
-            body = (
-                f"You transferred ownership. Your role is now {to_role}."
-                if is_owner_role_name(from_role)
-                else f"Your role is now {to_role}."
-            )
+            if is_owner_role_name(from_role):
+                # A null to_role names no new role, so the clause is dropped
+                # and the transfer itself is still reported.
+                body = (
+                    f"You transferred ownership. Your role is now {to_role}."
+                    if to_role
+                    else "You transferred ownership."
+                )
+            elif not to_role:
+                body = "Your role was changed."
+            else:
+                body = f"Your role is now {to_role}."
+        elif not to_role:
+            body = f"{changed_by} changed your role."
         else:
-            body = f"{changed_by} changed your role from {from_role} to {to_role}."
+            # A null from_role has no name to print, so the sentence says there
+            # was one instead of substituting a placeholder that reads like a role.
+            previous = from_role or "a previous role"
+            body = f"{changed_by} changed your role from {previous} to {to_role}."
         async with SessionFactory() as session:
             await _create_notification(
                 session,
