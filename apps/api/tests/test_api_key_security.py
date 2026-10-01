@@ -844,8 +844,10 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
 
     # usage_quota = 0 buys nothing: the conditional UPDATE's
     # `usage_count < usage_quota` is `0 < 0`, so the very first request is
-    # refused and the counter stays put. The row read is what pins that —
-    # a relaxed `<=` would still 403 on the next unit but hand out this one.
+    # refused and the counter stays put. The 403 is what pins the predicate —
+    # relax it to `<=` and the zero row matches on the first unit, so the
+    # request returns 200 instead. The row read is the separate guard: a
+    # refusal must not spend the unit it refuses.
     from src.models.api_key import ApiKey
 
     zero = await _create_key(client, headers, "quota-zero", [JOB_READ], usage_quota=0)
