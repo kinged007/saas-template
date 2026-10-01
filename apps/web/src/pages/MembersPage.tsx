@@ -29,16 +29,20 @@ import { UserProfileDialog } from "@/components/UserProfileDialog";
 
 import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceContext";
 import { canResendInvitation, canRevokeInvitation, invitationStatus } from "./invitation-actions";
+import { rolePickerCapNotice } from "./role-picker-cap";
 import type { Identity, Invitation, Member, Role } from "../types";
 import { getMemberDisplayName } from "../types";
 
 const MANAGER_ROLES = ["owner", "admin"];
 
 const PAGE_SIZE = 10;
-// The role pickers need every role, ordered by the endpoint. Capped at one
-// full page: past this the pickers drop the tail, and a pager is not worth it
-// on a settings surface.
+// The role pickers need every role, ordered by the endpoint. Capped at the
+// backend's page ceiling: past it the pickers drop the tail, so both surfaces
+// carrying a picker disclose it via rolePickerCapNotice.
 const ROLES_PAGE_SIZE = 100;
+
+const RoleCapNotice = ({ text }: { text: string | null }) =>
+  text && <p className="text-muted-foreground text-sm">{text}</p>;
 
 export function MembersPage() {
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
@@ -80,6 +84,8 @@ export function MembersPage() {
   const invitesTotal = invitationsResult?.total ?? 0;
   const invitesTotalPages = Math.max(1, Math.ceil(invitesTotal / PAGE_SIZE));
   const assignableRoles = roleOptions.filter((r) => r.name !== "owner");
+  // total counts every role, including the owner the pickers filter out.
+  const roleCapNotice = rolePickerCapNotice(rolesResult?.total ?? 0, roleOptions.length);
 
   useEffect(() => {
     if (membersPage > membersTotalPages) setMembersPage(membersTotalPages);
@@ -128,6 +134,7 @@ export function MembersPage() {
   return (
     <ListView>
       <ListViewHeader title="Members" canCreate={false} />
+      {canManageRoles && <RoleCapNotice text={roleCapNotice} />}
       <div className="border-border overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>
@@ -293,6 +300,7 @@ export function MembersPage() {
                   ))}
                 </SelectContent>
               </Select>
+              <RoleCapNotice text={roleCapNotice} />
             </div>
             <Button type="submit" disabled={mutation.isPending || !email.trim() || !inviteRoleId}>
               {mutation.isPending ? "Sending…" : "Invite"}
