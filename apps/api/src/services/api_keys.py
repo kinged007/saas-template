@@ -296,7 +296,7 @@ class ApiKeyService:
                 usage_window_count=ApiKey.usage_window_count + 1,
                 last_used_at=now,
             )
-            .execution_options(synchronize_session="auto")
+            .execution_options(synchronize_session="fetch")
         )
         if result.rowcount == 0:
             return False
