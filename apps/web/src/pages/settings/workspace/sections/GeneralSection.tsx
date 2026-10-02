@@ -89,6 +89,12 @@ export function GeneralSection() {
     ? `${getMemberDisplayName(transferTarget)} (${transferTarget.email})`
     : "";
 
+  // Drop a stale id so the trigger shows the placeholder again: an id that names
+  // no item renders as an empty box rather than the placeholder.
+  useEffect(() => {
+    if (transferId && !transferTarget) setTransferId("");
+  }, [transferId, transferTarget]);
+
   const transferOwnership = () => {
     if (!workspace || !transferTarget) return;
     transfer(

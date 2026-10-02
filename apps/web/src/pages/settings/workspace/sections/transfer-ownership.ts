@@ -1,8 +1,12 @@
 import type { Member } from "@/types";
+import { canReceiveOwnership } from "../../../member-actions.ts";
 
-/** Members that can receive ownership: active, and not already the owner. */
+/**
+ * Members that can receive ownership: active (the rule
+ * `transfer_ownership` enforces server-side), and not already the owner.
+ */
 export const transferEligibleMembers = (members: Member[]): Member[] =>
-  members.filter((m) => m.role !== "owner" && m.status === "active");
+  members.filter((m) => m.role !== "owner" && canReceiveOwnership(m));
 
 /**
  * Resolves the selected membership id against the current candidate list. Returns

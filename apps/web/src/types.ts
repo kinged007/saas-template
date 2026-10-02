@@ -136,6 +136,15 @@ export type Role = {
   created_at?: string;
 };
 
+/**
+ * The domain `ck_workspace_members_status` in `apps/api/src/models/workspace.py`
+ * enforces, so it is copied off the constraint rather than enumerated. The API
+ * writes `active` and `suspended`; `invited` has no writer and survives only as
+ * a pre-0017 value, and is kept so narrowing does not strip the Suspend action
+ * from such a row.
+ */
+export type MemberStatus = "active" | "invited" | "suspended";
+
 export type Member = {
   id: string;
   email: string;
@@ -147,9 +156,16 @@ export type Member = {
   membership_id: string;
   role_id: string;
   role: string;
-  status: string;
+  status: MemberStatus;
   joined_at?: string;
 };
+
+export type InvitationStatus =
+  | "pending"
+  | "declined"
+  | "accepted"
+  | "revoked"
+  | "expired";
 
 export type Invitation = {
   id: string;
@@ -158,7 +174,7 @@ export type Invitation = {
   role_id: string;
   invited_by_user_id?: string;
   token: string;
-  status: string;
+  status: InvitationStatus;
   expires_at?: string;
   accepted_at?: string;
   created_at?: string;

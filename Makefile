@@ -21,12 +21,12 @@ help:
 	@echo "  make setup        one-time: install uv + Node.js if missing (fnm -> apt -> nvm)"
 	@echo "  make dev          install deps, migrate, seed, then run api (:$(API_PORT)) + web (:$(WEB_PORT))"
 	@echo "  make dev API_PORT=8010 WEB_PORT=5273   use other ports (e.g. when :8000/:5173 are taken)"
-	@echo "  make api-install  install backend deps (uv sync)"
+	@echo "  make api-install  install backend deps + dev tooling (uv sync --extra dev)"
 	@echo "  make api-migrate  run alembic migrations (starts embedded postgres)"
 	@echo "  USE_SQLITE=1 make dev  sqlite dev DB (apps/api/dev.db) instead of postgres"
 	@echo "  make api-seed     seed default demo users + workspaces"
 	@echo "  make api          run backend (uvicorn, :$(API_PORT))"
-	@echo "  make api-test     run backend tests (sqlite in-memory)"
+	@echo "  make api-test     run backend tests (scratch sqlite file, no docker required)"
 	@echo "  make api-lint     ruff check + format check (same as pre-commit hook)"
 	@echo "  make hooks-install install pre-commit hooks (uv tool install pre-commit first)"
 	@echo "  make db-check     migration hygiene: single head + models match migrations"
@@ -133,10 +133,10 @@ api:
 	cd apps/api && uv run uvicorn src.main:app --reload --port $(API_PORT)
 
 api-test:
-	cd apps/api && uv run pytest
+	cd apps/api && uv run --extra dev pytest
 
 api-lint:
-	cd apps/api && uv run ruff check . && uv run ruff format --check .
+	cd apps/api && uv run --extra dev ruff check . && uv run --extra dev ruff format --check .
 
 web-install:
 	cd apps/web && npm install
@@ -179,4 +179,4 @@ nats-logs:
 
 api-test-nats:
 	./scripts/nats.sh start
-	cd apps/api && uv run pytest tests/test_nats_integration.py -v
+	cd apps/api && uv run --extra dev pytest tests/test_nats_integration.py -v

@@ -38,6 +38,7 @@ from src.core.security.crypto import SecretCipher
 from src.db.session import SessionFactory
 from src.events.bus import EventBus
 from src.events.factory import WorkflowRegistry
+from src.events.publisher import publish_audit
 from src.events.subjects import Subjects
 from src.jobs.executor import execute_run
 from src.models.workspace import WorkspaceMember
@@ -45,8 +46,46 @@ from src.realtime.manager import ConnectionManager
 from src.services.audit import AuditService
 from src.services.jobs import JobService
 from src.services.notifications import NotificationService
+from src.services.workspaces import is_owner_role_name
 
 logger = logging.getLogger(__name__)
+
+# Frontend route the invitation notification's "Open" button links to. The dev
+# seed (src/seed.py) imports it, so the two payload sides cannot drift.
+INVITATIONS_ROUTE = "/invitations"
+
+
+async def _audit_email_failure(
+    bus: EventBus,
+    notification,
+    *,
+    correlation_id: str | None,
+    user_id: str,
+    n_type: str,
+    email: str | None,
+    reason: str,
+) -> None:
+    """Log and audit one notification email that was not delivered.
+
+    `reason` is `no_recipient`, `no_email` or `send_failed`. Published after
+    the attempt, so a failing publish nacks the message and the in-app
+    notification row is created again on redelivery.
+    """
+    logger.error(
+        "notification email failed for %s (notification %s, reason=%s)",
+        email or f"user {user_id}",
+        notification.id,
+        reason,
+    )
+    await publish_audit(
+        bus,
+        correlation_id=correlation_id,
+        workspace_id=notification.workspace_id,
+        resource_type="notification",
+        resource_id=notification.id,
+        action="notification.email_failed",
+        details={"user_id": user_id, "type": n_type, "email": email, "reason": reason},
+    )
 
 
 async def _create_notification(
@@ -56,7 +95,9 @@ async def _create_notification(
 
     Honors the recipient's channel preference: `off` skips the insert;
     `email` inserts and sends an immediate email, fail-closed (the in-app
-    row is kept and the failure logged when sending fails).
+    row is kept and the failure logged and audited
+    (`notification.email_failed`) when the recipient is missing, has no
+    address, or sending fails).
     """
     service = NotificationService(session, bus)
     n_type = kwargs.get("type", "")
@@ -75,9 +116,18 @@ async def _create_notification(
 
     recipient = await session.get(User, n_user_id)
     if recipient is None or not recipient.email:
+        await _audit_email_failure(
+            bus,
+            notification,
+            correlation_id=correlation_id,
+            user_id=n_user_id,
+            n_type=n_type,
+            email=recipient.email if recipient else None,
+            reason="no_recipient" if recipient is None else "no_email",
+        )
         return
     token = await service.token_for(n_user_id, n_type)
-    await send_email(
+    sent = await send_email(
         notification_email(
             recipient.email,
             title=notification.title,
@@ -85,6 +135,17 @@ async def _create_notification(
             workspace_name=(notification.payload or {}).get("workspace_name", ""),
             unsubscribe_url=unsubscribe_url_for(token or "", n_type, settings.frontend_url),
         )
+    )
+    if sent:
+        return
+    await _audit_email_failure(
+        bus,
+        notification,
+        correlation_id=correlation_id,
+        user_id=n_user_id,
+        n_type=n_type,
+        email=recipient.email,
+        reason="send_failed",
     )
 
 
@@ -115,7 +176,7 @@ def build_workflows(
                     # NotificationCenter renders an "Open" button only when
                     # the payload carries a url; without it the invite is a
                     # dead end.
-                    "url": "/invitations",
+                    "url": INVITATIONS_ROUTE,
                 },
                 correlation_id=metadata.correlation_id,
             )
@@ -190,7 +251,7 @@ def build_workflows(
         if user_id == payload.get("changed_by_user_id"):
             body = (
                 f"You transferred ownership. Your role is now {to_role}."
-                if from_role == "owner"
+                if is_owner_role_name(from_role)
                 else f"Your role is now {to_role}."
             )
         else:

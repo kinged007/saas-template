@@ -49,3 +49,9 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# Generated migrations: the formatter cannot wrap comments or unsplittable
+# string literals, so `ruff check --fix` would exit 1 on a diagnostic only a
+# hand edit can clear — db-squash would abort on code it just generated.
+"alembic/versions/*.py" = ["E501"]

@@ -4,7 +4,7 @@ import secrets
 import uuid
 from datetime import timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +37,53 @@ class WorkspaceConflict(WorkspaceError):
 
 class WorkspaceNotFound(WorkspaceError):
     pass
+
+
+def is_owner_role_name(name: str | None) -> bool:
+    """Whether a role name is the owner role, ignoring case.
+
+    A workspace created before the case-insensitive name check (#328) can hold
+    `Owner` beside the seeded `owner`, and that row was meant to be the owner
+    role. Matched on the name rather than on `Role.system`: that flag is exactly
+    what tells the legacy row apart, so requiring it would leave the row
+    unprotected.
+
+    The name is the whole signal, deliberately: `transfer_ownership` grants on
+    this predicate alone, so a legacy `Owner` row an admin created pre-#328 —
+    which carries no `"*"`, because `*` is reserved for the owner role — can
+    still transfer ownership. Pinned by
+    `test_legacy_owner_case_row_transfers_without_the_owner_permission`.
+
+    The same hardening locks the row: `update_role` refuses it, `set_member_role`
+    refuses both assigning it and taking it from a holder, `remove_member`,
+    `leave_workspace` and `suspend_member` refuse the holder, and there is no
+    role delete. #400's backfill is the only path that removes the row, so it has
+    to reassign holders before dropping rows; #400 is parked on `needs-human`.
+    """
+    return (name or "").lower() == "owner"
+
+
+def is_manager_role_name(name: str | None) -> bool:
+    """Whether a role name may manage members: owner or admin, ignoring case.
+
+    Both halves case-fold, and that is a widening, not a refactor: #624 replaced
+    an exact `("owner", "admin")` comparison in `set_member_role` and
+    `_require_manager`. A workspace created before the case-insensitive name
+    check (#328) can hold a pre-#328 `Admin` row beside its seeded `admin`, and
+    that row's holder is now admitted at both manager gates, where the exact
+    comparison refused them. `_check_name_free` refuses the name
+    case-insensitively, so such a row can only come from old data; #400's
+    backfill is what removes it.
+
+    Name-only by design, as on the owner half: an `Admin` row an admin created
+    carries no `"*"`, since `"*"` is reserved for the owner role, and the gate
+    admits it anyway. Pinned by
+    `test_legacy_admin_case_row_counts_as_admin_at_the_manager_gates`; the owner
+    half by
+    `test_legacy_owner_case_row_counts_as_owner_for_transfer_and_manager_gates`.
+    """
+    lowered = (name or "").lower()
+    return lowered == "admin" or is_owner_role_name(lowered)
 
 
 class WorkspaceService:
@@ -391,18 +438,18 @@ class WorkspaceService:
         if membership is None:
             raise WorkspaceForbidden("you are not a member of this workspace")
         _, actor_role = membership
-        if actor_role.name not in ("owner", "admin"):
+        if not is_manager_role_name(actor_role.name):
             raise WorkspaceForbidden("only the workspace owner or an admin can change roles")
         member = await self._session.get(WorkspaceMember, member_id)
         if member is None or member.workspace_id != workspace_id:
             raise WorkspaceError("member not found in workspace")
         current_role = await self._session.get(Role, member.role_id)
-        if current_role is not None and current_role.name == "owner":
+        if current_role is not None and is_owner_role_name(current_role.name):
             raise WorkspaceConflict("cannot change the workspace owner's role")
         role = await self._session.get(Role, role_id)
         if role is None or role.workspace_id != workspace_id:
             raise WorkspaceError("role not found in workspace")
-        if role.name == "owner":
+        if is_owner_role_name(role.name):
             raise WorkspaceConflict("cannot assign the owner role")
         from_role = current_role.name if current_role is not None else None
         member.role_id = role.id
@@ -453,7 +500,7 @@ class WorkspaceService:
         if member.user_id == actor.id:
             raise WorkspaceError("cannot remove yourself")
         role = await self._session.get(Role, member.role_id)
-        if role and role.name == "owner":
+        if role and is_owner_role_name(role.name):
             raise WorkspaceError("cannot remove the workspace owner")
         user_id = member.user_id
         workspace = await self._session.get(Workspace, workspace_id)
@@ -500,7 +547,7 @@ class WorkspaceService:
         if member is None:
             raise WorkspaceError("membership not found")
         role = await self._session.get(Role, member.role_id)
-        if role and role.name == "owner":
+        if role and is_owner_role_name(role.name):
             raise WorkspaceError("owners cannot leave the workspace")
         workspace = await self._session.get(Workspace, workspace_id)
         workspace_name = workspace.name if workspace else "workspace"
@@ -534,7 +581,7 @@ class WorkspaceService:
         membership = await self.get_membership(workspace_id, actor.id, active_only=True)
         if membership is None:
             raise WorkspaceForbidden("you are not a member of this workspace")
-        if membership[1].name not in ("owner", "admin"):
+        if not is_manager_role_name(membership[1].name):
             raise WorkspaceForbidden("only the workspace owner or an admin can manage members")
         return membership
 
@@ -553,7 +600,7 @@ class WorkspaceService:
         if member.user_id == actor.id:
             raise WorkspaceConflict("cannot suspend yourself")
         role = await self._session.get(Role, member.role_id)
-        if role is not None and role.name == "owner":
+        if role is not None and is_owner_role_name(role.name):
             raise WorkspaceConflict("cannot suspend the workspace owner")
         if member.status == "suspended":
             return member
@@ -608,7 +655,7 @@ class WorkspaceService:
         ip_address: str | None = None,
     ) -> WorkspaceMember:
         membership = await self.get_membership(workspace_id, actor.id, active_only=True)
-        if membership is None or membership[1].name != "owner":
+        if membership is None or not is_owner_role_name(membership[1].name):
             raise WorkspaceForbidden("only the workspace owner can transfer ownership")
         actor_member, _ = membership
         target = await self._session.get(WorkspaceMember, new_owner_membership_id)
@@ -730,7 +777,7 @@ class WorkspaceService:
         email = email.lower()
         if (workspace.flags or {}).get("invites_enabled") is False:
             raise WorkspaceError("invitations are disabled for this workspace")
-        if role.name == "owner":
+        if is_owner_role_name(role.name):
             raise WorkspaceConflict("cannot invite a user to the owner role")
         duplicate = await self._session.execute(
             select(Invitation).where(
@@ -980,14 +1027,15 @@ class WorkspaceService:
     async def _single_workspace_role(self, workspace_id: str) -> Role:
         """Auto-join role: SINGLE_WORKSPACE_DEFAULT_ROLE, else viewer.
 
-        Matched by exact name over the workspace's non-owner roles, so a
-        custom role works too and an unknown, blank or "owner" value resolves
-        viewer. The wider chain keeps logins working when the viewer role
-        was renamed or removed, instead of bricking every later login."""
+        Matched by name over the workspace's non-owner roles, so a custom role
+        works too and an unknown, blank or "owner" value resolves viewer; a
+        workspace whose only role is a legacy owner-cased row has no candidate
+        left and raises. The wider chain keeps logins working when the viewer
+        role was renamed or removed, instead of bricking every later login."""
         from src.settings import settings
 
         result = await self._session.execute(select(Role).where(Role.workspace_id == workspace_id))
-        roles = {role.name: role for role in result.scalars() if role.name != "owner"}
+        roles = {role.name: role for role in result.scalars() if not is_owner_role_name(role.name)}
         names = (settings.single_workspace_default_role.strip(), self.SINGLE_WORKSPACE_ROLE)
         for name in (*names, "editor", "admin"):
             if role := roles.get(name):
@@ -1031,11 +1079,25 @@ class WorkspaceService:
     async def _check_name_free(
         self, workspace_id: str, name: str, *, exclude_id: str | None = None
     ) -> None:
-        stmt = select(Role).where(Role.workspace_id == workspace_id, Role.name == name)
+        # Case-insensitive: an "Admin" beside the seeded "admin" is a second,
+        # indistinguishable row in listings and selects. `.first()`, not
+        # `scalar_one_or_none()`: a workspace created before the case-insensitive
+        # check can already hold such a pair, and the predicate then matches both.
+        # The order is what makes the message deterministic: the system row
+        # first, then oldest, then `id` — `created_at` is
+        # `server_default=func.now()`, which ties on SQLite's second granularity,
+        # so it cannot be the last key. System-first deliberately inverts the
+        # "oldest first" preference in #592: the row a user needs named is the
+        # seeded one, not whichever duplicate was written first.
+        stmt = select(Role).where(
+            Role.workspace_id == workspace_id, func.lower(Role.name) == name.lower()
+        )
         if exclude_id is not None:
             stmt = stmt.where(Role.id != exclude_id)
-        if (await self._session.execute(stmt)).scalar_one_or_none() is not None:
-            raise WorkspaceConflict(f"a role named '{name}' already exists")
+        stmt = stmt.order_by(Role.system.desc(), Role.created_at, Role.id).limit(1)
+        existing = (await self._session.execute(stmt)).scalars().first()
+        if existing is not None:
+            raise WorkspaceConflict(f"a role named '{existing.name}' already exists")
 
     async def create_custom_role(
         self,
@@ -1090,7 +1152,7 @@ class WorkspaceService:
         ip_address: str | None = None,
     ) -> Role:
         role = await self.get_role(workspace_id, role_id)
-        if role.name == "owner":
+        if is_owner_role_name(role.name):
             raise WorkspaceForbidden("the owner role cannot be edited")
         changed = False
         if name is not None and name != role.name:
