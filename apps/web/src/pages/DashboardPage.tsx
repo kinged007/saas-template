@@ -136,10 +136,12 @@ export function DashboardPage() {
           <CardHeader>
             <div className="flex items-start justify-between gap-2">
               <div>
-                {/* Focus must stay (it is what announces the card is back), but the
-                    heading is not keyboard reachable, so the default ring only reads as a
-                    full-width input. Ring off, focus on. CardTitle renders a div, so the
-                    heading is spelled out here with the classes it applies. */}
+                {/* CardTitle renders a div, so each of the three card titles on this
+                    page is spelled out as an h3 with the classes CardTitle applies;
+                    card-title-classes.test.ts keeps the copies in step with the
+                    primitive. Focus must stay on this one (it is what announces the card
+                    is back), but the heading is not keyboard reachable, so the default
+                    ring only reads as a full-width input. Ring off, focus on. */}
                 <h3 tabIndex={-1} ref={restoreHeading} className="font-semibold leading-none tracking-tight outline-none">Get set up</h3>
                 <CardDescription>
                   Finish these steps to get the most out of your workspace.
@@ -172,7 +174,7 @@ export function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Members</CardTitle>
+            <h3 className="font-semibold leading-none tracking-tight">Members</h3>
             <CardDescription>Manage workspace members and their roles</CardDescription>
           </CardHeader>
           <CardContent>
@@ -184,7 +186,7 @@ export function DashboardPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Inbox</CardTitle>
+            <h3 className="font-semibold leading-none tracking-tight">Inbox</h3>
             <CardDescription>View your notifications and updates</CardDescription>
           </CardHeader>
           <CardContent>
