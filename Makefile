@@ -26,7 +26,7 @@ help:
 	@echo "  USE_SQLITE=1 make dev  sqlite dev DB (apps/api/dev.db) instead of postgres"
 	@echo "  make api-seed     seed default demo users + workspaces"
 	@echo "  make api          run backend (uvicorn, :$(API_PORT))"
-	@echo "  make api-test     run backend tests (sqlite in-memory)"
+	@echo "  make api-test     run backend tests (scratch sqlite file, no docker required)"
 	@echo "  make api-lint     ruff check + format check (same as pre-commit hook)"
 	@echo "  make hooks-install install pre-commit hooks (uv tool install pre-commit first)"
 	@echo "  make db-check     migration hygiene: single head + models match migrations"
