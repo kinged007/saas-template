@@ -30,6 +30,7 @@ def test_seed_and_workflow_share_one_route_constant():
 
 
 async def test_seed_invitation_notifications_carry_url():
+    from src.seed import _notifications
     from src.seed import main as seed_main
 
     await seed_main()
@@ -38,6 +39,13 @@ async def test_seed_invitation_notifications_carry_url():
         rows = (await session.execute(select(Notification))).scalars().all()
         pending_q = select(Invitation.id).where(Invitation.status == "pending")
         pending = set((await session.execute(pending_q)).scalars().all())
+
+    # One notification per fixture row. "at least one" would still pass while a
+    # defect drops the rest (#586).
+    assert len(rows) == len(_notifications()), (
+        f"the seed must create one notification per fixture row: "
+        f"{len(_notifications())} fixture rows -> {len(rows)} notifications"
+    )
 
     invitations = [n for n in rows if n.type == "workspace_invitation"]
     assert invitations, "seed should create workspace_invitation notifications"
@@ -53,13 +61,13 @@ async def test_seed_invitation_notifications_carry_url():
     with_invite = [
         n.payload["invitation_id"] for n in invitations if n.payload.get("invitation_id")
     ]
-    assert with_invite, "seed should link at least one notification to a pending invitation"
     assert len(with_invite) == len(set(with_invite)), (
         f"each notification should link to a distinct invitation, got {sorted(with_invite)}"
     )
-    assert set(with_invite) <= pending, (
-        f"invitation_id must name a pending invitation; dangling: "
-        f"{sorted(set(with_invite) - pending)}"
+    assert set(with_invite) == pending, (
+        f"every pending invitation must be linked and every link must resolve; "
+        f"unlinked: {sorted(pending - set(with_invite))}, "
+        f"dangling: {sorted(set(with_invite) - pending)}"
     )
 
     await seed_main()

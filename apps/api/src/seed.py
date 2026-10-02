@@ -167,7 +167,38 @@ def _notifications() -> list[dict]:
     ]
 
 
+def _check_fixtures() -> None:
+    """Every fixture row must name a slug and an email the seed defines.
+
+    The `slug not in workspaces` guard in each loop is the single-workspace and
+    foreign-workspace skip, and it stays: a known slug can legitimately be absent
+    from a run. A slug that is in no fixture at all is a typo, and skipping it
+    ships a demo quietly missing rows — the same for an email, which otherwise
+    surfaces as a bare KeyError from `users[email]`.
+    """
+    slugs = {spec["slug"] for spec in WORKSPACES}
+    emails = {email for email, _, _ in DEMO_USERS}
+    # (fixture name, slug, email) — notification rows are (email, slug, ...).
+    rows = [
+        (name, slug, email)
+        for name, fixture in (
+            ("memberships", MEMBERSHIPS),
+            ("invitations", INVITATIONS),
+            ("api keys", API_KEYS),
+        )
+        for slug, email, *_ in fixture
+    ]
+    rows += [("notifications", slug, email) for email, slug, *_ in _notifications()]
+    for name, slug, email in rows:
+        if slug not in slugs:
+            raise RuntimeError(f"{name} fixture names unknown workspace slug {slug!r}")
+        if email not in emails:
+            raise RuntimeError(f"{name} fixture names unknown user email {email!r}")
+
+
 async def main() -> None:
+    _check_fixtures()
+
     async with SessionFactory() as session:
         auth = AuthService(session)
         ws_service = WorkspaceService(session)
