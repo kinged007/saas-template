@@ -87,6 +87,7 @@ class ApiKeyService:
         own permission list. Returns (key, raw_secret); the raw secret is
         only ever returned once.
         """
+        name = name.strip()
         membership = await WorkspaceService(self._session).get_membership(
             workspace_id, actor.id, active_only=True
         )

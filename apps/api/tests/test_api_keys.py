@@ -408,3 +408,46 @@ async def test_explicit_sort_overrides_the_default_order(app_client):
     assert resp.status_code == 200, resp.text
     rows = resp.json()
     assert [k["name"] for k in rows] == ["k0", "k1", "k2"]
+
+
+async def test_create_api_key_strips_padded_name(app_client):
+    client = app_client
+    owner = await register_user(client, "pad-key@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    resp = await client.post(
+        "/api/v1/api-keys", json={"name": "  ci-deploy  ", "permissions": []}, headers=headers
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == "ci-deploy"
+    listed = await client.get("/api/v1/api-keys", headers=headers)
+    assert next(k for k in listed.json() if k["id"] == resp.json()["id"])["name"] == "ci-deploy"
+
+    blank = await client.post(
+        "/api/v1/api-keys", json={"name": "   ", "permissions": []}, headers=headers
+    )
+    assert blank.status_code == 422
+
+
+async def test_api_key_service_stores_trimmed_name(app_client):
+    """The service trims without the schema — seed and internal callers never
+    pass through `ApiKeyCreate`."""
+    from src.db.session import SessionFactory
+    from src.models.api_key import ApiKey
+    from src.services.api_keys import ApiKeyService
+    from src.services.auth import AuthService
+
+    client = app_client
+    owner = await register_user(client, "pad-key-svc@example.com")
+    ws = await create_workspace(client, owner)
+
+    async with SessionFactory() as session:
+        user = await AuthService(session).get_by_email("pad-key-svc@example.com")
+        key, _ = await ApiKeyService(session).create_api_key(
+            workspace_id=ws["id"], name="  ci-deploy  ", permissions=["member:read"], actor=user
+        )
+
+    async with SessionFactory() as session:
+        stored = await session.get(ApiKey, key.id)
+        assert stored.name == "ci-deploy"
