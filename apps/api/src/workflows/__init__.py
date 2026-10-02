@@ -300,7 +300,13 @@ def build_workflows(
             )
 
     async def on_invitation_created(payload: dict, metadata) -> None:
-        """Email unregistered recipients their invite link (fail-closed)."""
+        """Email unregistered recipients their invite link.
+
+        Delivery failure is not fatal: the invitation row is already committed
+        and this handler runs after the response, so a failed send is audited
+        (`invitation.email_failed`). `resend` skips a still-pending, unexpired
+        invitation, so that audit entry is the signal to revoke and re-invite.
+        """
         if payload.get("is_registered"):
             return
         email = payload.get("email")
@@ -327,17 +333,34 @@ def build_workflows(
             if token
             else f"{settings.frontend_url.rstrip('/')}/invitations"
         )
-        try:
-            await send_email(
-                invitation_template(
-                    email,
-                    workspace_name=payload.get("workspace_name", "workspace"),
-                    invite_url=invite_url,
-                    invited_by=payload.get("invited_by_name", ""),
-                )
+        sent = await send_email(
+            invitation_template(
+                email,
+                workspace_name=payload.get("workspace_name", "workspace"),
+                invite_url=invite_url,
+                invited_by=payload.get("invited_by_name", ""),
             )
-        except Exception:
-            logger.exception("invitation email failed for %s", email)
+        )
+        if sent:
+            return
+        logger.error("invitation email failed for %s (invitation %s)", email, invitation_id)
+        if not invitation_id:
+            return
+        # Published after the send, so a failing publish nacks the message and
+        # the invite email is delivered again.
+        await publish_audit(
+            bus,
+            correlation_id=metadata.correlation_id,
+            workspace_id=payload.get("workspace_id"),
+            resource_type="invitation",
+            resource_id=invitation_id,
+            action="invitation.email_failed",
+            details={
+                "email": email,
+                "invited_by_user_id": payload.get("invited_by_user_id"),
+                "invited_by_name": payload.get("invited_by_name"),
+            },
+        )
 
     async def on_workspace_created(payload: dict, metadata) -> None:
         """Provision workspace-scoped scheduled jobs for the new workspace.
