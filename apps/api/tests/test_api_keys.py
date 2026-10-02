@@ -1,6 +1,8 @@
 import hashlib
-from datetime import datetime
+from datetime import UTC, datetime
 
+from src.db.session import SessionFactory
+from src.models.api_key import ApiKey
 from tests.conftest import (
     auth_headers,
     create_workspace,
@@ -391,20 +393,100 @@ async def test_unsorted_paging_partitions_the_set(app_client):
     assert [k["id"] for k in paged] == [k["id"] for k in full]
 
 
+_TIE_IDS = [f"00000000-0000-4000-8000-00000000000{i}" for i in (1, 2, 3)]
+
+
+async def _seed_created_tie(client, owner, workspace_id, keys):
+    """Insert api keys sharing one explicit `created_at`, as (id, name) pairs
+    given in insertion order.
+
+    Arranged, not hoped for: the stamp is never `func.now()` (second
+    granularity on SQLite) and the ids are supplied, so a test can insert a tie
+    group in an order that disagrees with id order. Without the id
+    tiebreaker the group then comes back as inserted, which is what makes the
+    pre-fix result distinguishable from the post-fix one.
+    """
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(owner))
+    assert me.status_code == 200, me.text
+    stamp = datetime(2026, 1, 1, tzinfo=UTC)
+    rows = [
+        ApiKey(
+            id=i,
+            workspace_id=workspace_id,
+            created_by_user_id=me.json()["id"],
+            name=name,
+            key_prefix=f"sk_live_{n:04d}",
+            key_hash=f"{i}-hash",
+            permissions=[],
+            created_at=stamp,
+            updated_at=stamp,
+        )
+        for n, (i, name) in enumerate(keys)
+    ]
+    async with SessionFactory() as session:
+        session.add_all(rows)
+        await session.commit()
+
+
 async def test_explicit_sort_overrides_the_default_order(app_client):
+    """An explicit sort replaces the default order, and is itself total: the
+    tied `created_at` group comes back ordered by id, in the direction asked
+    for. Ids ascend in insertion order, so `order[]=desc` cannot come back
+    right without the tiebreaker, and ascending already disagrees with the
+    default `created_at DESC, id DESC`."""
     client = app_client
     owner = await register_user(client, "xena@example.com")
     ws = await create_workspace(client, owner)
     headers = ws_headers(owner, ws["id"])
 
-    for i in range(3):
-        await _create_key(client, headers, name=f"k{i}")
-
-    resp = await client.get(
-        "/api/v1/api-keys",
-        params={"sort[]": "created_at", "order[]": "asc", "limit": 10},
-        headers=headers,
+    await _seed_created_tie(
+        client, owner, ws["id"], list(zip(_TIE_IDS, ["k0", "k1", "k2"], strict=True))
     )
-    assert resp.status_code == 200, resp.text
-    rows = resp.json()
-    assert [k["name"] for k in rows] == ["k0", "k1", "k2"]
+    await _create_key(client, headers, name="newer")  # a stamp of its own
+
+    for order, reverse in (("asc", False), ("desc", True)):
+        resp = await client.get(
+            "/api/v1/api-keys",
+            params={"sort[]": "created_at", "order[]": order, "limit": 10},
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        rows = resp.json()
+        tied = [k for k in rows if k["id"] in _TIE_IDS]
+        assert len({k["created_at"] for k in tied}) == 1, f"{order}: expected a created_at tie"
+        expected = sorted(rows, key=lambda k: (k["created_at"], k["id"]), reverse=reverse)
+        assert [k["id"] for k in rows] == [k["id"] for k in expected], order
+        assert [k["id"] for k in tied] == sorted(_TIE_IDS, reverse=reverse), order
+
+
+async def test_explicit_sort_paging_partitions_the_set(app_client):
+    """`name` is a plain String(150) with no unique constraint, so an explicit
+    name sort ties. The tie group is inserted back to front, and reading it one
+    row per page must reproduce the unpaginated read: no row repeated, none
+    skipped."""
+    client = app_client
+    owner = await register_user(client, "yuki@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    await _seed_created_tie(client, owner, ws["id"], [(i, "dup") for i in reversed(_TIE_IDS)])
+
+    async def page(offset, limit):
+        resp = await client.get(
+            "/api/v1/api-keys",
+            params={"sort[]": "name", "order[]": "asc", "offset": offset, "limit": limit},
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    rows = await page(0, 10)
+    assert len({k["name"] for k in rows}) < len(rows), "expected a name tie"
+    assert [k["id"] for k in rows] == _TIE_IDS
+
+    paged: list[str] = []
+    for offset in range(len(rows)):
+        chunk = await page(offset, 1)
+        assert len(chunk) == 1, (offset, chunk)
+        paged.extend(k["id"] for k in chunk)
+    assert paged == [k["id"] for k in rows]

@@ -202,7 +202,10 @@ zero-customization data access:
 - `DELETE /{resource}/{id}` → 204
 
 A shared `crud` helper turns Refine params into safe SQLAlchemy queries
-(whitelisted sort/filter fields per resource).
+(whitelisted sort/filter fields per resource). Every sorted list ends on the
+row's primary key, in the direction of the last sort key, so the order is total
+and `offset`/`limit` paging cannot drop or repeat a row when the sorted columns
+tie. Ties resolve by `id`, not by insertion order — the ids are UUIDs.
 
 ## 9. Security
 
