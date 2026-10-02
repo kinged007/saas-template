@@ -8,7 +8,10 @@ turns an undefined email into a bare ``KeyError`` naming neither the fixture nor
 the row. Either way the demo ships with rows quietly missing.
 
 ``_check_fixtures`` separates the two cases and runs before any DB work, so a
-bad row leaves no half-seeded database behind.
+bad row leaves no half-seeded database behind. The email check is narrower still:
+it applies where the loop reads ``users[email]``, and ``INVITATIONS`` is exempt
+because inviting an address that has not registered yet is the flow it exists to
+demo.
 """
 
 import pytest
@@ -16,6 +19,7 @@ from sqlalchemy import select
 
 from src import seed
 from src.db.session import SessionFactory
+from src.models.core import Invitation, Notification
 from src.models.workspace import Workspace
 from src.seed import main as seed_main
 from src.settings import settings
@@ -39,51 +43,73 @@ def _with_notification(monkeypatch, *, email: str, slug: str) -> None:
 async def test_seed_fails_on_unknown_notification_slug(monkeypatch):
     _with_notification(monkeypatch, email="admin@example.com", slug="typo-corp")
 
-    with pytest.raises(RuntimeError, match="unknown workspace slug"):
+    with pytest.raises(
+        RuntimeError, match="notifications fixture names unknown workspace slug 'typo-corp'"
+    ):
         await seed_main()
 
     async with SessionFactory() as session:
         rows = (await session.execute(select(Workspace))).scalars().all()
-    assert rows == [], "the check must run before the seed writes anything"
+    assert rows == [], "no workspace row was written"
 
 
 async def test_seed_fails_on_unknown_notification_email(monkeypatch):
     _with_notification(monkeypatch, email="ghost@example.com", slug="acme-corp")
 
-    with pytest.raises(RuntimeError, match="unknown user email"):
+    with pytest.raises(
+        RuntimeError, match="notifications fixture names unknown user email 'ghost@example.com'"
+    ):
         await seed_main()
 
 
 @pytest.mark.parametrize(
-    ("fixture", "bad_slug_row", "bad_email_row"),
+    ("fixture", "kind", "bad_row"),
     [
+        ("MEMBERSHIPS", "workspace slug", ("typo-corp", "user1@example.com", "editor")),
+        ("MEMBERSHIPS", "user email", ("acme-corp", "ghost@example.com", "editor")),
+        ("INVITATIONS", "workspace slug", ("typo-corp", "user2@example.com", "viewer")),
         (
-            "MEMBERSHIPS",
-            ("typo-corp", "user1@example.com", "editor"),
-            ("acme-corp", "ghost@example.com", "editor"),
-        ),
-        (
-            "INVITATIONS",
-            ("typo-corp", "user2@example.com", "viewer"),
-            ("acme-corp", "ghost@example.com", "viewer"),
+            "API_KEYS",
+            "workspace slug",
+            ("typo-corp", "user1@example.com", "typo", ["member:read"]),
         ),
         (
             "API_KEYS",
-            ("typo-corp", "user1@example.com", "typo", ["member:read"]),
+            "user email",
             ("acme-corp", "ghost@example.com", "typo", ["member:read"]),
         ),
     ],
 )
-@pytest.mark.parametrize("field", ["bad_slug_row", "bad_email_row"])
 async def test_seed_rejects_undefined_reference_in_every_fixture(
-    monkeypatch, fixture, bad_slug_row, bad_email_row, field
+    monkeypatch, fixture, kind, bad_row
 ):
-    bad = bad_slug_row if field == "bad_slug_row" else bad_email_row
-    monkeypatch.setattr(seed, fixture, [*getattr(seed, fixture), bad])
-    match = "unknown workspace slug" if field == "bad_slug_row" else "unknown user email"
+    monkeypatch.setattr(seed, fixture, [*getattr(seed, fixture), bad_row])
+    # The message names the fixture the way the seed labels it ("api keys") and
+    # the offending value, so a generic "bad fixture" string fails here.
+    label = fixture.lower().replace("_", " ")
+    value = bad_row[0] if kind == "workspace slug" else bad_row[1]
 
-    with pytest.raises(RuntimeError, match=match):
+    with pytest.raises(RuntimeError, match=rf"{label} fixture names unknown {kind} {value!r}"):
         await seed_main()
+
+
+async def test_invitation_to_an_unregistered_address_is_not_a_failure(monkeypatch):
+    """``INVITATIONS`` may name an address the seed never registered.
+
+    The loop invites the address as a string and reads only
+    ``users["admin@example.com"]`` for the inviter, so an unregistered invitee is
+    the accept-invitation flow, not a typo. An email check that covered this
+    fixture would forbid the flow it exists to demo.
+    """
+    monkeypatch.setattr(
+        seed, "INVITATIONS", [*seed.INVITATIONS, ("acme-corp", "newcomer@example.com", "viewer")]
+    )
+
+    await seed_main()
+
+    async with SessionFactory() as session:
+        rows = (await session.execute(select(Invitation.email))).scalars().all()
+    assert "newcomer@example.com" in rows
 
 
 async def test_single_workspace_slug_skip_is_not_a_failure(monkeypatch):
@@ -97,3 +123,11 @@ async def test_single_workspace_slug_skip_is_not_a_failure(monkeypatch):
     monkeypatch.setattr(settings, "single_workspace", True)
 
     await seed_main()
+
+    async with SessionFactory() as session:
+        slugs = (await session.execute(select(Workspace.slug))).scalars().all()
+        notifications = (await session.execute(select(Notification.id))).scalars().all()
+    acme_notifications = sum(1 for _, slug, *_ in seed._notifications() if slug == "acme-corp")
+
+    assert list(slugs) == ["acme-corp"], "globex rows must be skipped, not created"
+    assert len(notifications) == acme_notifications, "the acme-corp rows must still land"

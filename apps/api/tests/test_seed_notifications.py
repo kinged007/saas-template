@@ -19,6 +19,7 @@ from sqlalchemy import select
 
 from src.db.session import SessionFactory
 from src.models.core import Invitation, Notification
+from src.settings import settings
 from src.workflows import INVITATIONS_ROUTE
 
 
@@ -29,9 +30,13 @@ def test_seed_and_workflow_share_one_route_constant():
     assert seed.INVITATIONS_ROUTE is INVITATIONS_ROUTE
 
 
-async def test_seed_invitation_notifications_carry_url():
+async def test_seed_invitation_notifications_carry_url(monkeypatch):
     from src.seed import _notifications
     from src.seed import main as seed_main
+
+    # The exact-count assertions below hold only in default mode; the flag is
+    # env-driven, so pin it rather than depend on the runner's environment.
+    monkeypatch.setattr(settings, "single_workspace", False)
 
     await seed_main()
 
