@@ -15,6 +15,7 @@ endif
 
 API_PORT ?= 8000
 WEB_PORT ?= 5173
+E2E_PORT ?= 5317
 
 help:
 	@echo "SaaS Template targets (development runs from the terminal — no docker needed):"
@@ -39,6 +40,7 @@ help:
 	@echo "  make web-test     run frontend unit tests (node --test, stdlib only)"
 	@echo "  make web-typecheck type-check frontend (tsc --noEmit)"
 	@echo "  make web-test-e2e run frontend e2e tests (playwright; no API needed)"
+	@echo "  make web-test-e2e E2E_PORT=5417  use another port (e.g. when :$(E2E_PORT) is taken)"
 	@echo ""
 	@echo "Optional (prod-like testing with NATS, requires docker — no compose needed):"
 	@echo "  make nats-up      start a NATS JetStream container (plain docker run)"
@@ -154,7 +156,7 @@ web-typecheck:
 	cd apps/web && npx tsc -p tsconfig.json --noEmit
 
 web-test-e2e:
-	cd apps/web && npx playwright install chromium && npm run test:e2e
+	cd apps/web && E2E_PORT=$(E2E_PORT) npx playwright install chromium && npm run test:e2e
 
 hooks-install:
 	pre-commit install --config .pre-commit-config.yaml

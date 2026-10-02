@@ -30,6 +30,12 @@ passes the chosen web origin to the API as `CORS_ORIGINS` / `FRONTEND_URL` (the
 default :5173 stays allowed), and `apps/web/vite.config.ts` proxies `/api/` and
 `/ws` to `API_PORT`. No other port configuration is needed.
 
+The playwright suite uses its own vite dev server on :5317, off both defaults.
+It starts that server and refuses to start when the port is already taken, so a
+run never silently tests another checkout's tree. Claim a different port with
+`E2E_PORT` (`make web-test-e2e E2E_PORT=5417`) or attach to a running one with
+`E2E_REUSE_SERVER=1`.
+
 ## Migrations
 
 Models are the source of truth; migrations are generated, reviewed, committed.
