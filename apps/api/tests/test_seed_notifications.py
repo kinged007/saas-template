@@ -1,4 +1,4 @@
-"""Issue #212: seeded invitation notifications must carry payload["url"].
+"""Issues #212, #378, #379, #381: seeded invitation notifications must carry payload["url"].
 
 The real invite path (workflows.on_member_invited) sets ``url`` to
 ``src.workflows.INVITATIONS_ROUTE`` in the notification payload, and
@@ -97,5 +97,5 @@ def test_null_payload_reports_the_defect():
         payload=None,
     )
 
-    with pytest.raises(AssertionError, match="missing payload.url"):
+    with pytest.raises(AssertionError, match=r"missing payload\.url"):
         _assert_carries_url(n)
