@@ -207,6 +207,10 @@ async def test_invitation_to_unregistered_email_emits_invitation_event_only(bus,
     invitation = bus.by_subject(Subjects.WORKSPACE_INVITATION_CREATED)
     assert len(invitation) == 1
     assert invitation[0][0]["is_registered"] is False
+    # The token stays out of the payload: invitation.created is a public webhook
+    # event, so subscribers must never see it. The handler re-reads the row.
+    assert "token" not in invitation[0][0]
+    assert "accept_url" not in invitation[0][0]
     # No in-app notification for unregistered recipients — email hook instead.
     assert bus.by_subject(Subjects.WORKSPACE_MEMBER_INVITED) == []
 
