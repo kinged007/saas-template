@@ -34,6 +34,7 @@ import logging
 
 from sqlalchemy import select
 
+from src.core.routes import INVITATIONS_ROUTE
 from src.core.security.crypto import SecretCipher
 from src.db.session import SessionFactory
 from src.events.bus import EventBus
@@ -49,10 +50,6 @@ from src.services.notifications import NotificationService
 from src.services.workspaces import is_owner_role_name
 
 logger = logging.getLogger(__name__)
-
-# Frontend route the invitation notification's "Open" button links to. The dev
-# seed (src/seed.py) imports it, so the two payload sides cannot drift.
-INVITATIONS_ROUTE = "/invitations"
 
 
 async def _audit_email_failure(

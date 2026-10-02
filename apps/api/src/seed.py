@@ -12,6 +12,7 @@ from datetime import timedelta
 from sqlalchemy import select
 
 from src.core.dates import now_utc
+from src.core.routes import INVITATIONS_ROUTE
 from src.db.session import SessionFactory
 from src.models.api_key import ApiKey
 from src.models.core import Invitation, Notification
@@ -20,7 +21,6 @@ from src.services.api_keys import ApiKeyService
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
 from src.settings import settings
-from src.workflows import INVITATIONS_ROUTE
 
 logger = logging.getLogger(__name__)
 
