@@ -165,7 +165,7 @@ async def oauth_callback(
         logger.exception("oauth token issue failed user=%s", user.id)
         return _error_redirect("sign-in failed")
     # A failed join stays log-only: the 302 must happen either way.
-    user = await _join_single_workspace_best_effort(db, container, user)
+    await _join_single_workspace_best_effort(db, container, user)
     one_time = secrets.token_urlsafe(32)
     container.cache.set(
         CODE_TTL_HINT + one_time,
