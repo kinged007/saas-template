@@ -23,9 +23,7 @@ from src.models.core import Notification
 from src.models.workspace import Workspace
 from src.schemas.api import NotificationAck, NotificationPreferencesUpdate
 from src.services.notifications import (
-    CHANNELS,
     DIGEST_TYPE,
-    KNOWN_TYPES,
     NotificationService,
 )
 from src.services.serializers import notification_to_dict
@@ -104,6 +102,13 @@ async def unread_count(
     return {"count": count}
 
 
+def _preferences_response(prefs) -> dict:
+    return {
+        "channels": {p.type: p.channel for p in prefs if p.type != DIGEST_TYPE},
+        "digest_enabled": next((p.digest_enabled for p in prefs if p.type == DIGEST_TYPE), False),
+    }
+
+
 @router.get("/preferences")
 async def get_preferences(
     user=Depends(get_current_user),
@@ -111,12 +116,7 @@ async def get_preferences(
     _=Depends(require_key_permission(NOTIFICATION_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    prefs = await NotificationService(db).get_preferences(user.id)
-    digest = next((p.digest_enabled for p in prefs if p.type == DIGEST_TYPE), False)
-    return {
-        "channels": {p.type: p.channel for p in prefs if p.type != DIGEST_TYPE},
-        "digest_enabled": digest,
-    }
+    return _preferences_response(await NotificationService(db).get_preferences(user.id))
 
 
 @router.put("/preferences")
@@ -127,24 +127,16 @@ async def update_preferences(
     _=Depends(require_key_permission(NOTIFICATION_UPDATE)),
     db: AsyncSession = Depends(get_db),
 ):
-    for type, channel in body.channels.items():
-        if type not in KNOWN_TYPES:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"unknown type {type!r}")
-        if channel not in CHANNELS:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, f"invalid channel {channel!r}"
-            )
     service = NotificationService(db)
     if body.channels:
-        await service.upsert_channels(user.id, body.channels)
+        try:
+            await service.upsert_channels(user.id, body.channels)
+        except ValueError as exc:
+            # upsert_channels owns type/channel validation (see KNOWN_TYPES).
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     if body.digest_enabled is not None:
         await service.set_digest(user.id, body.digest_enabled)
-    prefs = await service.get_preferences(user.id)
-    digest = next((p.digest_enabled for p in prefs if p.type == DIGEST_TYPE), False)
-    return {
-        "channels": {p.type: p.channel for p in prefs if p.type != DIGEST_TYPE},
-        "digest_enabled": digest,
-    }
+    return _preferences_response(await service.get_preferences(user.id))
 
 
 @router.get("/unsubscribe", response_class=PlainTextResponse)

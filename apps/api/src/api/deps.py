@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -24,6 +25,16 @@ bearer = HTTPBearer(auto_error=False)
 
 def get_container(request: Request):
     return request.app.state.container
+
+
+def uuid_or_404(value: str, label: str) -> str:
+    # StringUUID's bind processor raises ValueError (-> 500) on a malformed id,
+    # so validate before it reaches the query.
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{label} not found") from None
+    return value
 
 
 @dataclass
@@ -304,6 +315,8 @@ async def _target_profile_update(
     workspace_id: Annotated[str | None, Depends(get_optional_workspace_id)],
 ) -> bool:
     """The strict check behind both entry points; raises 403/404 on refusal."""
+    # A malformed id can never name a member, so it 404s before any UUID bind.
+    uuid_or_404(user_id, "user")
     if principal.is_deployment_admin or principal.user.id == user_id:
         return True
     if workspace_id is None:

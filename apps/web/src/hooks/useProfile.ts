@@ -4,8 +4,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { useParams } from "react-router";
 
+import { API_URL, httpClient } from "../providers/dataProvider";
+import { clearAllCaches } from "../providers/queryClient";
+import { identityStore, tokenStore } from "../utils/storage";
 import type { Identity, UserProfile } from "../types";
 import { getProfileField } from "../types";
+import { resolveTargetUserId } from "./target-user";
 export { getProfileField };
 
 /**
@@ -21,12 +25,8 @@ export { getProfileField };
 export function useTargetUserId(): string | null {
   const { data: identity } = useGetIdentity<Identity>();
   const id = useParams().id ?? null;
-  return id && id !== identity?.id ? id : null;
+  return resolveTargetUserId(id, identity?.id);
 }
-
-import { API_URL, httpClient } from "../providers/dataProvider";
-import { identityStore, tokenStore } from "../utils/storage";
-import { clearAllCaches } from "../providers/queryClient";
 
 /**
  * Self profile, or another member's when `userId` is given.
@@ -89,7 +89,8 @@ export function useUpdateProfile(userId?: string | null) {
               queryClient.invalidateQueries({ queryKey: ["auth"] });
               queryClient.invalidateQueries({ queryKey: ["data"] });
               invalidate({ resource: "profile", invalidates: ["all"] });
-            }            opts?.onSuccess?.();
+            }
+            opts?.onSuccess?.();
           },
           onError: (e) => {
             opts?.onError?.(e);
@@ -112,7 +113,7 @@ export function useUpdateProfile(userId?: string | null) {
         },
         errorNotification: false,
       } as never);
-if (!userId) {
+    if (!userId) {
         queryClient.invalidateQueries({ queryKey: ["auth"] });
         queryClient.invalidateQueries({ queryKey: ["data"] });
       }

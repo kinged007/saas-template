@@ -19,7 +19,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, apply_query, parse_query
-from src.api.deps import get_container, require_superuser
+from src.api.deps import get_container, require_superuser, uuid_or_404
 from src.db.session import get_db
 from src.events.publisher import publish_audit
 from src.models.audit import AuditLogEntry
@@ -39,16 +39,6 @@ _WORKSPACE_SORTABLE = {"created_at", "name", "slug"}
 _WORKSPACE_FILTERABLE = {"name", "slug"}
 _AUDIT_SORTABLE = {"created_at", "action", "resource_type"}
 _AUDIT_FILTERABLE = {"action", "resource_type", "actor_user_id", "workspace_id"}
-
-
-def _uuid_or_404(value: str, label: str) -> str:
-    # StringUUID's bind processor raises ValueError (-> 500) on a malformed id,
-    # so validate before it reaches the query.
-    try:
-        uuid.UUID(value)
-    except ValueError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{label} not found") from None
-    return value
 
 
 def _admin_user_dict(u: User) -> dict:
@@ -106,7 +96,7 @@ async def get_user(
     _=Depends(require_superuser),
     db: AsyncSession = Depends(get_db),
 ):
-    user = await db.get(User, _uuid_or_404(user_id, "user"))
+    user = await db.get(User, uuid_or_404(user_id, "user"))
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     stmt = (
@@ -132,7 +122,7 @@ async def update_user(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    user = await db.get(User, _uuid_or_404(user_id, "user"))
+    user = await db.get(User, uuid_or_404(user_id, "user"))
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     if user.id == admin.id and body.is_active is False:
@@ -196,7 +186,7 @@ async def update_workspace_flags(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    workspace = await db.get(Workspace, _uuid_or_404(workspace_id, "workspace"))
+    workspace = await db.get(Workspace, uuid_or_404(workspace_id, "workspace"))
     if workspace is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
     merged = {**(workspace.flags or {}), **body.flags}

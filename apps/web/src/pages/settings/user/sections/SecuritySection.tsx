@@ -28,7 +28,13 @@ import type { AuthSession } from "../../profile/sections/SecuritySection";
 export function SecuritySection() {
   const userId = useTargetUserId();
   const base = `users/${userId}`;
-  const sessions = useCustom<AuthSession[]>({ url: `${base}/sessions`, method: "get" });
+  // Null on the self routes, so the query waits for a real target instead of
+  // asking for `users/null`.
+  const sessions = useCustom<AuthSession[]>({
+    url: `${base}/sessions`,
+    method: "get",
+    queryOptions: { enabled: Boolean(userId) },
+  });
   const { mutateAsync, mutation } = useCustomMutation();
 
   const [password, setPassword] = useState("");

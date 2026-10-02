@@ -709,3 +709,26 @@ async def test_api_key_without_profile_update_cannot_edit_a_member(app_client):
     )
     assert resp.status_code == 403, resp.text
     assert PROFILE_UPDATE in resp.json()["detail"]
+
+
+async def test_a_malformed_target_id_is_404_not_500(app_client):
+    """StringUUID's bind processor raises ValueError on a malformed id, so the
+    guard validates before the membership lookup; the read path needs its own
+    check because it falls back to the redacted projection."""
+    client = app_client
+    owner = await register_user(client, "ada@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    resp = await client.get("/api/v1/users/not-a-uuid/sessions", headers=headers)
+    assert resp.status_code == 404, resp.text
+
+    resp = await client.get("/api/v1/users/not-a-uuid/profile", headers=headers)
+    assert resp.status_code == 404, resp.text
+
+    resp = await client.post(
+        "/api/v1/users/not-a-uuid/password",
+        json={"new_password": "Sup3rSecret!"},
+        headers=headers,
+    )
+    assert resp.status_code == 404, resp.text

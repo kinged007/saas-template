@@ -150,6 +150,9 @@ export function GeneralSection() {
   // Users; `?from` keeps Cancel returning to whichever list opened it.
   const [searchParams] = useSearchParams();
   const returnTo = searchParams.get("from");
+  // `?from` is user-controlled: only a same-app path is a valid Cancel target,
+  // so an absolute or protocol-relative value falls back to the list route.
+  const canReturn = returnTo !== null && /^\/(?!\/)/.test(returnTo);
 
   const [initialized, setInitialized] = useState(false);
   // A new target means new values: re-initialize the form for them.
@@ -457,7 +460,7 @@ export function GeneralSection() {
               />
 
               <div className="flex justify-end gap-2 pt-4">
-                <Button type="button" variant="outline" onClick={() => (returnTo ? go({ to: returnTo }) : list(targetId ? "members" : "workspaces"))}>
+                <Button type="button" variant="outline" onClick={() => (canReturn ? go({ to: returnTo }) : list(targetId ? "members" : "workspaces"))}>
                   Cancel
                 </Button>
                 <Button type="submit" disabled={isSaving}>

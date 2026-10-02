@@ -15,6 +15,7 @@ from src.api.deps import (
     require_superuser,
     require_target_profile_update,
     resolve_auth_principal,
+    uuid_or_404,
 )
 from src.db.session import get_db
 from src.models.workspace import User
@@ -113,6 +114,9 @@ async def get_user_profile(
     Self keeps the projection it always got (email, display_name, contact
     fields redacted); only a delegated `profile:update` read is editable."""
     service = ProfileService(db, container.bus)
+    # The delegated branch swallows a refusal, so validate here: a malformed id
+    # must 404 before the projection query binds it.
+    uuid_or_404(user_id, "user")
     if user_id != principal.user.id and await can_target_profile_update(
         user_id, response, db, principal, workspace_id
     ):
