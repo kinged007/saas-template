@@ -2,22 +2,20 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { ReactNode } from "react";
 import type { JobRunStatus } from "../types";
-import { statusBadgeVariant, type StatusBadgeStatus } from "./status-badge";
+import {
+  jobRunBadgeVariant,
+  statusBadgeVariant,
+  type StatusBadgeStatus,
+} from "./status-badge";
 
 export function StatusBadge({ status }: { status: StatusBadgeStatus }) {
   return <Badge variant={statusBadgeVariant(status)}>{status}</Badge>;
 }
 
 export function JobRunStatusBadge({ status }: { status: JobRunStatus }) {
-  const variant =
-    status === "success"
-      ? "success"
-      : status === "failed" || status === "timed_out"
-        ? "destructive"
-        : status === "running" || status === "pending"
-          ? "warning"
-          : "secondary";
-  return <Badge variant={variant as "secondary"}>{status.replace("_", " ")}</Badge>;
+  return (
+    <Badge variant={jobRunBadgeVariant(status)}>{status.replace("_", " ")}</Badge>
+  );
 }
 
 export function PageHeader({

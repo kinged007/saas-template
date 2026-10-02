@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { StatusBadgeStatus } from "./status-badge.ts";
-import { statusBadgeVariant } from "./status-badge.ts";
+import type { JobRunStatus } from "@/types";
+import type { BadgeVariant, StatusBadgeStatus } from "./status-badge.ts";
+import { jobRunBadgeVariant, statusBadgeVariant } from "./status-badge.ts";
 
 test("only an expired invitation is destructive", () => {
   assert.equal(statusBadgeVariant("expired"), "destructive");
@@ -27,7 +28,25 @@ test("member, invitation and account statuses keep rendering as secondary", () =
   }
 });
 
-test("the badge renders the raw status, so an unknown value is a compile error", () => {
+test("an unknown status is a compile error and has no variant", () => {
   // @ts-expect-error the badge only accepts the statuses the API documents.
   assert.equal(statusBadgeVariant("archived"), undefined);
+});
+
+test("every job run status keeps its variant", () => {
+  const expected: Record<JobRunStatus, BadgeVariant> = {
+    pending: "warning",
+    running: "warning",
+    success: "success",
+    failed: "destructive",
+    timed_out: "destructive",
+  };
+  for (const status of Object.keys(expected) as JobRunStatus[]) {
+    assert.equal(jobRunBadgeVariant(status), expected[status], status);
+  }
+});
+
+test("an unknown job run status is a compile error and has no variant", () => {
+  // @ts-expect-error the badge only accepts the statuses the API documents.
+  assert.equal(jobRunBadgeVariant("retrying"), undefined);
 });
