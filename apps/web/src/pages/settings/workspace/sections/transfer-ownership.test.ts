@@ -23,8 +23,10 @@ test("transferEligibleMembers offers active non-owners only", () => {
   const owner = member({ membership_id: "m-0", role: "owner" });
   const admin = member({ membership_id: "m-1" });
   const suspended = member({ membership_id: "m-2", status: "suspended" });
+  // A workspace created before the case-insensitive API check can hold `Owner`.
+  const legacyOwner = member({ membership_id: "m-3", role: "Owner" });
   assert.deepEqual(
-    transferEligibleMembers([owner, admin, suspended]).map((m) => m.membership_id),
+    transferEligibleMembers([owner, legacyOwner, admin, suspended]).map((m) => m.membership_id),
     ["m-1"],
   );
 });
@@ -87,8 +89,9 @@ test("transferCapNotice uses one list for both numbers", () => {
 });
 
 test("transferCapNotice never reports a negative tail", () => {
-  // A missing X-Total-Count reports 0, and a stale total can sit below the rows
-  // already in hand; the denominator floors at 0 instead of going negative.
+  // A stale total can sit below the rows already in hand; the denominator floors
+  // at 0 instead of going negative. A missing X-Total-Count falls back to the
+  // page length, which is the ceiling case above and already silent.
   assert.equal(transferCapNotice(0, page(100)), null);
   assert.equal(transferCapNotice(1, page(3, 1)), null);
 });
@@ -96,6 +99,6 @@ test("transferCapNotice never reports a negative tail", () => {
 // Coverage: these are the pure helpers behind the transfer Select. The effect
 // that clears a stale id in GeneralSection.tsx is wiring over
 // resolveTransferTarget, not a tested unit — `node --test` cannot load .tsx
-// (see AGENTS.md), so that wiring is covered by e2e/transfer-cap.spec.ts
-// together with the cap notice. What it relies on is covered above: an
-// unresolvable id yields undefined.
+// (see AGENTS.md), so that wiring is verified by hand; e2e/transfer-cap.spec.ts
+// covers the cap notice, not the clearing effect. What the wiring relies on is
+// covered above: an unresolvable id yields undefined.
