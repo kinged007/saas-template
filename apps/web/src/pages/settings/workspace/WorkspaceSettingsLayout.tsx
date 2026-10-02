@@ -8,14 +8,13 @@ import { activeWorkspacePermissions } from "@/utils/permissions";
 import type { Identity } from "@/types";
 import { workspaceSettings } from "./registry";
 import { SettingsNav } from "./components/SettingsNav";
-
-const MANAGER_ROLES = ["owner", "admin"];
+import { isManagerRoleName } from "@/pages/role-name";
 
 function isWorkspaceAdmin(identity: Identity | undefined, workspaceId: string | undefined): boolean {
   if (!identity || !workspaceId) return false;
   if (identity.is_superuser) return true;
   const ws = identity.workspaces.find((w) => w.id === workspaceId);
-  if (ws?.role && MANAGER_ROLES.includes(ws.role)) return true;
+  if (isManagerRoleName(ws?.role)) return true;
   // Fallback to permission check — admin/owner have workspace:update or audit:read that viewers lack.
   const perms = activeWorkspacePermissions(identity);
   if (perms.includes("*") || perms.includes("workspace:update")) return true;

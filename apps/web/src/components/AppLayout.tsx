@@ -56,6 +56,7 @@ import type { LucideIcon } from "lucide-react";
 
 import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "../contexts/WorkspaceContext";
 import { activeWorkspacePermissions } from "../utils/permissions";
+import { isManagerRoleName } from "../pages/role-name";
 import { ThemeToggle } from "./refine-ui/theme/theme-toggle";
 import { NotificationCenter } from "./NotificationCenter";
 import { PendingInvitationsBadge } from "./PendingInvitations";
@@ -277,7 +278,7 @@ function UserMenu() {
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
   const isWorkspaceAdmin =
     identity?.is_superuser === true ||
-    (myRole !== undefined && ["owner", "admin"].includes(myRole)) ||
+    isManagerRoleName(myRole) ||
     permissions.includes("*") ||
     permissions.includes("workspace:update");
 

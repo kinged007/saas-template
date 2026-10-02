@@ -7,6 +7,10 @@
  * keeps the UI's offer and the API's refusal on the same row: a control shown
  * for an owner is refused with 409, and one hidden from a manager is refused
  * with 403.
+ *
+ * The fold is `toLowerCase()` against ASCII literals, deliberately identical to
+ * the server's `str.lower()` rather than a locale-aware case map: the two sides
+ * have to agree, so change one only together with the other.
  */
 
 export const isOwnerRoleName = (name: string | null | undefined): boolean =>

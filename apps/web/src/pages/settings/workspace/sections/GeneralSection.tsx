@@ -45,6 +45,7 @@ import { getMemberDisplayName } from "@/types";
 import { WorkspaceExportCard } from "@/components/WorkspaceExportCard";
 import { workspaceStore } from "@/utils/storage";
 import { resolveTransferTarget, transferEligibleMembers } from "./transfer-ownership";
+import { isOwnerRoleName } from "@/pages/role-name";
 
 const schema = z.object({
   name: z.string().min(1, "Name is required").max(150, "Max 150 characters"),
@@ -78,7 +79,7 @@ export function GeneralSection() {
   });
   const invalidate = useInvalidate();
   const [transferId, setTransferId] = useState("");
-  const isOwner = workspace?.role === "owner";
+  const isOwner = isOwnerRoleName(workspace?.role);
   const transferCandidates = transferEligibleMembers(membersResult?.data ?? []);
   // A transferId that stopped resolving on a refetch leaves transferTarget
   // undefined, which is what disarms the button below.
