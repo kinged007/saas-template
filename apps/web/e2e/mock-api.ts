@@ -58,7 +58,10 @@ export async function mockApi(
     }
     if (pathname.endsWith("/auth/logout")) return route.fulfill({ status: 204, body: "" });
     const resource = pathname.slice("/api/v1/".length);
-    if (resource in lists) return reply(200, lists[resource]);
+    // Own-property only: `in` walks Object.prototype, so `toString` would serve
+    // `JSON.stringify` of an inherited function, which is undefined. `Object.hasOwn`
+    // needs lib ES2022; tsconfig pins ES2020.
+    if (Object.prototype.hasOwnProperty.call(lists, resource)) return reply(200, lists[resource]);
     return reply(200, []);
   });
   // The auth check only refreshes when the signed-in marker is set, so seed it
