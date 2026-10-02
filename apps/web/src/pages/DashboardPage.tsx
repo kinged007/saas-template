@@ -8,10 +8,11 @@ import { Button } from "@/components/ui/button";
 import { WorkspaceSearch } from "@/components/WorkspaceSearch";
 import { useWorkspace } from "../contexts/WorkspaceContext";
 import { onboardingStore } from "@/utils/storage";
+import { setupSteps, type SetupStep } from "./setup-steps";
 import { IDENTITY_QUERY_OPTIONS } from "../contexts/WorkspaceContext";
 import type { ApiKey, Identity, Invitation } from "../types";
 
-function Step({ done, title, hint, to, cta }: { done: boolean; title: string; hint: string; to: string; cta: string }) {
+function Step({ done, title, hint, to, cta }: SetupStep) {
   return (
     <div className="flex items-center justify-between gap-4 py-2">
       <div className="flex items-start gap-3">
@@ -60,9 +61,14 @@ export function DashboardPage() {
   // choice, and the flag exists to control what new users are shown.
   const onboardingOffForWorkspace = workspace?.onboarding_enabled === false;
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
+  const { data: canCreateKey } = useCan({ resource: "api-keys", action: "create" });
   const { result: keysResult } = useList<ApiKey>({
     resource: "api-keys",
-    queryOptions: { enabled: !!workspace },
+    // The count only decides this card's key step, so it is fetched only when
+    // that step is one the user has. Listing keys needs `apikey:read`, which a
+    // role without `apikey:create` usually lacks as well, and the card would
+    // put a 403 on screen for it.
+    queryOptions: { enabled: !!workspace && !!canCreateKey?.can },
   });
   const { result: invitationsResult } = useList<Invitation>({
     resource: "invitations",
@@ -97,10 +103,14 @@ export function DashboardPage() {
   const keys = keysResult?.data ?? [];
   const invitations = invitationsResult?.data ?? [];
   // ponytail: step progress is derived per render; only dismissal persists (onboardingStore). Add a tour store when onboarding grows past 3 steps.
-  const steps = [
-    { done: invitations.length > 0, title: "Invite your team", hint: "Members get workspace access by role.", to: "/members", cta: "Invite" },
-    { done: keys.length > 0, title: "Create an API key", hint: "Automate with scoped machine credentials.", to: "/api-keys/create", cta: "Create key" },
-  ];
+  const steps = setupSteps({
+    canInvite: canInvite?.can,
+    invitationCount: invitations.length,
+    canCreateKey: canCreateKey?.can,
+    apiKeyCount: keys.length,
+  });
+  // Progress is read over the steps this user has, so an empty list (nothing
+  // they may do) completes the card as surely as every step being finished.
   const allDone = steps.every((s) => s.done);
 
   return (
