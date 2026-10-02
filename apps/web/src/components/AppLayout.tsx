@@ -196,9 +196,8 @@ function useSingleWorkspace(): boolean {
   return identity?.single_workspace === true;
 }
 
-function WorkspaceSwitcher() {
+function WorkspaceSwitcher({ single }: { single: boolean }) {
   const { workspaces, workspace, setWorkspace } = useWorkspace();
-  const single = useSingleWorkspace();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   if (workspaces.length === 0) return null;
@@ -368,7 +367,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               className="hidden w-auto max-w-8 shrink-0 group-data-[collapsible=icon]:block"
             />
           </div>
-          <WorkspaceSwitcher />
+          <WorkspaceSwitcher single={single} />
         </SidebarHeader>
         <SidebarContent>
           {workspaces.length === 0 ? (
