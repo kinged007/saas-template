@@ -1,20 +1,14 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { ReactNode } from "react";
+import type { JobRunStatus } from "../types";
+import { statusBadgeVariant, type StatusBadgeStatus } from "./status-badge";
 
-export function StatusBadge({ status }: { status: string }) {
-  const variant =
-    status === "connected"
-      ? "success"
-      : status === "failed" || status === "expired"
-        ? "destructive"
-        : status === "pending"
-          ? "warning"
-          : "secondary";
-  return <Badge variant={variant as "secondary"}>{status}</Badge>;
+export function StatusBadge({ status }: { status: StatusBadgeStatus }) {
+  return <Badge variant={statusBadgeVariant(status)}>{status}</Badge>;
 }
 
-export function JobRunStatusBadge({ status }: { status: string }) {
+export function JobRunStatusBadge({ status }: { status: JobRunStatus }) {
   const variant =
     status === "success"
       ? "success"

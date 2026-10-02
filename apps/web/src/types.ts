@@ -145,6 +145,9 @@ export type Role = {
  */
 export type MemberStatus = "active" | "invited" | "suspended";
 
+/** What the admin users list shows for `AdminUser.is_active`; not a stored value. */
+export type AdminUserStatus = "active" | "disabled";
+
 export type Member = {
   id: string;
   email: string;
