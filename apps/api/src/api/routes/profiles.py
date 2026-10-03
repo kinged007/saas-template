@@ -9,6 +9,7 @@ from src.api.deps import (
     AuthPrincipal,
     get_container,
     get_current_user,
+    require_session_user,
     require_superuser,
     resolve_auth_principal,
 )
@@ -42,7 +43,7 @@ async def get_my_profile(
 async def put_my_profile(
     body: ProfileUpdate,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -64,7 +65,7 @@ async def put_my_profile(
 async def patch_my_profile(
     body: ProfileUpdate,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -99,7 +100,7 @@ async def get_user_profile(
 @router.get("/me/export")
 async def export_my_data(
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -136,7 +137,7 @@ async def export_user_data(
 async def delete_me(
     body: DeleteMeRequest,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
