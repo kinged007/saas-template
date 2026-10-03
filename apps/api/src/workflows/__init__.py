@@ -60,6 +60,7 @@ async def _audit_email_failure(
     notification,
     *,
     correlation_id: str | None,
+    source_event_id: str | None,
     user_id: str,
     n_type: str,
     email: str | None,
@@ -80,6 +81,7 @@ async def _audit_email_failure(
     await publish_audit(
         bus,
         correlation_id=correlation_id,
+        source_event_id=source_event_id,
         workspace_id=notification.workspace_id,
         resource_type="notification",
         resource_id=notification.id,
@@ -89,7 +91,12 @@ async def _audit_email_failure(
 
 
 async def _create_notification(
-    session, bus: EventBus, *, correlation_id: str | None = None, **kwargs
+    session,
+    bus: EventBus,
+    *,
+    correlation_id: str | None = None,
+    source_event_id: str | None = None,
+    **kwargs,
 ) -> None:
     """Persist a notification and fan it out over the bus in one call.
 
@@ -120,6 +127,7 @@ async def _create_notification(
             bus,
             notification,
             correlation_id=correlation_id,
+            source_event_id=source_event_id,
             user_id=n_user_id,
             n_type=n_type,
             email=recipient.email if recipient else None,
@@ -142,6 +150,7 @@ async def _create_notification(
         bus,
         notification,
         correlation_id=correlation_id,
+        source_event_id=source_event_id,
         user_id=n_user_id,
         n_type=n_type,
         email=recipient.email,
@@ -179,6 +188,7 @@ def build_workflows(
                     "url": INVITATIONS_ROUTE,
                 },
                 correlation_id=metadata.correlation_id,
+                source_event_id=metadata.event_id,
             )
         logger.info("notification persisted for user %s (%s)", user_id, payload.get("workspace_id"))
 
@@ -209,6 +219,7 @@ def build_workflows(
                         "user_id": user_id,
                     },
                     correlation_id=metadata.correlation_id,
+                    source_event_id=metadata.event_id,
                 )
             result = await session.execute(
                 select(WorkspaceMember).where(
@@ -233,6 +244,7 @@ def build_workflows(
                         "user_id": user_id,
                     },
                     correlation_id=metadata.correlation_id,
+                    source_event_id=metadata.event_id,
                 )
 
     async def on_member_role_changed(payload: dict, metadata) -> None:
@@ -273,6 +285,7 @@ def build_workflows(
                     "changed_by": changed_by,
                 },
                 correlation_id=metadata.correlation_id,
+                source_event_id=metadata.event_id,
             )
 
     async def on_member_removed(payload: dict, metadata) -> None:
@@ -297,6 +310,7 @@ def build_workflows(
                     "removed_by": removed_by,
                 },
                 correlation_id=metadata.correlation_id,
+                source_event_id=metadata.event_id,
             )
 
     async def on_invitation_created(payload: dict, metadata) -> None:
@@ -351,6 +365,7 @@ def build_workflows(
         await publish_audit(
             bus,
             correlation_id=metadata.correlation_id,
+            source_event_id=metadata.event_id,
             workspace_id=payload.get("workspace_id"),
             resource_type="invitation",
             resource_id=invitation_id,
@@ -390,6 +405,11 @@ def build_workflows(
                 actor_user_id=payload.get("actor_user_id"),
                 details=payload.get("details"),
                 ip_address=payload.get("ip_address"),
+                # The payload's id when the entry was produced by a subscriber
+                # (the handler, not this publish, is what re-runs on a
+                # redelivery); otherwise this envelope's own id, which a direct
+                # producer's redelivery repeats unchanged.
+                source_event_id=payload.get("source_event_id") or metadata.event_id,
             )
         logger.debug("audit entry persisted: %s", payload.get("action"))
 
@@ -507,6 +527,7 @@ def build_workflows(
                     for uid in recipients
                 ],
                 correlation_id=metadata.correlation_id,
+                source_event_id=metadata.event_id,
             )
 
     async def on_conversation_message_live(payload: dict, metadata) -> None:
