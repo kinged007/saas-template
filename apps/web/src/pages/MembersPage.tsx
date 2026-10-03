@@ -29,6 +29,7 @@ import { UserProfileDialog } from "@/components/UserProfileDialog";
 
 import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceContext";
 import { canResendInvitation, canRevokeInvitation, invitationStatus } from "./invitation-actions";
+import { resolveInviteRole } from "./invite-role";
 import { canReactivateMember, canSuspendMember } from "./member-actions";
 import { assignableRoles, rolePickerCapNotice } from "./role-picker-cap";
 import type { Identity, Invitation, Member, Role } from "../types";
@@ -132,14 +133,18 @@ export function MembersPage() {
   };
 
   const roleName = (roleId: string) => roleOptions.find((r) => r.id === roleId)?.name;
+  // Resolved against the picker's own list: an id the picker no longer offers
+  // leaves the submit blocked rather than sending a role the server dropped,
+  // and the trigger label reads from it too, as in GeneralSection.
+  const inviteRole = resolveInviteRole(assignable, inviteRoleId);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim() || !inviteRoleId) return;
+    if (!email.trim() || !inviteRole) return;
     invite(
       {
         resource: "invitations",
-        values: { email, role_id: inviteRoleId },
+        values: { email, role_id: inviteRole.id },
         successNotification: { message: "Invitation sent", type: "success" },
       },
       {
@@ -311,7 +316,7 @@ export function MembersPage() {
               <Label>Role</Label>
               <Select value={inviteRoleId} onValueChange={setInviteRoleId}>
                 <SelectTrigger className="w-40" aria-describedby={inviteRoleCapId}>
-                  <SelectValue placeholder="Role">{roleName(inviteRoleId)}</SelectValue>
+                  <SelectValue placeholder="Role">{inviteRole?.name ?? ""}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {assignable.map((r) => (
@@ -323,7 +328,7 @@ export function MembersPage() {
               </Select>
               <RoleCapNotice id={INVITE_ROLE_CAP_ID} text={roleCapNotice} />
             </div>
-            <Button type="submit" disabled={mutation.isPending || !email.trim() || !inviteRoleId}>
+            <Button type="submit" disabled={mutation.isPending || !email.trim() || !inviteRole}>
               {mutation.isPending ? "Sending…" : "Invite"}
             </Button>
           </form>
