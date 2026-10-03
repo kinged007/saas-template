@@ -3,12 +3,15 @@
 One config shape covers every enterprise IdP: OIDC discovery
 (discovery_url or issuer) for Google/Microsoft Entra/Okta/GitLab, or
 explicit authorize/token/userinfo URLs for non-OIDC providers like GitHub.
-Secrets come from env (OAUTH_PROVIDERS JSON); only ids and display names
-ever leave the server.
+The authorization-code flow uses PKCE (S256); the verifier lives in the
+server-side state entry, never in the browser. Secrets come from env
+(OAUTH_PROVIDERS JSON); only ids and display names ever leave the server.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import secrets
 from dataclasses import dataclass
@@ -105,6 +108,16 @@ async def _discovery(provider: ProviderConfig, cache: TtlCache) -> dict[str, Any
     return doc
 
 
+def _pkce_pair() -> tuple[str, str]:
+    """RFC 7636 verifier + its S256 challenge; token_urlsafe(64) is 86
+    unreserved characters, inside the 43..128 the RFC allows."""
+    verifier = secrets.token_urlsafe(64)
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    )
+    return verifier, challenge
+
+
 def build_authorize_url(
     provider: ProviderConfig, doc: dict[str, Any], cache: TtlCache, redirect_uri: str
 ) -> str:
@@ -112,7 +125,11 @@ def build_authorize_url(
     if not endpoint:
         raise OAuthError(f"oauth provider '{provider.id}' has no authorize endpoint")
     state = secrets.token_urlsafe(32)
-    cache.set(STATE_TTL_HINT + state, {"provider": provider.id, "redirect_uri": redirect_uri})
+    verifier, challenge = _pkce_pair()
+    cache.set(
+        STATE_TTL_HINT + state,
+        {"provider": provider.id, "redirect_uri": redirect_uri, "code_verifier": verifier},
+    )
     params = httpx.QueryParams(
         {
             "response_type": "code",
@@ -120,6 +137,8 @@ def build_authorize_url(
             "redirect_uri": redirect_uri,
             "scope": provider.scopes,
             "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
         }
     )
     return f"{endpoint}?{params}"
@@ -131,7 +150,7 @@ def consume_state(cache: TtlCache, state: str) -> dict[str, Any]:
         raise OAuthError("invalid or expired state")
     # Single-use: drop so a replayed callback cannot mint another code.
     cache.delete(STATE_TTL_HINT + state)
-    if not isinstance(entry, dict) or not entry.get("provider"):
+    if not isinstance(entry, dict) or not entry.get("provider") or not entry.get("code_verifier"):
         raise OAuthError("invalid or expired state")
     return entry
 
@@ -142,6 +161,7 @@ async def exchange_code(
     *,
     code: str,
     redirect_uri: str,
+    code_verifier: str,
 ) -> dict[str, Any]:
     endpoint = doc.get("token_endpoint") or provider.token_url
     if not endpoint:
@@ -156,6 +176,7 @@ async def exchange_code(
                     "redirect_uri": redirect_uri,
                     "client_id": provider.client_id,
                     "client_secret": provider.client_secret,
+                    "code_verifier": code_verifier,
                 },
                 headers={"Accept": "application/json"},
             )
