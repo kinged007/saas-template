@@ -285,8 +285,16 @@ async def login(
         if msg in ("password login is disabled",):
             raise HTTPException(status.HTTP_403_FORBIDDEN, msg) from None
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, msg) from None
+    try:
+        # The only HTTPException in here is the helper's account-gone guard, so
+        # charging the limiter for it is always a 401 charge, nothing else.
+        # Below the reset because this key is ip:email and stays reusable, so a
+        # charge on it can actually throttle the caller.
+        user = await _join_single_workspace_best_effort(db, container, user)
+    except HTTPException:
+        get_auth_limiter().fail(key)
+        raise
     get_auth_limiter().reset(key)
-    user = await _join_single_workspace_best_effort(db, container, user)
     if user.totp_enabled:
         challenge = TwoFactorService(db, container.cipher, container.bus).issue_challenge(user.id)
         raise HTTPException(
@@ -333,31 +341,31 @@ async def refresh(
     except AuthError as exc:
         get_auth_limiter().fail(key)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
-    try:
-        # The rotation above is already committed, so a raise here does not
-        # unwind it: the new refresh token is dropped on the floor and never
-        # reaches the client. pair.refresh_token is the NEW token, and the
-        # account can be deleted in the window between rotate_refresh's two
-        # commits, so the owner is re-read before any pair is handed out.
-        user = await service.get_user_by_refresh_token(pair.refresh_token)
-        if user is None:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, ACCOUNT_GONE_DETAIL)
-        if settings.single_workspace:
-            await _join_single_workspace_best_effort(db, container, user)
-    except HTTPException:
-        # The helper's account-gone guard, from here or from the branch above:
-        # charge the limiter like every other 401 on this endpoint, then
-        # re-raise rather than hand the caller a token pair for an account
-        # that is gone.
+    # The rotation above is already committed, so a raise here does not unwind
+    # it: the new refresh token is dropped on the floor and never reaches the
+    # client. pair.refresh_token is the NEW token, and the account can be
+    # deleted in the window between rotate_refresh's two commits, so the owner
+    # is re-read before any pair is handed out. Fails closed: a re-read that
+    # raises must not fall through to set_refresh_cookie.
+    user = await service.get_user_by_refresh_token(pair.refresh_token)
+    if user is None:
         get_auth_limiter().fail(key)
-        raise
-    except Exception:
-        # No rollback of its own: the helper already rolled back before it
-        # re-read the user, and nothing below here touches the ORM. Do not
-        # move this log ahead of that rollback, or read user.* down here.
-        logger.exception("failed to resolve the rotated account on refresh")
-    # Reset only once the request is authenticated: the account-gone 401 above
-    # charges the limiter instead of clearing its window.
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, ACCOUNT_GONE_DETAIL)
+    if settings.single_workspace:
+        try:
+            # The only HTTPException in here is the helper's account-gone
+            # guard, so this charge is always a 401 charge, nothing else.
+            await _join_single_workspace_best_effort(db, container, user)
+        except HTTPException:
+            get_auth_limiter().fail(key)
+            raise
+        except Exception:
+            # Best-effort, like the helper itself: no rollback of its own here
+            # (it already rolled back before re-reading the user), and nothing
+            # after this may lazy-load user.*.
+            logger.exception("failed to join single workspace on refresh")
+    # Reset only once the request is authenticated: the account-gone 401s
+    # charge the limiter instead of clearing its window.
     get_auth_limiter().reset(key)
     if cookie_token is not None or browser_flow(request, body):
         set_refresh_cookie(response, pair.refresh_token, request=request)

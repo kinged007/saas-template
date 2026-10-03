@@ -33,6 +33,29 @@ def single_workspace_on(monkeypatch):
     monkeypatch.setattr(settings, "single_workspace", False)
 
 
+def _spy_limiter(monkeypatch) -> list[tuple[str, str]]:
+    """Record the limiter calls the next request makes. Returns the live list.
+
+    The calls are recorded but not forwarded: the global limiter is shared
+    across tests, and an assertion about *which* branch charged or reset does
+    not need the window to keep enforcing.
+    """
+    calls: list[tuple[str, str]] = []
+
+    class _Spy:
+        def check(self, key: str) -> None:
+            calls.append(("check", key))
+
+        def fail(self, key: str) -> None:
+            calls.append(("fail", key))
+
+        def reset(self, key: str) -> None:
+            calls.append(("reset", key))
+
+    monkeypatch.setattr("src.api.routes.auth.get_auth_limiter", lambda: _Spy())
+    return calls
+
+
 async def test_register_creates_single_workspace(app_client, single_workspace_on):
     tokens = await register_user(app_client, "first@example.com")
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
@@ -195,13 +218,16 @@ async def test_refresh_joins_single_workspace(app_client, single_workspace_on, m
     assert resp.status_code == 200, resp.text
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(resp.json()))
     assert [w["id"] for w in me.json()["workspaces"]] == [ws_id]
-    # A successful refresh must clear the window, not charge it: with a budget
-    # of one attempt, a charge on the way out answers 429 on the next rotation.
-    monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 1)
+    # A successful refresh must clear the window, not charge it. The limiter
+    # has to be spied on to see that: the refresh key is ip:token_hash and
+    # rotation retires the presented token, so every rotation lands on a fresh
+    # key and a charge on the way out could never reach a window.
+    calls = _spy_limiter(monkeypatch)
     again = await app_client.post(
         "/api/v1/auth/refresh", json={"refresh_token": resp.json()["refresh_token"]}
     )
     assert again.status_code == 200, again.text
+    assert [op for op, _ in calls] == ["check", "reset"], calls
 
 
 async def test_join_survives_missing_viewer_role(app_client, single_workspace_on):
@@ -227,6 +253,9 @@ async def test_refresh_refuses_pair_when_account_deleted_mid_rotation(app_client
     # out-of-band from a second session after rotate_refresh committed the new
     # token row, so the token is live and its owner is gone. Default mode has
     # no join to re-read the user, so this is where the pair used to escape.
+    # The delete lands before the audit publish that follows, which still names
+    # the deleted row as its actor, so this test also rides on the AuditLog
+    # actor FK rules. It pins the guard, not the FK.
     from sqlalchemy import delete
 
     from src.db.session import SessionFactory
@@ -256,12 +285,32 @@ async def test_refresh_refuses_pair_when_account_deleted_mid_rotation(app_client
     assert "set-cookie" not in resp.headers
 
 
+async def test_refresh_fails_closed_when_the_owner_re_read_raises(app_client, monkeypatch):
+    # The existence check is a precondition for issuing a pair, so it cannot sit
+    # under the join's best-effort handler: a re-read that raises used to be
+    # logged and the caller still got 200 with a live pair.
+    from src.services.auth import AuthService
+
+    tokens = await register_user(app_client, "vanishing@example.com")
+
+    async def _boom(self, refresh_token):
+        raise RuntimeError("read failed")
+
+    monkeypatch.setattr(AuthService, "get_user_by_refresh_token", _boom)
+    with pytest.raises(RuntimeError):
+        await app_client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+        )
+
+
 async def test_refresh_account_gone_charges_rate_limiter(
     app_client, single_workspace_on, monkeypatch
 ):
     # Every sibling 401 on refresh charges the limiter; the account-gone 401
-    # has to as well, or a deleted account's refresh token is free to rotate
-    # (revocation write plus a user.token_refresh audit publish) forever.
+    # has to as well. What the charge buys here is bookkeeping and a brake if
+    # the guard ever regresses: the key is ip:token_hash and the rotation has
+    # already retired the presented token, so a deleted account is not
+    # throttled by it (that attempt dies in rotate_refresh instead).
     from src.services.auth import AuthService
 
     monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 1)
@@ -300,6 +349,7 @@ async def _gone_user_is_gone(app_client, monkeypatch, entry: str):
         return None
 
     monkeypatch.setattr(AuthService, "get_user", _gone)
+    calls = _spy_limiter(monkeypatch)
     if entry == "register":
         resp = await app_client.post(
             "/api/v1/auth/register",
@@ -324,6 +374,12 @@ async def _gone_user_is_gone(app_client, monkeypatch, entry: str):
     assert resp.status_code == 401, resp.text
     assert resp.json()["detail"] == "account no longer exists"
     assert "access_token" not in resp.json()
+    if entry != "register":
+        # Both throttled entry points charge the limiter on this 401 instead of
+        # resetting the window. On login that is the whole point: the key is
+        # ip:email and stays reusable, so a reset would leave it unthrottled.
+        # /register has no limiter at all.
+        assert [op for op, _ in calls] == ["check", "fail"], calls
 
 
 @pytest.mark.parametrize("entry", ["login", "refresh"])
