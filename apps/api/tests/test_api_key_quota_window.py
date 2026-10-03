@@ -4,12 +4,18 @@
 (`usage_window_count`); `usage_count` stays the lifetime total.
 """
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
+import sqlalchemy as sa
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.db.session import engine
+from src.db.session import SessionFactory, engine
 from src.models.api_key import ApiKey
 from src.services.api_keys import ApiKeyService
 from tests.conftest import create_workspace, register_user, ws_headers
@@ -47,6 +53,10 @@ def _month_start(now: datetime) -> datetime:
 def _previous_month() -> datetime:
     """Aware UTC datetime in the month before now (never in the current one)."""
     return _month_start(datetime.now(UTC)) - timedelta(days=1)
+
+
+def _next_month() -> datetime:
+    return _month_start(_previous_month()) + timedelta(days=32)
 
 
 async def test_quota_resets_on_the_first_use_in_a_new_calendar_month(app_client):
@@ -171,60 +181,117 @@ async def test_quota_rejection_still_reports_the_budget(app_client):
     assert "X-API-Key-Window-Reset" in resp.headers
 
 
-def test_roll_window_opens_the_window_on_first_use():
-    key = ApiKey(usage_count=12, usage_window_count=0, usage_window_start=None)
-    ApiKeyService.roll_window(key, now=datetime(2026, 3, 17, 12, 30, tzinfo=UTC))
-    assert key.usage_window_count == 0
-    assert key.usage_window_start == datetime(2026, 3, 1, tzinfo=UTC)
-    assert key.usage_count == 12  # lifetime total untouched
+async def test_concurrent_requests_cannot_both_spend_the_last_unit(app_client):
+    """The atomicity this PR exists for: accepted requests never exceed the
+    quota, and the counter agrees with the accepted count."""
+    client = app_client
+    owner = await register_user(client, "race@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    created = await _mint_key(client, headers, name="racy", permissions=["member:read"], quota=3)
+    raw = created["key"]
+
+    # ponytail: sqlite serialises writers per statement, so this reproduces the
+    # month-boundary clobber (N charges, one counted) and not every interleaving
+    # a row-lock backend allows. Ceiling: no postgres run in CI.
+    # Upgrade path: parametrise the suite over both backends.
+    async def charge() -> bool:
+        async with SessionFactory() as db:
+            service = ApiKeyService(db)
+            key = await service.authenticate(raw)
+            assert key is not None
+            return await service.record_use(key)
+
+    accepted = sum(await asyncio.gather(*(charge() for _ in range(8))))
+    assert accepted == 3
+
+    async with SessionFactory() as db:
+        key = await db.get(ApiKey, created["id"])
+        assert key.usage_window_count == accepted
+        assert key.usage_count == accepted
 
 
-def test_roll_window_ignores_later_days_of_the_same_month():
-    key = ApiKey(
-        usage_window_count=7,
-        usage_window_start=datetime(2026, 3, 1, tzinfo=UTC),
+async def test_fail_closed_when_the_host_clock_steps_back(app_client):
+    """A stored start later than `now` means the clock moved backwards. Rolling
+    there would hand out a second full budget, so an exhausted key keeps its
+    counter and stays rejected."""
+    client = app_client
+    owner = await register_user(client, "clock@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    created = await _mint_key(client, headers, name="clock", permissions=["member:read"], quota=1)
+    key_headers = {"Authorization": f"Bearer {created['key']}", "X-Workspace-ID": ws["id"]}
+    assert (await client.get("/api/v1/members", headers=key_headers)).status_code == 200
+
+    await _set_window_start(created["id"], _next_month())
+    resp = await client.get("/api/v1/members", headers=key_headers)
+    assert resp.status_code == 403
+
+    item = await _listed_key(client, headers, created["id"])
+    assert item["usage_window_count"] == 1  # not reset to a fresh budget
+    assert item["usage_window_start"].startswith(_next_month().strftime("%Y-%m"))
+
+
+async def test_rollover_crosses_the_year_boundary(app_client):
+    client = app_client
+    owner = await register_user(client, "year@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    created = await _mint_key(client, headers, name="year", permissions=["member:read"], quota=1)
+    key_headers = {"Authorization": f"Bearer {created['key']}", "X-Workspace-ID": ws["id"]}
+    assert (await client.get("/api/v1/members", headers=key_headers)).status_code == 200
+
+    last_december = _month_start(datetime.now(UTC)).replace(month=12)
+    last_december = last_december.replace(year=last_december.year - 1)
+    await _set_window_start(created["id"], last_december)
+
+    assert (await client.get("/api/v1/members", headers=key_headers)).status_code == 200
+    item = await _listed_key(client, headers, created["id"])
+    assert item["usage_window_count"] == 1
+    assert datetime.fromisoformat(item["usage_window_start"]) == _month_start(datetime.now(UTC))
+
+
+def test_migration_0019_seeds_the_window_start_too():
+    """The backfill must seed both columns.
+
+    A NULL start reads as "no window has been opened yet", so the rollover
+    zeroes the counter on the key's first request and the seed is discarded —
+    the second full budget the migration exists to prevent.
+    """
+    path = (
+        Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0019_api_key_quota_window.py"
     )
-    ApiKeyService.roll_window(key, now=datetime(2026, 3, 31, 23, 59, tzinfo=UTC))
-    assert key.usage_window_count == 7
-    assert key.usage_window_start == datetime(2026, 3, 1, tzinfo=UTC)
+    spec = spec_from_file_location("migration_0019", path)
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
 
+    sqlite = sa.create_engine("sqlite://")
+    try:
+        with sqlite.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "CREATE TABLE api_keys"
+                    " (id VARCHAR(36) PRIMARY KEY, usage_count INTEGER NOT NULL DEFAULT 0)"
+                )
+            )
+            conn.execute(sa.text("INSERT INTO api_keys VALUES ('exhausted', 50), ('fresh', 0)"))
+            with Operations.context(MigrationContext.configure(conn)):
+                module.upgrade()
+            rows = {
+                row[0]: (row[1], row[2])
+                for row in conn.execute(
+                    sa.text("SELECT id, usage_window_count, usage_window_start FROM api_keys")
+                )
+            }
+    finally:
+        sqlite.dispose()
 
-def test_roll_window_keeps_the_count_when_now_precedes_the_stored_start():
-    # A host whose clock steps backwards must not get a second full budget.
-    key = ApiKey(
-        usage_window_count=9,
-        usage_window_start=datetime(2026, 3, 1, tzinfo=UTC),
-    )
-    ApiKeyService.roll_window(key, now=datetime(2026, 2, 15, tzinfo=UTC))
-    assert key.usage_window_count == 9
-    assert key.usage_window_start == datetime(2026, 3, 1, tzinfo=UTC)
-
-
-def test_roll_window_rolls_across_month_and_year_boundaries():
-    february = ApiKey(
-        usage_window_count=7,
-        usage_window_start=datetime(2026, 2, 1, tzinfo=UTC),
-    )
-    ApiKeyService.roll_window(february, now=datetime(2026, 3, 1, tzinfo=UTC))
-    assert february.usage_window_count == 0
-    assert february.usage_window_start == datetime(2026, 3, 1, tzinfo=UTC)
-
-    december = ApiKey(
-        usage_window_count=7,
-        usage_window_start=datetime(2025, 12, 1, tzinfo=UTC),
-    )
-    ApiKeyService.roll_window(december, now=datetime(2026, 1, 15, tzinfo=UTC))
-    assert december.usage_window_count == 0
-    assert december.usage_window_start == datetime(2026, 1, 1, tzinfo=UTC)
-
-
-def test_roll_window_reads_a_naive_window_start_as_utc():
-    # SQLite hands back naive datetimes for DateTime(timezone=True) columns.
-    stale = ApiKey(usage_window_count=7, usage_window_start=datetime(2026, 2, 1))
-    ApiKeyService.roll_window(stale, now=datetime(2026, 3, 1, tzinfo=UTC))
-    assert stale.usage_window_count == 0
-    assert stale.usage_window_start == datetime(2026, 3, 1, tzinfo=UTC)
-
-    current = ApiKey(usage_window_count=7, usage_window_start=datetime(2026, 3, 1))
-    ApiKeyService.roll_window(current, now=datetime(2026, 3, 20, tzinfo=UTC))
-    assert current.usage_window_count == 7
+    now = datetime.now(UTC)
+    assert rows["exhausted"][0] == 50  # seeded from the lifetime total
+    start = datetime.fromisoformat(rows["exhausted"][1])
+    assert (start.year, start.month, start.day) == (now.year, now.month, 1)
+    assert rows["fresh"][0] == 0
+    assert rows["fresh"][1] is not None

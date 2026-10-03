@@ -6,6 +6,7 @@ Create Date: 2026-09-26 00:00:00.000000
 """
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 import sqlalchemy as sa
 
@@ -31,7 +32,20 @@ def upgrade() -> None:
     # second full budget to a key that had already exhausted its old lifetime
     # quota: such a key stays rejected until the next month boundary, and from
     # that boundary on it gets a fresh budget every month.
-    op.execute("UPDATE api_keys SET usage_window_count = usage_count")
+    #
+    # usage_window_start is seeded too, and that half is not optional: a NULL
+    # start reads as "no window has been opened yet", so the rollover zeroes
+    # the counter on the key's first request and the seed above is discarded.
+    #
+    # op.execute() takes no bound parameters (the bind connection does), and
+    # the typed bindparam is what lets sqlite3 bind a datetime at all.
+    month_start = datetime.now(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    op.get_bind().execute(
+        sa.text(
+            "UPDATE api_keys SET usage_window_count = usage_count, usage_window_start = :start"
+        ).bindparams(sa.bindparam("start", type_=sa.DateTime(timezone=True))),
+        {"start": month_start},
+    )
 
 
 def downgrade() -> None:
