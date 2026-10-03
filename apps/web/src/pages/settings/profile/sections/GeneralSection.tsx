@@ -69,6 +69,20 @@ const profileSchema = z.object({
 
 type ProfileFormData = z.infer<typeof profileSchema>;
 
+/** The PATCH body: the only profile fields this form is allowed to send. */
+const PROFILE_FIELDS: (keyof ProfileFormData)[] = [
+  "first_name",
+  "last_name",
+  "bio",
+  "phone_number",
+  "timezone",
+  "locale",
+  "date_of_birth",
+  "website_url",
+  "location",
+  "avatar_url",
+];
+
 // Developer-defined custom_data keys are not user-editable. The backend Merge Patch
 // remains available for forks that add first-class custom fields via code (types.ts
 // + dedicated inputs), but the generic key-value editor is intentionally removed.
@@ -180,19 +194,7 @@ export function GeneralSection() {
 
   const onSubmit = (data: ProfileFormData) => {
     const payload: Record<string, unknown> = {};
-    const fields: (keyof ProfileFormData)[] = [
-      "first_name",
-      "last_name",
-      "bio",
-      "phone_number",
-      "timezone",
-      "locale",
-      "date_of_birth",
-      "website_url",
-      "location",
-      "avatar_url",
-    ];
-    for (const f of fields) {
+    for (const f of PROFILE_FIELDS) {
       const val = data[f];
       if (val !== undefined) {
         if (val === "") {
@@ -247,6 +249,12 @@ export function GeneralSection() {
 
   if (!profile && profileHook.isLoading) {
     return <p className="text-muted-foreground p-4 text-sm">Loading profile…</p>;
+  }
+
+  // A failed fetch with nothing embedded would paint an empty form whose submit
+  // nulls every stored field. Say so instead of offering it.
+  if (profileHook.isError && PROFILE_FIELDS.every((f) => !getProfileField(profile, f, ""))) {
+    return <p className="text-muted-foreground p-4 text-sm">Could not load your profile — reload to try again.</p>;
   }
 
   return (

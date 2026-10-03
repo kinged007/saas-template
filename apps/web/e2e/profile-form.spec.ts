@@ -44,8 +44,6 @@ const NULL_PROFILE = {
   updated_at: null,
 };
 
-
-
 /** Holds `GET /me/profile` until `release` is called. */
 function hold() {
   let release!: () => void;
@@ -141,5 +139,13 @@ test.describe("profile form boot", () => {
     await mockApi(page, { profile: PROFILE, fetched: null });
     await openGeneral(page);
     await expect(page.getByLabel("First name")).toHaveValue("Reviewer");
+  });
+
+  test("says so when the profile fetch fails and nothing is embedded", async ({ page }) => {
+    await mockApi(page, { profile: NULL_PROFILE, fetched: null });
+    await page.goto("/settings/profile/general");
+    // An empty form here submits a PATCH that nulls every stored field.
+    await expect(page.getByText("Could not load your profile")).toBeVisible();
+    await expect(page.getByRole("button", { name: /save changes/i })).toHaveCount(0);
   });
 });
