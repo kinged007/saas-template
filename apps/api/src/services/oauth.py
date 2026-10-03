@@ -175,8 +175,9 @@ def _jwks_client(provider: ProviderConfig, doc: dict[str, Any]) -> jwt.PyJWKClie
 def _norm_issuer(issuer: str | None) -> str | None:
     """Trailing slash normalized away, so a cosmetic slash decides nothing.
 
-    Non-strings (the discovery document is network-sourced JSON) normalize to
-    None, which fails the pin closed rather than raising.
+    A non-string -- the token's `iss` is signed input, and a `ProviderConfig` can
+    be built by hand -- normalizes to None, which fails the pin closed rather
+    than raising.
     """
     return issuer.rstrip("/") if isinstance(issuer, str) and issuer else None
 
@@ -209,6 +210,12 @@ def claims_from_id_token(
         logger.warning("no issuer configured for provider %s; id_token iss not pinned", provider.id)
     try:
         key = client.get_signing_key_from_jwt(id_token).key
+    except Exception as exc:
+        # An unreachable or mid-rotation JWKS is an outage, not a bad token, so
+        # it gets its own line: the generic failure below reads as an attack.
+        logger.warning("jwks fetch failed for provider %s: %s", provider.id, _failure_detail(exc))
+        return None
+    try:
         claims = jwt.decode(
             id_token,
             key,

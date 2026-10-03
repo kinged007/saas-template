@@ -257,7 +257,9 @@ def test_claims_from_id_token_rejects_non_string_issuer(provider, idp):
     """The document is network-sourced JSON and the config is unvalidated env, so
     `issuer` is untrusted in type as well as value: anything but a string is
     refused, not raised. The callback only catches `OAuthError`, so an escaping
-    exception is a 500 with a stack trace."""
+    exception is a 500 with a stack trace. The config-side case is unreachable
+    in production -- `get_provider` coerces `issuer` to `str` -- so it asserts
+    the guard, not that a bad config is caught upstream."""
     assert claims_from_id_token(provider, {**idp.doc, "issuer": ["http://x"]}, idp.mint()) is None
     assert claims_from_id_token(replace(provider, issuer=12345), idp.doc, idp.mint()) is None
 
@@ -337,6 +339,17 @@ def test_claims_from_id_token_rejects_token_signed_by_another_key(provider, idp)
 
 def test_claims_from_id_token_rejects_unsigned_token(provider, idp):
     assert claims_from_id_token(provider, idp.doc, idp.mint(alg="none")) is None
+
+
+def test_claims_from_id_token_logs_jwks_fetch_failure(provider, idp, caplog):
+    """An unreachable JWKS is an outage, not a bad token. It refuses either way,
+    but it must not log under the message a signature failure produces, or an
+    IdP key rotation is triaged as a takeover."""
+    doc = {**idp.doc, "jwks_uri": f"http://127.0.0.1:{_closed_port()}/jwks"}
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        assert claims_from_id_token(provider, doc, idp.mint()) is None
+    assert "jwks fetch failed" in caplog.text
+    assert "id_token verification failed" not in caplog.text
 
 
 def test_claims_from_id_token_returns_none_without_jwks_uri(provider, idp):
