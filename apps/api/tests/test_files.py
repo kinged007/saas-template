@@ -345,29 +345,85 @@ async def test_content_length_oversize_rejected_before_body_is_parsed(app_client
     assert pulled == 0, f"the parser spooled {pulled} bytes for a rejected upload"
 
 
-async def test_upload_rejects_unknown_purpose(tmp_path):
-    from src.services.files import FileError, FileService
-    from src.storage.local import LocalFileStorage
+async def test_content_bytes_must_match_declared_type(app_client):
+    """Declared type and extension are client-supplied; the bytes must agree."""
+    owner, _ = await _setup(app_client)
+    payload = b"<html><script>alert(1)</script></html>"
+    resp = await app_client.post(
+        "/api/v1/files",
+        files={"file": ("evil.png", io.BytesIO(payload), "image/png")},
+        headers=owner,
+    )
+    assert resp.status_code == 415, resp.text
+    assert _stored_files(owner["X-Workspace-ID"]) == []
 
-    class _Session:
-        async def execute(self, *args, **kwargs):
-            class _Result:
-                def scalar_one_or_none(self):
-                    return object()
 
-            return _Result()
+async def test_session_user_without_file_read_is_forbidden(app_client):
+    """file:read must apply to session users, not only API-key callers."""
+    from tests.conftest import auth_headers, create_workspace, login, register_user, ws_headers
 
-    service = FileService(_Session(), LocalFileStorage(tmp_path), len(PNG))
-    with pytest.raises(FileError, match="unknown purpose"):
-        await service.upload(
-            workspace_id="ws1",
-            owner_user_id="user1",
-            filename="avatar.png",
-            content_type="image/png",
-            content=PNG,
-            purpose="invoice",
-        )
-    assert list(tmp_path.rglob("*")) == []
+    await register_user(app_client, email="perm-owner@example.com")
+    owner_tokens = await login(app_client, email="perm-owner@example.com")
+    ws = await create_workspace(app_client, owner_tokens, name="Perm WS")
+    owner = ws_headers(owner_tokens, ws["id"])
+
+    role = await app_client.post(
+        "/api/v1/roles",
+        json={"name": "No Files", "permissions": ["workspace:read", "member:read"]},
+        headers=owner,
+    )
+    assert role.status_code == 201, role.text
+
+    await register_user(app_client, email="perm-member@example.com")
+    member = await login(app_client, email="perm-member@example.com")
+    invite = await app_client.post(
+        "/api/v1/invitations",
+        json={"email": "perm-member@example.com", "role_id": role.json()["id"]},
+        headers=owner,
+    )
+    assert invite.status_code == 201, invite.text
+    accepted = await app_client.post(
+        "/api/v1/invitations/accept",
+        params={"token": invite.json()["token"]},
+        headers=auth_headers(member),
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    member_ws = ws_headers(member, ws["id"])
+    up = await app_client.post("/api/v1/files", files=_png(), headers=owner)
+    assert up.status_code == 201, up.text
+    path = f"/api/v1/files/{up.json()['id']}"
+
+    # The owner reads it fine; the role without file:read does not.
+    assert (await app_client.get(path, headers=owner)).status_code == 200
+    listed = await app_client.get("/api/v1/files", headers=member_ws)
+    assert listed.status_code == 403, listed.text
+    got = await app_client.get(path, headers=member_ws)
+    assert got.status_code == 403, got.text
+    assert "file:read" in got.text
+
+
+async def test_download_sets_cache_validators_and_honours_etag(app_client):
+    owner, _ = await _setup(app_client)
+    up = await app_client.post("/api/v1/files", files=_png(), headers=owner)
+    assert up.status_code == 201, up.text
+    path = f"/api/v1/files/{up.json()['id']}"
+
+    got = await app_client.get(path, headers=owner)
+    assert got.status_code == 200, got.text
+    etag = got.headers["etag"]
+    assert got.headers["cache-control"] == "private, max-age=300"
+    assert got.headers["x-content-type-options"] == "nosniff"
+    assert "avatar.png" in got.headers["content-disposition"]
+
+    cached = await app_client.get(path, headers={**owner, "If-None-Match": etag})
+    assert cached.status_code == 304, cached.text
+    assert not cached.content
+    assert cached.headers["etag"] == etag
+
+    stale = await app_client.get(path, headers={**owner, "If-None-Match": '"other"'})
+    assert stale.status_code == 200, stale.text
+    assert stale.content == PNG
 
 
 async def test_delete_account_removes_stored_bytes(app_client):

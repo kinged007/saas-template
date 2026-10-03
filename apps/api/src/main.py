@@ -111,8 +111,6 @@ class ApiVersionMiddleware(BaseHTTPMiddleware):
         return response
 
 
-app.add_middleware(ApiVersionMiddleware)
-
 # Multipart framing (boundaries, part headers) rides on the request body, so the
 # Content-Length of a legal upload exceeds the file cap by roughly this much.
 MULTIPART_OVERHEAD_BYTES = 64 * 1024
@@ -141,6 +139,10 @@ class UploadSizeLimitMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(UploadSizeLimitMiddleware, path=f"{API}/files")
+
+# Added after the size middleware so it wraps it (the last middleware added is the
+# outermost one): the 413 that middleware returns early still gets X-API-Version.
+app.add_middleware(ApiVersionMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

@@ -22,13 +22,9 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_AVATAR_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-# The /files route stores more than avatars eventually; each purpose names the
-# (content types, extensions) it accepts.
-# ponytail: purpose is validated but not stored on the row — add a column when a
-# second purpose needs to be listed or filtered on.
-_PURPOSES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
-    "avatar": (frozenset(ALLOWED_AVATAR_TYPES), frozenset(ALLOWED_EXTENSIONS)),
-}
+# Avatars render on every authenticated page, so the bytes are cached and
+# revalidated by ETag instead of being pulled through the API on each render.
+FILE_CACHE_CONTROL = "private, max-age=300"
 _FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
@@ -55,6 +51,32 @@ class FileTypeRejected(FileError):
 def _safe_filename(name: str) -> str:
     base = (name or "upload").rsplit("/", 1)[-1].rsplit("\\", 1)[-1].strip() or "upload"
     return _FILENAME_SAFE.sub("_", base)[:200]
+
+
+def _sniff(content: bytes) -> str | None:
+    """Return the allowed type these bytes actually are, or None.
+
+    The request's Content-Type and the filename extension are both supplied by
+    the caller, so the stored bytes themselves decide what this is.
+    """
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if content.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if content[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def file_etag(row: FileObject) -> str:
+    """Stable validator for stored bytes, which never change once written."""
+    return f'"{row.id}-{row.size_bytes}"'
+
+
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    return bool(if_none_match) and etag in {t.strip() for t in if_none_match.split(",")}
 
 
 async def purge_objects(storage: FileStorage | None, keys: Sequence[str]) -> None:
@@ -108,8 +130,12 @@ class FileService:
             "filename": row.filename,
             "content_type": row.content_type,
             "size_bytes": row.size_bytes,
-            # Relative: the API cannot know the origin it is served from, and
-            # the client's origin proxies /api/ to it.
+            # Relative: the API cannot know the origin it is served from, and the client's
+            # origin proxies /api/ to it. This is the address of the resource,
+            # not an image URL: GET needs a bearer token and X-Workspace-ID, so
+            # a browser cannot load it as a plain <img> src. Consumers fetch it
+            # with credentials and use the bytes (see the web app's
+            # src/hooks/useAvatarSrc.ts).
             "url": f"{API}/files/{row.id}",
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
@@ -124,23 +150,20 @@ class FileService:
         content_type: str | None,
         content: bytes,
         ip_address: str | None = None,
-        purpose: str = "avatar",
     ) -> dict:
         await self._ensure_membership(workspace_id, owner_user_id)
-        allowed = _PURPOSES.get(purpose)
-        if allowed is None:
-            raise FileError(f"unknown purpose: {purpose}")
-        allowed_types, allowed_extensions = allowed
         mime = (content_type or "").split(";")[0].strip().lower()
-        if mime not in allowed_types:
+        if mime not in ALLOWED_AVATAR_TYPES:
             raise FileTypeRejected(f"unsupported content type: {content_type or 'unknown'}")
         ext = Path(_safe_filename(filename)).suffix.lower()
-        if ext not in allowed_extensions:
+        if ext not in ALLOWED_EXTENSIONS:
             raise FileTypeRejected(f"unsupported file extension: {ext or 'none'}")
         if len(content) > self._max_bytes:
             raise FileTooLarge(f"file exceeds {self._max_bytes} bytes")
         if not content:
             raise FileError("empty file")
+        if _sniff(content) != mime:
+            raise FileTypeRejected(f"content does not match declared type: {mime}")
         safe = _safe_filename(filename)
         key = f"{workspace_id}/{uuid.uuid4()}-{safe}"
         try:
@@ -177,12 +200,24 @@ class FileService:
         return self.to_dict(row)
 
     async def download(
-        self, *, workspace_id: str, file_id: str, user_id: str, ip_address: str | None = None
-    ) -> tuple[FileObject, bytes]:
+        self,
+        *,
+        workspace_id: str,
+        file_id: str,
+        user_id: str,
+        if_none_match: str | None = None,
+        ip_address: str | None = None,
+    ) -> tuple[FileObject, bytes | None]:
+        """Return the row and its bytes, or (row, None) when the caller is current.
+
+        A matching ETag short-circuits before storage is read.
+        """
         await self._ensure_membership(workspace_id, user_id)
         row = await self._session.get(FileObject, file_id)
         if row is None or row.workspace_id != workspace_id:
             raise FileNotFound("file not found")
+        if _etag_matches(if_none_match, file_etag(row)):
+            return row, None
         try:
             stored = await self._storage.get(key=row.storage_key)
         except StorageError as exc:
