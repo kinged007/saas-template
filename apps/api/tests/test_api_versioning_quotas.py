@@ -146,3 +146,49 @@ async def test_quota_patch_validates_and_scopes_to_owner(app_client):
         headers=auth_headers(stranger),
     )
     assert resp.status_code in (400, 403)  # no workspace scope, no membership
+
+
+async def test_zero_quota_is_rejected(app_client):
+    """A quota of 0 is a key that can never authenticate: `usage_count <
+    usage_quota` is `0 < 0`, so the first request is refused and every one
+    after it. It is refused at the counter instead — no mint, no meter."""
+    client = app_client
+    owner = await register_user(client, "quinn@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    resp = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "quota-zero", "permissions": ["member:read"], "usage_quota": 0},
+        headers=headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert (await client.get("/api/v1/api-keys", headers=headers)).json() == []
+
+    # A positive quota is still the way to bound a key.
+    created = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "metered", "permissions": ["member:read"], "usage_quota": 2},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+
+    # Patching an existing key to 0 would kill it the same way, so it is
+    # refused there too — the key keeps the quota it had.
+    resp = await client.patch(
+        f"/api/v1/api-keys/{created.json()['id']}",
+        json={"usage_quota": 0},
+        headers=headers,
+    )
+    assert resp.status_code == 422, resp.text
+    keys = (await client.get("/api/v1/api-keys", headers=headers)).json()
+    assert keys[0]["usage_quota"] == 2, keys
+
+    # ... and it still authenticates.
+    key_headers = {
+        "Authorization": f"Bearer {created.json()['key']}",
+        "X-Workspace-ID": ws["id"],
+    }
+    ok = await client.get("/api/v1/members", headers=key_headers)
+    assert ok.status_code == 200, ok.text
+    assert ok.headers["X-API-Key-Remaining"] == "1", ok.text

@@ -150,7 +150,7 @@ class RoleUpdate(BaseModel):
 class ApiKeyCreate(BaseModel):
     name: StrippedName = Field(max_length=150)
     permissions: list[str] = Field(default_factory=list)
-    usage_quota: int | None = Field(default=None, ge=0)
+    usage_quota: int | None = Field(default=None, ge=1)
     # Optional hard expiry. Naive input is rejected: without an offset the
     # instant is ambiguous, and the service compares against UTC.
     expires_at: datetime | None = Field(default=None, examples=["2027-01-01T00:00:00Z"])
@@ -164,7 +164,7 @@ class ApiKeyCreate(BaseModel):
 
 
 class ApiKeyQuotaUpdate(BaseModel):
-    usage_quota: int | None = Field(default=None, ge=0)
+    usage_quota: int | None = Field(default=None, ge=1)
 
 
 class NotificationAck(BaseModel):

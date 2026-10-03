@@ -44,7 +44,7 @@ import type { ApiKeyCreated } from "../types";
 const apiKeySchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
   permissions: z.array(z.string()),
-  usage_quota: z.number().int().min(0).nullable().optional(),
+  usage_quota: z.number().int().min(1).nullable().optional(),
   // datetime-local value ("2027-01-01T09:00"), empty = never expires.
   expires_at: z
     .string()
@@ -196,7 +196,7 @@ export function ApiKeyCreatePage() {
                 <FormControl>
                   <Input
                     type="number"
-                    min={0}
+                    min={1}
                     placeholder="Unlimited"
                     value={field.value ?? ""}
                     onChange={(e) =>

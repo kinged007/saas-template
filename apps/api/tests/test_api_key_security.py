@@ -1042,22 +1042,15 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     resp = await client.get(f"/api/v1/jobs/runs/{foreign}", headers=viewer_headers)
     assert resp.status_code == 404, resp.text
 
-    # usage_quota = 0 buys nothing: the conditional UPDATE's
-    # `usage_count < usage_quota` is `0 < 0`, so the very first request is
-    # refused and the counter stays put. The 403 is what pins the predicate —
-    # relax it to `<=` and the zero row matches on the first unit, so the
-    # request returns 200 instead. The row read is the separate guard: a
-    # refusal must not spend the unit it refuses.
-    zero = await _create_key(client, headers, "quota-zero", [JOB_READ], usage_quota=0)
-    refused = await client.get(
-        f"/api/v1/jobs/runs/{runs['workspace']}",
-        headers=_key_headers(zero["key"], ws["id"]),
+    # usage_quota = 0 is refused at the counter: the conditional UPDATE's
+    # `usage_count < usage_quota` would be `0 < 0`, so the key the mint would
+    # hand back could never authenticate. No key is returned at all.
+    refused = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "quota-zero", "permissions": [JOB_READ], "usage_quota": 0},
+        headers=headers,
     )
-    assert refused.status_code == 403, refused.text
-    assert "quota" in refused.json()["detail"].lower(), refused.text
-    async with SessionFactory() as db:
-        row = await db.get(ApiKey, zero["id"])
-        assert row.usage_count == 0, "a zero-quota key must not spend a unit"
+    assert refused.status_code == 422, refused.text
 
     # A key-authorized hit is metered like any other key route: every read and
     # write route spends one unit and reports what is left. Regression test for
@@ -1105,6 +1098,13 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     # the schedule the charged request set.
     after = await client.get(f"/api/v1/jobs/{runs['definition']}", headers=auth_headers(owner))
     assert after.json()["cron_schedule"] == "30 4 * * *", after.text
+
+    # ... and the refused request never spent the unit it refused. This is the
+    # separate guard from the 403 above: the row must be left exactly as the
+    # charged request left it.
+    async with SessionFactory() as db:
+        row = await db.get(ApiKey, capped["id"])
+        assert row.usage_count == 1, "a refused request must not spend a unit"
 
 
 async def test_one_quota_unit_cannot_be_spent_twice(app_client):

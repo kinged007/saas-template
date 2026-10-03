@@ -119,8 +119,8 @@ class ApiKeyService:
             denied = sorted(capped - allowed)
             raise ApiKeyForbidden(f"cannot grant permissions you do not have: {', '.join(denied)}")
 
-        if usage_quota is not None and usage_quota < 0:
-            raise ApiKeyError("usage quota cannot be negative")
+        if usage_quota is not None and usage_quota < 1:
+            raise ApiKeyError("usage quota must be at least 1 (leave it empty for unlimited)")
         if expires_at is not None and ensure_utc(expires_at) <= now_utc():
             raise ApiKeyError("expiry must be in the future")
 
@@ -317,8 +317,8 @@ class ApiKeyService:
             raise ApiKeyNotFound("api key not found")
         if actor is not None and key.created_by_user_id != actor.id:
             raise ApiKeyNotFound("api key not found")
-        if usage_quota is not None and usage_quota < 0:
-            raise ApiKeyError("usage quota cannot be negative")
+        if usage_quota is not None and usage_quota < 1:
+            raise ApiKeyError("usage quota must be at least 1 (leave it empty for unlimited)")
         key.usage_quota = usage_quota
         await self._session.commit()
         await publish_event(
