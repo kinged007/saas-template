@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, apply_query, parse_query
@@ -71,22 +72,24 @@ async def list_api_keys(
     _=Depends(require_permission(APIKEY_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    # Query parsing is the HTTP layer's job; the service owns the personal
-    # scope predicate, so no filter or sort can widen it.
+    # Query parsing is the HTTP layer's job; the service runners own the
+    # personal scope predicate, so no filter or sort can widen it.
     service = ApiKeyService(db)
     try:
         spec = parse_query(request)
         stmt = apply_query(
-            service.owner_scope(workspace_id, user.id),
+            select(ApiKey),
             ApiKey,
             spec,
             sortable=_APIKEY_SORTABLE,
             filterable=_APIKEY_FILTERABLE,
         )
-        total = await service.count_for_user(stmt)
+        total = await service.count_for_user(workspace_id, user.id, stmt)
         if not spec.sort_by:
             stmt = stmt.order_by(*_APIKEY_DEFAULT_ORDER)
-        rows = await service.list_for_user(stmt.offset(spec.offset).limit(spec.limit))
+        rows = await service.list_for_user(
+            workspace_id, user.id, stmt.offset(spec.offset).limit(spec.limit)
+        )
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     response.headers["X-Total-Count"] = str(total)

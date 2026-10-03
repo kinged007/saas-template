@@ -19,9 +19,13 @@ Covers, end to end over the HTTP API:
     export, and the deployment-admin flag all refuse a key
 """
 
+from sqlalchemy import select
+
 from src.core.permissions import ALL_PERMISSIONS, JOB_READ, JOB_UPDATE, permissions_for_role
 from src.db.session import SessionFactory
+from src.models.api_key import ApiKey
 from src.models.jobs import JobDefinition
+from src.services.api_keys import ApiKeyService
 from src.services.notifications import NotificationService
 from tests.conftest import (
     auth_headers,
@@ -482,6 +486,7 @@ async def test_users_only_see_their_own_api_keys(app_client):
 
     seen_by_owner = await client.get("/api/v1/api-keys", headers=owner_headers)
     assert seen_by_owner.status_code == 200
+    assert seen_by_owner.headers["X-Total-Count"] == "2"
     owner_ids = {k["id"] for k in seen_by_owner.json()}
     assert owner_ids == {admin_a["id"], admin_b["id"]}
     assert editor_key["id"] not in owner_ids
@@ -489,10 +494,68 @@ async def test_users_only_see_their_own_api_keys(app_client):
 
     seen_by_editor = await client.get("/api/v1/api-keys", headers=ws_headers(editor, ws["id"]))
     assert seen_by_editor.status_code == 200
+    assert seen_by_editor.headers["X-Total-Count"] == "1"
     editor_ids = {k["id"] for k in seen_by_editor.json()}
     assert editor_ids == {editor_key["id"]}
     assert {admin_a["id"], admin_b["id"]}.isdisjoint(editor_ids)
     assert {"admin-key-a", "admin-key-b"}.isdisjoint({k["name"] for k in seen_by_editor.json()})
+
+
+async def test_runners_reapply_the_owner_predicate(app_client):
+    """The runners enforce the scope themselves: a bare select(ApiKey) still
+    cannot reach another user's keys, or the same user's keys elsewhere."""
+    client = app_client
+    owner = await register_user(client, "sven@example.com")
+    owner_id = await _user_id(client, owner)
+    ws = await create_workspace(client, owner, name="One")
+    other_ws = await create_workspace(client, owner, name="Two")
+    owner_headers = ws_headers(owner, ws["id"])
+
+    editor = await _add_member(client, owner_headers, ws["id"], "teresa@example.com", "editor")
+    editor_id = await _user_id(client, editor)
+
+    owner_key = await _create_key(client, owner_headers, "owner-key", ["member:read"])
+    elsewhere = await _create_key(
+        client, ws_headers(owner, other_ws["id"]), "elsewhere", ["member:read"]
+    )
+    editor_key = await _create_key(
+        client, ws_headers(editor, ws["id"]), "editor-key", ["member:read"]
+    )
+
+    async with SessionFactory() as session:
+        service = ApiKeyService(session)
+        rows = await service.list_for_user(ws["id"], owner_id, select(ApiKey))
+        assert {k.id for k in rows} == {owner_key["id"]}
+        assert await service.count_for_user(ws["id"], owner_id, select(ApiKey)) == 1
+
+        # ... and the scope of the other user is equally narrow
+        rows = await service.list_for_user(ws["id"], editor_id, select(ApiKey))
+        assert {k.id for k in rows} == {editor_key["id"]}
+        assert await service.count_for_user(ws["id"], editor_id, select(ApiKey)) == 1
+
+        # a statement scoped to somebody else narrows to empty rather than
+        # borrowing theirs: the re-applied predicate ANDs, it never replaces
+        other_owner = select(ApiKey).where(ApiKey.created_by_user_id == editor_id)
+        other_ws_stmt = select(ApiKey).where(ApiKey.workspace_id == other_ws["id"])
+        already = select(ApiKey).where(
+            ApiKey.workspace_id == ws["id"], ApiKey.created_by_user_id == owner_id
+        )
+
+        async def run_ids(stmt: object) -> set[str]:
+            rows = await service.list_for_user(ws["id"], owner_id, stmt)
+            return {k.id for k in rows}
+
+        assert await run_ids(other_owner) == set()
+        assert await service.count_for_user(ws["id"], owner_id, other_owner) == 0
+        assert await run_ids(other_ws_stmt) == set()
+        assert await service.count_for_user(ws["id"], owner_id, other_ws_stmt) == 0
+        # a statement that already carries the caller's own scope is unchanged
+        assert await run_ids(already) == {owner_key["id"]}
+
+    # the unscoped statement really does reach every key — the runners narrowed it
+    async with SessionFactory() as session:
+        all_rows = list((await session.execute(select(ApiKey))).scalars().all())
+    assert {k.id for k in all_rows} == {owner_key["id"], editor_key["id"], elsewhere["id"]}
 
 
 async def test_user_cannot_revoke_anothers_api_key(app_client):
@@ -914,8 +977,6 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     # relax it to `<=` and the zero row matches on the first unit, so the
     # request returns 200 instead. The row read is the separate guard: a
     # refusal must not spend the unit it refuses.
-    from src.models.api_key import ApiKey
-
     zero = await _create_key(client, headers, "quota-zero", [JOB_READ], usage_quota=0)
     refused = await client.get(
         f"/api/v1/jobs/runs/{runs['workspace']}",
