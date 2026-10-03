@@ -1040,13 +1040,14 @@ class WorkspaceService:
         return role
 
     async def _single_workspace_role(self, workspace_id: str) -> Role:
-        """Auto-join role: SINGLE_WORKSPACE_DEFAULT_ROLE, else the chain below.
+        """Auto-join role: SINGLE_WORKSPACE_DEFAULT_ROLE, else
+        viewer/editor/admin/an arbitrary remaining non-owner role.
 
-        viewer -> editor -> admin -> an arbitrary remaining non-owner role,
-        matched by name over the workspace's non-owner roles, so a custom role
-        works too and an unknown, blank or "owner" value falls through it.
-        The wider chain keeps a later login working when the viewer role was
-        renamed or removed, instead of bricking every later login.
+        Each rung is matched by name over the workspace's non-owner roles, so a
+        custom role works too and an unknown, blank or "owner" value falls
+        through the chain. The wider chain keeps a later login working when the
+        viewer role was renamed or removed, instead of bricking every later
+        login.
 
         Raises when the workspace has no non-owner role at all: there is
         nothing to join with, and the caller skips the join rather than
