@@ -5,12 +5,12 @@ repos:
       - id: ruff-check
         name: ruff check (api)
         files: ^apps/api/.*\.py$
-        entry: uv run --project apps/api ruff check
+        entry: uv run --project apps/api --extra dev ruff check
         language: system
       - id: ruff-format
         name: ruff format (api)
         files: ^apps/api/.*\.py$
-        entry: uv run --project apps/api ruff format --check
+        entry: uv run --project apps/api --extra dev ruff format --check
         language: system
 
   - repo: local

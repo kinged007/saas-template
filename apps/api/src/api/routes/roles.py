@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, apply_query, parse_query
@@ -32,6 +32,21 @@ router = APIRouter(prefix="/roles", tags=["roles"])
 _ROLE_FILTERABLE = {"name", "system"}
 _ROLE_SORTABLE = {"name", "created_at"}
 
+# Rank: a role whose lower-cased name is a DEFAULT_ROLES entry gets that
+# entry's index, everything else ranks last. Ordering here rather than on the
+# client so it holds across a page boundary: the system block keeps its default
+# roles contiguous, and every role *list* surface agrees by construction (the
+# export orders roles on its own). Contiguity comes from the rank, not from the
+# order key — the sort and the row lock in `update_role` are separate steps, so
+# a concurrent rename can still interleave. Names are unique only by exact
+# match, so a custom role differing from a system name in case alone joins that
+# rank group; #257 re-keys the rank on Role.system.
+_ROLE_RANK = case(
+    {name: i for i, name in enumerate(WorkspaceService.DEFAULT_ROLES)},
+    value=func.lower(Role.name),
+    else_=len(WorkspaceService.DEFAULT_ROLES),
+)
+
 
 def _role_dict(r: Role) -> dict:
     return {
@@ -53,7 +68,7 @@ async def list_roles(
     _=Depends(require_permission(ROLE_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(Role).where(Role.workspace_id == workspace_id)
+    stmt = select(Role).where(Role.workspace_id == workspace_id).order_by(_ROLE_RANK)
     try:
         spec = parse_query(request)
         stmt = apply_query(stmt, Role, spec, sortable=_ROLE_SORTABLE, filterable=_ROLE_FILTERABLE)
@@ -61,7 +76,10 @@ async def list_roles(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
-    stmt = stmt.offset(spec.offset).limit(spec.limit)
+    # A client sorter is a tiebreak within the rank groups, not an override:
+    # it is appended after _ROLE_RANK. Name last keeps the order total, so
+    # paging cannot repeat or drop a row.
+    stmt = stmt.order_by(Role.name).offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
     return [_role_dict(r) for r in rows.scalars().all()]
@@ -80,7 +98,7 @@ async def permission_catalog(
     (`"*"` implies the full catalog) — same capping semantics as
     `GET /api-keys/effective-permissions`. The single source for the roles
     matrix and the New/Edit role dialogs."""
-    membership = await WorkspaceService(db).get_membership(workspace_id, user.id)
+    membership = await WorkspaceService(db).get_membership(workspace_id, user.id, active_only=True)
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership

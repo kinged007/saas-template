@@ -1,4 +1,4 @@
-import { useReducer } from "react";
+import { useLayoutEffect, useReducer, useRef } from "react";
 import { useCan, useGetIdentity, useList } from "@refinedev/core";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle2, Circle, PlusCircle, X } from "lucide-react";
@@ -41,6 +41,16 @@ export function DashboardPage() {
   // re-render after dismiss. No dismissed state is kept, so switching
   // workspaces can never show a stale dismissal from another workspace.
   const [, force] = useReducer((x: number) => x + 1, 0);
+  // Restoring unmounts the button while it holds focus, which drops focus to
+  // <body> and tells a screen reader nothing. Move focus to the card heading
+  // in the commit that brings the card back.
+  const restoreHeading = useRef<HTMLHeadingElement>(null);
+  const focusHeadingOnRender = useRef(false);
+  useLayoutEffect(() => {
+    if (!focusHeadingOnRender.current) return;
+    focusHeadingOnRender.current = false;
+    restoreHeading.current?.focus();
+  });
   const onboardingDismissed = workspace
     ? onboardingStore.isDismissed(workspace.id, identity?.id)
     : false;
@@ -69,12 +79,16 @@ export function DashboardPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Link to="/workspaces/create">
-            <Button>
-              <PlusCircle className="mr-2 h-4 w-4" />
-              Create workspace
-            </Button>
-          </Link>
+          {/* /workspaces/create redirects home while the flag is set, so the
+              button would navigate nowhere. */}
+          {identity?.single_workspace !== true && (
+            <Link to="/workspaces/create">
+              <Button>
+                <PlusCircle className="mr-2 h-4 w-4" />
+                Create workspace
+              </Button>
+            </Link>
+          )}
         </CardContent>
       </Card>
     );
@@ -83,21 +97,38 @@ export function DashboardPage() {
   const keys = keysResult?.data ?? [];
   const invitations = invitationsResult?.data ?? [];
   // ponytail: step progress is derived per render; only dismissal persists (onboardingStore). Add a tour store when onboarding grows past 3 steps.
-  const steps = workspace
-    ? [
-        { done: invitations.length > 0, title: "Invite your team", hint: "Members get workspace access by role.", to: "/members", cta: "Invite" },
-        { done: keys.length > 0, title: "Create an API key", hint: "Automate with scoped machine credentials.", to: "/api-keys/create", cta: "Create key" },
-      ]
-    : [];
-  const allDone = steps.length > 0 && steps.every((s) => s.done);
+  const steps = [
+    { done: invitations.length > 0, title: "Invite your team", hint: "Members get workspace access by role.", to: "/members", cta: "Invite" },
+    { done: keys.length > 0, title: "Create an API key", hint: "Automate with scoped machine credentials.", to: "/api-keys/create", cta: "Create key" },
+  ];
+  const allDone = steps.every((s) => s.done);
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h2 className="text-3xl font-bold tracking-tight">{workspace?.name ?? "Workspace"}</h2>
-        <p className="text-muted-foreground mt-1">
-          Manage your team and collaborate effectively.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">{workspace?.name ?? "Workspace"}</h2>
+          <p className="text-muted-foreground mt-1">
+            Manage your team and collaborate effectively.
+          </p>
+        </div>
+        {/* The card is hidden by three independent reasons (all steps done, the
+            caller's own dismissal, the workspace flag). Restore shows only
+            when the caller's dismissal is the sole reason it is gone. */}
+        {onboardingDismissed && !allDone && !onboardingOffForWorkspace && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="shrink-0"
+            onClick={() => {
+              if (workspace) onboardingStore.clear(workspace.id, identity?.id);
+              focusHeadingOnRender.current = true;
+              force();
+            }}
+          >
+            Show setup checklist again
+          </Button>
+        )}
       </div>
 
       {!allDone && !onboardingDismissed && !onboardingOffForWorkspace && (
@@ -105,9 +136,15 @@ export function DashboardPage() {
           <CardHeader>
             <div className="flex items-start justify-between gap-2">
               <div>
-                <CardTitle>Get set up</CardTitle>
+                {/* CardTitle renders a div, so each of the three card titles on this
+                    page is spelled out as an h3 with the classes CardTitle applies;
+                    card-title-classes.test.ts keeps the copies in step with the
+                    primitive. Focus must stay on this one (it is what announces the card
+                    is back), but the heading is not keyboard reachable, so the default
+                    ring only reads as a full-width input. Ring off, focus on. */}
+                <h3 tabIndex={-1} ref={restoreHeading} className="font-semibold leading-none tracking-tight outline-none">Get set up</h3>
                 <CardDescription>
-                  {workspace ? "Finish these steps to get the most out of your workspace." : "Create a workspace to get started with managing your team."}
+                  Finish these steps to get the most out of your workspace.
                 </CardDescription>
               </div>
               <Button
@@ -126,14 +163,6 @@ export function DashboardPage() {
             </div>
           </CardHeader>
           <CardContent className="divide-y">
-            {!workspace && (
-              <Link to="/workspaces/create">
-                <Button>
-                  <PlusCircle className="mr-2 h-4 w-4" />
-                  Create workspace
-                </Button>
-              </Link>
-            )}
             {steps.map((s) => (
               <Step key={s.title} {...s} />
             ))}
@@ -145,7 +174,7 @@ export function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Members</CardTitle>
+            <h3 className="font-semibold leading-none tracking-tight">Members</h3>
             <CardDescription>Manage workspace members and their roles</CardDescription>
           </CardHeader>
           <CardContent>
@@ -157,7 +186,7 @@ export function DashboardPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Inbox</CardTitle>
+            <h3 className="font-semibold leading-none tracking-tight">Inbox</h3>
             <CardDescription>View your notifications and updates</CardDescription>
           </CardHeader>
           <CardContent>

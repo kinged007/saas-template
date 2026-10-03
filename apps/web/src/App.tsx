@@ -168,7 +168,10 @@ export function App() {
                 </div>
               }
             />
-            {/* Deliberate: signed-out typos land on / (which redirects to /login); signed-in unknown paths render NotFoundPage above. */}
+            {/* Unreachable guard: both splats score the same, so the "/" layout's nested
+                path="*" (declared first) wins and renders NotFoundPage — moving this route
+                above "/" would flip that. Authenticated's fallback sends a signed-out
+                visitor to /login. */}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
           <Toaster />

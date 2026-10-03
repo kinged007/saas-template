@@ -10,7 +10,20 @@ the flag is on.
 import pytest
 
 from src.settings import settings
-from tests.conftest import auth_headers, create_workspace, login, register_user
+from tests.conftest import (
+    auth_headers,
+    break_single_workspace_join,
+    create_workspace,
+    login,
+    register_user,
+)
+
+
+@pytest.fixture(autouse=True)
+def _default_role_is_viewer(monkeypatch):
+    # `settings` is a module singleton built at import, so a developer's
+    # SINGLE_WORKSPACE_DEFAULT_ROLE (env or .env) would reach these tests.
+    monkeypatch.setattr(settings, "single_workspace_default_role", "viewer")
 
 
 @pytest.fixture
@@ -99,9 +112,44 @@ async def test_configured_custom_role_is_granted(app_client, single_workspace_on
     assert [(w["id"], w["role"]) for w in me.json()["workspaces"]] == [(ws_id, "ops")]
 
 
+async def test_role_created_with_padded_name_is_granted(
+    app_client, single_workspace_on, monkeypatch
+):
+    # The role is created through a normal API call with padding; stripping
+    # on write is what keeps it matchable as the configured default.
+    tokens, ws_id = await _first_workspace(app_client)
+    headers = {**auth_headers(tokens), "X-Workspace-ID": ws_id}
+    resp = await app_client.post(
+        "/api/v1/roles", json={"name": "  ops  ", "permissions": []}, headers=headers
+    )
+    assert resp.status_code in (200, 201), resp.text
+    monkeypatch.setattr(settings, "single_workspace_default_role", "ops")
+
+    joined = await register_user(app_client, "second@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(joined))
+    assert [(w["id"], w["role"]) for w in me.json()["workspaces"]] == [(ws_id, "ops")]
+
+
 async def test_unknown_role_name_falls_back_to_viewer(app_client, single_workspace_on, monkeypatch):
-    await _first_workspace(app_client)
-    for i, value in enumerate(["", "   ", "nope", "owner"]):
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    _tokens, ws_id = await _first_workspace(app_client)
+    # A workspace created before the case-insensitive name check (#328) can hold
+    # `Owner` beside the seeded `owner`; neither auto-joins a newcomer.
+    async with SessionFactory() as session:
+        session.add(
+            Role(
+                workspace_id=ws_id,
+                name="Owner",
+                description=None,
+                permissions=[],
+                system=False,
+            )
+        )
+        await session.commit()
+
+    for i, value in enumerate(["", "   ", "nope", "owner", "Owner"]):
         monkeypatch.setattr(settings, "single_workspace_default_role", value)
         tokens = await register_user(app_client, f"newcomer{i}@example.com")
         me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
@@ -167,28 +215,70 @@ async def test_join_survives_missing_viewer_role(app_client, single_workspace_on
     assert [w["id"] for w in me.json()["workspaces"]] == [ws_id]
 
 
-async def test_join_failure_does_not_break_login(app_client, single_workspace_on, monkeypatch):
-    import src.api.routes.auth as auth_routes
+async def test_refresh_surfaces_401_when_user_row_is_gone(
+    app_client, single_workspace_on, monkeypatch
+):
+    # The join failure is real (rollback runs, instances expire), so the only
+    # thing left to fake is the re-read that follows it. get_user has no other
+    # consumer on the refresh path: rotate_refresh uses session.get, and
+    # get_user_by_refresh_token runs before the helper.
+    from src.services.auth import AuthService
 
-    async def boom(*args, **kwargs):
-        raise RuntimeError("db down")
+    await break_single_workspace_join(app_client)
+    tokens = await register_user(app_client, "newcomer@example.com")
 
-    monkeypatch.setattr(auth_routes.WorkspaceService, "join_single_workspace", boom)
+    async def _gone(self, user_id):
+        return None
+
+    monkeypatch.setattr(AuthService, "get_user", _gone)
     resp = await app_client.post(
-        "/api/v1/auth/login",
-        json={"email": "ghost@example.com", "password": "Password123!"},
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
     )
-    # Unknown user still 401; the point is no 500 from the join path —
-    # covered below with a real user.
-    assert resp.status_code == 401
-    monkeypatch.setattr(settings, "single_workspace", False)
-    await register_user(app_client, "real@example.com")
-    monkeypatch.setattr(settings, "single_workspace", True)
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["detail"] == "account no longer exists"
+    assert "access_token" not in resp.json()
+
+
+async def test_login_survives_join_failure(app_client, single_workspace_on):
+    # A failed join is log-only: the rollback it needs expires every loaded
+    # instance, so the reads after it must not be lazy loads.
+    await break_single_workspace_join(app_client)
+    await register_user(app_client, "newcomer@example.com")
+
+    tokens = await login(app_client, "newcomer@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert me.status_code == 200, me.text
+    assert me.json()["workspaces"] == []
+    assert me.json()["single_workspace"] is True
+
+
+async def test_refresh_survives_join_failure(app_client, single_workspace_on):
+    await break_single_workspace_join(app_client)
+    tokens = await register_user(app_client, "newcomer@example.com")
+
     resp = await app_client.post(
-        "/api/v1/auth/login",
-        json={"email": "real@example.com", "password": "Password123!"},
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
     )
     assert resp.status_code == 200, resp.text
+    # The join's rollback runs after the rotation: the rotated token has to
+    # outlive it, and the one it replaced has to stay dead.
+    rotated = resp.json()["refresh_token"]
+    assert rotated != tokens["refresh_token"]
+    again = await app_client.post("/api/v1/auth/refresh", json={"refresh_token": rotated})
+    assert again.status_code == 200, again.text
+    stale = await app_client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert stale.status_code == 401, stale.text
+
+
+async def test_register_survives_join_failure(app_client, single_workspace_on):
+    await break_single_workspace_join(app_client)
+    tokens = await register_user(app_client, "newcomer@example.com")
+
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert me.status_code == 200, me.text
+    assert me.json()["workspaces"] == []
 
 
 async def test_delete_nonexistent_returns_404_in_single_mode(app_client, single_workspace_on):

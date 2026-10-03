@@ -307,7 +307,9 @@ class SearchExportService:
     async def _can(self, workspace_id: str, user_id: str, permission: str) -> bool:
         from src.services.workspaces import WorkspaceService
 
-        membership = await WorkspaceService(self._session).get_membership(workspace_id, user_id)
+        membership = await WorkspaceService(self._session).get_membership(
+            workspace_id, user_id, active_only=True
+        )
         if membership is None:
             return False
         _, role = membership
