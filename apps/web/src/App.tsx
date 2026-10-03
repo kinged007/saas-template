@@ -10,7 +10,7 @@ import { authProvider } from "./providers/authProvider";
 import { liveProvider } from "./providers/liveProvider";
 import { accessControlProvider } from "./providers/accessControlProvider";
 import { queryClient } from "./providers/queryClient";
-import { WorkspaceProvider } from "./contexts/WorkspaceContext";
+import { WorkspaceProvider, useWorkspace } from "./contexts/WorkspaceContext";
 import { AppLayout } from "./components/AppLayout";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
@@ -46,6 +46,20 @@ import { RolesSection } from "./pages/settings/workspace/sections/RolesSection";
 import { JobsSection } from "./pages/settings/workspace/sections/JobsSection";
 import { UsersSection } from "./pages/settings/workspace/sections/UsersSection";
 import { AuditLogSection } from "./pages/settings/workspace/sections/AuditLogSection";
+
+/**
+ * With zero workspaces nothing auto-selects, so useWorkspaceQuery keeps every
+ * workspace-scoped query disabled: the page hangs on `isPending` or renders a
+ * misleading empty list. DashboardPage already carries the "No workspace yet"
+ * card and the create CTA, so send them there. This lives in the router rather
+ * than in WorkspaceProvider because the provider also wraps the workspace-free
+ * routes (workspaces/create, settings/profile, admin, invitations).
+ */
+function RequireWorkspace() {
+  const { workspaces } = useWorkspace();
+  if (workspaces.length === 0) return <Navigate to="/" replace />;
+  return <Outlet />;
+}
 
 export function App() {
   return (
@@ -107,16 +121,32 @@ export function App() {
                 <Route path="audit" element={<AdminAuditSection />} />
               </Route>
               <Route path="workspaces/create" element={<WorkspaceCreatePage />} />
-              <Route path="members" element={<MembersPage />} />
               <Route path="invitations" element={<ReceivedInvitationsPage />} />
-              <Route path="api-keys/create" element={<ApiKeyCreatePage />} />
-              <Route path="api-keys" element={<ApiKeysPage />} />
-              <Route path="webhooks/create" element={<WebhookCreatePage />} />
-              <Route path="webhooks" element={<WebhooksPage />} />
-              <Route path="inbox" element={<InboxPage />} />
-              {/* Jobs detail stays top-level; list moved into workspace settings */}
-              <Route path="jobs/:id" element={<JobDetailPage />} />
-              <Route path="jobs/:id/runs/:runId" element={<JobRunPage />} />
+              {/* Every route below reads the active workspace; the guard keeps a
+                  user in zero workspaces out instead of stranding them here. */}
+              <Route element={<RequireWorkspace />}>
+                <Route path="members" element={<MembersPage />} />
+                <Route path="api-keys/create" element={<ApiKeyCreatePage />} />
+                <Route path="api-keys" element={<ApiKeysPage />} />
+                <Route path="webhooks/create" element={<WebhookCreatePage />} />
+                <Route path="webhooks" element={<WebhooksPage />} />
+                <Route path="inbox" element={<InboxPage />} />
+                {/* Jobs detail stays top-level; list moved into workspace settings */}
+                <Route path="jobs/:id" element={<JobDetailPage />} />
+                <Route path="jobs/:id/runs/:runId" element={<JobRunPage />} />
+                <Route path="settings/workspace" element={<WorkspaceSettingsLayout />}>
+                  <Route index element={<Navigate to="general" replace />} />
+                  <Route path="general" element={<GeneralSection />} />
+                  <Route path="roles" element={<RolesSection />} />
+                  <Route path="jobs" element={<JobsSection />} />
+                  <Route path="users" element={<UsersSection />} />
+                  <Route path="audit" element={<AuditLogSection />} />
+                  <Route
+                    path="*"
+                    element={<Navigate to="/settings/workspace/general" replace />}
+                  />
+                </Route>
+              </Route>
               <Route path="settings/profile" element={<ProfileSettingsLayout />}>
                 <Route index element={<Navigate to="general" replace />} />
                 <Route path="general" element={<ProfileGeneralSection />} />
@@ -124,15 +154,6 @@ export function App() {
                 <Route path="security" element={<SecuritySection />} />
                 <Route path="workspaces" element={<WorkspacesSection />} />
                 <Route path="*" element={<Navigate to="/settings/profile/general" replace />} />
-              </Route>
-              <Route path="settings/workspace" element={<WorkspaceSettingsLayout />}>
-                <Route index element={<Navigate to="general" replace />} />
-                <Route path="general" element={<GeneralSection />} />
-                <Route path="roles" element={<RolesSection />} />
-                <Route path="jobs" element={<JobsSection />} />
-                <Route path="users" element={<UsersSection />} />
-                <Route path="audit" element={<AuditLogSection />} />
-                <Route path="*" element={<Navigate to="/settings/workspace/general" replace />} />
               </Route>
               {/* Legacy redirects — keep old URLs working */}
               <Route path="roles" element={<Navigate to="/settings/workspace/roles" replace />} />
