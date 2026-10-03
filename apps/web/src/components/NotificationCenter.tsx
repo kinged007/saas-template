@@ -15,10 +15,11 @@ import { useWorkspaceCustom, useWorkspaceList } from "../hooks/useWorkspaceQuery
 import { useNavigate } from "react-router";
 
 import type { Notification } from "../types";
-import { formatDate } from "./ui";
+import { ReadError, formatDate } from "./ui";
 import { stripMarkdown, truncate } from "@/lib/markdown";
 import { notificationLinkUrl } from "@/lib/notificationLink";
 import { liveChannels, subscribeLive } from "../providers/liveProvider";
+import { errorMessage } from "../utils/errorMessage";
 
 function truncateEscaped(text: string | undefined, max: number): string {
   return truncate(stripMarkdown(text), max);
@@ -65,10 +66,13 @@ export function NotificationCenter() {
   const { result: notifUnreadResult, query: notifUnreadQuery } = useWorkspaceCustom<{ count: number }>({
     url: "notifications/unread-count",
     method: "get",
+    // Badge counters have no in-body surface — they keep the error toast.
+    errorNotification: (error) => ({ type: "error", message: errorMessage(error) }),
   });
   const { result: convUnreadResult, query: convUnreadQuery } = useWorkspaceCustom<{ count: number; unread_conversations: number }>({
     url: "conversations/unread-count",
     method: "get",
+    errorNotification: (error) => ({ type: "error", message: errorMessage(error) }),
   });
 
   const notifCount = (notifUnreadResult?.data as { count?: number } | undefined)?.count ?? (result?.total ?? items.length);
@@ -234,6 +238,7 @@ export function NotificationCenter() {
           <SheetDescription>Unread invitations, messages and workspace activity</SheetDescription>
         </SheetHeader>
         <div className="mt-6 flex flex-col gap-4">
+          <ReadError error={query.error} className="p-0" />
           {items.length > 0 ? (
             <section className="flex flex-col gap-4">{items.map(renderItem)}</section>
           ) : (

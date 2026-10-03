@@ -18,7 +18,7 @@ import {
   ListView,
   ListViewHeader,
 } from "../components/refine-ui/views/list-view";
-import { EmptyRow, formatDate } from "../components/ui";
+import { EmptyRow, ReadError, formatDate } from "../components/ui";
 import type { WebhookDelivery, WebhookSubscription } from "../types";
 import { useWebhookDeliveries, useWebhookRedeliver } from "./webhooks-hooks";
 
@@ -29,6 +29,9 @@ function DeliveryLog({ subscriptionId }: { subscriptionId: string }) {
 
   if (query.isLoading) {
     return <p className="text-muted-foreground text-sm">Loading deliveries…</p>;
+  }
+  if (query.error) {
+    return <ReadError error={query.error} className="p-0" />;
   }
   if (rows.length === 0) {
     return (
@@ -92,7 +95,7 @@ function DeliveryLog({ subscriptionId }: { subscriptionId: string }) {
 }
 
 export function WebhooksPage() {
-  const { result } = useWorkspaceList<WebhookSubscription>({ resource: "webhooks" });
+  const { result, query } = useWorkspaceList<WebhookSubscription>({ resource: "webhooks" });
   const { data: canManage } = useCan({ resource: "webhooks", action: "delete" });
   const [openId, setOpenId] = useState<string | null>(null);
 
@@ -103,6 +106,7 @@ export function WebhooksPage() {
       <ListViewHeader title="Webhooks">
         <CreateButton resource="webhooks">New webhook</CreateButton>
       </ListViewHeader>
+      <ReadError error={query.error} className="p-0" />
       <div className="border-border overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>

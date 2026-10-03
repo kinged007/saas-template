@@ -1,6 +1,7 @@
 import { useLayoutEffect, useReducer, useRef } from "react";
 import { useCan, useGetIdentity, useList } from "@refinedev/core";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ReadError } from "@/components/ui";
 import { CheckCircle2, Circle, PlusCircle, X } from "lucide-react";
 import { Link } from "react-router";
 
@@ -60,11 +61,11 @@ export function DashboardPage() {
   // choice, and the flag exists to control what new users are shown.
   const onboardingOffForWorkspace = workspace?.onboarding_enabled === false;
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
-  const { result: keysResult } = useList<ApiKey>({
+  const { result: keysResult, query: keysQuery } = useList<ApiKey>({
     resource: "api-keys",
     queryOptions: { enabled: !!workspace },
   });
-  const { result: invitationsResult } = useList<Invitation>({
+  const { result: invitationsResult, query: invitationsQuery } = useList<Invitation>({
     resource: "invitations",
     queryOptions: { enabled: !!workspace && !!canInvite?.can },
   });
@@ -105,6 +106,7 @@ export function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      <ReadError error={keysQuery.error ?? invitationsQuery.error} className="p-0" />
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">{workspace?.name ?? "Workspace"}</h2>

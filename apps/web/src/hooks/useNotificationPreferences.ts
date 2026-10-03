@@ -3,6 +3,7 @@ import { useCustom, useCustomMutation } from "@refinedev/core";
 import { toast } from "sonner";
 
 import type { NotificationChannel, NotificationPreferences } from "../types";
+import { errorMessage } from "../utils/errorMessage";
 
 export const KNOWN_NOTIFICATION_TYPES = [
   "workspace_invitation",
@@ -48,6 +49,8 @@ export function useNotificationPreferences(extraTypes: string[] = [], enabled = 
   const { result: prefsResult, query: prefsQuery } = useCustom<NotificationPreferences>({
     url: "notifications/preferences",
     method: "get",
+    // The delivery form has no in-body error state — it keeps the toast.
+    errorNotification: (error) => ({ type: "error", message: errorMessage(error) }),
     queryOptions: { enabled },
   });
   const { mutateAsync: savePrefsAsync, mutation: savePrefsMutation } =

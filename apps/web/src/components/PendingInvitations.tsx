@@ -5,7 +5,7 @@ import { Mail } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatDate } from "./ui";
+import { ReadError, formatDate } from "./ui";
 import { useWorkspace } from "../contexts/WorkspaceContext";
 import type { Invitation } from "../types";
 
@@ -22,7 +22,7 @@ export function usePendingInvitations() {
   });
   const rows = Array.isArray(result?.data) ? result.data : [];
   const pending = rows.filter((inv) => inv.status === "pending" && !inv.expired);
-  return { pending, refetch: query.refetch };
+  return { pending, error: query.error, refetch: query.refetch };
 }
 
 export function PendingInvitationsBadge() {
@@ -41,7 +41,7 @@ export function PendingInvitationsBadge() {
  */
 export function PendingInvitationsCard() {
   const { refresh: refreshIdentity } = useWorkspace();
-  const { pending, refetch } = usePendingInvitations();
+  const { pending, error, refetch } = usePendingInvitations();
   const { mutate: action } = useCustomMutation();
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -73,7 +73,7 @@ export function PendingInvitationsCard() {
     );
   };
 
-  if (pending.length === 0) return null;
+  if (pending.length === 0) return error ? <ReadError error={error} /> : null;
 
   return (
     <Card>

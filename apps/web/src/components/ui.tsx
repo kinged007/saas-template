@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { ReactNode } from "react";
 import type { JobRunStatus } from "../types";
+import { errorMessage } from "../utils/errorMessage";
 import {
   jobRunBadgeVariant,
   statusBadgeVariant,
@@ -47,6 +48,20 @@ export function EmptyRow({ colSpan, children }: { colSpan: number; children: Rea
         {children}
       </td>
     </tr>
+  );
+}
+
+/**
+ * In-body report for a failed read. refine raises no toast for reads (see
+ * refine-ui/notification/read-failure.ts), so this is where the server's reason
+ * reaches the user, and role="alert" announces it — a toast does not.
+ */
+export function ReadError({ error, className }: { error: unknown; className?: string }) {
+  if (!error) return null;
+  return (
+    <p role="alert" className={cn("text-muted-foreground p-4 text-sm", className)}>
+      {errorMessage(error)}
+    </p>
   );
 }
 

@@ -35,6 +35,7 @@ import { getMemberDisplayName } from "@/types";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "@/contexts/WorkspaceContext";
 import { cn } from "@/lib/utils";
+import { errorMessage } from "../../utils/errorMessage";
 
 const schema = z.object({
   title: z.string().max(300, "Subject must be at most 300 characters").optional(),
@@ -58,6 +59,8 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
   const { result } = useWorkspaceList<Member>({
     resource: "members",
     pagination: { pageSize: 100 },
+    // No in-body surface for the picker — it keeps refine's error toast.
+    errorNotification: (error) => ({ type: "error", message: errorMessage(error) }),
     queryOptions: { enabled: open && !!workspace?.id },
   });
   const members = result?.data ?? [];

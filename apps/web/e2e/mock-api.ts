@@ -29,11 +29,14 @@ export async function mockApi(
     signedIn,
     identity = IDENTITY,
     lists = {},
+    failures = {},
   }: {
     signedIn: boolean;
     identity?: unknown;
     /** Rows for a bare `/api/v1/<resource>` list call; every other list answers `[]`. */
     lists?: Record<string, unknown[]>;
+    /** Path (without `/api/v1/`, query string dropped) → the status and detail it answers with. */
+    failures?: Record<string, { status: number; detail: string }>;
   },
 ) {
   await page.route("**/api/v1/**", async (route) => {
@@ -58,6 +61,10 @@ export async function mockApi(
     }
     if (pathname.endsWith("/auth/logout")) return route.fulfill({ status: 204, body: "" });
     const resource = pathname.slice("/api/v1/".length);
+    if (Object.prototype.hasOwnProperty.call(failures, resource)) {
+      const { status, detail } = failures[resource];
+      return reply(status, { detail });
+    }
     // Own-property only: `in` walks Object.prototype, so `toString` would serve
     // `JSON.stringify` of an inherited function, which is undefined. `Object.hasOwn`
     // needs lib ES2022; tsconfig pins ES2020.

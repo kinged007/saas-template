@@ -17,7 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { UserProfileDialog } from "@/components/UserProfileDialog";
-import { formatDate } from "../components/ui";
+import { ReadError, formatDate } from "../components/ui";
 import { TabbedPageHeader } from "../components/refine-ui/layout/tabbed-page-header";
 import { cn } from "@/lib/utils";
 import type { Notification, Conversation, Message, Identity, Member } from "../types";
@@ -32,6 +32,7 @@ import {
   removeThreadMessage,
   upsertThreadMessage,
 } from "../providers/liveCache";
+import { errorMessage } from "../utils/errorMessage";
 
 type Tab = "messages" | "notifications";
 type StatusFilter = "unread" | "read" | "all";
@@ -222,6 +223,8 @@ export function InboxPage() {
   const { result: membersResult } = useWorkspaceList<Member>({
     resource: "members",
     pagination: { pageSize: 100 },
+    // No in-body surface for the @-picker — it keeps refine's error toast.
+    errorNotification: (error) => ({ type: "error", message: errorMessage(error) }),
     queryOptions: { enabled: tab === "messages" && !!selectedConvId },
   });
   const mentionTargets: MentionTarget[] = useMemo(
@@ -545,6 +548,10 @@ export function InboxPage() {
 
   return (
     <div className="page-flush flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+      <ReadError
+        error={notifListQuery.error ?? convQuery.error ?? messagesQuery.error}
+        className="p-0"
+      />
       <TabbedPageHeader
         title="Inbox"
         tabs={

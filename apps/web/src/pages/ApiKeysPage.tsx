@@ -16,7 +16,7 @@ import {
   ListView,
   ListViewHeader,
 } from "../components/refine-ui/views/list-view";
-import { EmptyRow, formatDate } from "../components/ui";
+import { EmptyRow, ReadError, formatDate } from "../components/ui";
 import type { ApiKey } from "../types";
 
 /** Past its expiry the key already fails auth, before the job revokes it. */
@@ -25,7 +25,7 @@ function isExpired(key: ApiKey): boolean {
 }
 
 export function ApiKeysPage() {
-  const { result } = useWorkspaceList<ApiKey>({ resource: "api-keys" });
+  const { result, query } = useWorkspaceList<ApiKey>({ resource: "api-keys" });
   const { data: canManage } = useCan({ resource: "api-keys", action: "delete" });
 
   const rows = result?.data ?? [];
@@ -33,6 +33,7 @@ export function ApiKeysPage() {
   return (
     <ListView>
       <ListViewHeader title="API Keys" />
+      <ReadError error={query.error} className="p-0" />
       <div className="border-border overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>

@@ -6,7 +6,8 @@ import { ArrowLeft, RefreshCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { JobRunStatusBadge, formatDate, formatDuration } from "../components/ui";
+import { JobRunStatusBadge, ReadError, formatDate, formatDuration } from "../components/ui";
+import { errorMessage } from "../utils/errorMessage";
 import type { JobLogEntry, JobRun, ScheduledJob } from "../types";
 
 export function JobRunPage() {
@@ -55,7 +56,7 @@ export function JobRunPage() {
     return () => clearInterval(timer);
   }, [isActive, refetchRun, refetchLogs]);
 
-  const { result: jobResult } = useWorkspaceCustom<ScheduledJob>({
+  const { result: jobResult, query: jobQuery } = useWorkspaceCustom<ScheduledJob>({
     url: `jobs/${jobId}`,
     method: "get",
     queryOptions: { enabled: !!jobId },
@@ -69,7 +70,15 @@ export function JobRunPage() {
     return <p className="text-muted-foreground p-4 text-sm">Loading…</p>;
   }
   if (!run) {
-    return <p className="text-muted-foreground p-4 text-sm">Run not found.</p>;
+    // The heading's job fetch carries no page state (the name falls back to
+    // "job"), so this refusal is reported here, once, with the server's reason.
+    return (
+      <p className="text-muted-foreground p-4 text-sm">
+        {runQuery.error || jobQuery.error
+          ? errorMessage(runQuery.error ?? jobQuery.error)
+          : "Run not found."}
+      </p>
+    );
   }
 
   return (
@@ -154,7 +163,9 @@ export function JobRunPage() {
         )}
       </div>
       <div className="overflow-hidden rounded-lg border">
-        {logs.length === 0 ? (
+        {logsQuery.error ? (
+          <ReadError error={logsQuery.error} className="p-0" />
+        ) : logs.length === 0 ? (
           <p className="text-muted-foreground p-4 text-sm">
             {isActive ? "Waiting for output…" : "No output was captured."}
           </p>

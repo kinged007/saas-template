@@ -74,7 +74,7 @@ If any source file shows ⚠ in a wiki article, re-run `npx codesight --wiki` be
 - Navigation: `useNavigation().list("resource")` / `useGo` — not raw react-router `navigate`.
 - Data fetching: `useList` / `useCustom` / `useCustomMutation`; custom URLs are relative to `/api/v1` (the dataProvider resolves them). Mutations use `useCreate`/`useUpdate`/`useDelete` on resources, not `useCustomMutation`, where possible.
 - Access control: `accessControlProvider` maps (resource, action) → backend permission string (see `PERMISSION_MAP`). Gate UI with `useCan` / `CreateButton` / `<CanAccess>`; the backend is always the final authority.
-- Notifications: set `successNotification` in `refineCoreProps`. Suppress refine's generic error toast (`errorNotification: false`) when showing the server `detail` yourself — the dataProvider already surfaces FastAPI `detail` as `error.message`.
+- Notifications: set `successNotification` in `refineCoreProps`. A failed **read** raises no toast — the notification provider drops refine's generated read notification (`refine-ui/notification/read-failure.ts`), so the view that renders the data must show the failure with `<ReadError error={query.error} />` (or the `detail` in its own state). The dataProvider already surfaces FastAPI `detail` as `error.message`. **Mutations** still toast by default; pass `errorNotification` only where a read has no in-body surface and needs the toast back.
 - Keep API/entity types in `src/types.ts` (high-impact file — change carefully).
 
 **Not yet canonical (migrate to the patterns above when touched):** RolesPage, MembersPage, WorkspaceCreatePage, ReceivedInvitationsPage (use `PageHeader`/`useCreate`/dialogs instead of views + `useForm`).

@@ -62,6 +62,7 @@ import { PendingInvitationsBadge } from "./PendingInvitations";
 import { cn } from "@/lib/utils";
 import type { Identity } from "../types";
 import { getDisplayName } from "../types";
+import { errorMessage } from "../utils/errorMessage";
 
 type MenuItem = {
   key: string;
@@ -113,6 +114,8 @@ function SidebarNav() {
   const { result: convUnreadResult } = useWorkspaceCustom<{ count: number; unread_conversations: number }>({
     url: "conversations/unread-count",
     method: "get",
+    // Badge counter, no in-body surface — it keeps the error toast.
+    errorNotification: (error) => ({ type: "error", message: errorMessage(error) }),
     queryOptions: {
       enabled: !!workspace?.id,
     },

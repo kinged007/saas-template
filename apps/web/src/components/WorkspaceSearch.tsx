@@ -5,6 +5,7 @@ import { Search } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { ReadError } from "./ui";
 import type { WorkspaceSearchResponse } from "@/types";
 
 function resultLink(r: WorkspaceSearchResponse["results"][number]): string {
@@ -57,6 +58,7 @@ export function WorkspaceSearch() {
       </div>
       {q.length >= 2 && (
         <div className="rounded-lg border p-3">
+          <ReadError error={query.error} className="p-0" />
           {query.isPending ? (
             <p className="text-muted-foreground text-sm">Searching…</p>
           ) : results.length === 0 ? (

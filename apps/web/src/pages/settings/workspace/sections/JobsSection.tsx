@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { EmptyRow, formatDate } from "@/components/ui";
+import { EmptyRow, ReadError, formatDate } from "@/components/ui";
 import type { Identity, ScheduledJob } from "@/types";
 
 function JobTable({
@@ -104,8 +104,8 @@ export function JobsSection() {
   const { data: canEdit } = useCan({ resource: "jobs", action: "edit" });
   const canEditWorkspaceJobs = canEdit?.can ?? false;
 
-  const { result: workspaceJobs } = useWorkspaceList<ScheduledJob>({ resource: "jobs" });
-  const { result: globalResult } = useCustom<ScheduledJob[]>({
+  const { result: workspaceJobs, query: jobsQuery } = useWorkspaceList<ScheduledJob>({ resource: "jobs" });
+  const { result: globalResult, query: globalQuery } = useCustom<ScheduledJob[]>({
     url: "jobs/global",
     method: "get",
     queryOptions: { enabled: isSuperuser },
@@ -115,6 +115,7 @@ export function JobsSection() {
 
   return (
     <div className="flex flex-col gap-4">
+      <ReadError error={jobsQuery.error ?? globalQuery.error} className="p-0" />
       <Card>
         <CardHeader>
           <CardTitle>Scheduled Jobs</CardTitle>

@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { EmptyRow, StatusBadge, formatDate } from "@/components/ui";
+import { EmptyRow, ReadError, StatusBadge, formatDate } from "@/components/ui";
 import type { AdminUser } from "@/types";
 import { useAdminGuard } from "./AdminLayout";
 import {
@@ -68,6 +68,7 @@ export function UsersSection() {
 
   return (
     <div className="flex flex-col gap-4">
+      <ReadError error={query.error ?? detailQuery.query.error} className="p-0" />
       <Card>
         <CardHeader>
           <CardTitle>Users</CardTitle>
