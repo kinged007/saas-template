@@ -159,27 +159,48 @@ class ApiKeyService:
         )
         return key, raw
 
-    def owner_scope(self, workspace_id: str, created_by_user_id: str) -> Select[tuple[ApiKey]]:
-        """Base statement restricted to one user's keys in one workspace.
+    @staticmethod
+    def _scope(
+        workspace_id: str, created_by_user_id: str, stmt: Select[tuple[ApiKey]]
+    ) -> Select[tuple[ApiKey]]:
+        """AND the owner predicate onto `stmt`, so it can only narrow.
 
-        The personal-scope predicate lives here (not in the route) so every
-        key read shares one owner. Callers apply their own filters, counting
-        and pagination on top — the scope can only ever narrow."""
-        return select(ApiKey).where(
+        Only `Select` is accepted: a subquery or compound select has no
+        `.where`, so it raises here rather than executing unscoped. Do not
+        wrap this call in try/except — a swallowed error would skip the scope.
+        """
+        return stmt.where(
             ApiKey.workspace_id == workspace_id,
             ApiKey.created_by_user_id == created_by_user_id,
         )
 
-    async def count_for_user(self, stmt: Select[tuple[ApiKey]]) -> int:
-        """Rows the scoped statement matches, ignoring its ORDER BY."""
+    async def count_for_user(
+        self, workspace_id: str, created_by_user_id: str, stmt: Select[tuple[ApiKey]]
+    ) -> int:
+        """Rows the statement matches within one user's scope, ignoring its ORDER BY.
+
+        The owner predicate is re-applied here, so a statement from another
+        workspace or owner cannot widen the scope. ORDER BY, LIMIT and OFFSET
+        are stripped: the count is the whole scope, not one page of it."""
         count = await self._session.execute(
-            select(func.count()).select_from(stmt.order_by(None).subquery())
+            select(func.count()).select_from(
+                self._scope(workspace_id, created_by_user_id, stmt)
+                .order_by(None)
+                .limit(None)
+                .offset(None)
+                .subquery()
+            )
         )
         return count.scalar_one()
 
-    async def list_for_user(self, stmt: Select[tuple[ApiKey]]) -> list[ApiKey]:
-        """Run an owner-scoped statement and return the page."""
-        result = await self._session.execute(stmt)
+    async def list_for_user(
+        self, workspace_id: str, created_by_user_id: str, stmt: Select[tuple[ApiKey]]
+    ) -> list[ApiKey]:
+        """Run the statement within one user's scope and return the page.
+
+        The owner predicate is re-applied here, so a statement from another
+        workspace or owner cannot widen the scope."""
+        result = await self._session.execute(self._scope(workspace_id, created_by_user_id, stmt))
         return list(result.scalars().all())
 
     async def revoke_api_key(
