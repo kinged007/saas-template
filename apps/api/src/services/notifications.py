@@ -130,12 +130,19 @@ class NotificationService:
         self,
         user_id: str,
         *,
+        workspace_id: str,
         acknowledged: bool | None = None,
-        workspace_id: str | None = None,
     ) -> list[Notification]:
-        stmt = select(Notification).where(Notification.user_id == user_id)
-        if workspace_id is not None:
-            stmt = stmt.where(Notification.workspace_id == workspace_id)
+        """Notifications for one user in one workspace, newest first.
+
+        `workspace_id` is required so the scope cannot be widened by
+        omitting it, the same way `ApiKeyService` re-applies its owner
+        predicate instead of trusting the caller.
+        """
+        stmt = select(Notification).where(
+            Notification.user_id == user_id,
+            Notification.workspace_id == workspace_id,
+        )
         if acknowledged is not None:
             if acknowledged:
                 stmt = stmt.where(Notification.acknowledged_at.is_not(None))
