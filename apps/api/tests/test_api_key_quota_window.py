@@ -262,7 +262,10 @@ def test_migration_0019_seeds_the_window_start_too():
     the second full budget the migration exists to prevent.
     """
     path = (
-        Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0019_api_key_quota_window.py"
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0019_api_key_quota_window.py"
     )
     spec = spec_from_file_location("migration_0019", path)
     module = module_from_spec(spec)
