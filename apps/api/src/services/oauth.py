@@ -52,7 +52,6 @@ def _clean_email(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-
 class OAuthError(Exception):
     pass
 
@@ -125,7 +124,6 @@ def untrusted_emails_urls() -> list[str]:
         if provider.emails_url and not _endpoint_trusted(provider, {}, provider.emails_url):
             untrusted.append(provider.id)
     return untrusted
-
 
 
 async def _discovery(provider: ProviderConfig, cache: TtlCache) -> dict[str, Any]:
@@ -294,6 +292,7 @@ async def _verified_email(client: httpx.AsyncClient, url: str, headers: dict[str
     )
     return _clean_email(chosen.get("email")) if chosen else ""
 
+
 def _url_host_scheme(url: Any) -> tuple[str, str]:
     """Lower-cased (hostname, scheme) of a URL, or ("", "") when unusable."""
     if not isinstance(url, str) or not url:
@@ -304,11 +303,13 @@ def _url_host_scheme(url: Any) -> tuple[str, str]:
         return "", ""
     return (parts.hostname or "").lower(), parts.scheme.lower()
 
+
 def _origin_ok(url: Any) -> bool:
     """https, except plain http on loopback: a local IdP cannot offer https and
     loopback is not routable off the machine."""
     host, scheme = _url_host_scheme(url)
     return bool(host) and (scheme == "https" or (scheme == "http" and host in _LOOPBACK_HOSTS))
+
 
 def _anchor_hosts(provider: ProviderConfig, doc: dict[str, Any]) -> set[str]:
     """Hosts named by the provider config, plus the ones in `doc`.
@@ -328,6 +329,7 @@ def _anchor_hosts(provider: ProviderConfig, doc: dict[str, Any]) -> set[str]:
         doc.get("jwks_uri"),
     )
     return {_url_host_scheme(a)[0] for a in anchors} - {""}
+
 
 def _endpoint_trusted(provider: ProviderConfig, doc: dict[str, Any], url: Any) -> bool:
     """Whether a secret-bearing request may go to `url`.

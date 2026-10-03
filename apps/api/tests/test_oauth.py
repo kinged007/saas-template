@@ -551,6 +551,8 @@ async def test_verified_email_edge_branches(payload, status, expected):
     else:
         got = await oauth_svc._verified_email(client, "https://api.github.com/user/emails", {})
         assert got == expected
+
+
 async def _github_sign_in(app_client, monkeypatch, *, user, emails, state):
     """One GitHub callback round-trip: (requested URLs, response, user count before)."""
     calls = _fake_httpx(monkeypatch, user=user, emails=emails)
@@ -789,6 +791,7 @@ async def test_discovery_doc_anchors_cross_host_userinfo_endpoint(app_client, oi
     assert "https://userinfo.idp.example/userinfo" in calls
     assert await _account_email(app_client, resp) == "octo@example.com"
 
+
 async def test_discovery_over_plain_http_is_refused(monkeypatch):
     # A forged document is what could name a third party's endpoints, so one is
     # never fetched over plaintext: no request leaves the process at all.
@@ -803,6 +806,7 @@ async def test_discovery_over_plain_http_is_refused(monkeypatch):
     with pytest.raises(oauth_svc.OAuthError, match="must be https"):
         await oauth_svc._discovery(cfg, oauth_svc.TtlCache())
     assert calls == []
+
 
 async def test_plaintext_token_endpoint_is_refused(monkeypatch):
     # client_secret is posted to the token endpoint, so it is origin-checked like
@@ -833,6 +837,7 @@ async def test_plaintext_token_endpoint_is_refused(monkeypatch):
     )
     assert ok["access_token"] == "at" and calls == ["https://idp.example/token"]
 
+
 async def test_plaintext_userinfo_endpoint_is_refused(app_client, oidc_on, monkeypatch):
     # The bearer never leaves over plaintext either, config-named host or not.
     oidc_on("")
@@ -851,11 +856,13 @@ async def test_plaintext_userinfo_endpoint_is_refused(app_client, oidc_on, monke
     assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
     assert await _user_count() == before
 
+
 def test_boot_check_is_config_only_and_may_be_conservative(oidc_on):
     # The document cannot be fetched at boot, so a doc-anchored emails_url is
     # named there and accepted at the callback; main.py says "may fail".
     oidc_on("https://userinfo.idp.example/user/emails")
     assert oauth_svc.untrusted_emails_urls() == ["oidcidp"]
+
 
 def test_untrusted_emails_urls_skips_entries_that_cannot_be_selected(monkeypatch):
     # get_provider() matches a raw id against a route string, so a numeric id and
