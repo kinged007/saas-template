@@ -9,7 +9,7 @@ import { IDENTITY, mockApi } from "./mock-api";
  * and it has to be the accessible description of the trigger it annotates.
  */
 
-const CAP = "Showing 97 of 140 members.";
+const CAP = "Showing 95 of 138 members.";
 
 const member = (i: number, over: Record<string, unknown> = {}) => ({
   id: `user-${i}`,
@@ -25,12 +25,18 @@ const member = (i: number, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-/** A full page: one owner, two suspended, the rest active non-owners. */
+/**
+ * A full page: an owner, a legacy `Owner`, two suspended, an invite, the rest
+ * active non-owners. The legacy row and the invite are both rejected by
+ * transferEligibleMembers, for different reasons.
+ */
 const PAGE_ROWS = [
   member(0, { role: "owner" }),
+  member(100, { role: "Owner", email: "legacy-owner@example.com" }),
   member(1, { status: "suspended" }),
   member(2, { status: "suspended" }),
-  ...Array.from({ length: 97 }, (_, i) => member(i + 3)),
+  member(101, { status: "invited", email: "invited@example.com" }),
+  ...Array.from({ length: 95 }, (_, i) => member(i + 3)),
 ];
 
 const memberList = (page: Page, total: number) =>
@@ -61,7 +67,12 @@ test.describe("transfer cap notice", () => {
     await expect(trigger(page)).toHaveAccessibleDescription(CAP);
     // The picker offers the eligible members, which is what the notice counts.
     await trigger(page).click();
-    await expect(page.getByRole("option")).toHaveCount(97);
+    await expect(page.getByRole("option")).toHaveCount(95);
+    // A workspace created before the case-insensitive API check can hold
+    // `Owner` beside `owner`; offering it produces a 409 on transfer. An invite
+    // is not an active member, so it is refused too.
+    await expect(page.getByRole("option", { name: /legacy-owner@example\.com/ })).toHaveCount(0);
+    await expect(page.getByRole("option", { name: /invited@example\.com/ })).toHaveCount(0);
   });
 
   test("an uncapped workspace leaves no dangling description", async ({ page }) => {

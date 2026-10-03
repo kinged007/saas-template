@@ -2,7 +2,7 @@ import type { Member } from "@/types";
 import { canReceiveOwnership } from "../../../member-actions.ts";
 
 /**
-* Members that can receive ownership: active (the rule `transfer_ownership`
+ * Members that can receive ownership: active (the rule `transfer_ownership`
  * enforces server-side, via canReceiveOwnership), and not already the owner.
  * The owner test ignores case, like is_owner_role_name on the API — a workspace
  * created before that check can hold `Owner` beside the seeded `owner`, and

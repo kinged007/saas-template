@@ -50,6 +50,11 @@ import { resolveTransferTarget, transferCapNotice, transferEligibleMembers } fro
 // carrying it, and a second picker would need a second paragraph.
 const TRANSFER_CAP_ID = "transfer-cap";
 
+// parse_query in apps/api/src/api/crud.py clamps with max_limit=100, so this is
+// the largest page /members returns. A longer workspace is disclosed by the cap
+// notice, not paginated through.
+const MEMBERS_PAGE_SIZE = 100;
+
 const schema = z.object({
   name: z.string().min(1, "Name is required").max(150, "Max 150 characters"),
   description: z.string().max(500, "Max 500 characters").optional().or(z.literal("")),
@@ -76,11 +81,9 @@ export function GeneralSection() {
   const [confirmName, setConfirmName] = useState("");
 
   const { mutate: transfer, mutation: transferMutation } = useCustomMutation();
-  // The backend caps the page at its own max_limit, so this is the largest page
-  // the endpoint returns; a longer workspace is disclosed by the cap notice.
   const { result: membersResult } = useWorkspaceList<Member>({
     resource: "members",
-    pagination: { pageSize: 100 },
+    pagination: { pageSize: MEMBERS_PAGE_SIZE },
   });
   const invalidate = useInvalidate();
   const [transferId, setTransferId] = useState("");
