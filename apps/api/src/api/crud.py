@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import Request
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select
 from sqlalchemy.sql import ColumnElement
 
 from src.services.profile_helpers import escape_like
@@ -169,21 +169,3 @@ def apply_query(
         last = spec.sort_order[-1] if spec.sort_order else "asc"
         stmt = stmt.order_by(model.id.desc() if last == "desc" else model.id.asc())
     return stmt
-
-
-async def run_list(
-    session,
-    stmt: Select,
-    model: type,
-    request: Request,
-    *,
-    sortable: set[str],
-    filterable: set[str],
-) -> tuple[list[Any], int]:
-    spec = parse_query(request)
-    stmt = apply_query(stmt, model, spec, sortable=sortable, filterable=filterable)
-    count = await session.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
-    total = count.scalar_one()
-    stmt = stmt.offset(spec.offset).limit(spec.limit)
-    result = await session.execute(stmt)
-    return list(result.scalars().all()), total
