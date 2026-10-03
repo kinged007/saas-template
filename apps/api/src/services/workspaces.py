@@ -18,7 +18,7 @@ from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
 from src.models.core import Invitation
-from src.models.workspace import Role, User, Workspace, WorkspaceMember
+from src.models.workspace import MemberStatus, Role, User, Workspace, WorkspaceMember
 from src.services.auth import AuthService
 from src.services.serializers import ONBOARDING_ENABLED_FLAG
 
@@ -37,6 +37,19 @@ class WorkspaceConflict(WorkspaceError):
 
 class WorkspaceNotFound(WorkspaceError):
     pass
+
+
+# Which member statuses may take over a workspace, decided per status rather
+# than by a `status != "active"` comparison that compiles against any status the
+# domain gains later. Every `MemberStatus` has an entry, so a new one is refused
+# until it is decided here; pinned by
+# `test_transfer_eligibility_decides_every_member_status`. Mirrors
+# `TRANSFER_ELIGIBLE` in `apps/web/src/pages/member-actions.ts`.
+_TRANSFER_ELIGIBLE: dict[str, bool] = {
+    MemberStatus.ACTIVE.value: True,
+    MemberStatus.INVITED.value: False,
+    MemberStatus.SUSPENDED.value: False,
+}
 
 
 def is_owner_role_name(name: str | None) -> bool:
@@ -168,6 +181,7 @@ class WorkspaceService:
         ip_address: str | None = None,
         allow_single_workspace_bootstrap: bool = False,
     ) -> Workspace:
+        name = name.strip()
         if self.single_workspace_enabled() and not allow_single_workspace_bootstrap:
             existing = await self.get_single_workspace()
             if existing is not None:
@@ -238,6 +252,8 @@ class WorkspaceService:
         if workspace is None:
             raise WorkspaceError("workspace not found")
         changes: dict = {}
+        if name is not None:
+            name = name.strip()
         if name is not None and name != workspace.name:
             changes["name"] = {"from": workspace.name, "to": name}
             workspace.name = name
@@ -661,7 +677,7 @@ class WorkspaceService:
         target = await self._session.get(WorkspaceMember, new_owner_membership_id)
         if target is None or target.workspace_id != workspace_id:
             raise WorkspaceError("member not found in workspace")
-        if target.status != "active":
+        if not _TRANSFER_ELIGIBLE.get(target.status, False):
             raise WorkspaceConflict("new owner must be an active member")
         if target.user_id == actor.id:
             raise WorkspaceConflict("you already own this workspace")
@@ -803,8 +819,10 @@ class WorkspaceService:
         existing = await AuthService(self._session).get_by_email(email)
         is_registered = existing is not None
 
-        # Fired for every invitation. The workflow currently only handles
-        # unregistered recipients; email delivery is not implemented yet.
+        # Fired for every invitation. The workflow emails unregistered
+        # recipients; a failed send is audited (`invitation.email_failed`),
+        # not raised. `resend` skips a still-pending, unexpired invitation, so
+        # the audit entry is the signal to revoke the row and invite again.
         await publish_event(
             self._bus,
             Subjects.WORKSPACE_INVITATION_CREATED,
@@ -817,9 +835,6 @@ class WorkspaceService:
                 "invited_by_user_id": invited_by.id,
                 "invited_by_name": invited_by.display_name,
                 "is_registered": is_registered,
-                # TODO(events): include an accept URL when email delivery is
-                # implemented, e.g.
-                # "accept_url": f"{settings.frontend_url}/invitations/accept?token={invite.token}",
             },
         )
         # Notify an existing user with that email via the event bus.
@@ -1109,6 +1124,7 @@ class WorkspaceService:
         actor: User | None = None,
         ip_address: str | None = None,
     ) -> Role:
+        name = name.strip()
         assignable: set[str] = set()
         is_owner = False
         if actor is not None:
@@ -1151,6 +1167,8 @@ class WorkspaceService:
         actor: User | None = None,
         ip_address: str | None = None,
     ) -> Role:
+        if name is not None:
+            name = name.strip()
         role = await self.get_role(workspace_id, role_id)
         if is_owner_role_name(role.name):
             raise WorkspaceForbidden("the owner role cannot be edited")

@@ -29,6 +29,16 @@ class ApiKeyNotFound(ApiKeyError):
     pass
 
 
+def _payload_iso(value: datetime | None) -> str | None:
+    """Serialize an ORM datetime for a publish payload.
+
+    Normalized at the emission edge instead of read off the attribute: SQLite
+    hands `DateTime(timezone=True)` back without an offset, and a consumer's
+    `new Date(...)` reads a naive ISO string as local time.
+    """
+    return ensure_utc(value).isoformat() if value is not None else None
+
+
 class ApiKeyService:
     """Workspace-scoped API key management.
 
@@ -87,6 +97,7 @@ class ApiKeyService:
         own permission list. Returns (key, raw_secret); the raw secret is
         only ever returned once.
         """
+        name = name.strip()
         membership = await WorkspaceService(self._session).get_membership(
             workspace_id, actor.id, active_only=True
         )
@@ -108,8 +119,8 @@ class ApiKeyService:
             denied = sorted(capped - allowed)
             raise ApiKeyForbidden(f"cannot grant permissions you do not have: {', '.join(denied)}")
 
-        if usage_quota is not None and usage_quota < 0:
-            raise ApiKeyError("usage quota cannot be negative")
+        if usage_quota is not None and usage_quota < 1:
+            raise ApiKeyError("usage quota must be at least 1 (leave it empty for unlimited)")
         if expires_at is not None and ensure_utc(expires_at) <= now_utc():
             raise ApiKeyError("expiry must be in the future")
 
@@ -140,7 +151,7 @@ class ApiKeyService:
                 "permissions": key.permissions,
                 "created_by_user_id": actor.id,
                 "created_by_name": actor.display_name,
-                "expires_at": key.expires_at.isoformat() if key.expires_at else None,
+                "expires_at": _payload_iso(key.expires_at),
             },
         )
         await publish_audit(
@@ -159,27 +170,48 @@ class ApiKeyService:
         )
         return key, raw
 
-    def owner_scope(self, workspace_id: str, created_by_user_id: str) -> Select[tuple[ApiKey]]:
-        """Base statement restricted to one user's keys in one workspace.
+    @staticmethod
+    def _scope(
+        workspace_id: str, created_by_user_id: str, stmt: Select[tuple[ApiKey]]
+    ) -> Select[tuple[ApiKey]]:
+        """AND the owner predicate onto `stmt`, so it can only narrow.
 
-        The personal-scope predicate lives here (not in the route) so every
-        key read shares one owner. Callers apply their own filters, counting
-        and pagination on top — the scope can only ever narrow."""
-        return select(ApiKey).where(
+        Only `Select` is accepted: a subquery or compound select has no
+        `.where`, so it raises here rather than executing unscoped. Do not
+        wrap this call in try/except — a swallowed error would skip the scope.
+        """
+        return stmt.where(
             ApiKey.workspace_id == workspace_id,
             ApiKey.created_by_user_id == created_by_user_id,
         )
 
-    async def count_for_user(self, stmt: Select[tuple[ApiKey]]) -> int:
-        """Rows the scoped statement matches, ignoring its ORDER BY."""
+    async def count_for_user(
+        self, workspace_id: str, created_by_user_id: str, stmt: Select[tuple[ApiKey]]
+    ) -> int:
+        """Rows the statement matches within one user's scope, ignoring its ORDER BY.
+
+        The owner predicate is re-applied here, so a statement from another
+        workspace or owner cannot widen the scope. ORDER BY, LIMIT and OFFSET
+        are stripped: the count is the whole scope, not one page of it."""
         count = await self._session.execute(
-            select(func.count()).select_from(stmt.order_by(None).subquery())
+            select(func.count()).select_from(
+                self._scope(workspace_id, created_by_user_id, stmt)
+                .order_by(None)
+                .limit(None)
+                .offset(None)
+                .subquery()
+            )
         )
         return count.scalar_one()
 
-    async def list_for_user(self, stmt: Select[tuple[ApiKey]]) -> list[ApiKey]:
-        """Run an owner-scoped statement and return the page."""
-        result = await self._session.execute(stmt)
+    async def list_for_user(
+        self, workspace_id: str, created_by_user_id: str, stmt: Select[tuple[ApiKey]]
+    ) -> list[ApiKey]:
+        """Run the statement within one user's scope and return the page.
+
+        The owner predicate is re-applied here, so a statement from another
+        workspace or owner cannot widen the scope."""
+        result = await self._session.execute(self._scope(workspace_id, created_by_user_id, stmt))
         return list(result.scalars().all())
 
     async def revoke_api_key(
@@ -285,8 +317,8 @@ class ApiKeyService:
             raise ApiKeyNotFound("api key not found")
         if actor is not None and key.created_by_user_id != actor.id:
             raise ApiKeyNotFound("api key not found")
-        if usage_quota is not None and usage_quota < 0:
-            raise ApiKeyError("usage quota cannot be negative")
+        if usage_quota is not None and usage_quota < 1:
+            raise ApiKeyError("usage quota must be at least 1 (leave it empty for unlimited)")
         key.usage_quota = usage_quota
         await self._session.commit()
         await publish_event(

@@ -54,10 +54,16 @@ class AuthPrincipal:
     def is_deployment_admin(self) -> bool:
         """Superuser power, and only session auth ever has it.
 
-        Every deployment-wide check reads this property rather than
-        `user.is_superuser`: an API key resolves to its creator's `User`,
-        so testing that field would hand a leaked key admin power. Keys are
-        workspace-scoped credentials, never deployment admins."""
+        Every route-level deployment-wide gate reads this property rather
+        than `user.is_superuser`: an API key resolves to its creator's
+        `User`, so testing that field would hand a leaked key admin power.
+        Keys are workspace-scoped credentials, never deployment admins.
+
+        One service below the gate re-checks the bare flag —
+        `ProfileService.delete_account_superuser` reads `actor.is_superuser`
+        on the `User` it deletes with. `require_superuser` is the only route
+        to it, so a key principal never arrives; the re-check is redundant
+        defence in depth, kept because the service is callable directly."""
         return self.api_key is None and self.user.is_superuser
 
 
@@ -110,12 +116,17 @@ async def get_current_user(
 async def require_session_user(
     principal: AuthPrincipal = Depends(resolve_auth_principal),
 ) -> User:
-    """Reject API-key principals.
+    """Reject API-key principals. The single session-only gate.
 
     An API key carries its creator's role into the service layer, so a route
     whose real authority check is a *role* check (not a permission) would let a
-    narrowly scoped key exercise owner-level powers. Owner-level operations
-    (ownership transfer) therefore require an interactive session.
+    narrowly scoped key exercise owner-level powers. Two families need an
+    interactive session: owner-level operations (ownership transfer), and
+    self-service routes that read or change the caller's own account — the
+    `/me` family (profile writes, data export, account deletion), 2FA, sessions
+    and the password. No permission list covers any of them, so the key would be
+    the only thing deciding access. (`GET /me/profile` and `GET /auth/me` stay
+    readable by a key: they report the caller's own identity.)
     """
     if principal.api_key is not None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "api keys cannot perform this action")
@@ -132,12 +143,29 @@ async def require_superuser(
     Use this dependency for every deployment-wide route — `/admin/*` and
     the `/jobs/global*` family are session superuser only.
 
+    The 403 detail names the supported path rather than the caller's
+    authority: a key is told deployment administration needs a session, a
+    session user without the flag is told the privilege is missing. Neither
+    answer reveals anything the status code does not.
+
     Routes that mix superuser and co-member access pass
-    `principal.is_deployment_admin` to their service instead, so the
-    service never sees the bare `user.is_superuser` flag."""
+    `principal.is_deployment_admin` to their service instead, so an API key
+    can never reach a service superuser branch."""
     if not principal.is_deployment_admin:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "superuser access required")
+        raise deployment_admin_denied(principal)
     return principal.user
+
+
+def deployment_admin_denied(principal: AuthPrincipal) -> HTTPException:
+    """Build the 403 for a deployment-wide gate. Shared with the routes that
+    resolve their own check, so one denial of the same kind never reaches the
+    caller as two different messages."""
+    return HTTPException(
+        status.HTTP_403_FORBIDDEN,
+        "deployment administration is not available to API keys"
+        if principal.api_key is not None
+        else "superuser access required",
+    )
 
 
 async def get_current_workspace_id(

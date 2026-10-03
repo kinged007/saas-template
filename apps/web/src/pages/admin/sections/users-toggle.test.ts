@@ -49,6 +49,13 @@ test("asAdminUserDetail rejects a payload without a workspaces array", () => {
   assert.deepEqual(asAdminUserDetail(detail()), detail());
 });
 
+test("asAdminUserDetail rejects a workspaces payload with no usable id", () => {
+  const { id: _dropped, ...noId } = detail();
+  assert.equal(asAdminUserDetail({ ...noId, workspaces: [] }), undefined);
+  assert.equal(asAdminUserDetail({ ...detail(), id: 42 }), undefined);
+  assert.equal(asAdminUserDetail({ ...detail(), id: "" }), undefined);
+});
+
 test("pageRange clamps the visible window and never reports zero pages", () => {
   assert.deepEqual(pageRange(1, 0), { from: 0, to: 0, totalPages: 1 });
   assert.deepEqual(pageRange(1, 25), { from: 1, to: 20, totalPages: 2 });
@@ -57,6 +64,8 @@ test("pageRange clamps the visible window and never reports zero pages", () => {
   assert.deepEqual(pageRange(1, 41), { from: 1, to: 20, totalPages: 3 });
   // A page that empties out after a refetch must not invert the range.
   assert.deepEqual(pageRange(3, 5), { from: 5, to: 5, totalPages: 1 });
+  // A current page below 1 must not report a negative start or invert the range.
+  assert.deepEqual(pageRange(0, 10), { from: 1, to: 10, totalPages: 1 });
 });
 
 test("adminUserPatch's url is built from a row typed as the list item, not the detail", () => {

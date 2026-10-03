@@ -551,25 +551,64 @@ async def test_workspace_isolation_on_definitions_and_runs(app_client):
 
     job_a = _by_key((await client.get("/api/v1/jobs", headers=headers_a)).json(), "test.echo")
 
-    # B cannot see or mutate A's definition
-    assert (await client.get(f"/api/v1/jobs/{job_a['id']}", headers=headers_b)).status_code == 404
-    assert (
-        await client.patch(f"/api/v1/jobs/{job_a['id']}", json={"enabled": True}, headers=headers_b)
-    ).status_code == 404
-    assert (
-        await client.post(f"/api/v1/jobs/{job_a['id']}/execute", json={}, headers=headers_b)
-    ).status_code == 404
+    # a non-member is refused with 403, the answer the run routes already give
+    for method, url, body in (
+        ("get", f"/api/v1/jobs/{job_a['id']}", None),
+        ("patch", f"/api/v1/jobs/{job_a['id']}", {"enabled": True}),
+        ("post", f"/api/v1/jobs/{job_a['id']}/execute", {}),
+    ):
+        resp = await client.request(method, url, json=body, headers=headers_b)
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"] == "you are not a member of this workspace"
 
     # B's own list shows a different row with the same key
     job_b = _by_key((await client.get("/api/v1/jobs", headers=headers_b)).json(), "test.echo")
     assert job_a["id"] != job_b["id"]
 
-    # non-members get 403 on run endpoints (membership check, not 404 leak)
     run = await client.post(f"/api/v1/jobs/{job_a['id']}/execute", json={}, headers=headers_a)
     run_id = run.json()["id"]
     outsider = await register_user(client, "iso-outsider@example.com")
     resp = await client.get(f"/api/v1/jobs/runs/{run_id}", headers=auth_headers(outsider))
     assert resp.status_code == 403
+    assert resp.json()["detail"] == "you are not a member of this workspace"
+
+
+async def test_run_routes_refuse_non_member_and_role_without_jobs_read(app_client):
+    """Pins the run routes' session branch: 403, with the membership and the
+    permission message distinguished."""
+    client = app_client
+    _, ws, owner_headers, roles = await setup_workspace(client, "runaccess-owner@example.com")
+    viewer = await invite_and_accept(
+        client, owner_headers, ws, roles, "viewer", "runaccess-viewer@example.com"
+    )
+    outsider = await register_user(client, "runaccess-outsider@example.com")
+
+    job = _by_key((await client.get("/api/v1/jobs", headers=owner_headers)).json(), "test.echo")
+    run_id = (
+        await client.post(f"/api/v1/jobs/{job['id']}/execute", json={}, headers=owner_headers)
+    ).json()["id"]
+
+    for headers, detail in (
+        (auth_headers(outsider), "you are not a member of this workspace"),
+        (ws_headers(viewer, ws["id"]), "missing permission: jobs:read"),
+    ):
+        for url in (f"/api/v1/jobs/runs/{run_id}", f"/api/v1/jobs/runs/{run_id}/logs"):
+            resp = await client.get(url, headers=headers)
+            assert resp.status_code == 403, (url, resp.status_code, resp.text)
+            assert resp.json()["detail"] == detail, url
+
+    # the refusals changed nothing: the owner still reads the same run and its
+    # logs, and the run is still the one recorded for the definition. Asserting
+    # membership rather than an exact count — the scheduler may fire in parallel.
+    owner_run = await client.get(f"/api/v1/jobs/runs/{run_id}", headers=owner_headers)
+    assert owner_run.status_code == 200, owner_run.text
+    assert owner_run.json()["id"] == run_id
+    assert owner_run.json()["workspace_id"] == ws["id"]
+    assert (
+        await client.get(f"/api/v1/jobs/runs/{run_id}/logs", headers=owner_headers)
+    ).status_code == 200
+    runs = await client.get(f"/api/v1/jobs/{job['id']}/runs", headers=owner_headers)
+    assert run_id in [r["id"] for r in runs.json()], runs.text
 
 
 async def test_new_workspace_gets_jobs_via_event(app_client):

@@ -33,6 +33,11 @@ router = APIRouter(prefix="/members", tags=["members"])
 
 _MEMBER_FILTERABLE = {"status", "role_id"}
 _MEMBER_SORTABLE = {"created_at", "status"}
+# offset/limit page stably only against a total order. created_at is
+# server_default=now() (second granularity on SQLite), so memberships created
+# in the same second tie and id breaks it. An explicit client sort replaces
+# this.
+_MEMBER_DEFAULT_ORDER = (WorkspaceMember.created_at.desc(), WorkspaceMember.id.desc())
 
 
 def _member_dict(
@@ -85,6 +90,8 @@ async def list_members(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(*_MEMBER_DEFAULT_ORDER)
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)

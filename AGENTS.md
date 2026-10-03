@@ -28,7 +28,9 @@ USE_SQLITE=1 make dev API_PORT=8010 WEB_PORT=5273   # open http://localhost:5273
 `API_PORT` / `WEB_PORT` also work on `make api` and `make web`. `scripts/dev.py`
 passes the chosen web origin to the API as `CORS_ORIGINS` / `FRONTEND_URL` (the
 default :5173 stays allowed), and `apps/web/vite.config.ts` proxies `/api/` and
-`/ws` to `API_PORT`. No other port configuration is needed.
+`/ws` to `API_PORT`. No other port configuration is needed. The allowlisted dev
+origin is the web origin on both loopback names (`localhost` and `127.0.0.1`,
+since vite serves both) — open either and the session holds.
 
 ## Migrations
 

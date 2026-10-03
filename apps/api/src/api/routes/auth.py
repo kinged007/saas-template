@@ -9,6 +9,7 @@ from src.api.deps import (
     AuthPrincipal,
     get_container,
     get_current_user,
+    require_session_user,
     resolve_auth_principal,
 )
 from src.core.dates import ensure_utc, now_utc
@@ -372,8 +373,7 @@ def _require_session_user(principal: AuthPrincipal) -> None:
 async def change_password(
     body: ChangePasswordRequest,
     request: Request,
-    principal: AuthPrincipal = Depends(resolve_auth_principal),
-    user=Depends(get_current_user),
+    user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> None:
@@ -386,7 +386,6 @@ async def change_password(
     The session stays valid when the submitted credentials are wrong, so a bad
     current password or 2FA code answers 400 — 401 is reserved for a dead
     session and would sign the caller out."""
-    _require_session_user(principal)
     key = _limit_key(request, user.email)
     get_auth_limiter().check(key)
     service = AuthService(db, container.bus)
@@ -415,22 +414,19 @@ async def change_password(
 
 @router.get("/2fa/status")
 async def totp_status(
-    user=Depends(get_current_user),
+    user: User = Depends(require_session_user),
 ):
     return {"enabled": bool(user.totp_enabled)}
 
 
 @router.post("/2fa/setup")
 async def totp_setup(
-    principal: AuthPrincipal = Depends(resolve_auth_principal),
+    user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    _require_session_user(principal)
     try:
-        return await TwoFactorService(db, container.cipher, container.bus).start_setup(
-            principal.user
-        )
+        return await TwoFactorService(db, container.cipher, container.bus).start_setup(user)
     except TwoFactorError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
 
@@ -438,14 +434,13 @@ async def totp_setup(
 @router.post("/2fa/enable")
 async def totp_enable(
     body: TwoFactorSetupConfirm,
-    principal: AuthPrincipal = Depends(resolve_auth_principal),
+    user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    _require_session_user(principal)
     try:
         codes = await TwoFactorService(db, container.cipher, container.bus).confirm_setup(
-            principal.user, setup_token=body.setup_token, code=body.code
+            user, setup_token=body.setup_token, code=body.code
         )
     except TwoFactorError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
@@ -456,7 +451,7 @@ async def totp_enable(
 async def totp_disable(
     body: TwoFactorDisable,
     request: Request,
-    user=Depends(get_current_user),
+    user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> None:
@@ -482,7 +477,7 @@ async def totp_disable(
 async def totp_backup_codes(
     body: TwoFactorDisable,
     request: Request,
-    user=Depends(get_current_user),
+    user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -549,10 +544,10 @@ async def totp_login(
 @router.get("/sessions", response_model=list[SessionRead])
 async def list_sessions(
     principal: AuthPrincipal = Depends(resolve_auth_principal),
+    _: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    _require_session_user(principal)
     _ = container
     rows = await AuthService(db).list_sessions(principal.user.id)
     now = now_utc()
@@ -567,10 +562,10 @@ async def list_sessions(
 async def revoke_all_sessions(
     request: Request,
     principal: AuthPrincipal = Depends(resolve_auth_principal),
+    _: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> None:
-    _require_session_user(principal)
     await AuthService(db, container.bus).revoke_other_sessions(
         principal.user.id,
         current_session_id=principal.session_id,
@@ -605,10 +600,10 @@ async def revoke_session(
     session_id: str,
     request: Request,
     principal: AuthPrincipal = Depends(resolve_auth_principal),
+    _: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> None:
-    _require_session_user(principal)
     try:
         await AuthService(db, container.bus).revoke_session(
             principal.user.id,
@@ -625,13 +620,22 @@ async def revoke_session(
 
 @router.get("/me")
 async def me(
-    user=Depends(get_current_user),
+    principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    user = principal.user
     service = WorkspaceService(db)
     data = user_to_dict(user)
+    # The principal's own deployment power, not the raw user column: an API
+    # key is never a deployment admin, so a key holder never learns that the
+    # user who minted it is one.
+    data["is_superuser"] = principal.is_deployment_admin
     memberships = await service.list_workspaces(user.id)
+    if principal.api_key is not None:
+        # A key learns only its own workspace, never the creator's inventory:
+        # every workspace listed here is one the key can actually reach.
+        memberships = [m for m in memberships if m[0].id == principal.api_key.workspace_id]
     if settings.single_workspace:
         # Toggling onto an existing deployment: oldest wins, rest stay hidden.
         # (GET /workspaces still lists all memberships; /me is the UI surface.)

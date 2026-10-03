@@ -10,15 +10,24 @@ Covers, end to end over the HTTP API:
   * edit access — PATCH/POST mutations require the matching permission
   * delete access — DELETE mutations require the matching permission
   * workspace scoping — a key minted in one workspace can never touch another
+  * user scoping — a key reaches only its creator's own notifications, the
+    property that makes the key-only scopes safe to offer
   * ownership scoping — users see and manage ONLY their own keys; neither
     listing nor revoking ever crosses the creator boundary, not even for
     wildcard-permission admins
   * authentication hygiene — garbage/revoked keys, zero-permission keys,
     and proof that key permissions never inherit the creator's role
+  * session-only surfaces — 2FA, sessions, the password, the personal data
+    export, and the deployment-admin flag all refuse a key
 """
+
+from sqlalchemy import select
 
 from src.core.permissions import ALL_PERMISSIONS, JOB_READ, JOB_UPDATE, permissions_for_role
 from src.db.session import SessionFactory
+from src.models.api_key import ApiKey
+from src.models.jobs import JobDefinition
+from src.services.api_keys import ApiKeyService
 from src.services.notifications import NotificationService
 from tests.conftest import (
     auth_headers,
@@ -479,6 +488,7 @@ async def test_users_only_see_their_own_api_keys(app_client):
 
     seen_by_owner = await client.get("/api/v1/api-keys", headers=owner_headers)
     assert seen_by_owner.status_code == 200
+    assert seen_by_owner.headers["X-Total-Count"] == "2"
     owner_ids = {k["id"] for k in seen_by_owner.json()}
     assert owner_ids == {admin_a["id"], admin_b["id"]}
     assert editor_key["id"] not in owner_ids
@@ -486,10 +496,68 @@ async def test_users_only_see_their_own_api_keys(app_client):
 
     seen_by_editor = await client.get("/api/v1/api-keys", headers=ws_headers(editor, ws["id"]))
     assert seen_by_editor.status_code == 200
+    assert seen_by_editor.headers["X-Total-Count"] == "1"
     editor_ids = {k["id"] for k in seen_by_editor.json()}
     assert editor_ids == {editor_key["id"]}
     assert {admin_a["id"], admin_b["id"]}.isdisjoint(editor_ids)
     assert {"admin-key-a", "admin-key-b"}.isdisjoint({k["name"] for k in seen_by_editor.json()})
+
+
+async def test_runners_reapply_the_owner_predicate(app_client):
+    """The runners enforce the scope themselves: a bare select(ApiKey) still
+    cannot reach another user's keys, or the same user's keys elsewhere."""
+    client = app_client
+    owner = await register_user(client, "sven@example.com")
+    owner_id = await _user_id(client, owner)
+    ws = await create_workspace(client, owner, name="One")
+    other_ws = await create_workspace(client, owner, name="Two")
+    owner_headers = ws_headers(owner, ws["id"])
+
+    editor = await _add_member(client, owner_headers, ws["id"], "teresa@example.com", "editor")
+    editor_id = await _user_id(client, editor)
+
+    owner_key = await _create_key(client, owner_headers, "owner-key", ["member:read"])
+    elsewhere = await _create_key(
+        client, ws_headers(owner, other_ws["id"]), "elsewhere", ["member:read"]
+    )
+    editor_key = await _create_key(
+        client, ws_headers(editor, ws["id"]), "editor-key", ["member:read"]
+    )
+
+    async with SessionFactory() as session:
+        service = ApiKeyService(session)
+        rows = await service.list_for_user(ws["id"], owner_id, select(ApiKey))
+        assert {k.id for k in rows} == {owner_key["id"]}
+        assert await service.count_for_user(ws["id"], owner_id, select(ApiKey)) == 1
+
+        # ... and the scope of the other user is equally narrow
+        rows = await service.list_for_user(ws["id"], editor_id, select(ApiKey))
+        assert {k.id for k in rows} == {editor_key["id"]}
+        assert await service.count_for_user(ws["id"], editor_id, select(ApiKey)) == 1
+
+        # a statement scoped to somebody else narrows to empty rather than
+        # borrowing theirs: the re-applied predicate ANDs, it never replaces
+        other_owner = select(ApiKey).where(ApiKey.created_by_user_id == editor_id)
+        other_ws_stmt = select(ApiKey).where(ApiKey.workspace_id == other_ws["id"])
+        already = select(ApiKey).where(
+            ApiKey.workspace_id == ws["id"], ApiKey.created_by_user_id == owner_id
+        )
+
+        async def run_ids(stmt: object) -> set[str]:
+            rows = await service.list_for_user(ws["id"], owner_id, stmt)
+            return {k.id for k in rows}
+
+        assert await run_ids(other_owner) == set()
+        assert await service.count_for_user(ws["id"], owner_id, other_owner) == 0
+        assert await run_ids(other_ws_stmt) == set()
+        assert await service.count_for_user(ws["id"], owner_id, other_ws_stmt) == 0
+        # a statement that already carries the caller's own scope is unchanged
+        assert await run_ids(already) == {owner_key["id"]}
+
+    # the unscoped statement really does reach every key — the runners narrowed it
+    async with SessionFactory() as session:
+        all_rows = list((await session.execute(select(ApiKey))).scalars().all())
+    assert {k.id for k in all_rows} == {owner_key["id"], editor_key["id"], elsewhere["id"]}
 
 
 async def test_user_cannot_revoke_anothers_api_key(app_client):
@@ -644,6 +712,75 @@ async def test_key_cannot_cross_workspace_boundaries(app_client):
     assert resp.status_code == 403
 
 
+# ------------------------------------------------- notification scoping
+
+
+async def test_key_reaches_only_its_creators_notifications(app_client):
+    """The user-scoping guarantee behind `KEY_ONLY_PERMISSIONS`.
+
+    `core.permissions` offers `notification:read` / `notification:update` to any
+    member with `apikey:read` on the strength of the scopes being user-scoped:
+    a key resolves to its creator's `User` and reaches nothing that creator
+    could not reach with a session. That is a claim about reach, so it is
+    asserted as one — which scopes the endpoint *offers* is a different
+    statement. Drop the `user_id` predicate from the notification queries and
+    this is what goes red."""
+    client = app_client
+    owner = await register_user(client, "notif-owner@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+
+    alice = await _add_member(client, owner_headers, ws["id"], "alice@example.com", "editor")
+    alice_headers = ws_headers(alice, ws["id"])
+    bob = await _add_member(client, owner_headers, ws["id"], "bob@example.com", "editor")
+    alice_id = await _user_id(client, alice)
+    bob_id = await _user_id(client, bob)
+
+    mine = await _insert_notification(ws["id"], alice_id, "Alice's alert")
+    theirs = await _insert_notification(ws["id"], bob_id, "Bob's alert")
+
+    key = await _create_key(
+        client, alice_headers, "alice-notifs", ["notification:read", "notification:update"]
+    )
+    kh = _key_headers(key["key"], ws["id"])
+
+    # the list is filtered per user, not per workspace. Alice also has the
+    # notifications her own membership produced, so the assertion is about
+    # whose rows these are, not about how many there are.
+    listed = await client.get("/api/v1/notifications", headers=kh)
+    assert listed.status_code == 200, listed.text
+    ids = {n["id"] for n in listed.json()}
+    assert mine in ids
+    assert theirs not in ids
+
+    # ... and neither ack nor delete reaches the other member's row by id
+    for method, url, body in [
+        ("patch", f"/api/v1/notifications/{theirs}", {"acknowledged": True}),
+        ("delete", f"/api/v1/notifications/{theirs}", None),
+    ]:
+        resp = await client.request(method, url, json=body, headers=kh)
+        assert resp.status_code == 404, (method, url, resp.status_code, resp.text)
+
+    # The refusals left Bob's notification untouched, and Bob's own session
+    # still reaches it — so the 404s above are the user predicate, not a row
+    # that was missing or already acted on.
+    bob_headers = ws_headers(bob, ws["id"])
+    bob_listed = await client.get("/api/v1/notifications", headers=bob_headers)
+    assert theirs in {n["id"] for n in bob_listed.json()}
+    resp = await client.patch(
+        f"/api/v1/notifications/{theirs}", json={"acknowledged": True}, headers=bob_headers
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Alice's key still reaches her own notification on both verbs
+    for method, url, body, status in [
+        ("patch", f"/api/v1/notifications/{mine}", {"acknowledged": True}, 200),
+        ("delete", f"/api/v1/notifications/{mine}", None, 204),
+    ]:
+        resp = await client.request(method, url, json=body, headers=kh)
+        assert resp.status_code == status, (method, url, resp.status_code, resp.text)
+
+
 # ------------------------------------------------- authentication hygiene
 
 
@@ -770,24 +907,46 @@ async def test_superuser_key_cannot_reach_superuser_routes(app_client):
     victim_id = await _user_id(client, await register_user(client, "victim@example.com"))
     runs = await _seed_runs(ws["id"])
 
-    for method, url in [
+    surfaces = [
         ("get", "/api/v1/admin/users"),
         ("get", "/api/v1/admin/workspaces"),
         ("get", "/api/v1/jobs/global"),
-        # The same rule, reached through routes that resolve their own
-        # superuser check rather than through `require_superuser`.
         ("get", f"/api/v1/users/{victim_id}/export"),
         ("delete", f"/api/v1/users/{victim_id}"),
+        # The same rule, reached through routes that resolve their own
+        # superuser check (`_require_run_access`) rather than through
+        # `require_superuser`.
         ("get", f"/api/v1/jobs/runs/{runs['global']}"),
         ("get", f"/api/v1/jobs/runs/{runs['global']}/logs"),
-    ]:
+    ]
+    for method, url in surfaces:
         resp = await client.request(method, url, headers=key_headers)
         assert resp.status_code == 403, (method, url, resp.status_code, resp.text)
+        # One kind of denial, one message: every path above is the
+        # deployment-admin gate, so a key caller is told the same thing
+        # whichever route it probed.
+        assert resp.json()["detail"] == (
+            "deployment administration is not available to API keys"
+        ), (method, url, resp.text)
+
+    # /auth/me stays readable by a key — it is the key's own identity — but
+    # reports the creator's deployment-admin flag as false, so the field
+    # reads the principal's power rather than the raw user column.
+    me_key = await client.get("/api/v1/auth/me", headers=key_headers)
+    assert me_key.status_code == 200, me_key.text
+    assert me_key.json()["is_superuser"] is False, me_key.text
 
     # The profile projection's superuser bypass is off for a key, so it
     # falls back to co-membership and finds none (404, not a 403 leak).
     resp = await client.get(f"/api/v1/users/{victim_id}/profile", headers=key_headers)
     assert resp.status_code == 404, resp.text
+
+    # The same path names the missing privilege to a session caller, without
+    # revealing whether that session would otherwise be a superuser.
+    plain = await register_user(client, "plain@example.com")
+    resp = await client.get("/api/v1/admin/users", headers=auth_headers(plain))
+    assert resp.status_code == 403, resp.status_code
+    assert resp.json()["detail"] == "superuser access required", resp.text
 
     # The superuser's own session still reaches all of them.
     session = await client.get("/api/v1/admin/users", headers=auth_headers(root))
@@ -796,6 +955,47 @@ async def test_superuser_key_cannot_reach_superuser_routes(app_client):
     assert export.status_code == 200, export.text
     profile = await client.get(f"/api/v1/users/{victim_id}/profile", headers=auth_headers(root))
     assert profile.status_code == 200, profile.text
+
+    # The superuser's own session reaches all of them, from the same list
+    # the key loop uses. Only the delete answers 204.
+    for method, url in surfaces:
+        resp = await client.request(method, url, headers=auth_headers(root))
+        assert resp.status_code == (204 if method == "delete" else 200), (
+            method,
+            url,
+            resp.status_code,
+            resp.text,
+        )
+    me_session = await client.get("/api/v1/auth/me", headers=auth_headers(root))
+    assert me_session.json()["is_superuser"] is True, me_session.text
+
+
+async def test_auth_me_reports_the_principals_scope_not_the_owners(app_client):
+    """/auth/me answers for the caller, so a key never learns the owner's inventory.
+
+    A workspace-scoped key used to be handed every workspace its creator
+    belonged to, each with its role and permission set. That leaked another
+    workspace's id — the one value every route behind it refuses to hand out
+    ("api key is not scoped to this workspace").
+    """
+    client = app_client
+    owner = await register_user(client, "scope-owner@example.com")
+    ws = await create_workspace(client, owner, "Scoped Inc")
+    other_ws = await create_workspace(client, owner, "Other Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "scoped", ["member:read"])
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    assert [w["id"] for w in me_key.json()["workspaces"]] == [ws["id"]]
+
+    # The owner's own session still sees the whole inventory, and it is the
+    # reference for what a key may read back: the roles it holds in the one
+    # workspace the key is scoped to, never the union across all of them.
+    me_owner = await client.get("/api/v1/auth/me", headers=auth_headers(owner))
+    assert me_owner.status_code == 200, me_owner.text
+    assert {w["id"] for w in me_owner.json()["workspaces"]} == {ws["id"], other_ws["id"]}
+    in_scope = next(w for w in me_owner.json()["workspaces"] if w["id"] == ws["id"])
+    assert set(me_key.json()["permissions"]) == set(in_scope["permissions"])
 
 
 async def test_job_run_access_uses_the_keys_own_permissions(app_client):
@@ -842,24 +1042,15 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     resp = await client.get(f"/api/v1/jobs/runs/{foreign}", headers=viewer_headers)
     assert resp.status_code == 404, resp.text
 
-    # usage_quota = 0 buys nothing: the conditional UPDATE's
-    # `usage_count < usage_quota` is `0 < 0`, so the very first request is
-    # refused and the counter stays put. The 403 is what pins the predicate —
-    # relax it to `<=` and the zero row matches on the first unit, so the
-    # request returns 200 instead. The row read is the separate guard: a
-    # refusal must not spend the unit it refuses.
-    from src.models.api_key import ApiKey
-
-    zero = await _create_key(client, headers, "quota-zero", [JOB_READ], usage_quota=0)
-    refused = await client.get(
-        f"/api/v1/jobs/runs/{runs['workspace']}",
-        headers=_key_headers(zero["key"], ws["id"]),
+    # usage_quota = 0 is refused at the counter: the conditional UPDATE's
+    # `usage_count < usage_quota` would be `0 < 0`, so the key the mint would
+    # hand back could never authenticate. No key is returned at all.
+    refused = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "quota-zero", "permissions": [JOB_READ], "usage_quota": 0},
+        headers=headers,
     )
-    assert refused.status_code == 403, refused.text
-    assert "quota" in refused.json()["detail"].lower(), refused.text
-    async with SessionFactory() as db:
-        row = await db.get(ApiKey, zero["id"])
-        assert row.usage_count == 0, "a zero-quota key must not spend a unit"
+    assert refused.status_code == 422, refused.text
 
     # A key-authorized hit is metered like any other key route: every read and
     # write route spends one unit and reports what is left. Regression test for
@@ -908,6 +1099,13 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     after = await client.get(f"/api/v1/jobs/{runs['definition']}", headers=auth_headers(owner))
     assert after.json()["cron_schedule"] == "30 4 * * *", after.text
 
+    # ... and the refused request never spent the unit it refused. This is the
+    # separate guard from the 403 above: the row must be left exactly as the
+    # charged request left it.
+    async with SessionFactory() as db:
+        row = await db.get(ApiKey, capped["id"])
+        assert row.usage_count == 1, "a refused request must not spend a unit"
+
 
 async def test_one_quota_unit_cannot_be_spent_twice(app_client):
     """Two callers that read the counter before either writes must not both
@@ -937,22 +1135,84 @@ async def test_one_quota_unit_cannot_be_spent_twice(app_client):
         assert row.usage_count == 1, "a refused charge must not be spent"
 
 
-async def test_key_cannot_enroll_two_factor(app_client):
-    """A key holder must not mint TOTP codes that outlive the key.
+async def _seed_definition(workspace_id: str) -> str:
+    """A workspace-scoped definition row, bypassing async provisioning."""
+    import uuid
 
-    2FA enrolment is a session capability: the backup codes it returns stay
-    valid logins for the account, and no permission list covers them."""
+    async with SessionFactory() as session:
+        definition = JobDefinition(
+            id=str(uuid.uuid4()),
+            key="test.echo",
+            workspace_id=workspace_id,
+            name="Echo",
+            description="",
+            cron_schedule="0 6 * * *",
+            params_schema={},
+            params={},
+            enabled=False,
+        )
+        session.add(definition)
+        await session.commit()
+        return definition.id
+
+
+async def test_job_definition_access_uses_the_keys_own_permissions(app_client):
+    """A definition is authorized against the key's own permission list and its
+    own workspace — a foreign-workspace key gets 404, never the definition."""
+    client = app_client
+    owner = await register_user(client, "jobdef-owner@example.com")
+    ws = await create_workspace(client, owner, "Jobdef Owner Inc")
+    headers = ws_headers(owner, ws["id"])
+    definition_id = await _seed_definition(ws["id"])
+    other = await register_user(client, "jobdef-other@example.com")
+    foreign_ws = await create_workspace(client, other, "Jobdef Other Inc")
+    foreign_id = await _seed_definition(foreign_ws["id"])
+
+    # A key scoped to another workspace learns nothing about this definition,
+    # whichever workspace header it carries.
+    foreign_headers = ws_headers(other, foreign_ws["id"])
+    for header_ws in (ws["id"], foreign_ws["id"]):
+        key = await _create_key(client, foreign_headers, "jobdef", [JOB_READ])
+        resp = await client.get(
+            f"/api/v1/jobs/{definition_id}", headers=_key_headers(key["key"], header_ws)
+        )
+        assert resp.status_code == 404, (header_ws, resp.status_code, resp.text)
+
+    # The owner's own key still reads its own definition, and not the other one.
+    own = await _create_key(client, headers, "jobdef-own", [JOB_READ])
+    ok = await client.get(
+        f"/api/v1/jobs/{definition_id}", headers=_key_headers(own["key"], ws["id"])
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["id"] == definition_id
+    resp = await client.get(
+        f"/api/v1/jobs/{foreign_id}", headers=_key_headers(own["key"], ws["id"])
+    )
+    assert resp.status_code == 404, resp.text
+
+
+async def test_key_cannot_touch_two_factor(app_client):
+    """No 2FA surface is reachable by a key, not just enrolment.
+
+    Backup codes stay valid logins for the account and no permission list
+    covers them, so 2FA is session-only as a feature. `2fa/disable` and
+    `2fa/backup-codes` re-verify the password, which a key holder does not
+    have — both send the owner's *correct* password here, so the 403 proves
+    the gate stopped them, not the credential check."""
     client = app_client
     owner = await register_user(client, "totp-owner@example.com")
     ws = await create_workspace(client, owner, "Totp Owner Inc")
     key = await _create_key(client, ws_headers(owner, ws["id"]), "no-2fa", ["member:read"])
     key_headers = _key_headers(key["key"], ws["id"])
 
-    for url, body in [
-        ("/api/v1/auth/2fa/setup", None),
-        ("/api/v1/auth/2fa/enable", {"setup_token": "x", "code": "000000"}),
+    for method, url, body in [
+        ("get", "/api/v1/auth/2fa/status", None),
+        ("post", "/api/v1/auth/2fa/setup", None),
+        ("post", "/api/v1/auth/2fa/enable", {"setup_token": "x", "code": "000000"}),
+        ("post", "/api/v1/auth/2fa/disable", {"password": "Password123!"}),
+        ("post", "/api/v1/auth/2fa/backup-codes", {"password": "Password123!"}),
     ]:
-        resp = await client.post(url, json=body, headers=key_headers)
+        resp = await client.request(method, url, json=body, headers=key_headers)
         assert resp.status_code == 403, (url, resp.status_code, resp.text)
 
     # The owner's own session can still enrol; the refusals left 2FA off.
@@ -960,6 +1220,94 @@ async def test_key_cannot_enroll_two_factor(app_client):
     assert resp.status_code == 200, resp.text
     state = await client.get("/api/v1/auth/2fa/status", headers=auth_headers(owner))
     assert state.json() == {"enabled": False}, state.text
+
+
+async def test_key_cannot_export_its_creator_data(app_client):
+    """Self-service export is a session capability, like /users/{id}/export.
+
+    The bare key header (no X-Workspace-ID) is deliberate: the route takes no
+    workspace scoping, so the missing gate — not workspace scoping — is the
+    entire defect."""
+    client = app_client
+    owner = await register_user(client, "export-owner@example.com")
+    ws = await create_workspace(client, owner, "Export Owner Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "no-export", ["member:read"])
+
+    resp = await client.get("/api/v1/me/export", headers={"Authorization": f"Bearer {key['key']}"})
+    assert resp.status_code == 403, resp.text
+
+    resp = await client.get("/api/v1/me/export", headers=auth_headers(owner))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["user"]["id"] == await _user_id(client, owner)
+
+
+async def test_key_cannot_write_its_creator_profile_or_delete_the_account(app_client):
+    """The rest of the /me write family is a session concept too.
+
+    `DELETE /me` is the sharp edge: for an OAuth-registered user
+    (`password_hash is None`) the password confirmation never runs, so any key
+    the user ever minted could destroy the account.
+    """
+    client = app_client
+    owner = await register_user(client, "profile-owner@example.com")
+    ws = await create_workspace(client, owner, "Profile Owner Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "no-profile", ["member:read"])
+    key_headers = {"Authorization": f"Bearer {key['key']}"}
+
+    for method, url, body in [
+        ("put", "/api/v1/me/profile", {"display_name": "Hacked"}),
+        ("patch", "/api/v1/me/profile", {"bio": "Hacked"}),
+        ("delete", "/api/v1/me", {"password": "Password123!", "confirm": "DELETE"}),
+    ]:
+        resp = await client.request(method, url, json=body, headers=key_headers)
+        assert resp.status_code == 403, (method, url, resp.status_code, resp.text)
+
+    # Reading the profile with a key, and writing it as a session, still work.
+    assert (await client.get("/api/v1/me/profile", headers=key_headers)).status_code == 200
+    resp = await client.patch(
+        "/api/v1/me/profile", json={"bio": "Mine"}, headers=auth_headers(owner)
+    )
+    assert resp.status_code == 200, resp.text
+
+
+async def test_key_cannot_manage_sessions_or_password(app_client):
+    """Sessions and the password are a session concept; a key carries none.
+
+    This passes before and after the change — it is the guard that deleting
+    auth.py's private gate did not silently un-gate the six routes that used
+    to call it."""
+    client = app_client
+    owner = await register_user(client, "session-owner@example.com")
+    ws = await create_workspace(client, owner, "Session Owner Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "no-sessions", ["member:read"])
+    key_headers = _key_headers(key["key"], ws["id"])
+    runs = await _seed_runs(ws["id"])
+
+    for method, url, body in [
+        ("get", "/api/v1/auth/sessions", None),
+        ("delete", "/api/v1/auth/sessions", None),
+        # A global run id the owner never owned: the session gate refuses
+        # before the lookup, so no session row is needed for the 403.
+        ("delete", f"/api/v1/auth/sessions/{runs['global']}", None),
+        (
+            "post",
+            "/api/v1/auth/change-password",
+            {"current_password": "Password123!", "new_password": "Password456!"},
+        ),
+    ]:
+        resp = await client.request(method, url, json=body, headers=key_headers)
+        assert resp.status_code == 403, (url, resp.status_code, resp.text)
+
+    # The owner's own session still lists its sessions, and still changes
+    # its password.
+    resp = await client.get("/api/v1/auth/sessions", headers=auth_headers(owner))
+    assert resp.status_code == 200, resp.text
+    resp = await client.post(
+        "/api/v1/auth/change-password",
+        json={"current_password": "Password123!", "new_password": "Password456!"},
+        headers=auth_headers(owner),
+    )
+    assert resp.status_code == 204, resp.text
 
 
 # ------------------------------------------------------------------- seed
