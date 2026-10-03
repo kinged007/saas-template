@@ -30,9 +30,11 @@ export default defineConfig({
   use: {
     baseURL,
     // A retained trace is the only record of the DOM, network and console of a
-    // failure that is gone by the time anyone reads the log. Only in CI: the
-    // trace is recorded on every test and discarded on a pass, so a local run
-    // pays that cost for an artifact nobody uploads.
+    // failure that is gone by the time anyone reads the log. It carries the
+    // full network log, so it is safe only while every spec mocks /api/v1;
+    // point one at a real backend and the artifact holds credentials. Only in
+    // CI: the trace is recorded on every test and discarded on a pass, so a
+    // local run pays that cost for an artifact nobody uploads.
     trace: process.env.CI ? "retain-on-failure" : "off",
     // "on-first-retry" would never fire with retries: 0, so every failure
     // gets one. ponytail: no retries, a flake is red rather than green on a
