@@ -16,7 +16,7 @@
 - `apps/api/src/api/deps.py` — get_container, require_key_permission, require_permission, record_key_use, authenticate_websocket_token, AuthPrincipal
 - `apps/api/src/core/metrics.py` — inc, observe_request, observe_job_run, observe_webhook_delivery, render_prometheus, reset
 - `apps/api/src/models/workspace.py` — User, AuthToken, RefreshToken, Workspace, Role, WorkspaceMember
-- `apps/api/src/api/crud.py` — parse_query, apply_query, run_list, QuerySpec, InvalidQuery
+- `apps/api/src/api/crud.py` — parse_query, apply_query, QuerySpec, InvalidQuery
 - `apps/api/src/email/templates.py` — invitation, notification_email, digest_email, email_verification, password_reset
 - `apps/api/src/events/bus.py` — EventMetadata, EventEnvelope, EventBus, PublishError, SubscriptionError
 - `apps/api/src/events/webhook_events.py` — register_webhook_event, webhook_event_names, webhook_subject_for, webhook_event_for_subject, webhook_subjects

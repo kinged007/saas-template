@@ -547,22 +547,33 @@ async def test_list_invitations_pagination(app_client):
         )
         assert resp.status_code == 201, resp.text
 
+    # The unsorted list now defaults to `created_at desc, id desc` (#449), so
+    # which invitation lands at offset=2 depends on generated ids. Assert the
+    # pages are slices of the unpaginated read instead of against insertion
+    # order, which the old rowid read happened to reproduce.
+    resp = await client.get("/api/v1/invitations?limit=10", headers=owner_headers)
+    assert resp.status_code == 200
+    assert resp.headers["X-Total-Count"] == "3"
+    ordered = resp.json()
+    assert len(ordered) == 3
+
     resp = await client.get("/api/v1/invitations?limit=2&offset=0", headers=owner_headers)
     assert resp.status_code == 200
     assert resp.headers["X-Total-Count"] == "3"
     assert len(resp.json()) == 2
+    assert resp.json() == ordered[:2]
 
     resp = await client.get("/api/v1/invitations?limit=2&offset=2", headers=owner_headers)
     assert resp.status_code == 200
     assert resp.headers["X-Total-Count"] == "3"
     assert len(resp.json()) == 1
-    assert resp.json()[0]["email"] == "inv_page_2@example.com"
+    assert resp.json() == ordered[2:]
 
     resp = await client.get("/api/v1/invitations?_start=2&_end=4", headers=owner_headers)
     assert resp.status_code == 200
     assert resp.headers["X-Total-Count"] == "3"
     assert len(resp.json()) == 1
-    assert resp.json()[0]["email"] == "inv_page_2@example.com"
+    assert resp.json() == ordered[2:]
 
 
 async def test_resend_invitation_requires_a_manager_actor(app_client):

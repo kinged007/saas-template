@@ -10,6 +10,15 @@ import type { Role } from "../types";
 export const assignableRoles = (roles: Role[]): Role[] =>
   roles.filter((r) => r.name.toLowerCase() !== "owner");
 
+const MANAGER_ROLES = ["owner", "admin"];
+
+// Whether a role name may manage members. Case-folds for the same reason as
+// `assignableRoles`: `is_manager_role_name` (workspaces.py) case-folds both
+// halves, so a row spelled `Admin` is a manager to the API. An exact match here
+// would hide the member and invitation controls the backend accepts for it.
+export const isManagerRoleName = (name: string | null | undefined): boolean =>
+  MANAGER_ROLES.includes((name ?? "").toLowerCase());
+
 // The gate and sentence the roles table and the MembersPage pickers both share;
 // null while the page is complete.
 export const roleCapNotice = (fetched: number, total: number): string | null =>
@@ -27,4 +36,14 @@ export const rolePickerCapNotice = (total: number, roles: Role[]): string | null
   const assignable = assignableRoles(roles);
   const pickable = Math.max(0, total - (roles.length - assignable.length));
   return roleCapNotice(assignable.length, pickable);
+};
+
+// The notice is the accessible description of the trigger it annotates, so a
+// whitespace-only string has to be no notice at all: `aria-describedby` would
+// still resolve to the paragraph and announce an empty description. Call it
+// once, where the notice is produced (MembersPage), so the notice and the two
+// `aria-describedby` gates read the same value.
+export const roleCapNoticeText = (text: string | null): string | null => {
+  const trimmed = text?.trim();
+  return trimmed ? trimmed : null;
 };
