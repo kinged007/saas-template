@@ -1024,13 +1024,19 @@ class WorkspaceService:
         return role
 
     async def _single_workspace_role(self, workspace_id: str) -> Role:
-        """Auto-join role: SINGLE_WORKSPACE_DEFAULT_ROLE, else viewer.
+        """Auto-join role: SINGLE_WORKSPACE_DEFAULT_ROLE, else the chain below.
 
-        Matched by name over the workspace's non-owner roles, so a custom role
-        works too and an unknown, blank or "owner" value resolves viewer; a
-        workspace whose only role is a legacy owner-cased row has no candidate
-        left and raises. The wider chain keeps logins working when the viewer
-        role was renamed or removed, instead of bricking every later login."""
+        viewer -> editor -> admin -> an arbitrary remaining non-owner role,
+        matched by name over the workspace's non-owner roles, so a custom role
+        works too and an unknown, blank or "owner" value falls through it.
+        The wider chain keeps a later login working when the viewer role was
+        renamed or removed, instead of bricking every later login.
+
+        Raises when the workspace has no non-owner role at all: there is
+        nothing to join with, and the caller skips the join rather than
+        granting owner. An owner-only workspace and one holding only a legacy
+        owner-cased row both reach that, since is_owner_role_name drops those
+        from the candidates."""
         from src.settings import settings
 
         result = await self._session.execute(select(Role).where(Role.workspace_id == workspace_id))
@@ -1041,7 +1047,7 @@ class WorkspaceService:
                 return role
         if roles:
             return next(iter(roles.values()))
-        raise WorkspaceError(f"role {self.SINGLE_WORKSPACE_ROLE} not found")
+        raise WorkspaceError(f"workspace {workspace_id} has no non-owner role to join")
 
     async def _role_by_name(self, workspace_id: str, name: str) -> Role:
         stmt = select(Role).where(Role.workspace_id == workspace_id, Role.name == name)
