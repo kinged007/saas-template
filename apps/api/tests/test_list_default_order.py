@@ -55,9 +55,7 @@ async def _assert_pages_partition(client, path, headers, ids, key="id") -> None:
     """One row per page must reproduce the unpaginated read: no repeat, no skip."""
     paged: list[str] = []
     for offset in range(len(ids)):
-        resp = await client.get(
-            path, params={"offset": offset, "limit": 1}, headers=headers
-        )
+        resp = await client.get(path, params={"offset": offset, "limit": 1}, headers=headers)
         assert resp.status_code == 200, resp.text
         chunk = resp.json()
         assert len(chunk) == 1, (offset, chunk)
