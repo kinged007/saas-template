@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useCan, useCustomMutation, useGetIdentity, useGo, useInvalidate } from "@refinedev/core";
 import { useWorkspaceCustom } from "../hooks/useWorkspaceQuery";
+import { jobFetchError } from "./job-fetch-error";
 import { useParams } from "react-router";
 import { ArrowLeft, History, Pencil, Play } from "lucide-react";
 
@@ -290,6 +291,8 @@ export function JobDetailPage() {
   const { result: jobResult, query: jobQuery } = useWorkspaceCustom<ScheduledJob>({
     url: `jobs/${jobId}`,
     method: "get",
+    // the body below renders the refusal — a toast would report it twice
+    errorNotification: false,
   });
   // While pending/erroring, refine surfaces an empty object — treat as "not loaded yet".
   const job =
@@ -323,7 +326,11 @@ export function JobDetailPage() {
     return <p className="text-muted-foreground p-4 text-sm">Loading…</p>;
   }
   if (!job) {
-    return <p className="text-muted-foreground p-4 text-sm">Job not found.</p>;
+    return (
+      <p className="text-muted-foreground p-4 text-sm">
+        {jobFetchError(jobQuery.error) ?? "Job not found."}
+      </p>
+    );
   }
 
   return (

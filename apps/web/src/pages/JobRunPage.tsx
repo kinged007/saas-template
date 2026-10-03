@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useGo } from "@refinedev/core";
 import { useWorkspaceCustom } from "../hooks/useWorkspaceQuery";
+import { jobFetchError } from "./job-fetch-error";
 import { useParams } from "react-router";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 
@@ -21,6 +22,8 @@ export function JobRunPage() {
   } = useWorkspaceCustom<JobRun>({
     url: `jobs/runs/${runId}`,
     method: "get",
+    // the body below renders the refusal — a toast would report it twice
+    errorNotification: false,
   });
   // While pending/erroring, refine surfaces an empty object — treat as "not loaded yet".
   const run =
@@ -58,6 +61,8 @@ export function JobRunPage() {
   const { result: jobResult } = useWorkspaceCustom<ScheduledJob>({
     url: `jobs/${jobId}`,
     method: "get",
+    // the job only names the heading, so a refusal costs a name and nothing else
+    errorNotification: false,
     queryOptions: { enabled: !!jobId },
   });
   const job =
@@ -69,7 +74,11 @@ export function JobRunPage() {
     return <p className="text-muted-foreground p-4 text-sm">Loading…</p>;
   }
   if (!run) {
-    return <p className="text-muted-foreground p-4 text-sm">Run not found.</p>;
+    return (
+      <p className="text-muted-foreground p-4 text-sm">
+        {jobFetchError(runQuery.error) ?? "Run not found."}
+      </p>
+    );
   }
 
   return (
