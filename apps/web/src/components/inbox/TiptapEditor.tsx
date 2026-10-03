@@ -141,7 +141,9 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
   const [linkUrl, setLinkUrl] = useState("");
   const [linkError, setLinkError] = useState<string | null>(null);
   const linkInputRef = useRef<HTMLInputElement>(null);
+  const linkDismissedOutside = useRef(false);
   const linkInputId = useId();
+  const linkLabelId = useId();
 
   const editor = useEditor(
     {
@@ -463,7 +465,10 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           <PopoverContent
             align="start"
             className="w-80 p-3"
-            aria-label="Link URL"
+            aria-labelledby={linkLabelId}
+            onInteractOutside={() => {
+              linkDismissedOutside.current = true;
+            }}
             // The trigger eats mousedown so the caret survives, which leaves
             // nothing to focus the form for us.
             onOpenAutoFocus={(e) => {
@@ -471,11 +476,15 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
               linkInputRef.current?.focus();
               linkInputRef.current?.select();
             }}
-            // Cancel and Escape would otherwise drop focus on the trigger, so
-            // every way out of the popover returns to the document being edited.
             onCloseAutoFocus={(e) => {
+              // Radix would otherwise park focus on the trigger.
               e.preventDefault();
-              editor.commands.focus();
+              const dismissedOutside = linkDismissedOutside.current;
+              linkDismissedOutside.current = false;
+              // Apply, Cancel and Escape close the popover from its own controls,
+              // so the caret goes back to the document being edited. A click
+              // elsewhere in the compose dialog owns the focus it landed on.
+              if (!dismissedOutside) editor.commands.focus();
             }}
           >
             {/* noValidate: this form reports its own message, not the browser's. */}
@@ -487,7 +496,7 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
                 applyLink();
               }}
             >
-              <Label htmlFor={linkInputId}>Link URL</Label>
+              <Label id={linkLabelId} htmlFor={linkInputId}>Link URL</Label>
               <Input
                 id={linkInputId}
                 ref={linkInputRef}

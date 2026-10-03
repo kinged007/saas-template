@@ -154,6 +154,23 @@ test.describe("composer toolbar", () => {
     await expect(editor.locator("a")).toHaveCount(0);
   });
 
+  test("dismissing the popover from outside leaves focus where the click landed", async ({ page }) => {
+    const toolbar = await openToolbar(page);
+    const editor = page.getByRole("dialog").locator('[contenteditable="true"]');
+
+    await editor.click();
+    await page.keyboard.type("hello");
+    await toolbar.getByRole("button", { name: "Link", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Link URL" })).toBeVisible();
+
+    // A click elsewhere in the compose dialog dismisses the popover, and that
+    // click owns the focus afterwards: the caret must not jump back into the
+    // document the user clicked away from.
+    await page.getByRole("dialog", { name: "New conversation" }).getByRole("heading").click();
+    await expect(page.getByRole("dialog", { name: "Link URL" })).toHaveCount(0);
+    await expect(editor).not.toBeFocused();
+  });
+
   test("a bare host typed in the text still autolinks", async ({ page }) => {
     await openToolbar(page);
     const editor = page.getByRole("dialog").locator('[contenteditable="true"]');
