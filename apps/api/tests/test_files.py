@@ -59,9 +59,8 @@ async def test_upload_store_download_roundtrip(app_client):
     resp = await app_client.post("/api/v1/files", files=_png(), headers=owner)
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    from src.settings import settings
 
-    assert body["url"] == f"{settings.frontend_url}/api/v1/files/{body['id']}"
+    assert body["url"] == f"/api/v1/files/{body['id']}"
     assert body["size_bytes"] == len(PNG)
 
     got = await app_client.get(f"/api/v1/files/{body['id']}", headers=owner)

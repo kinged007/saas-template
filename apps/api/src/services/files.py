@@ -16,7 +16,6 @@ from src.events.bus import EventBus
 from src.events.publisher import publish_audit
 from src.models.file_object import FileObject
 from src.models.workspace import WorkspaceMember
-from src.settings import settings
 from src.storage.base import FileStorage, StorageError
 
 logger = logging.getLogger(__name__)
@@ -109,8 +108,9 @@ class FileService:
             "filename": row.filename,
             "content_type": row.content_type,
             "size_bytes": row.size_bytes,
-            # Absolute so a browser can load it whatever origin serves the UI.
-            "url": f"{settings.frontend_url.rstrip('/')}{API}/files/{row.id}",
+            # Relative: the API cannot know the origin it is served from, and
+            # the client's origin proxies /api/ to it.
+            "url": f"{API}/files/{row.id}",
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         }
