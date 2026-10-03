@@ -380,3 +380,67 @@ async def test_update_workspace_strips_padded_name(app_client):
         f"/api/v1/workspaces/{ws['id']}", json={"name": "   "}, headers=headers
     )
     assert blank.status_code == 422
+
+
+async def _set_member_status(membership_id: str, status: str) -> None:
+    from src.db.session import SessionFactory
+    from src.models.workspace import WorkspaceMember
+
+    async with SessionFactory() as session:
+        member = await session.get(WorkspaceMember, membership_id)
+        assert member is not None
+        member.status = status
+        await session.commit()
+
+
+async def test_transfer_ownership_refuses_every_non_active_status(app_client):
+    """Both terminal statuses are refused and `active` is still offered.
+
+    `transfer_ownership` decides from a table over the member-status domain
+    (#810), so both halves are pinned: an assertion on the refusal side alone
+    also passes against a `!= "active"` comparison, and one on the offer side
+    alone misses a table that grants every status.
+    """
+    client = app_client
+    owner = await register_user(client, "xfer-owner@example.com")
+    ws = await create_workspace(client, owner)
+    heir = await register_user(client, "xfer-heir@example.com")
+    token = await _invite(client, owner, ws, "xfer-heir@example.com", "editor")
+    accepted = await client.post(
+        f"/api/v1/invitations/accept?token={token}", headers=auth_headers(heir)
+    )
+    assert accepted.status_code == 200, accepted.text
+    members = await client.get("/api/v1/members", headers=ws_headers(owner, ws["id"]))
+    target_id = next(
+        m["membership_id"] for m in members.json() if m["email"] == "xfer-heir@example.com"
+    )
+    headers = ws_headers(owner, ws["id"])
+
+    for status in ("suspended", "invited"):
+        await _set_member_status(target_id, status)
+        refused = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/transfer",
+            json={"new_owner_membership_id": target_id},
+            headers=headers,
+        )
+        assert refused.status_code == 409, status
+        assert refused.json()["detail"] == "new owner must be an active member"
+
+    await _set_member_status(target_id, "active")
+    transferred = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/transfer",
+        json={"new_owner_membership_id": target_id},
+        headers=headers,
+    )
+    assert transferred.status_code == 200, transferred.text
+    roles = await client.get("/api/v1/members", headers=headers)
+    heir_row = next(m for m in roles.json() if m["email"] == "xfer-heir@example.com")
+    assert heir_row["role"] == "owner"
+
+
+def test_transfer_eligibility_decides_every_member_status():
+    """A status the domain gains is refused until this table decides it."""
+    from src.models.workspace import MemberStatus
+    from src.services.workspaces import _TRANSFER_ELIGIBLE
+
+    assert set(_TRANSFER_ELIGIBLE) == {status.value for status in MemberStatus}

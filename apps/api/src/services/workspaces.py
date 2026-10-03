@@ -18,7 +18,7 @@ from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
 from src.models.core import Invitation
-from src.models.workspace import Role, User, Workspace, WorkspaceMember
+from src.models.workspace import MemberStatus, Role, User, Workspace, WorkspaceMember
 from src.services.auth import AuthService
 from src.services.serializers import ONBOARDING_ENABLED_FLAG
 
@@ -37,6 +37,19 @@ class WorkspaceConflict(WorkspaceError):
 
 class WorkspaceNotFound(WorkspaceError):
     pass
+
+
+# Which member statuses may take over a workspace, decided per status rather
+# than by a `status != "active"` comparison that compiles against any status the
+# domain gains later. Every `MemberStatus` has an entry, so a new one is refused
+# until it is decided here; pinned by
+# `test_transfer_eligibility_decides_every_member_status`. Mirrors
+# `TRANSFER_ELIGIBLE` in `apps/web/src/pages/member-actions.ts`.
+_TRANSFER_ELIGIBLE: dict[str, bool] = {
+    MemberStatus.ACTIVE.value: True,
+    MemberStatus.INVITED.value: False,
+    MemberStatus.SUSPENDED.value: False,
+}
 
 
 def is_owner_role_name(name: str | None) -> bool:
@@ -664,7 +677,7 @@ class WorkspaceService:
         target = await self._session.get(WorkspaceMember, new_owner_membership_id)
         if target is None or target.workspace_id != workspace_id:
             raise WorkspaceError("member not found in workspace")
-        if target.status != "active":
+        if not _TRANSFER_ELIGIBLE.get(target.status, False):
             raise WorkspaceConflict("new owner must be an active member")
         if target.user_id == actor.id:
             raise WorkspaceConflict("you already own this workspace")
