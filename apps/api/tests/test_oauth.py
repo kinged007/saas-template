@@ -767,28 +767,110 @@ async def test_discovery_doc_endpoint_anchors_emails_url(app_client, oidc_on, mo
     assert "/oauth/callback?code=" in resp.headers["location"]
 
 
-async def test_userinfo_endpoint_may_not_anchor_on_itself(app_client, oidc_on, monkeypatch):
-    # The document names a userinfo host its own issuer does not; the bearer must
-    # not follow it, even though that same host would pass the emails_url check.
-    oidc_on("https://userinfo.idp.example/user/emails")
+async def test_discovery_doc_anchors_cross_host_userinfo_endpoint(app_client, oidc_on, monkeypatch):
+    # Google serves userinfo from openidconnect.googleapis.com and Entra from
+    # graph.microsoft.com, hosts their issuer never names: the document comes from
+    # the operator's own https config, so the endpoints it states are anchors too.
+    oidc_on("")
     _mock_discovery(
         monkeypatch,
         {
             "authorization_endpoint": "https://idp.example/authorize",
-            "token_endpoint": "https://userinfo.idp.example/token",
-            "userinfo_endpoint": "https://evil.example/userinfo",
+            "token_endpoint": "https://idp.example/token",
+            "userinfo_endpoint": "https://userinfo.idp.example/userinfo",
         },
     )
     calls = _fake_httpx(
         monkeypatch,
-        user={"id": 4242, "sub": "4242", "email": None},
+        user={"id": 4242, "sub": "4242", "email": "octo@example.com", "name": "Octo"},
         emails=None,
     )
-    before = await _user_count()
     _, resp = await _callback(app_client, monkeypatch, state="o2", provider="oidcidp")
-    assert not [c for c in calls if "evil.example" in c]
+    assert "https://userinfo.idp.example/userinfo" in calls
+    assert await _account_email(app_client, resp) == "octo@example.com"
+
+async def test_discovery_over_plain_http_is_refused(monkeypatch):
+    # A forged document is what could name a third party's endpoints, so one is
+    # never fetched over plaintext: no request leaves the process at all.
+    calls = _fake_httpx(monkeypatch, user={}, emails=[])
+    cfg = oauth_svc.ProviderConfig(
+        id="oidcidp",
+        display_name="OIDC IdP",
+        client_id="cid",
+        client_secret="csecret",
+        discovery_url="http://idp.example/.well-known/openid-configuration",
+    )
+    with pytest.raises(oauth_svc.OAuthError, match="must be https"):
+        await oauth_svc._discovery(cfg, oauth_svc.TtlCache())
+    assert calls == []
+
+async def test_plaintext_token_endpoint_is_refused(monkeypatch):
+    # client_secret is posted to the token endpoint, so it is origin-checked like
+    # the bearer ones. The config is the trust root, so the host rule cannot bite
+    # here; the scheme rule is what refuses a plaintext secret.
+    calls = _fake_httpx(monkeypatch, user={}, emails=[])
+    provider = oauth_svc.ProviderConfig(
+        id="oidcidp",
+        display_name="OIDC IdP",
+        client_id="cid",
+        client_secret="csecret",
+        discovery_url="https://idp.example/.well-known/openid-configuration",
+    )
+    with pytest.raises(oauth_svc.OAuthError, match="token endpoint"):
+        await oauth_svc.exchange_code(
+            provider,
+            {"token_endpoint": "http://idp.example/token"},
+            code="c",
+            redirect_uri="http://app.test/cb",
+        )
+    assert calls == []
+    # Control: the same endpoint over https is posted to.
+    ok = await oauth_svc.exchange_code(
+        provider,
+        {"token_endpoint": "https://idp.example/token"},
+        code="c",
+        redirect_uri="http://app.test/cb",
+    )
+    assert ok["access_token"] == "at" and calls == ["https://idp.example/token"]
+
+async def test_plaintext_userinfo_endpoint_is_refused(app_client, oidc_on, monkeypatch):
+    # The bearer never leaves over plaintext either, config-named host or not.
+    oidc_on("")
+    _mock_discovery(
+        monkeypatch,
+        {
+            "authorization_endpoint": "https://idp.example/authorize",
+            "token_endpoint": "https://idp.example/token",
+            "userinfo_endpoint": "http://idp.example/userinfo",
+        },
+    )
+    calls = _fake_httpx(monkeypatch, user={"sub": "1", "email": "octo@example.com"}, emails=None)
+    before = await _user_count()
+    _, resp = await _callback(app_client, monkeypatch, state="o3", provider="oidcidp")
+    assert not [c for c in calls if c.startswith("http://")]
     assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
     assert await _user_count() == before
+
+def test_boot_check_is_config_only_and_may_be_conservative(oidc_on):
+    # The document cannot be fetched at boot, so a doc-anchored emails_url is
+    # named there and accepted at the callback; main.py says "may fail".
+    oidc_on("https://userinfo.idp.example/user/emails")
+    assert oauth_svc.untrusted_emails_urls() == ["oidcidp"]
+
+def test_untrusted_emails_urls_skips_entries_that_cannot_be_selected(monkeypatch):
+    # get_provider() matches a raw id against a route string, so a numeric id and
+    # a non-dict entry are not providers at all and are not reported as broken.
+    monkeypatch.setattr(
+        settings,
+        "oauth_providers",
+        json.dumps(
+            [
+                {"id": 123, "emails_url": "https://api.github.com.evil.com/user/emails"},
+                "not-a-dict",
+            ]
+        ),
+    )
+    assert oauth_svc.untrusted_emails_urls() == []
 
 
 async def test_non_string_provider_email_is_refused(app_client, github_on, monkeypatch):
