@@ -48,6 +48,10 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 _RUN_SORTABLE = {"scheduled_at", "started_at", "duration_ms", "status"}
 _RUN_FILTERABLE = {"status", "trigger"}
+# Newest occurrence first, id breaking scheduled_at ties. created_at is not in
+# _RUN_SORTABLE, and scheduled_at is not null — see _MEMBER_DEFAULT_ORDER for
+# why the tiebreak matters.
+_RUN_DEFAULT_ORDER = (JobRun.scheduled_at.desc(), JobRun.id.desc())
 
 
 async def _get_definition_or_404(
@@ -429,6 +433,8 @@ async def _list_runs(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(*_RUN_DEFAULT_ORDER)
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
