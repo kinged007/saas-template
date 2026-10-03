@@ -25,7 +25,7 @@ import httpx
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.dates import ensure_utc, now_utc
+from src.core.dates import ensure_utc, iso_or_none, now_utc
 from src.events.bus import EventBus
 from src.events.webhook_events import webhook_event_for_subject, webhook_event_names
 from src.models.webhook import WebhookDelivery, WebhookDeliveryStatus, WebhookSubscription
@@ -126,8 +126,8 @@ def subscription_to_dict(s: WebhookSubscription) -> dict:
         "events": s.events or [],
         "active": s.active,
         "created_by_user_id": s.created_by_user_id,
-        "created_at": s.created_at.isoformat() if s.created_at else None,
-        "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+        "created_at": iso_or_none(s.created_at),
+        "updated_at": iso_or_none(s.updated_at),
     }
 
 
@@ -141,14 +141,14 @@ def delivery_to_dict(d: WebhookDelivery) -> dict:
         "payload": d.payload or {},
         "status": d.status,
         "attempt_count": d.attempt_count,
-        "next_retry_at": d.next_retry_at.isoformat() if d.next_retry_at else None,
-        "last_attempt_at": d.last_attempt_at.isoformat() if d.last_attempt_at else None,
+        "next_retry_at": iso_or_none(d.next_retry_at),
+        "last_attempt_at": iso_or_none(d.last_attempt_at),
         "response_status": d.response_status,
         "error": d.error,
         "event_id": d.event_id,
         "correlation_id": d.correlation_id,
-        "created_at": d.created_at.isoformat() if d.created_at else None,
-        "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+        "created_at": iso_or_none(d.created_at),
+        "updated_at": iso_or_none(d.updated_at),
     }
 
 

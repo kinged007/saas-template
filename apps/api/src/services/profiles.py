@@ -9,6 +9,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.dates import iso_or_none
 from src.core.security.password import PasswordHasher
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
@@ -268,7 +269,7 @@ class ProfileService:
                     "workspace_id": w.id,
                     "workspace_name": w.name,
                     "role": role.name if role else None,
-                    "joined_at": member.created_at.isoformat() if member.created_at else None,
+                    "joined_at": iso_or_none(member.created_at),
                 }
             )
         # Counts

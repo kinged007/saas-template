@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, apply_query, parse_query
 from src.api.deps import get_current_workspace_id, require_permission
+from src.core.dates import iso_or_none
 from src.core.permissions import AUDIT_READ
 from src.db.session import get_db
 from src.models.audit import AuditLogEntry
@@ -46,7 +47,7 @@ def _audit_to_dict(
         "action": entry.action,
         "details": entry.details,
         "ip_address": entry.ip_address,
-        "created_at": entry.created_at.isoformat() if entry.created_at else None,
+        "created_at": iso_or_none(entry.created_at),
     }
 
 

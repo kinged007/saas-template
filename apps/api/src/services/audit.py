@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.dates import iso_or_none
 from src.models.audit import AuditLogEntry
 
 logger = logging.getLogger(__name__)
@@ -89,5 +90,5 @@ def audit_log_to_dict(entry: AuditLogEntry) -> dict[str, Any]:
         "action": entry.action,
         "details": entry.details,
         "ip_address": entry.ip_address,
-        "created_at": entry.created_at.isoformat() if entry.created_at else None,
+        "created_at": iso_or_none(entry.created_at),
     }
