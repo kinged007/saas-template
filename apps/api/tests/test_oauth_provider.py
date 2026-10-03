@@ -352,6 +352,24 @@ def test_claims_from_id_token_logs_jwks_fetch_failure(provider, idp, caplog):
     assert "id_token verification failed" not in caplog.text
 
 
+def test_claims_from_id_token_logs_unknown_kid_as_verification_failure(provider, idp, caplog):
+    """The JWKS was fetched and simply does not publish this kid: an attack-shaped
+    probe, not an outage, so it must not land on the jwks-fetch line."""
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        assert claims_from_id_token(provider, idp.doc, idp.mint(kid="rotated-away")) is None
+    assert "jwks fetch failed" not in caplog.text
+    assert "id_token verification failed" in caplog.text
+
+
+def test_claims_from_id_token_logs_unparseable_token_as_verification_failure(provider, idp, caplog):
+    """An unparseable token raises before any fetch, so naming a fetch would name
+    an operation that never ran."""
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        assert claims_from_id_token(provider, idp.doc, "not-a-jwt") is None
+    assert "jwks fetch failed" not in caplog.text
+    assert "id_token verification failed" in caplog.text
+
+
 def test_claims_from_id_token_returns_none_without_jwks_uri(provider, idp):
     doc = {k: v for k, v in idp.doc.items() if k != "jwks_uri"}
     assert claims_from_id_token(provider, doc, idp.mint()) is None

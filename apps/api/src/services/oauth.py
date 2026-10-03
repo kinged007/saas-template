@@ -211,9 +211,16 @@ def claims_from_id_token(
     try:
         key = client.get_signing_key_from_jwt(id_token).key
     except Exception as exc:
-        # An unreachable or mid-rotation JWKS is an outage, not a bad token, so
-        # it gets its own line: the generic failure below reads as an attack.
-        logger.warning("jwks fetch failed for provider %s: %s", provider.id, _failure_detail(exc))
+        # Only a fetch failure is an outage. An unknown kid and an unparseable
+        # token raise from here too, and both are the attack-shaped side, so
+        # they keep the generic line: an outage that reads as an attack is the
+        # ambiguity this split exists to remove.
+        if isinstance(exc, jwt.PyJWKClientConnectionError):
+            logger.warning(
+                "jwks fetch failed for provider %s: %s", provider.id, _failure_detail(exc)
+            )
+        else:
+            logger.warning("id_token verification failed for provider %s", provider.id)
         return None
     try:
         claims = jwt.decode(
