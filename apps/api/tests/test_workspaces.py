@@ -309,6 +309,79 @@ async def test_suspended_actor_cannot_widen_a_custom_role(app_client):
             )
 
 
+async def test_service_stores_trimmed_names(app_client):
+    """The service trims even when no schema validated the input.
+
+    The schema is the validation boundary; the service is the normalization
+    boundary. Direct callers (seed, bootstrap, tests) never pass through the
+    schema, so a padded name must not reach the row.
+    """
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role, Workspace
+    from src.services.auth import AuthService
+    from src.services.workspaces import WorkspaceService
+
+    client = app_client
+    await register_user(client, "trim-owner@example.com")
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session)
+        user = await AuthService(session).get_by_email("trim-owner@example.com")
+        workspace = await service.create_workspace(
+            name="  Acme  ", slug=None, description=None, owner=user
+        )
+        role = await service.create_custom_role(
+            workspace.id,
+            name="  ops  ",
+            description=None,
+            permissions=["member:read"],
+            actor=user,
+        )
+        await service.update_workspace(workspace.id, name="  Acme Renamed  ")
+        await service.update_role(workspace.id, role.id, name="  operators  ")
+
+    # Re-read so the assertion is on the stored row, not the in-memory object.
+    async with SessionFactory() as session:
+        stored_ws = await session.get(Workspace, workspace.id)
+        assert stored_ws.name == "Acme Renamed"
+        assert stored_ws.slug == "acme"
+        stored_role = await session.get(Role, role.id)
+        assert stored_role.name == "operators"
+
+
+async def test_create_workspace_strips_padded_name(app_client):
+    client = app_client
+    tokens = await register_user(client, "pad-ws@example.com")
+    resp = await client.post(
+        "/api/v1/workspaces", json={"name": "  Acme  "}, headers=auth_headers(tokens)
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == "Acme"
+    assert resp.json()["slug"] == "acme"
+
+    blank = await client.post(
+        "/api/v1/workspaces", json={"name": "   "}, headers=auth_headers(tokens)
+    )
+    assert blank.status_code == 422
+
+
+async def test_update_workspace_strips_padded_name(app_client):
+    client = app_client
+    tokens = await register_user(client, "pad-ws-upd@example.com")
+    ws = await create_workspace(client, tokens, name="Acme Corp")
+    headers = ws_headers(tokens, ws["id"])
+    resp = await client.patch(
+        f"/api/v1/workspaces/{ws['id']}", json={"name": "  Acme Renamed  "}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["name"] == "Acme Renamed"
+
+    blank = await client.patch(
+        f"/api/v1/workspaces/{ws['id']}", json={"name": "   "}, headers=headers
+    )
+    assert blank.status_code == 422
+
+
 async def _set_member_status(membership_id: str, status: str) -> None:
     from src.db.session import SessionFactory
     from src.models.workspace import WorkspaceMember

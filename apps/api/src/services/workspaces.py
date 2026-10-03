@@ -181,6 +181,7 @@ class WorkspaceService:
         ip_address: str | None = None,
         allow_single_workspace_bootstrap: bool = False,
     ) -> Workspace:
+        name = name.strip()
         if self.single_workspace_enabled() and not allow_single_workspace_bootstrap:
             existing = await self.get_single_workspace()
             if existing is not None:
@@ -251,6 +252,8 @@ class WorkspaceService:
         if workspace is None:
             raise WorkspaceError("workspace not found")
         changes: dict = {}
+        if name is not None:
+            name = name.strip()
         if name is not None and name != workspace.name:
             changes["name"] = {"from": workspace.name, "to": name}
             workspace.name = name
@@ -1121,6 +1124,7 @@ class WorkspaceService:
         actor: User | None = None,
         ip_address: str | None = None,
     ) -> Role:
+        name = name.strip()
         assignable: set[str] = set()
         is_owner = False
         if actor is not None:
@@ -1163,6 +1167,8 @@ class WorkspaceService:
         actor: User | None = None,
         ip_address: str | None = None,
     ) -> Role:
+        if name is not None:
+            name = name.strip()
         role = await self.get_role(workspace_id, role_id)
         if is_owner_role_name(role.name):
             raise WorkspaceForbidden("the owner role cannot be edited")
