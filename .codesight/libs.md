@@ -207,7 +207,7 @@
   - function get_provider: (provider_id) -> ProviderConfig
   - function build_authorize_url: (provider, doc, Any], cache, redirect_uri) -> str
   - function consume_state: (cache, state) -> dict[str, Any]
-  - function claims_from_id_token: (provider, doc, Any], id_token) -> dict[str, Any] | None
+  - function claims_from_id_token: (provider, doc, Any], id_token, cache) -> Any] | None
   - function normalize_identity: (*, provider_id, claims, Any] | None, userinfo, Any]) -> dict[str, Any]
   - function exchange_code: (provider, doc, Any], *, code, redirect_uri) -> dict[str, Any]
   - _...3 more_
