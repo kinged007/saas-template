@@ -363,6 +363,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }
 
   // Workspace known but not yet selected: block until the effect picks one.
+  // Zero workspaces is deliberately not this gate — RequireWorkspace in App.tsx
+  // owns it, because the provider also wraps the workspace-free routes.
   if (workspaces.length > 0 && !selected) {
     return null;
   }
