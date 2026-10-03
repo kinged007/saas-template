@@ -133,8 +133,8 @@ async def test_role_created_with_padded_name_is_granted(
 async def test_custom_default_role_cannot_manage_existing_members(
     app_client, single_workspace_on, monkeypatch
 ):
-    # The .env.example / settings.py note is only true because the role-change
-    # path checks the literal role name, not the permission list.
+    # The .env.example / settings.py note is only true because these paths
+    # check the role name, not the permission list.
     tokens, ws_id = await _first_workspace(app_client)
     headers = {**auth_headers(tokens), "X-Workspace-ID": ws_id}
     created = await app_client.post(
@@ -162,6 +162,21 @@ async def test_custom_default_role_cannot_manage_existing_members(
     # Changing an existing member's role is name-gated, so it is not.
     resp = await app_client.patch(
         f"/api/v1/members/{target['membership_id']}", json={"role_id": ops_id}, headers=ops
+    )
+    assert resp.status_code == 403, resp.text
+
+    # Neither is suspending or reactivating one.
+    for action in ("suspend", "reactivate"):
+        resp = await app_client.post(
+            f"/api/v1/members/{target['membership_id']}/{action}", headers=ops
+        )
+        assert resp.status_code == 403, (action, resp.text)
+
+    # Nor transferring ownership, which needs "owner" rather than "owner"/"admin".
+    resp = await app_client.post(
+        f"/api/v1/workspaces/{ws_id}/transfer",
+        json={"new_owner_membership_id": target["membership_id"]},
+        headers=ops,
     )
     assert resp.status_code == 403, resp.text
 
