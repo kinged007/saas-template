@@ -19,6 +19,7 @@ Covers, end to end over the HTTP API:
 
 from src.core.permissions import ALL_PERMISSIONS, JOB_READ, JOB_UPDATE, permissions_for_role
 from src.db.session import SessionFactory
+from src.models.jobs import JobDefinition
 from src.services.notifications import NotificationService
 from tests.conftest import (
     auth_headers,
@@ -935,6 +936,62 @@ async def test_one_quota_unit_cannot_be_spent_twice(app_client):
     async with SessionFactory() as verify:
         row = await verify.get(ApiKey, capped["id"])
         assert row.usage_count == 1, "a refused charge must not be spent"
+
+
+async def _seed_definition(workspace_id: str) -> str:
+    """A workspace-scoped definition row, bypassing async provisioning."""
+    import uuid
+
+    async with SessionFactory() as session:
+        definition = JobDefinition(
+            id=str(uuid.uuid4()),
+            key="test.echo",
+            workspace_id=workspace_id,
+            name="Echo",
+            description="",
+            cron_schedule="0 6 * * *",
+            params_schema={},
+            params={},
+            enabled=False,
+        )
+        session.add(definition)
+        await session.commit()
+        return definition.id
+
+
+async def test_job_definition_access_uses_the_keys_own_permissions(app_client):
+    """A definition is authorized against the key's own permission list and its
+    own workspace — a foreign-workspace key gets 404, never the definition."""
+    client = app_client
+    owner = await register_user(client, "jobdef-owner@example.com")
+    ws = await create_workspace(client, owner, "Jobdef Owner Inc")
+    headers = ws_headers(owner, ws["id"])
+    definition_id = await _seed_definition(ws["id"])
+    other = await register_user(client, "jobdef-other@example.com")
+    foreign_ws = await create_workspace(client, other, "Jobdef Other Inc")
+    foreign_id = await _seed_definition(foreign_ws["id"])
+
+    # A key scoped to another workspace learns nothing about this definition,
+    # whichever workspace header it carries.
+    foreign_headers = ws_headers(other, foreign_ws["id"])
+    for header_ws in (ws["id"], foreign_ws["id"]):
+        key = await _create_key(client, foreign_headers, "jobdef", [JOB_READ])
+        resp = await client.get(
+            f"/api/v1/jobs/{definition_id}", headers=_key_headers(key["key"], header_ws)
+        )
+        assert resp.status_code == 404, (header_ws, resp.status_code, resp.text)
+
+    # The owner's own key still reads its own definition, and not the other one.
+    own = await _create_key(client, headers, "jobdef-own", [JOB_READ])
+    ok = await client.get(
+        f"/api/v1/jobs/{definition_id}", headers=_key_headers(own["key"], ws["id"])
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["id"] == definition_id
+    resp = await client.get(
+        f"/api/v1/jobs/{foreign_id}", headers=_key_headers(own["key"], ws["id"])
+    )
+    assert resp.status_code == 404, resp.text
 
 
 async def test_key_cannot_enroll_two_factor(app_client):

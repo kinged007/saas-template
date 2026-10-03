@@ -202,12 +202,13 @@ async def _require_run_access(
 ) -> None:
     """Global runs are superuser-only; workspace runs need jobs:read there.
 
-    Mirrors _require_job_access: an API key is authorized by its own
-    permission list and stays inside its own workspace — never by the
-    creator's role, and never over a global run. A key that passes spends one
-    unit of its usage quota, the same charge require_permission makes, and
-    `response` is what makes that charge observable (the quota headers) — so
-    callers must thread their own Response through, never drop it.
+    An API key is authorized by its own permission list and stays inside its
+    own workspace — never by the creator's role, and never over a global run.
+    A key outside the run's workspace gets 404, a session user who is not a
+    member gets 403. A key that passes spends one unit of its usage quota, the
+    same charge require_permission makes, and `response` is what makes that
+    charge observable (the quota headers) — so callers must thread their own
+    Response through, never drop it.
     """
     if run.workspace_id is None:
         if not principal.is_deployment_admin:
@@ -216,7 +217,7 @@ async def _require_run_access(
     if principal.api_key is not None:
         api_key = principal.api_key
         if api_key.workspace_id != run.workspace_id:
-            # Hide cross-workspace existence.
+            # A key learns nothing about runs outside its own workspace.
             raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
         if "*" in api_key.permissions or JOB_READ in api_key.permissions:
             await record_key_use(api_key, db, response)
@@ -242,9 +243,10 @@ async def _require_job_access(
 ) -> None:
     """Unified check: global → superuser, workspace → jobs:read/update.
 
-    A key that passes spends one unit of its usage quota through
-    record_key_use, and `response` is what makes that charge observable (the
-    quota headers) — callers must thread their own Response through, never
+    A key outside the definition's workspace gets 404, a session user who is
+    not a member gets 403. A key that passes spends one unit of its usage quota
+    through record_key_use, and `response` is what makes that charge observable
+    (the quota headers) — callers must thread their own Response through, never
     drop it.
     """
     required = JOB_UPDATE if need_edit else JOB_READ
@@ -265,8 +267,7 @@ async def _require_job_access(
         definition.workspace_id, principal.user.id, active_only=True
     )
     if membership is None:
-        # Hide cross-workspace existence (isolation test expects 404, not 403)
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership
     if "*" in role.permissions or required in role.permissions:
         return
