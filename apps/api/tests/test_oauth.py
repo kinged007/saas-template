@@ -14,6 +14,7 @@ from src.models.workspace import User
 from src.services import oauth as oauth_svc
 from src.settings import settings
 from tests.conftest import auth_headers, break_single_workspace_join, register_user
+from tests.test_auth_2fa_sessions import _totp_for
 
 PROVIDERS = [
     {
@@ -275,6 +276,95 @@ async def test_oauth_callback_survives_join_failure(app_client, oauth_on, monkey
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens.json()))
     assert me.status_code == 200, me.text
     assert me.json()["workspaces"] == []
+
+
+async def test_oauth_callback_joins_before_issuing_tokens(app_client, oauth_on, monkeypatch):
+    # The join can roll back and hand back a different instance, so issue_tokens
+    # has to be called after it and with whatever it returned.
+    import src.api.routes.oauth as oauth_routes
+    from src.services.auth import AuthService
+
+    _mock_oauth(monkeypatch)
+    order: list[str] = []
+    handed: list[User] = []
+    received: list[User] = []
+    real_issue = AuthService.issue_tokens
+
+    async def rec_join(db, container, user):
+        order.append("join")
+        # A real failed join re-reads the user in another session, so mimic that
+        # here: a distinct instance makes the identity assertion below bite.
+        async with SessionFactory() as other:
+            handed.append(await AuthService(other).get_user(user.id))
+        return handed[-1]
+
+    async def rec_issue(self, user, **kwargs):
+        order.append("tokens")
+        received.append(user)
+        return await real_issue(self, user, **kwargs)
+
+    monkeypatch.setattr(oauth_routes, "_join_single_workspace_best_effort", rec_join)
+    monkeypatch.setattr(AuthService, "issue_tokens", rec_issue)
+
+    _, resp = await _callback(app_client, monkeypatch)
+    assert resp.status_code == 302, resp.text
+    assert order == ["join", "tokens"]
+    assert received == handed
+
+
+async def test_oauth_2fa_user_is_joined(app_client, oauth_on, monkeypatch):
+    # A 2FA-enrolled OAuth user is parked for the challenge before any join
+    # used to run, so they ended up with no workspace at all.
+    monkeypatch.setattr(settings, "single_workspace", True)
+    owner = await register_user(app_client, "owner@example.com")
+    ws_id = (await app_client.get("/api/v1/auth/me", headers=auth_headers(owner))).json()[
+        "workspaces"
+    ][0]["id"]
+    # Enrol outside the single-workspace window so only the OAuth callback can join.
+    monkeypatch.setattr(settings, "single_workspace", False)
+    sso = await register_user(app_client, "sso@example.com")
+    setup_token, code = await _totp_for(app_client, auth_headers(sso))
+    enabled = await app_client.post(
+        "/api/v1/auth/2fa/enable",
+        json={"setup_token": setup_token, "code": code},
+        headers=auth_headers(sso),
+    )
+    assert enabled.status_code == 200, enabled.text
+    backup_code = enabled.json()["backup_codes"][0]
+    monkeypatch.setattr(settings, "single_workspace", True)
+
+    _mock_oauth(monkeypatch, email="sso@example.com")
+    _, resp = await _callback(app_client, monkeypatch)
+    assert resp.status_code == 302, resp.text
+    tokens = await app_client.post(
+        "/api/v1/auth/oauth/token", json={"code": resp.headers["location"].split("code=")[1]}
+    )
+    assert tokens.json()["two_factor_required"] is True
+    done = await app_client.post(
+        "/api/v1/auth/2fa/login",
+        json={"challenge_token": tokens.json()["challenge_token"], "code": backup_code},
+    )
+    assert done.status_code == 200, done.text
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(done.json()))
+    assert [w["id"] for w in me.json()["workspaces"]] == [ws_id]
+
+
+async def test_oauth_callback_account_gone_redirects(app_client, oauth_on, monkeypatch):
+    # The join's "account no longer exists" guard must leave the browser flow
+    # as a redirect, not a JSON 401 body mid-redirect.
+    from src.services.auth import AuthService
+
+    monkeypatch.setattr(settings, "single_workspace", True)
+    await break_single_workspace_join(app_client)
+    _mock_oauth(monkeypatch)
+
+    async def gone(self, user_id):
+        return None
+
+    monkeypatch.setattr(AuthService, "get_user", gone)
+    _, resp = await _callback(app_client, monkeypatch)
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "http://localhost:5173/login?error=sign-in%20failed"
 
 
 async def test_oauth_new_user_blocked_when_registration_disabled(app_client, oauth_on, monkeypatch):

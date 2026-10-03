@@ -412,7 +412,6 @@
 - `apps/api/src/api/crud.py`
   - function parse_query: (request, *, max_limit) -> QuerySpec
   - function apply_query: (stmt, model, spec, *, sortable, filterable) -> Select
-  - function run_list: (session, stmt, model, request, *, sortable, filterable) -> tuple[list[Any], int]
   - class QuerySpec
   - class InvalidQuery
 - `apps/api/src/api/deps.py`
