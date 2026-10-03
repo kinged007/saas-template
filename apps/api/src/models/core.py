@@ -22,7 +22,8 @@ class Invitation(Base, TimestampMixin):
     token: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), default="pending", nullable=False
-    )  # pending|accepted|declined|revoked|expired
+    )  # pending|accepted|declined|revoked|expired  (keep in step with `InvitationStatus`
+    # in apps/web/src/types.ts; tests/test_invitation_status_vocabulary.py fails on drift)
     expires_at: Mapped[object] = mapped_column(DateTime(timezone=True), nullable=False)
     accepted_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
