@@ -28,3 +28,13 @@ export const rolePickerCapNotice = (total: number, roles: Role[]): string | null
   const pickable = Math.max(0, total - (roles.length - assignable.length));
   return roleCapNotice(assignable.length, pickable);
 };
+
+// The notice is the accessible description of the trigger it annotates, so a
+// whitespace-only string has to be no notice at all: `aria-describedby` would
+// still resolve to the paragraph and announce an empty description. Call it
+// once, where the notice is produced (MembersPage), so the notice and the two
+// `aria-describedby` gates read the same value.
+export const roleCapNoticeText = (text: string | null): string | null => {
+  const trimmed = text?.trim();
+  return trimmed ? trimmed : null;
+};
