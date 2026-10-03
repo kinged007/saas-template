@@ -43,7 +43,10 @@ const EXEMPT_PREFIXES = ["/settings/profile", "/settings/workspace"];
  * blocked, rather than redirecting from an effect. A gated page must not mount
  * at all: pages that write the URL from their own mount effect (InboxPage
  * syncing its tab to the query string) re-assert the location after any
- * redirect and land the member on a page whose every request 403s.
+ * redirect and land the member on a page whose every request 403s. The same
+ * applies while the verdict is still unknown: WorkspaceContext can render its
+ * children from the persisted identity before /me lands, and a page that
+ * mounts in that window fires the workspace-scoped calls the gate refuses.
  */
 export function WorkspaceSecurityGuard({ children }: { children: ReactNode }) {
   const { workspace } = useWorkspace();
@@ -58,7 +61,10 @@ export function WorkspaceSecurityGuard({ children }: { children: ReactNode }) {
     () => undefined,
   );
 
-  if (!identity || !workspace) return <>{children}</>;
+  if (!identity) return null;
+  // No workspace selected: nothing to enforce, and the workspace list and
+  // create pages have to render.
+  if (!workspace) return <>{children}</>;
   if (!workspace.require_2fa || workspace.two_factor_verified) return <>{children}</>;
   if (EXEMPT_PREFIXES.some((prefix) => location.pathname.startsWith(prefix))) return <>{children}</>;
 

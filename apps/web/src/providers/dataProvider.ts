@@ -181,12 +181,15 @@ httpClient.interceptors.response.use(
       // a cached identity. Invalidate the query WorkspaceSecurityGuard reads,
       // so it redirects to the 2FA setup flow instead of leaving the user on
       // a page of failed requests. Skipped when the cached identity already
-      // reports the gated verdict: a page fanning out N gated queries would
-      // otherwise trigger N identity refetches for a verdict that is not going
-      // to change.
+      // reports this request's workspace as gated: a page fanning out N gated
+      // queries would otherwise trigger N identity refetches for a verdict
+      // that is not going to change. Scoped to the workspace the request
+      // names, not any workspace — a member of a second, already-gated
+      // workspace must still pick up a requirement turned on for this one.
+      const workspaceId = String(original?.headers?.["X-Workspace-ID"] ?? "");
       const cached = queryClient.getQueryData<Identity>(["auth", "identity"]);
       const alreadyGated = cached?.workspaces?.some(
-        (ws) => ws.require_2fa && !ws.two_factor_verified,
+        (ws) => ws.id === workspaceId && ws.require_2fa && !ws.two_factor_verified,
       );
       if (!alreadyGated) {
         queryClient.invalidateQueries({ queryKey: ["auth", "identity"] });

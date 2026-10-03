@@ -1,6 +1,11 @@
 """Workspace-level 2FA enforcement (docs/FEATURE_FLAGS.md: require_2fa)."""
 
+import pytest
+from fastapi import HTTPException, Request
+
+from src.api.deps import AuthPrincipal, enforce_workspace_security
 from src.core.security.totp import current_code, secret_from_base32
+from src.models.workspace import User
 from tests.conftest import (
     auth_headers,
     create_workspace,
@@ -470,3 +475,19 @@ async def test_transfer_is_gated_and_leaving_is_not(app_client):
         f"/api/v1/workspaces/{ws['id']}/transfer", json=transfer, headers=owner_headers
     )
     assert resp.status_code == 200, resp.text
+
+
+async def test_gate_refuses_a_session_principal_with_no_session_row():
+    """The verdict lives on the session row, so no row means no verdict.
+
+    Unreachable through a route today (every `create_access_token` call site
+    passes the row id), so the gate is called directly: the branch exists so a
+    future token that forgot the session id cannot open the gate silently.
+    """
+    request = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+    principal = AuthPrincipal(user=User(id="sec-nosession"), session_id=None)
+
+    with pytest.raises(HTTPException) as refusal:
+        await enforce_workspace_security(principal, "ws-1", None, request)
+    assert refusal.value.status_code == 403
+    assert refusal.value.detail["code"] == "2fa_required_for_workspace"
