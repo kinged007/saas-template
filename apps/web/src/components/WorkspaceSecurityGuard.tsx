@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import { Navigate, useLocation } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -10,10 +10,16 @@ export const TWO_FACTOR_SETUP_PATH = "/settings/profile/security";
 
 // The redirect is skipped on the pages that stay reachable without clearing
 // the requirement: the 2FA setup flow itself (re-redirecting would loop) and
-// the workspace Security tab, which is where an admin who has no 2FA turns
-// the requirement back off. The API route is exempt for the same reason
-// (skip_workspace_security); exempting only the API would leave no way back.
-const EXEMPT_PREFIXES = ["/settings/profile", "/settings/workspace/security"];
+// the workspace settings shell, which holds the Security tab — where an admin
+// who has no 2FA turns the requirement back off. The API route is exempt for
+// the same reason (skip_workspace_security); exempting only the API would
+// leave no way back. The shell is exempt because that is what the user menu's
+// "Workspace Settings" entry lands on: exempting only the Security leaf would
+// make the toggle reachable by URL but not by navigation.
+//
+// The backend refuses every other workspace-scoped call for this session
+// anyway, so nothing beyond the settings shell is reachable by clicking.
+const EXEMPT_PREFIXES = ["/settings/profile", "/settings/workspace"];
 
 /**
  * Sends members to the 2FA setup flow when the active workspace requires 2FA
@@ -32,8 +38,14 @@ const EXEMPT_PREFIXES = ["/settings/profile", "/settings/workspace/security"];
  * identity query, and an extra observer mounted above the routed content can
  * wedge it (see the note in WorkspaceContext). This is the same
  * cache-subscription pattern that provider uses.
+ *
+ * Takes the routed content as children and withholds it while the session is
+ * blocked, rather than redirecting from an effect. A gated page must not mount
+ * at all: pages that write the URL from their own mount effect (InboxPage
+ * syncing its tab to the query string) re-assert the location after any
+ * redirect and land the member on a page whose every request 403s.
  */
-export function WorkspaceSecurityGuard() {
+export function WorkspaceSecurityGuard({ children }: { children: ReactNode }) {
   const { workspace } = useWorkspace();
   const queryClient = useQueryClient();
   const location = useLocation();
@@ -46,9 +58,9 @@ export function WorkspaceSecurityGuard() {
     () => undefined,
   );
 
-  if (!identity || !workspace) return null;
-  if (!workspace.require_2fa || workspace.two_factor_verified) return null;
-  if (EXEMPT_PREFIXES.some((prefix) => location.pathname.startsWith(prefix))) return null;
+  if (!identity || !workspace) return <>{children}</>;
+  if (!workspace.require_2fa || workspace.two_factor_verified) return <>{children}</>;
+  if (EXEMPT_PREFIXES.some((prefix) => location.pathname.startsWith(prefix))) return <>{children}</>;
 
   return <Navigate to={TWO_FACTOR_SETUP_PATH} replace />;
 }

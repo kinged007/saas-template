@@ -136,7 +136,8 @@ export function SecuritySection() {
             authenticator app, so they are exempt. Keys issued before this setting was turned on
             keep working. Leaving a workspace is exempt too, so a member this setting refuses is
             never trapped in it. The live notification socket is user-scoped rather than
-            workspace-scoped, so it stays open for members this setting refuses.
+            workspace-scoped, so it stays open for members this setting refuses. Pages that carry
+            no workspace id — your workspace list, invitations, notifications — are not covered.
           </p>
         </CardContent>
       </Card>

@@ -4,6 +4,7 @@ import dataProviderModule from "@refinedev/simple-rest";
 
 import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId, sessionHint } from "../utils/storage";
 import { clearAllCaches, queryClient } from "./queryClient";
+import type { Identity } from "../types";
 
 // Same-origin API path: the vite dev proxy (and nginx in production) forwards
 // /api → backend, so no CORS/absolute-URL issues regardless of how the app is
@@ -179,8 +180,17 @@ httpClient.interceptors.response.use(
       // An admin turned the requirement on while this session was sitting on
       // a cached identity. Invalidate the query WorkspaceSecurityGuard reads,
       // so it redirects to the 2FA setup flow instead of leaving the user on
-      // a page of failed requests.
-      queryClient.invalidateQueries({ queryKey: ["auth", "identity"] });
+      // a page of failed requests. Skipped when the cached identity already
+      // reports the gated verdict: a page fanning out N gated queries would
+      // otherwise trigger N identity refetches for a verdict that is not going
+      // to change.
+      const cached = queryClient.getQueryData<Identity>(["auth", "identity"]);
+      const alreadyGated = cached?.workspaces?.some(
+        (ws) => ws.require_2fa && !ws.two_factor_verified,
+      );
+      if (!alreadyGated) {
+        queryClient.invalidateQueries({ queryKey: ["auth", "identity"] });
+      }
     }
     return Promise.reject(error);
   },

@@ -62,10 +62,16 @@ Exemptions are deliberate:
 - **The WebSocket** at `ws://…/ws` is user-scoped, not workspace-scoped, so it
   stays outside the gate: a member this setting refuses still receives live
   notifications.
+- **The superuser flags endpoint** (`PATCH /admin/workspaces/{id}/flags`). It
+  edits the same `flags` blob but is audited under `workspace.flags_updated`,
+  not `workspace.security_updated`, and is reserved for superusers.
 
 Every other route whose path carries a workspace id is gated, including
 `POST /workspaces/{id}/transfer`, which calls `enforce_workspace_security`
 directly because its authority is the owner role rather than a permission.
+
+Routes whose path carries no workspace id — `GET /workspaces`, the invitation
+routes, the notification routes — are not gated either.
 
 `onboarding_enabled` is the one flag also writable by non-superusers, through
 `PATCH /workspaces/{id}` (`workspace:update`, i.e. owners and admins) rather

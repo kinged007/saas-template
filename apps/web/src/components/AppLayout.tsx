@@ -343,7 +343,6 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <SidebarProvider>
-      <WorkspaceSecurityGuard />
       <Sidebar collapsible="icon">
         <SidebarHeader>
           <div className="flex items-center gap-2 px-2 py-1 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:px-0">
@@ -398,7 +397,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         </header>
         <main className="container mx-auto flex min-h-0 flex-1 flex-col gap-4 p-4 md:p-6">
           {/* Global page bottom padding; full-height pages opt out via .page-flush (see InboxPage). */}
-          <div className="flex min-h-0 flex-1 flex-col [&>*:not(.page-flush)]:pb-[2em]">{children}</div>
+          <div className="flex min-h-0 flex-1 flex-col [&>*:not(.page-flush)]:pb-[2em]">
+            <WorkspaceSecurityGuard>{children}</WorkspaceSecurityGuard>
+          </div>
         </main>
       </SidebarInset>
     </SidebarProvider>

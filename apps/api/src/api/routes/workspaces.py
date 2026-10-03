@@ -291,6 +291,13 @@ async def transfer_ownership(
 ):
     # Called directly because this route has no permission dependency, so the
     # gate has no automatic entry point here.
+    #
+    # It runs before the owner-role check inside transfer_ownership, which is
+    # the reverse of the require_permission ordering ("after the permission
+    # check"). There is no permission to check here: the authority is the owner
+    # role the service resolves, and reusing it as a dependency would duplicate
+    # that lookup. Both outcomes are 403 and neither discloses membership, so a
+    # caller who cannot transfer either way learns nothing from the code.
     await enforce_workspace_security(principal, workspace_id, db, request)
     try:
         member = await WorkspaceService(db, container.bus).transfer_ownership(

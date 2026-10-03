@@ -207,8 +207,20 @@ async def enforce_workspace_security(
     Raises 403 with a machine-readable `code` so the frontend can redirect to
     the 2FA setup flow instead of showing a generic failure.
     """
-    if principal.api_key is not None or principal.session_id is None:
+    if principal.api_key is not None:
         return
+    if principal.session_id is None:
+        # Fail secure. A session principal with no session row cannot carry a
+        # 2FA verdict, so refusing beats passing: this branch is unreachable
+        # today (every `create_access_token` call site passes the row id) and a
+        # future one that forgot would otherwise open the gate silently.
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            {
+                "code": "2fa_required_for_workspace",
+                "detail": "this session cannot be checked against the workspace 2FA requirement",
+            },
+        )
     if workspace_id is None:
         # User-scoped routes pass the optional workspace id. With no workspace
         # selected there is no security posture to enforce.
