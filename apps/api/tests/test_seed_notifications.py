@@ -22,6 +22,7 @@ from sqlalchemy import select
 
 from src.db.session import SessionFactory
 from src.models.core import Invitation, Notification
+from src.settings import settings
 from src.workflows import INVITATIONS_ROUTE
 
 
@@ -45,8 +46,13 @@ def test_seed_and_workflow_share_one_route_constant():
     assert seed.INVITATIONS_ROUTE is INVITATIONS_ROUTE
 
 
-async def test_seed_invitation_notifications_carry_url():
+async def test_seed_invitation_notifications_carry_url(monkeypatch):
+    from src.seed import _notifications
     from src.seed import main as seed_main
+
+    # The exact-count assertions below hold only in default mode; the flag is
+    # env-driven, so pin it rather than depend on the runner's environment.
+    monkeypatch.setattr(settings, "single_workspace", False)
 
     await seed_main()
 
@@ -55,6 +61,13 @@ async def test_seed_invitation_notifications_carry_url():
         pending_q = select(Invitation.id).where(Invitation.status == "pending")
         pending = set((await session.execute(pending_q)).scalars().all())
 
+    # One notification per fixture row. "at least one" would still pass while a
+    # defect drops the rest (#586).
+    assert len(rows) == len(_notifications()), (
+        f"the seed must create one notification per fixture row: "
+        f"{len(_notifications())} fixture rows -> {len(rows)} notifications"
+    )
+
     invitations = [n for n in rows if n.type == "workspace_invitation"]
     assert invitations, "seed should create workspace_invitation notifications"
 
@@ -62,16 +75,16 @@ async def test_seed_invitation_notifications_carry_url():
         _assert_carries_url(n)
 
     # Only rows backed by a real pending invitation carry the invite id, one
-    # link per notification. The subset check runs before distinctness: a
+    # link per notification. The resolve check runs before distinctness: a
     # dangling id is the worse defect, and the distinctness failure would
     # otherwise report in its place (#581).
     with_invite = [
         n.payload["invitation_id"] for n in invitations if (n.payload or {}).get("invitation_id")
     ]
-    assert with_invite, "seed should link at least one notification to a pending invitation"
-    assert set(with_invite) <= pending, (
-        f"invitation_id must name a pending invitation; dangling: "
-        f"{sorted(set(with_invite) - pending)}"
+    assert set(with_invite) == pending, (
+        f"every pending invitation must be linked and every link must resolve; "
+        f"unlinked: {sorted(pending - set(with_invite))}, "
+        f"dangling: {sorted(set(with_invite) - pending)}"
     )
     assert len(with_invite) == len(set(with_invite)), (
         f"each notification should link to a distinct invitation, got {sorted(with_invite)}"
