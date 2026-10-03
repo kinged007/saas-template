@@ -8,11 +8,21 @@
  * replay — which the backend treats as a stolen token and answers by revoking
  * the user's sessions.
  *
- * The Web Locks API serialises the exchange across tabs of one origin, and the
- * late tab then sends the cookie the winner already replaced. It is
- * cross-context (not just cross-tab) and is released when a tab dies, which a
- * promise guard does not give us. Browsers without it fall back to running
- * unguarded, exactly as before.
+ * The Web Locks API serialises the exchange across tabs of one origin, so the
+ * late tab sends the cookie the winner already replaced and never presents an
+ * already-used token. That is the whole of what it buys: a benign double-refresh
+ * is no longer read as a compromise, so the user's other devices keep their
+ * sessions.
+ *
+ * It does NOT keep sibling tabs signed in. Rotation replaces the session row
+ * rather than adding to it, every access token carries that row id as `sid`,
+ * and the API validates `sid` live on each request (`deps.py`). The losing tab
+ * therefore still gets `401 session revoked` and force-logs out. Fixing that
+ * needs a rotation grace period, tracked in #924.
+ *
+ * The lock is cross-context (not just cross-tab) and is released when a tab
+ * dies, which a promise guard does not give us. Browsers without it fall back
+ * to running unguarded, exactly as before.
  */
 
 const REFRESH_LOCK = "saas-template:auth-refresh";

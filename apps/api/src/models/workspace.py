@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.base import Base, StringUUID, TimestampMixin
+
+# Why a refresh token row died. Only "rotated" means "was exchanged, so a later
+# presentation of it is a replay" — the reuse signal keys off it, so a typo here
+# silently disarms that security check. One literal, shared by every writer.
+RevokeReason = Literal["rotated", "user", "logout", "password", "reuse"]
 
 
 class User(Base, TimestampMixin):
@@ -68,10 +74,7 @@ class RefreshToken(Base, TimestampMixin):
     token_hash: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     expires_at: Mapped[object] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # Why the row died: rotated | user | logout | password | reuse.
-    # Only "rotated" means "was exchanged, so a replay is a compromise" — the
-    # other values are ordinary user actions and must not arm that signal.
-    revoke_reason: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    revoke_reason: Mapped[RevokeReason | None] = mapped_column(String(20), nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
 

@@ -13,7 +13,7 @@ from src.core.security.password import PasswordHasher
 from src.core.security.tokens import OpaqueToken, create_access_token
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
-from src.models.workspace import AuthToken, RefreshToken, User
+from src.models.workspace import AuthToken, RefreshToken, RevokeReason, User
 from src.services.profile_helpers import format_display_name
 from src.settings import settings
 
@@ -22,9 +22,6 @@ VERIFY_TOKEN_TTL = timedelta(hours=24)
 
 RESET_PURPOSE = "password_reset"
 VERIFY_PURPOSE = "email_verification"
-
-# The only revoke reason that arms the refresh-token-reuse signal.
-ROTATED = "rotated"
 
 RevokeSessionsAction = Literal["user.sessions_revoked", "user.refresh_token_reuse"]
 
@@ -334,7 +331,7 @@ class AuthService:
         if ensure_utc(row.expires_at) < now_utc():
             raise AuthError("refresh token expired")
         if row.revoked_at is not None:
-            if row.revoke_reason != ROTATED:
+            if row.revoke_reason != "rotated":
                 # Revoked by a user action (logout, "revoke other sessions",
                 # password change). Replaying it is a stale cookie, not theft.
                 raise AuthError("invalid refresh token")
@@ -363,7 +360,7 @@ class AuthService:
         if user is None or not user.is_active:
             raise AuthError("account is disabled")
         row.revoked_at = now_utc()
-        row.revoke_reason = ROTATED
+        row.revoke_reason = "rotated"
         await self._session.commit()
         pair = await self.issue_tokens(user, ip_address=ip_address, user_agent=user_agent)
         await publish_audit(
@@ -416,7 +413,7 @@ class AuthService:
         current_session_id: str | None,
         ip_address: str | None = None,
         action: RevokeSessionsAction = "user.sessions_revoked",
-        revoke_reason: str = "user",
+        revoke_reason: RevokeReason = "user",
         actor_user_id: str | None,
         details: dict[str, object] | None = None,
     ) -> int:

@@ -152,11 +152,13 @@ async def test_concurrent_refresh_of_one_token_is_deterministic(app_client):
     """Two racing rotations of one token never lock the user out.
 
     The SPA serialises this with the Web Locks API (see providers/refreshLock.ts),
-    so the server only sees it from a client that does not. How many of the two
-    requests win depends on the storage engine — ``with_for_update()`` is a real
-    row lock on Postgres and a no-op on the in-memory sqlite the suite runs on —
-    so the invariant asserted here is the one that holds either way: nobody
-    beyond the rotation is disabled, and a fresh login always works.
+    so the server only sees it from a client that does not. The two outcomes split
+    on the storage engine, because ``with_for_update()`` is a real row lock on
+    Postgres and a no-op on the sqlite the suite runs on: Postgres serialises the
+    two and answers the loser from the reuse branch, sqlite lets both read a live
+    row and answers 200 twice. Asserting either outcome would be an assertion that
+    cannot fail, so this pins the three properties that hold either way and that a
+    regression in the reuse gate would break.
     """
     import asyncio
 
@@ -168,11 +170,16 @@ async def test_concurrent_refresh_of_one_token_is_deterministic(app_client):
         client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]}),
         client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]}),
     )
-    assert first.status_code in (200, 401), first.text
-    assert second.status_code in (200, 401), second.text
+    # The race must not lose the token outright. If the reuse signal ever fires on
+    # a row that was not rotated, both racers take the 401 path and the user has no
+    # live session and no token to retry with.
+    assert 200 in (first.status_code, second.status_code), (first.text, second.text)
     for resp in (first, second):
-        if resp.status_code == 401:
-            assert resp.json()["detail"] == "invalid refresh token"
+        # Whoever loses loses to the same no-oracle 401 an unknown token gets, so a
+        # loser cannot tell itself apart from a stranger probing for valid hashes.
+        assert resp.status_code in (200, 401), resp.text
+        if resp.status_code != 200:
+            assert resp.json()["detail"] == "invalid refresh token", resp.text
 
     # signed out at worst, never disabled: the user can always get back in
     t3 = await login(client, "race@example.com")
