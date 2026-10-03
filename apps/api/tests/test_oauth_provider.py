@@ -25,7 +25,7 @@ from urllib.parse import parse_qs
 
 import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from src.core.cache import TtlCache
 from src.services.oauth import (
@@ -42,12 +42,14 @@ from src.settings import settings
 CLIENT_ID = "cid"
 CLIENT_SECRET = "csecret"
 KID = "stub-key-1"
+EC_KID = "stub-ec-1"
 REDIRECT_URI = "http://localhost:8000/api/v1/auth/oauth/stub/callback"
 
 
-def _jwk(key: rsa.RSAPrivateKey, kid: str) -> dict[str, Any]:
-    pub = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
-    return {**pub, "kid": kid, "use": "sig", "alg": "RS256"}
+def _jwk(key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey, kid: str, alg: str) -> dict[str, Any]:
+    algo = {"RS256": jwt.algorithms.RSAAlgorithm, "ES256": jwt.algorithms.ECAlgorithm}[alg]
+    pub = json.loads(algo.to_jwk(key.public_key()))
+    return {**pub, "kid": kid, "use": "sig", "alg": alg}
 
 
 class _StubIdP:
@@ -59,7 +61,9 @@ class _StubIdP:
 
     def __init__(self) -> None:
         self.signing_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        self.ec_key = ec.generate_private_key(ec.SECP256R1())
         self.other_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        self.other_ec_key = ec.generate_private_key(ec.SECP256R1())
         self.hits: list[str] = []
         self.token_forms: list[dict[str, list[str]]] = []
         self.auth_headers: list[str] = []
@@ -91,7 +95,7 @@ class _StubIdP:
         self,
         *,
         kid: str = KID,
-        key: rsa.RSAPrivateKey | None = None,
+        key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey | None = None,
         alg: str = "RS256",
         **claims: Any,
     ) -> str:
@@ -130,7 +134,11 @@ class _StubIdP:
                 if self.path.startswith("/.well-known/openid-configuration"):
                     self._send(200, stub.doc)
                 elif self.path == "/jwks":
-                    self._send(200, {"keys": [_jwk(stub.signing_key, KID)]})
+                    keys = [
+                        _jwk(stub.signing_key, KID, "RS256"),
+                        _jwk(stub.ec_key, EC_KID, "ES256"),
+                    ]
+                    self._send(200, {"keys": keys})
                 elif self.path == "/userinfo":
                     stub.auth_headers.append(self.headers.get("Authorization", ""))
                     self._send(
@@ -175,7 +183,7 @@ def idp():
 async def _clean_db():
     """No-op override of the autouse fixture in conftest.
 
-    These tests never touch the database, and each default drop/recreate cycle
+    These tests never touch the database, and each default unlink/recreate cycle
     churns the SQLite file the whole suite shares (#319). Skipping it here keeps
     13 pointless teardowns out of every full run.
     """
@@ -236,6 +244,55 @@ def test_claims_from_id_token_accepts_valid_rs256(provider, idp):
     assert claims is not None
     assert claims["sub"] == "sub-1"
     assert claims["email"] == "user@example.com"
+
+
+def test_claims_from_id_token_accepts_valid_es256(provider, idp):
+    """Second half of the RS256/ES256 allow-list: some Entra and Okta configs serve ES256."""
+    claims = claims_from_id_token(
+        provider, idp.doc, idp.mint(kid=EC_KID, key=idp.ec_key, alg="ES256")
+    )
+    assert claims is not None
+    assert claims["sub"] == "sub-1"
+    assert claims["email"] == "user@example.com"
+
+
+def test_claims_from_id_token_rejects_es256_token_signed_by_another_ec_key(provider, idp):
+    """Negative control for the ES256 half: same kid, different EC key. Only a real
+    signature check catches this, and the RS256 twin says nothing about EC."""
+    claims = claims_from_id_token(
+        provider, idp.doc, idp.mint(kid=EC_KID, key=idp.other_ec_key, alg="ES256")
+    )
+    assert claims is None
+
+
+def test_claims_from_id_token_rejects_es256_token_published_under_the_rsa_kid(provider, idp):
+    """Cross-family control: the JWKS resolves an RSA key for an `alg=ES256` token. Both
+    same-family twins keep the kid's key type and only swap the private key; this re-labels
+    the kid, so only the kid↔key-type binding can reject it. The first mint signs with the
+    published EC key, which makes the signature valid on its own, so a resolver trusting the
+    header `alg` over the kid accepts it; the second is the shape an attacker sends."""
+    from_published_ec_key = idp.mint(kid=KID, key=idp.ec_key, alg="ES256")
+    from_attacker_ec_key = idp.mint(kid=KID, key=idp.other_ec_key, alg="ES256")
+
+    assert claims_from_id_token(provider, idp.doc, from_published_ec_key) is None
+    assert claims_from_id_token(provider, idp.doc, from_attacker_ec_key) is None
+
+
+def test_claims_from_id_token_rejects_rs256_token_published_under_the_ec_kid(provider, idp):
+    """The mirror direction, so neither key family is the one that goes uncovered."""
+    from_published_rsa_key = idp.mint(kid=EC_KID, key=idp.signing_key, alg="RS256")
+    from_attacker_rsa_key = idp.mint(kid=EC_KID, key=idp.other_key, alg="RS256")
+
+    assert claims_from_id_token(provider, idp.doc, from_published_rsa_key) is None
+    assert claims_from_id_token(provider, idp.doc, from_attacker_rsa_key) is None
+
+
+def test_jwk_rejects_unknown_algorithm(idp):
+    """An alg outside the map raises here, at the call site. The ternary this replaced
+    emitted an RSA key labelled with whatever alg it was handed, so the stub published
+    a key it could never verify and the failure surfaced as a signature error."""
+    with pytest.raises(KeyError):
+        _jwk(idp.signing_key, "kid-x", "PS256")
 
 
 def test_claims_from_id_token_rejects_wrong_audience(provider, idp):

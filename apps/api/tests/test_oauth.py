@@ -2,7 +2,9 @@
 exchanges are monkeypatched at the service-module boundary."""
 
 import json
+from dataclasses import replace
 
+import httpx
 import pytest
 from sqlalchemy import func, select
 
@@ -11,7 +13,7 @@ from src.models.oauth import OAuthAccount
 from src.models.workspace import User
 from src.services import oauth as oauth_svc
 from src.settings import settings
-from tests.conftest import auth_headers, register_user
+from tests.conftest import auth_headers, break_single_workspace_join, register_user
 
 PROVIDERS = [
     {
@@ -41,19 +43,47 @@ GITHUB = {
 
 
 class _Resp:
-    def __init__(self, payload):
+    def __init__(self, payload, url="https://provider.test/x", status=200):
         self._payload = payload
+        self._request = httpx.Request("GET", url)
+        self._status = status
 
     def raise_for_status(self):
+        if self._status >= 400:
+            raise httpx.HTTPStatusError(
+                f"HTTP {self._status}",
+                request=self._request,
+                response=httpx.Response(self._status, request=self._request),
+            )
         return None
 
     def json(self):
         return self._payload
 
 
-def _fake_httpx(monkeypatch, *, user, emails):
-    """Serve the token exchange, /user and /user/emails from literals; returns
-    the URLs requested. emails=None marks that endpoint as off-limits."""
+class _EmailsClient:
+    """One-shot httpx stand-in, so _verified_email can be called directly."""
+
+    def __init__(self, payload, status_code=200):
+        self._resp = _Resp(payload, status=status_code)
+
+    async def get(self, url, headers=None):
+        return self._resp
+
+
+def _fake_httpx(
+    monkeypatch,
+    *,
+    user,
+    emails,
+    user_status=200,
+    emails_status=200,
+    token_status=200,
+    discovery_status=200,
+):
+    """Serve the token exchange, discovery, /user and /user/emails from literals;
+    returns the URLs requested. emails=None marks that endpoint as off-limits. A
+    *_status above 399 makes that endpoint answer with an error."""
     calls: list[str] = []
 
     class _Client:
@@ -68,15 +98,17 @@ def _fake_httpx(monkeypatch, *, user, emails):
 
         async def post(self, url, **kwargs):
             calls.append(url)
-            return _Resp({"access_token": "at", "access_token_type": "bearer"})
+            return _Resp({"access_token": "at", "access_token_type": "bearer"}, url, token_status)
 
         async def get(self, url, **kwargs):
             calls.append(url)
+            if ".well-known" in url:
+                return _Resp({}, url, discovery_status)
             if url.endswith("/emails"):
                 if emails is None:
                     raise AssertionError(f"emails endpoint must not be called ({url})")
-                return _Resp(emails)
-            return _Resp(user)
+                return _Resp(emails, url, emails_status)
+            return _Resp(user, url, user_status)
 
     monkeypatch.setattr(oauth_svc.httpx, "AsyncClient", _Client)
     return calls
@@ -227,6 +259,24 @@ async def test_oauth_same_provider_new_subject_links_same_user(app_client, oauth
     assert await _link_count() == 2
 
 
+async def test_oauth_callback_survives_join_failure(app_client, oauth_on, monkeypatch):
+    # A failed join is log-only: the rollback it needs expires every loaded
+    # instance, and reading the user for the log line would be a lazy load.
+    monkeypatch.setattr(settings, "single_workspace", True)
+    await break_single_workspace_join(app_client)
+    _mock_oauth(monkeypatch)
+
+    _, resp = await _callback(app_client, monkeypatch)
+    assert resp.status_code == 302, resp.text
+    assert resp.headers["location"].startswith("http://localhost:5173/oauth/callback?code=")
+    code = resp.headers["location"].split("code=")[1]
+    tokens = await app_client.post("/api/v1/auth/oauth/token", json={"code": code})
+    assert tokens.status_code == 200, tokens.text
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens.json()))
+    assert me.status_code == 200, me.text
+    assert me.json()["workspaces"] == []
+
+
 async def test_oauth_new_user_blocked_when_registration_disabled(app_client, oauth_on, monkeypatch):
     _mock_oauth(monkeypatch, email="newblocked@example.com")
     monkeypatch.setattr(settings, "auth_allow_registration", False)
@@ -308,6 +358,87 @@ async def test_password_reset_blocked_when_password_disabled(app_client, monkeyp
         monkeypatch.setattr(settings, "auth_password_enabled", True)
 
 
+# A GitHub account with a private address: /user answers, with a null email.
+_PRIVATE_GITHUB_USER = {"id": 4242, "login": "octocat", "email": None}
+
+
+def _github_config() -> oauth_svc.ProviderConfig:
+    return oauth_svc.ProviderConfig(
+        id="github",
+        display_name="GitHub",
+        client_id="cid",
+        client_secret="csecret",
+        scopes="read:user user:email",
+        userinfo_url="https://api.github.com/user",
+        emails_url="https://api.github.com/user/emails",
+    )
+
+
+def test_failure_detail_without_a_response():
+    """The no-response half of the helper: DNS, timeout and TLS failures never
+    reach it through the other tests, which all drive a synthetic HTTPStatusError."""
+    assert oauth_svc._failure_detail(httpx.ConnectError("boom")) == "ConnectError"
+
+
+async def test_emails_404_scope_hint_survives_a_reworded_failure_detail(monkeypatch):
+    """The 404 branch keys off the status, not off _failure_detail's wording."""
+    _fake_httpx(monkeypatch, user=_PRIVATE_GITHUB_USER, emails=[], emails_status=404)
+    monkeypatch.setattr(oauth_svc, "_failure_detail", lambda exc: "status 404, not found")
+    with pytest.raises(oauth_svc.OAuthError) as err:
+        await oauth_svc.fetch_userinfo(_github_config(), {}, "at")
+    msg = str(err.value)
+    assert "https://api.github.com/user/emails" in msg
+    assert "user:email" in msg  # the scope hint still fires
+
+
+async def test_exchange_failure_names_the_upstream_status(monkeypatch):
+    _fake_httpx(monkeypatch, user={}, emails=[], token_status=400)
+    cfg = replace(_github_config(), token_url="https://github.com/login/oauth/access_token")
+    with pytest.raises(oauth_svc.OAuthError) as err:
+        await oauth_svc.exchange_code(cfg, {}, code="c", redirect_uri="http://app.test/cb")
+    msg = str(err.value)
+    assert "code exchange failed" in msg
+    assert "400" in msg  # expired code, clock skew or a wrong secret all land here
+
+
+async def test_discovery_failure_names_the_upstream_status(monkeypatch):
+    _fake_httpx(monkeypatch, user={}, emails=[], discovery_status=503)
+    cfg = replace(_github_config(), discovery_url="https://github.com/.well-known/x", issuer=None)
+    with pytest.raises(oauth_svc.OAuthError) as err:
+        await oauth_svc._discovery(cfg, oauth_svc.TtlCache())
+    msg = str(err.value)
+    assert "could not load discovery document" in msg and "github" in msg
+    assert "503" in msg
+
+
+async def test_emails_404_names_the_endpoint_and_the_missing_scope(monkeypatch):
+    _fake_httpx(monkeypatch, user=_PRIVATE_GITHUB_USER, emails=[], emails_status=404)
+    with pytest.raises(oauth_svc.OAuthError) as err:
+        await oauth_svc.fetch_userinfo(_github_config(), {}, "at")
+    msg = str(err.value)
+    assert "could not fetch user info" not in msg  # separable from a /user fault
+    assert "github" in msg and "https://api.github.com/user/emails" in msg
+    assert "404" in msg and "user:email" in msg
+
+
+async def test_emails_500_is_not_reported_as_a_scope_problem(monkeypatch):
+    _fake_httpx(monkeypatch, user=_PRIVATE_GITHUB_USER, emails=[], emails_status=500)
+    with pytest.raises(oauth_svc.OAuthError) as err:
+        await oauth_svc.fetch_userinfo(_github_config(), {}, "at")
+    msg = str(err.value)
+    assert "https://api.github.com/user/emails" in msg and "500" in msg
+    assert "scope" not in msg
+
+
+async def test_userinfo_failure_names_the_userinfo_endpoint(monkeypatch):
+    _fake_httpx(monkeypatch, user={}, emails=[], user_status=500)
+    with pytest.raises(oauth_svc.OAuthError) as err:
+        await oauth_svc.fetch_userinfo(_github_config(), {}, "at")
+    msg = str(err.value)
+    assert "https://api.github.com/user" in msg and "500" in msg
+    assert "/user/emails" not in msg
+
+
 async def test_github_callback_uses_emails_endpoint_when_profile_email_null(
     app_client, github_on, monkeypatch
 ):
@@ -347,6 +478,37 @@ async def test_github_refuses_unverified_email(app_client, github_on, monkeypatc
     _, resp = await _callback(app_client, monkeypatch, state="g2", provider="github")
     assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
     assert await _user_count() == before
+
+
+@pytest.mark.parametrize(
+    ("payload", "status", "expected"),
+    [
+        # Payload is not a list: the guard returns "" instead of iterating
+        # a non-iterable body into a TypeError.
+        (None, 200, ""),
+        # Provider errored: raise_for_status() propagates out of the helper.
+        ({"message": "server error"}, 502, httpx.HTTPStatusError),
+        # Several verified addresses, none primary: the provider's list order decides.
+        (
+            [
+                {"email": "first@example.com", "primary": False, "verified": True},
+                {"email": "second@example.com", "primary": False, "verified": True},
+            ],
+            200,
+            "first@example.com",
+        ),
+    ],
+    ids=["non-list-payload", "raise-for-status", "no-primary"],
+)
+async def test_verified_email_edge_branches(payload, status, expected):
+    """The three _verified_email arms the callback tests never reach."""
+    client = _EmailsClient(payload, status)
+    if isinstance(expected, type):
+        with pytest.raises(expected):
+            await oauth_svc._verified_email(client, "https://api.github.com/user/emails", {})
+    else:
+        got = await oauth_svc._verified_email(client, "https://api.github.com/user/emails", {})
+        assert got == expected
 
 
 async def test_github_public_email_skips_emails_endpoint(app_client, github_on, monkeypatch):

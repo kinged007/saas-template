@@ -97,10 +97,20 @@ export function GeneralSection() {
   const candidatesMessage = transferCandidateMessage({
     isPending: membersQuery.isPending,
     isError: membersQuery.isError,
-    error: membersQuery.error,
     loaded: members.length,
     total: membersResult?.total ?? 0,
   });
+
+  // Drop a stale id so the trigger shows the placeholder again: an id that names
+  // no item renders as an empty box rather than the placeholder. The dialog
+  // closes with it — DialogContent is conditional on the target, so leaving
+  // transferOpen true would strand an open dialog with nothing mounted.
+  useEffect(() => {
+    if (transferId && !transferTarget) {
+      setTransferId("");
+      setTransferOpen(false);
+    }
+  }, [transferId, transferTarget]);
 
   const transferOwnership = () => {
     if (!workspace || !transferTarget) return;
@@ -318,71 +328,73 @@ export function GeneralSection() {
                     transfer ownership.
                   </p>
                 </div>
-                <div className="flex flex-col gap-2">
-                  {transferCandidates.length > 0 ? (
-                    <>
-                      <Label htmlFor="transfer-member">New owner</Label>
-                      <Select value={transferId} onValueChange={setTransferId}>
-                        <SelectTrigger id="transfer-member" className="w-full sm:w-72">
-                          <SelectValue placeholder="Select member">{transferTargetLabel}</SelectValue>
-                        </SelectTrigger>
-                        <SelectContent>
-                          {transferCandidates.map((m) => (
-                            <SelectItem key={m.membership_id} value={m.membership_id}>
-                              {getMemberDisplayName(m)} ({m.email})
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Dialog open={transferOpen} onOpenChange={setTransferOpen}>
-                        <DialogTrigger asChild>
-                          <Button variant="destructive" disabled={!transferTarget || transferMutation.isPending}>
-                            Transfer ownership
-                          </Button>
-                        </DialogTrigger>
-                        {/* No target left: the pick stopped resolving on a refetch, so there
-                            is nothing to confirm and no name to state. Nothing renders. */}
-                        {transferTarget && (
-                          <DialogContent>
-                            <DialogHeader>
-                              <DialogTitle>Transfer ownership to {transferTargetName}?</DialogTitle>
-                              <DialogDescription>
-                                <span className="font-semibold">{workspace.name}</span> will be owned by{" "}
-                                <span className="font-semibold">{transferTargetName}</span> ({transferTarget.email}).
-                                You are demoted to admin immediately, and only the new owner can transfer it back. This
-                                cannot be undone.
-                              </DialogDescription>
-                            </DialogHeader>
-                            <DialogFooter>
-                              <Button
-                                variant="outline"
-                                onClick={() => setTransferOpen(false)}
-                                disabled={transferMutation.isPending}
-                              >
-                                Cancel
-                              </Button>
-                              <Button
-                                variant="destructive"
-                                onClick={transferOwnership}
-                                disabled={transferMutation.isPending}
-                              >
-                                {transferMutation.isPending ? "Transferring…" : "Transfer ownership"}
-                              </Button>
-                            </DialogFooter>
-                          </DialogContent>
-                        )}
-                      </Dialog>
-                    </>
-                  ) : (
-                    <p className="text-muted-foreground text-sm">{candidatesMessage}</p>
-                  )}
-                  {membersTruncated && (
-                    <p className="text-muted-foreground text-xs">
-                      Showing the first {members.length} of {membersResult?.total} members. Members beyond the first{" "}
-                      {members.length} are not listed here.
-                    </p>
-                  )}
-                </div>
+                {transferCandidates.length > 0 && (
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="transfer-member">New owner</Label>
+                    <Select value={transferId} onValueChange={setTransferId}>
+                      <SelectTrigger id="transfer-member" className="w-full sm:w-72">
+                        <SelectValue placeholder="Select member">{transferTargetLabel}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {transferCandidates.map((m) => (
+                          <SelectItem key={m.membership_id} value={m.membership_id}>
+                            {getMemberDisplayName(m)} ({m.email})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Dialog open={transferOpen} onOpenChange={setTransferOpen}>
+                      <DialogTrigger asChild>
+                        <Button variant="destructive" disabled={!transferTarget || transferMutation.isPending}>
+                          Transfer ownership
+                        </Button>
+                      </DialogTrigger>
+                      {/* No target left: the pick stopped resolving on a refetch, so there
+                          is nothing to confirm and no name to state. Nothing renders. */}
+                      {transferTarget && (
+                        <DialogContent>
+                          <DialogHeader>
+                            <DialogTitle>Transfer ownership to {transferTargetName}?</DialogTitle>
+                            <DialogDescription>
+                              <span className="font-semibold">{workspace.name}</span> will be owned by{" "}
+                              <span className="font-semibold">{transferTargetName}</span> ({transferTarget.email}).
+                              You are demoted to admin immediately, and only the new owner can transfer it back. This
+                              cannot be undone.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <DialogFooter>
+                            <Button
+                              variant="outline"
+                              onClick={() => setTransferOpen(false)}
+                              disabled={transferMutation.isPending}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              variant="destructive"
+                              onClick={transferOwnership}
+                              disabled={transferMutation.isPending}
+                            >
+                              {transferMutation.isPending ? "Transferring…" : "Transfer ownership"}
+                            </Button>
+                          </DialogFooter>
+                        </DialogContent>
+                      )}
+                    </Dialog>
+                  </div>
+                )}
+                {/* Both notes span the full grid width. In the auto track their
+                    max-content width wins the container and collapses the text
+                    column to 0px, so the heading wraps one word per line. */}
+                {transferCandidates.length === 0 && (
+                  <p className="text-muted-foreground text-sm sm:col-span-2">{candidatesMessage}</p>
+                )}
+                {membersTruncated && (
+                  <p className="text-muted-foreground text-xs sm:col-span-2">
+                    Showing the first {members.length} of {membersResult?.total} members. Members beyond the first{" "}
+                    {members.length} are not listed here.
+                  </p>
+                )}
               </div>
             )}
 

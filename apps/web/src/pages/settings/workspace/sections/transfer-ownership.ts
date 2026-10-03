@@ -1,8 +1,12 @@
 import type { Member } from "@/types";
+import { canReceiveOwnership } from "../../../member-actions.ts";
 
-/** Members that can receive ownership: active, and not already the owner. */
+/**
+ * Members that can receive ownership: active (the rule
+ * `transfer_ownership` enforces server-side), and not already the owner.
+ */
 export const transferEligibleMembers = (members: Member[]): Member[] =>
-  members.filter((m) => m.role !== "owner" && m.status === "active");
+  members.filter((m) => m.role !== "owner" && canReceiveOwnership(m));
 
 /**
  * Resolves the selected membership id against the current candidate list. Returns
@@ -22,21 +26,18 @@ export const resolveTransferTarget = (
 export const transferCandidateMessage = ({
   isPending,
   isError,
-  error,
   loaded,
   total,
 }: {
   isPending: boolean;
   isError: boolean;
-  error: unknown;
   loaded: number;
   total: number;
 }): string => {
   if (isPending) return "Loading members…";
-  if (isError) {
-    const detail = (error as { message?: string })?.message;
-    return `Could not load members${detail ? `: ${detail}` : ""}. Reload the page to try again.`;
-  }
+  // The raw error body stays in the toast; a serialised FastAPI `detail`
+  // object is not copy to put in front of the owner.
+  if (isError) return "Could not load members. Reload the page to try again.";
   if (total > loaded) {
     return `No eligible members in the ${loaded} members loaded here. The other ${total - loaded} are not listed, so this workspace may still have an owner to transfer to.`;
   }

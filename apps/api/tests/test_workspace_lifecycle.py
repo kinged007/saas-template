@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from sqlalchemy.exc import IntegrityError
 
@@ -27,6 +29,7 @@ async def _expire_invitation(invitation_id: str) -> None:
         row = await session.get(Invitation, invitation_id)
         row.expires_at = now_utc() - timedelta(minutes=5)
         await session.commit()
+
 
 async def _invite_and_join(client, owner_tokens, ws, email: str, role_name: str = "viewer"):
     owner_headers = ws_headers(owner_tokens, ws["id"])
@@ -242,6 +245,7 @@ async def test_resend_rejects_accepted_invitation(app_client):
     )
     assert resp.status_code == 409, resp.text
 
+
 async def test_resend_rejects_revoked_invitation(app_client):
     """Revoke is terminal: Re-send must not put the row back in the invitee's inbox."""
     client = app_client
@@ -305,20 +309,27 @@ async def test_safe_delete_cascades_but_keeps_audit(app_client):
     ).status_code == 404
     # The delete also drops the caller's membership, so the workspace-scoped
     # audit endpoint is no longer reachable for them — assert the retained rows
-    # directly instead.
+    # directly instead. The row is written by the background audit consumer, so
+    # poll for it instead of reading once.
     from sqlalchemy import select
 
     from src.db.session import SessionFactory
     from src.models.audit import AuditLogEntry
 
-    async with SessionFactory() as session:
-        actions = (
-            (
-                await session.execute(
-                    select(AuditLogEntry.action).where(AuditLogEntry.workspace_id == ws["id"])
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + 5.0
+    while True:
+        async with SessionFactory() as session:
+            actions = (
+                (
+                    await session.execute(
+                        select(AuditLogEntry.action).where(AuditLogEntry.workspace_id == ws["id"])
+                    )
                 )
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
-    assert "workspace.deleted" in actions
+        if "workspace.deleted" in actions or loop.time() >= deadline:
+            break
+        await asyncio.sleep(0.02)
+    assert "workspace.deleted" in actions, "audit bus did not commit workspace.deleted in 5s"

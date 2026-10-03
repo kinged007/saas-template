@@ -23,7 +23,19 @@ export const ACCESS_TOKEN = [
  * (@refinedev/simple-rest maps the body straight to `data`); `/auth/config`
  * must report registration_enabled, or RegisterPage bounces to /login.
  */
-export async function mockApi(page: Page, { signedIn }: { signedIn: boolean }) {
+export async function mockApi(
+  page: Page,
+  {
+    signedIn,
+    identity = IDENTITY,
+    lists = {},
+  }: {
+    signedIn: boolean;
+    identity?: unknown;
+    /** Rows for a bare `/api/v1/<resource>` list call; every other list answers `[]`. */
+    lists?: Record<string, unknown[]>;
+  },
+) {
   await page.route("**/api/v1/**", async (route) => {
     const reply = (status: number, body: unknown) =>
       route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
@@ -34,7 +46,7 @@ export async function mockApi(page: Page, { signedIn }: { signedIn: boolean }) {
     }
     if (pathname.endsWith("/auth/me")) {
       if (!signedIn) return reply(401, { detail: "Not authenticated" });
-      return reply(200, IDENTITY);
+      return reply(200, identity);
     }
     if (pathname.endsWith("/auth/config")) {
       return reply(200, {
@@ -45,6 +57,11 @@ export async function mockApi(page: Page, { signedIn }: { signedIn: boolean }) {
       });
     }
     if (pathname.endsWith("/auth/logout")) return route.fulfill({ status: 204, body: "" });
+    const resource = pathname.slice("/api/v1/".length);
+    // Own-property only: `in` walks Object.prototype, so `toString` would serve
+    // `JSON.stringify` of an inherited function, which is undefined. `Object.hasOwn`
+    // needs lib ES2022; tsconfig pins ES2020.
+    if (Object.prototype.hasOwnProperty.call(lists, resource)) return reply(200, lists[resource]);
     return reply(200, []);
   });
   // The auth check only refreshes when the signed-in marker is set, so seed it

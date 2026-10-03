@@ -1,6 +1,6 @@
 """API-level tests: member workflows (joined / role_changed / removed) produce
 in-app notifications for the right users, and invitation workflows notify
-registered invitees.
+registered invitees and email unregistered ones.
 
 The app wires the full workflow registry into the in-process bus, so a
 published member event must end up as Notification rows after the background
@@ -322,6 +322,43 @@ async def test_role_changed_body_never_renders_none():
     assert "from unknown to owner" in row.body
 
 
+async def test_role_changed_from_legacy_owner_names_the_transfer():
+    """A self-change from the case-variant `Owner` row is still a transfer (#593).
+
+    `set_member_role` refuses to touch the owner role, so a self-change from a
+    role named `Owner` is a transfer the same way a self-change from `owner` is.
+    """
+    from src.events.bus import EventMetadata
+    from src.events.subjects import Subjects
+    from src.workflows import build_workflows
+
+    class _CaptureRegistry:
+        def __init__(self) -> None:
+            self.handlers: dict[str, object] = {}
+
+        def register(self, subject, handler, *, fanout: bool = False) -> None:
+            self.handlers[subject] = handler
+
+    registry = _CaptureRegistry()
+    build_workflows(registry, None, None)
+    user_id = str(uuid.uuid4())
+    await registry.handlers[Subjects.WORKSPACE_MEMBER_ROLE_CHANGED](
+        {
+            "workspace_id": str(uuid.uuid4()),
+            "workspace_name": "Acme Corp",
+            "user_id": user_id,
+            "from_role": "Owner",
+            "to_role": "admin",
+            "changed_by_user_id": user_id,
+            "changed_by_name": "Test U.",
+        },
+        EventMetadata(subject=Subjects.WORKSPACE_MEMBER_ROLE_CHANGED),
+    )
+
+    row = await _latest_role_change(user_id)
+    assert row.body == "You transferred ownership. Your role is now admin."
+
+
 async def test_member_removed_notifies_the_removed_member(app_client):
     from tests.conftest import create_workspace, register_user
 
@@ -358,6 +395,46 @@ async def test_member_removed_notifies_the_removed_member(app_client):
         )
         row = result.scalars().first()
     assert row.payload["removed_by"] == "Test U."
+
+
+async def test_unregistered_invite_emails_accept_link(app_client, monkeypatch):
+    """The invitation workflow emails unregistered recipients an accept link
+    built from the committed row's token, and stays silent for registered ones.
+    """
+    import src.email.factory as email_factory
+    from tests.conftest import create_workspace, register_user
+
+    captured: list = []
+
+    async def _capture(message):
+        captured.append(message)
+        return True
+
+    monkeypatch.setattr(email_factory, "send_email", _capture)
+
+    # Registering sends a verification email, so scope assertions per recipient.
+    def sent_to(address: str) -> list:
+        return [m for m in captured if m.to == address]
+
+    owner = await register_user(app_client, "owner@wf5.com")
+    ws = await create_workspace(app_client, owner)
+    roles = await _roles_by_name(app_client, owner, ws["id"])
+
+    invite = await _invite(app_client, owner, ws["id"], roles["editor"], "stranger@wf5.com")
+    assert await _wait_for(lambda: len(sent_to("stranger@wf5.com")) == 1)
+    link = f"/invitations/accept?token={invite['token']}"
+    assert link in sent_to("stranger@wf5.com")[0].text_body
+    assert link in sent_to("stranger@wf5.com")[0].html_body
+
+    member = await register_user(app_client, "member@wf5.com")
+    member_me = await _me(app_client, member)
+    captured.clear()  # drop the registration verification email
+    await _invite(app_client, owner, ws["id"], roles["editor"], "member@wf5.com")
+    # The in-app notification proves the event was delivered; the handler returns
+    # early for registered recipients, so no email follows.
+    await _wait_for_count(member_me["id"], "workspace_invitation", 1)
+    await asyncio.sleep(0.1)
+    assert sent_to("member@wf5.com") == []
 
 
 async def test_unregistered_invite_emits_no_in_app_notification(app_client):

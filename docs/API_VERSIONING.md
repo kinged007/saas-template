@@ -15,6 +15,20 @@ as `api_version`.
   documented consumer has migrated.
 - **Deprecation**: announce in release notes first; serve the old version for
   at least one minor release with a `Sunset` response header before removal.
+- **Status-code corrections are not breaking changes**: a route that returned
+  the wrong status for a documented caller keeps its route and payload, so no
+  new prefix is required — but the correction is recorded here and in the
+  release notes.
+
+## Recorded corrections
+
+- `GET /api/v1/jobs/{id}`, `PATCH /api/v1/jobs/{id}`,
+  `POST /api/v1/jobs/{id}/execute` and `GET /api/v1/jobs/{id}/runs` return
+  `403 "you are not a member of this workspace"` — not `404 "job not found"` —
+  for an authenticated user who is not a member of the definition's workspace.
+  This matches the run routes and every other workspace-owned resource. An
+  API key scoped to another workspace still gets `404`, so key callers learn
+  nothing about definitions outside their scope.
 
 ## Why prefix strategy
 
