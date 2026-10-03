@@ -668,42 +668,101 @@ async def test_resend_invitation_route_403s_a_non_manager_recruiter(app_client):
         assert resp.status_code == 403, (invitation_id, resp.status_code, resp.text)
 
 
-async def test_revoke_invitation_route_403s_a_non_manager(app_client):
-    """`revoke_invitation` carries the same owner/admin guard as `resend_invitation`."""
+async def test_revoke_invitation_route_403s_a_non_manager_with_member_delete(app_client):
+    """The guard is a role check, so the shape that reaches it is a `member:delete`
+    holder that is not owner/admin — a plain viewer is refused by the route's
+    permission dependency and would still pass with the guard deleted."""
     client = app_client
     owner = await register_user(client, "revoke-owner@example.com")
     ws = await create_workspace(client, owner)
     owner_headers = ws_headers(owner, ws["id"])
-    viewer = next(
-        r
-        for r in (await client.get("/api/v1/roles", headers=owner_headers)).json()
-        if r["name"] == "viewer"
-    )
 
-    viewer_invite = await client.post(
-        "/api/v1/invitations",
-        json={"email": "revoke-viewer@example.com", "role_id": viewer["id"]},
+    role = await client.post(
+        "/api/v1/roles",
+        json={"name": "revoke-op", "permissions": [perms.MEMBER_DELETE]},
         headers=owner_headers,
     )
-    assert viewer_invite.status_code == 201, viewer_invite.text
-    viewer_tokens = await register_user(client, "revoke-viewer@example.com")
+    assert role.status_code == 201, role.text
+    role_id = role.json()["id"]
+
+    del_op_invite = await client.post(
+        "/api/v1/invitations",
+        json={"email": "del-op@example.com", "role_id": role_id},
+        headers=owner_headers,
+    )
+    assert del_op_invite.status_code == 201, del_op_invite.text
+    del_op = await register_user(client, "del-op@example.com")
     accepted = await client.post(
         "/api/v1/invitations/accept",
-        params={"token": viewer_invite.json()["token"]},
-        headers=auth_headers(viewer_tokens),
+        params={"token": del_op_invite.json()["token"]},
+        headers=auth_headers(del_op),
     )
     assert accepted.status_code == 200, accepted.text
-    viewer_headers = ws_headers(viewer_tokens, ws["id"])
+    del_op_headers = ws_headers(del_op, ws["id"])
 
     target = await client.post(
         "/api/v1/invitations",
-        json={"email": "revoke-target@example.com", "role_id": viewer["id"]},
+        json={"email": "revoke-target@example.com", "role_id": role_id},
         headers=owner_headers,
     )
     assert target.status_code == 201, target.text
 
-    resp = await client.delete(f"/api/v1/invitations/{target.json()['id']}", headers=viewer_headers)
-    assert resp.status_code == 403, (resp.status_code, resp.text)
+    # 403 (not 404) on a real and a non-existent id: the guard runs before the
+    # lookup, so the response is not an existence oracle.
+    for invitation_id in (target.json()["id"], "does-not-exist"):
+        resp = await client.delete(f"/api/v1/invitations/{invitation_id}", headers=del_op_headers)
+        assert resp.status_code == 403, (invitation_id, resp.status_code, resp.text)
 
     ok = await client.delete(f"/api/v1/invitations/{target.json()['id']}", headers=owner_headers)
     assert ok.status_code == 204, (ok.status_code, ok.text)
+
+
+async def test_api_key_cannot_resend_or_revoke_invitation(app_client):
+    """Both routes are session-only: an API key authenticates as its creator's
+    user, so a key minted by the owner would carry owner power on a role guard.
+    Each key is scoped to exactly the permission its route still requires, so
+    only `require_session_user` can produce this 403."""
+    client = app_client
+    owner = await register_user(client, "key-owner@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+    viewer_id = next(
+        r["id"]
+        for r in (await client.get("/api/v1/roles", headers=owner_headers)).json()
+        if r["name"] == "viewer"
+    )
+
+    target = await client.post(
+        "/api/v1/invitations",
+        json={"email": "key-target@example.com", "role_id": viewer_id},
+        headers=owner_headers,
+    )
+    assert target.status_code == 201, target.text
+    invitation_id = target.json()["id"]
+
+    for permission, call in (
+        (
+            perms.MEMBER_CREATE,
+            lambda h: client.post(f"/api/v1/invitations/{invitation_id}/resend", headers=h),
+        ),
+        (
+            perms.MEMBER_DELETE,
+            lambda h: client.delete(f"/api/v1/invitations/{invitation_id}", headers=h),
+        ),
+    ):
+        key = await client.post(
+            "/api/v1/api-keys",
+            json={"name": f"scoped-{permission}", "permissions": [permission]},
+            headers=owner_headers,
+        )
+        assert key.status_code == 201, key.text
+        resp = await call(
+            {
+                "Authorization": f"Bearer {key.json()['key']}",
+                "X-Workspace-ID": ws["id"],
+            }
+        )
+        assert resp.status_code == 403, (permission, resp.status_code, resp.text)
+
+    ok = await client.post(f"/api/v1/invitations/{invitation_id}/resend", headers=owner_headers)
+    assert ok.status_code == 200, (ok.status_code, ok.text)
