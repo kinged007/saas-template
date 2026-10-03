@@ -125,7 +125,9 @@ export function SecuritySection() {
           </div>
           <div className="flex justify-between border-b py-2">
             <span className="text-muted-foreground">Checked on</span>
-            <span>Every workspace-scoped request except leaving a workspace</span>
+            <span>
+              Every workspace-scoped request except leaving a workspace and saving this setting
+            </span>
           </div>
           <div className="flex justify-between py-2">
             <span className="text-muted-foreground">API keys</span>
@@ -135,7 +137,9 @@ export function SecuritySection() {
             API keys are server-side credentials with their own permission list and no
             authenticator app, so they are exempt. Keys issued before this setting was turned on
             keep working. Leaving a workspace is exempt too, so a member this setting refuses is
-            never trapped in it. The live notification socket is user-scoped rather than
+            never trapped in it. Saving this setting is exempt too, so you can always turn the requirement
+            back off. The platform-wide flags editor a superuser uses writes the same settings and
+            is exempt for the same reason. The live notification socket is user-scoped rather than
             workspace-scoped, so it stays open for members this setting refuses. Pages that carry
             no workspace id — your workspace list, invitations, notifications — are not covered.
           </p>
