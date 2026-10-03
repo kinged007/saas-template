@@ -88,7 +88,7 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 
 | Flow | Mechanism |
 |---|---|
-| Password (browser) | `POST /auth/login` (`use_cookies: true`) → access JWT in JSON + refresh in `HttpOnly; Secure; SameSite=Lax` cookie; `POST /auth/refresh` reads the cookie (rotating, hashed opaque token in DB); `POST /auth/logout` revokes + clears the cookie |
+| Password (browser) | `POST /auth/login` (`use_cookies: true`) → access JWT in JSON + refresh in `HttpOnly; SameSite=Lax` cookie, `Secure` per `cookie_secure_for()` (https request, explicit `REFRESH_COOKIE_SECURE`, or plain http outside `development`/`test`); `POST /auth/refresh` reads the cookie (rotating, hashed opaque token in DB); `POST /auth/logout` revokes + clears the cookie |
 | Password (non-browser) | `POST /auth/login` → access + refresh in JSON; `POST /auth/refresh` takes `{"refresh_token"}` as before |
 | 2FA / OAuth (browser) | `POST /auth/2fa/login` / `POST /auth/oauth/token` with `use_cookies: true` set the same cookie and omit the JSON refresh; the OAuth one-time code handoff carries only the access token for cookie callers |
 | API keys | `Authorization: Bearer <key>`; permissions resolved per workspace (untouched by the cookie flow) |
@@ -152,7 +152,7 @@ Durable subjects (persisted, one workflow per subject, load-balanced):
 | `workspaces.member.joined` | notify the inviter + other active members |
 | `workspaces.member.role_changed` | notify the member whose role changed |
 | `workspaces.member.removed` | notify the removed member |
-| `workspaces.invitation.created` | email hook for unregistered invites (TODO) |
+| `workspaces.invitation.created` | email unregistered invitees; a failed send is audited (`invitation.email_failed`) |
 | `workspaces.created` | provisioning/analytics hook (TODO) |
 | `audit.entry.created` | persist an AuditLogEntry row |
 | `apikeys.created` / `apikeys.revoked` | security/monitoring hook (TODO) |
@@ -165,9 +165,9 @@ Transient subject (core NATS, realtime fan-out, no persistence):
 
 Every user/automatic action publishes an audit event (`audit.entry.created`):
 `user.register/login/token_refresh/logout`, `workspace.created/updated/deleted`,
-`member.role_changed/removed/left`, `invitation.created/accepted/declined/revoked`, `user.session_revoked/sessions_revoked`,
+`member.role_changed/removed/left`, `invitation.created/resent/accepted/declined/revoked/email_failed`, `user.session_revoked/sessions_revoked`,
 `role.created`, `apikey.created/revoked`, `notification.acknowledged/
-unacknowledged`, `job.run_*`. The audit workflow persists them (committed) to
+unacknowledged`, `notification.email_failed`, `job.run_*`. The audit workflow persists them (committed) to
 `audit_log_entries`.
 
 ## 7. Scheduled jobs
@@ -202,13 +202,16 @@ zero-customization data access:
 - `DELETE /{resource}/{id}` → 204
 
 A shared `crud` helper turns Refine params into safe SQLAlchemy queries
-(whitelisted sort/filter fields per resource).
+(whitelisted sort/filter fields per resource). Every sorted list ends on the
+row's primary key, in the direction of the last sort key, so the order is total
+and `offset`/`limit` paging cannot drop or repeat a row when the sorted columns
+tie. Ties resolve by `id`, not by insertion order — the ids are UUIDs.
 
 ## 9. Security
 
 - bcrypt password hashing, Fernet-encrypted secrets (versioned keys)
 - CORS allowlist from env (`allow_credentials` on); refresh-token rotation + revocation
-- Browser refresh tokens in `HttpOnly; Secure; SameSite=Lax` cookies (JS cannot exfiltrate them); CSRF covered by SameSite + `Origin`/`Referer` allowlist check + required `X-Requested-With` custom header on cookie-authenticated refresh/logout
+- Browser refresh tokens in `HttpOnly; SameSite=Lax` cookies (JS cannot exfiltrate them); `Secure` is resolved per request by `cookie_secure_for()` — on https requests, on plain http only when `ENVIRONMENT` is neither `development` nor `test`, or whatever `REFRESH_COOKIE_SECURE` is set to; CSRF covered by SameSite + `Origin`/`Referer` allowlist check + required `X-Requested-With` custom header on cookie-authenticated refresh/logout
 - HttpOnly narrows theft to the live session — injected JS can still ride the session while the page is open, so CSP and output escaping remain the real XSS defense
 - Permission checks server-side on every workspace-scoped route
 - No secrets in responses; API-key raw values returned once at creation

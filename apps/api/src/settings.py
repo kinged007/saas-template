@@ -110,8 +110,8 @@ class Settings(BaseSettings):
     # one shared workspace (owned by whoever arrives first, normally the
     # superadmin) and every later login/register auto-joins it as
     # single_workspace_default_role. Creating a second workspace and deleting
-    # the workspace are rejected; the sidebar switcher and the delete
-    # danger-zone are hidden.
+    # the workspace are rejected; the sidebar switcher, the workspace settings
+    # entry in the user menu, and the delete danger-zone are hidden.
     single_workspace: bool = False
     # Role given to users who auto-join the single workspace: any of its
     # system or custom role names. An unknown or blank name falls back to

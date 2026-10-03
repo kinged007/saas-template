@@ -23,13 +23,18 @@ export const adminUserPatch = (user: AdminUser, next: boolean) => ({
 export const canToggleUser = (detail: AdminUserDetail, viewerId?: string | null) =>
   detail.id !== viewerId;
 
-export const asAdminUserDetail = (raw: unknown): AdminUserDetail | undefined =>
-  raw && Array.isArray((raw as AdminUserDetail).workspaces)
+export const asAdminUserDetail = (raw: unknown): AdminUserDetail | undefined => {
+  const { id, workspaces } = (raw ?? {}) as Partial<AdminUserDetail>;
+  return typeof id === "string" && id.length > 0 && Array.isArray(workspaces)
     ? (raw as AdminUserDetail)
     : undefined;
+};
 
-export const pageRange = (current: number, total: number, pageSize = PAGE_SIZE) => ({
-  from: total === 0 ? 0 : Math.min((current - 1) * pageSize + 1, total),
-  to: Math.min(current * pageSize, total),
-  totalPages: Math.max(1, Math.ceil(total / pageSize)),
-});
+export const pageRange = (current: number, total: number, pageSize = PAGE_SIZE) => {
+  const from = total === 0 ? 0 : Math.max(1, Math.min((current - 1) * pageSize + 1, total));
+  return {
+    from,
+    to: total === 0 ? 0 : Math.min(from + pageSize - 1, total),
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+  };
+};

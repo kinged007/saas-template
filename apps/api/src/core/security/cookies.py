@@ -22,10 +22,19 @@ CSRF_HEADER_VALUE = "XMLHttpRequest"
 def _is_https_request(request: Request | None) -> bool:
     """True when the request arrived over TLS (proxy-aware).
 
-    Uvicorn runs with --proxy-headers in prod, so request.url.scheme already
-    honors X-Forwarded-Proto; the explicit header check covers test clients
+    The compose prod service (infra/docker/docker-compose.prod.yml) runs uvicorn
+    with --proxy-headers, so there request.url.scheme already honors
+    X-Forwarded-Proto; the image default CMD (infra/docker/Dockerfile.api) does
+    not, so the explicit header check is what covers that case, test clients,
     and servers without proxy-header handling. Port suffix (:443) covers
-    X-Forwarded-Host forms that carry no scheme."""
+    X-Forwarded-Host forms that carry no scheme, for a proxy that forwards
+    the host only.
+
+    The header reads are client-controlled and deliberately ignore uvicorn's
+    forwarded_allow_ips (prod sets --forwarded-allow-ips='*', so there is no
+    trusted boundary to check). They are fail-secure: they can only return
+    True, never strip Secure from a real https request. Narrowing
+    forwarded_allow_ips must come with a re-check of this function."""
     if request is None:
         return False
     if request.url.scheme == "https":
@@ -51,7 +60,9 @@ def cookie_secure_for(request: Request | None = None) -> bool:
     return settings.refresh_cookie_secure_effective
 
 
-def set_refresh_cookie(response: Response, token: str, request: Request | None = None) -> None:
+def set_refresh_cookie(response: Response, token: str, request: Request) -> None:
+    """Set the refresh cookie. `request` is required: the Secure flag is derived
+    from it, and a default would silently restore the ENVIRONMENT-based flag."""
     kwargs: dict = {
         "key": settings.refresh_cookie_name,
         "value": token,

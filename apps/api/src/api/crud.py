@@ -162,6 +162,12 @@ def apply_query(
             raise InvalidQuery(f"sort on unknown field: {fname}")
         column = getattr(model, fname)
         stmt = stmt.order_by(column.desc() if order == "desc" else column.asc())
+    # A unique column last makes the order total, so offset/limit paging can
+    # neither repeat nor skip a row when the leading terms tie. Only where an
+    # order already exists: making one up is not this helper's call.
+    if spec.sort_by and "id" not in spec.sort_by:
+        last = spec.sort_order[-1] if spec.sort_order else "asc"
+        stmt = stmt.order_by(model.id.desc() if last == "desc" else model.id.asc())
     return stmt
 
 

@@ -5,7 +5,9 @@ import Markdown from "react-markdown";
 import { ArrowLeft, Inbox, Mail, MailOpen, ExternalLink, SendHorizontal, Pencil, Archive, ArchiveRestore, Search, MessageSquare, PanelLeftClose, PanelLeftOpen, X, Check, UserPlus } from "lucide-react";
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
-import { markdownComponents, markdownComponentsInverted, highlightMentions, mentionUrlTransform, stripMarkdown, truncate as truncatePreview } from "@/lib/markdown";
+import { markdownComponents, markdownComponentsInverted, stripMarkdown, truncate as truncatePreview } from "@/lib/markdown";
+import { mentionRemarkPlugin, mentionUrlTransform, type MentionTarget } from "@/lib/mentions";
+import { notificationLinkUrl } from "@/lib/notificationLink";
 import { activeWorkspacePermissions } from "../utils/permissions";
 
 import { Badge } from "@/components/ui/badge";
@@ -21,7 +23,7 @@ import { cn } from "@/lib/utils";
 import type { Notification, Conversation, Message, Identity, Member } from "../types";
 import { getDisplayName, getParticipantDisplayName, getMemberDisplayName } from "../types";
 import { ComposeDialog } from "../components/inbox/ComposeDialog";
-import { TiptapEditor, type MentionTarget } from "../components/inbox/TiptapEditor";
+import { TiptapEditor } from "../components/inbox/TiptapEditor";
 import { EditParticipantsDialog } from "../components/inbox/EditParticipantsDialog";
 import {
   applyConversationRead,
@@ -248,6 +250,9 @@ export function InboxPage() {
     [selectedConversation],
   );
 
+  // Built once per participant list, not once per message bubble.
+  const mentionPlugins = useMemo(() => [mentionRemarkPlugin(participantNames)], [participantNames]);
+
   const { mutate: updateConv } = useUpdate();
   const { mutate: customMutate } = useCustomMutation();
   const { mutateAsync: customMutateAsync } = useCustomMutation();
@@ -366,7 +371,6 @@ export function InboxPage() {
     if (next.acknowledged) markNotifRead(cur.id);
     else markNotifUnread(cur.id);
   };
-  const linkUrl = (n: Notification) => (n.payload as Record<string, unknown> | undefined)?.url as string | undefined;
 
   // Conversation actions
   const handleSelectConv = (id: string) => {
@@ -620,6 +624,7 @@ export function InboxPage() {
                     size="icon"
                     onClick={() => setSearchExpanded(true)}
                     aria-label="Search"
+                    title="Search"
                     className={cn("h-9 w-9 shrink-0", searchInput.trim() && "ring-1 ring-ring border-ring")}
                   >
                     <Search className="h-4 w-4" />
@@ -835,7 +840,7 @@ export function InboxPage() {
                             className="h-8 w-8 shrink-0"
                             onClick={handleTitleSave}
                             aria-label="Save title"
-                            title="Save"
+                            title="Save title"
                           >
                             <Check className="h-4 w-4" />
                           </Button>
@@ -853,7 +858,14 @@ export function InboxPage() {
                       ) : (
                         <div className="flex items-center gap-2">
                           <h3 className="truncate text-lg font-semibold">{selectedConversation.title || "Untitled"}</h3>
-                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditingTitle(true)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6"
+                            onClick={() => setEditingTitle(true)}
+                            aria-label="Edit title"
+                            title="Edit title"
+                          >
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
                         </div>
@@ -973,9 +985,10 @@ export function InboxPage() {
                               <div className={cn("prose prose-sm dark:prose-invert max-w-none break-words", isSelf ? "prose-invert" : "")}>
                                 <Markdown
                                   components={isSelf ? markdownComponentsInverted : markdownComponents}
+                                  remarkPlugins={mentionPlugins}
                                   urlTransform={mentionUrlTransform}
                                 >
-                                  {highlightMentions(m.body, participantNames)}
+                                  {m.body}
                                 </Markdown>
                               </div>
                               <p className={cn("mt-1 text-[11px]", isSelf ? "text-primary-foreground/70" : "text-muted-foreground")}>
@@ -1175,9 +1188,9 @@ export function InboxPage() {
                   <Markdown components={markdownComponents}>{selectedNotif.body || ""}</Markdown>
                 </div>
                 <div className="border-border mt-6 flex items-center gap-2 border-t pt-4">
-                  {linkUrl(selectedNotif) && (
+                  {notificationLinkUrl(selectedNotif) && (
                     <Button size="sm" variant="outline" asChild>
-                      <a href={linkUrl(selectedNotif)} target="_blank" rel="noopener noreferrer">
+                      <a href={notificationLinkUrl(selectedNotif)} target="_blank" rel="noopener noreferrer">
                         <ExternalLink className="mr-1 h-3.5 w-3.5" />
                         Open link
                       </a>

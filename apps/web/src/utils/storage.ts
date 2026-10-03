@@ -170,11 +170,17 @@ export const workspaceStore = {
 
 const ONBOARDING_PREFIX = "tf_onboarding_dismissed:";
 
+const onboardingKey = (workspaceId: string, userId?: string | null) =>
+  ONBOARDING_PREFIX + (userId ?? "legacy") + ":" + workspaceId;
+
 export const onboardingStore = {
   isDismissed: (workspaceId: string, userId?: string | null) =>
-    storage.get(ONBOARDING_PREFIX + (userId ?? "legacy") + ":" + workspaceId) === "1",
+    storage.get(onboardingKey(workspaceId, userId)) === "1",
   dismiss: (workspaceId: string, userId?: string | null) =>
-    storage.set(ONBOARDING_PREFIX + (userId ?? "legacy") + ":" + workspaceId, "1"),
+    storage.set(onboardingKey(workspaceId, userId), "1"),
+  /** Undo this user's own dismissal, bringing the card back. */
+  clear: (workspaceId: string, userId?: string | null) =>
+    storage.remove(onboardingKey(workspaceId, userId)),
 };
 
 /**

@@ -20,6 +20,7 @@ from src.services.api_keys import ApiKeyService
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
 from src.settings import settings
+from src.workflows import INVITATIONS_ROUTE
 
 logger = logging.getLogger(__name__)
 
@@ -275,7 +276,9 @@ async def main() -> None:
             )
             if existing.scalar_one_or_none() is not None:
                 continue
-            if await ws_service.get_membership(workspace.id, user.id) is None:
+            # `active_only=False`: the question is whether a member row exists
+            # for the demo admin at all, and a suspended row is still a row.
+            if await ws_service.get_membership(workspace.id, user.id, active_only=False) is None:
                 # The canonical workspace pre-existed and its owner is not the
                 # demo admin, who never auto-joins (no login event yet).
                 logger.info("skipped api key %s in %s: %s is not a member", name, slug, email)
@@ -336,7 +339,7 @@ async def main() -> None:
                 # /invitations is a static frontend route, so it does not
                 # depend on a live invitation row. Mirrors the workflow path
                 # (workflows.on_member_invited), which sets the same url.
-                payload["url"] = "/invitations"
+                payload["url"] = INVITATIONS_ROUTE
                 if invite is not None:
                     payload.update({"invitation_id": invite.id, "invited_by": "Admin User"})
             created_at = now - timedelta(hours=age_hours)
