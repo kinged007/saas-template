@@ -152,7 +152,7 @@ Durable subjects (persisted, one workflow per subject, load-balanced):
 | `workspaces.member.joined` | notify the inviter + other active members |
 | `workspaces.member.role_changed` | notify the member whose role changed |
 | `workspaces.member.removed` | notify the removed member |
-| `workspaces.invitation.created` | email hook for unregistered invites (TODO) |
+| `workspaces.invitation.created` | email unregistered invitees; a failed send is audited (`invitation.email_failed`) |
 | `workspaces.created` | provisioning/analytics hook (TODO) |
 | `audit.entry.created` | persist an AuditLogEntry row |
 | `apikeys.created` / `apikeys.revoked` | security/monitoring hook (TODO) |
@@ -165,9 +165,9 @@ Transient subject (core NATS, realtime fan-out, no persistence):
 
 Every user/automatic action publishes an audit event (`audit.entry.created`):
 `user.register/login/token_refresh/logout`, `workspace.created/updated/deleted`,
-`member.role_changed/removed/left`, `invitation.created/accepted/declined/revoked`, `user.session_revoked/sessions_revoked`,
+`member.role_changed/removed/left`, `invitation.created/resent/accepted/declined/revoked/email_failed`, `user.session_revoked/sessions_revoked`,
 `role.created`, `apikey.created/revoked`, `notification.acknowledged/
-unacknowledged`, `job.run_*`. The audit workflow persists them (committed) to
+unacknowledged`, `notification.email_failed`, `job.run_*`. The audit workflow persists them (committed) to
 `audit_log_entries`.
 
 ## 7. Scheduled jobs
@@ -202,7 +202,10 @@ zero-customization data access:
 - `DELETE /{resource}/{id}` → 204
 
 A shared `crud` helper turns Refine params into safe SQLAlchemy queries
-(whitelisted sort/filter fields per resource).
+(whitelisted sort/filter fields per resource). Every sorted list ends on the
+row's primary key, in the direction of the last sort key, so the order is total
+and `offset`/`limit` paging cannot drop or repeat a row when the sorted columns
+tie. Ties resolve by `id`, not by insertion order — the ids are UUIDs.
 
 ## 9. Security
 

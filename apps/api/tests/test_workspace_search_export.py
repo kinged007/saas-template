@@ -2,7 +2,10 @@ import asyncio
 import csv
 import io
 import json
+import time
+from uuid import uuid4
 
+import pytest
 from sqlalchemy import select
 
 from src.db.session import SessionFactory
@@ -11,7 +14,7 @@ from tests.conftest import create_workspace, register_user, ws_headers
 
 
 async def _wait_for_audit_export(
-    client, headers, workspace_id, params=None, timeout_secs: float = 5.0
+    client, headers, workspace_id, params=None, timeout_secs: float = 5.0, poll_secs: float = 0.02
 ):
     """Return the export, requested once the bus has committed `workspace.created`.
 
@@ -31,11 +34,45 @@ async def _wait_for_audit_export(
             landed = "workspace.created" in set(result.scalars().all())
         if landed or loop.time() >= deadline:
             break
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(poll_secs)
     assert landed, f"event bus did not commit workspace.created within {timeout_secs}s"
     resp = await client.get("/api/v1/workspaces/export", params=params, headers=headers)
     assert resp.status_code == 200, resp.text
     return resp
+
+
+async def test_wait_for_audit_export_gives_up_without_issuing_export(app_client, monkeypatch):
+    """The exhausted gate: no `workspace.created` row -> no export, only the assert."""
+    from src.services.search_export import SearchExportService
+
+    issued = []
+
+    async def _recording_export_json(self, **kwargs):
+        issued.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(SearchExportService, "export_json", _recording_export_json)
+
+    # Real credentials, so the export is reachable and the counter below is
+    # evidence rather than a 401 short-circuit.
+    tokens = await register_user(app_client, "gate@example.com")
+    ws = await create_workspace(app_client, tokens, name="Gate Co")
+    # The gate watches a workspace id the bus has never seen, so the row can never land.
+    missing_workspace_id = str(uuid4())
+    timeout_secs, poll_secs = 0.05, 0.01
+    started = time.monotonic()
+    with pytest.raises(AssertionError, match="event bus did not commit workspace.created"):
+        await _wait_for_audit_export(
+            app_client,
+            ws_headers(tokens, ws["id"]),
+            missing_workspace_id,
+            timeout_secs=timeout_secs,
+            poll_secs=poll_secs,
+        )
+    # The loop cannot exit before the deadline, so this also proves the gate polled
+    # to the deadline instead of giving up on the first check.
+    assert time.monotonic() - started >= timeout_secs
+    assert issued == [], "the gate must abort before the export is issued"
 
 
 async def _me_id(client, tokens):

@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/table";
 import { Check, ChevronDown, Pencil, Plus } from "lucide-react";
 import type { Role } from "@/types";
+import { roleCapNotice } from "@/pages/role-picker-cap";
 
 type CatalogResponse = { catalog: string[]; permissions: string[] };
 
@@ -173,6 +174,7 @@ export function RolesSection() {
   // Ordered by the endpoint (system roles first), so no client sort.
   const rows = result?.data ?? [];
   const total = result?.total ?? rows.length;
+  const capNotice = roleCapNotice(rows.length, total);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
@@ -316,11 +318,7 @@ export function RolesSection() {
           </Dialog>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          {total > rows.length && (
-            <p className="text-muted-foreground text-sm">
-              Showing {rows.length} of {total} roles.
-            </p>
-          )}
+          {capNotice && <p className="text-muted-foreground text-sm">{capNotice}</p>}
           {rows.map((role) => {
             const isOpen = expanded.has(role.id);
             const granted = new Set(role.permissions.includes("*") ? catalog : role.permissions);

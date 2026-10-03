@@ -43,6 +43,10 @@ AUDIT_READ = "audit:read"
 
 # API-key-only scopes: never granted to roles, never required of sessions.
 # Declared before PERMISSION_DEFINITIONS so ALL_PERMISSIONS can exclude them.
+#
+# GET /api-keys/effective-permissions offers them to every member with
+# `apikey:read`, not owners only: they are user-scoped, so a key reaches
+# nothing its own creator could not already reach with their session.
 KEY_ONLY_PERMISSIONS = frozenset({NOTIFICATION_READ, NOTIFICATION_UPDATE})
 
 PERMISSION_DEFINITIONS: dict[str, dict[str, str]] = {

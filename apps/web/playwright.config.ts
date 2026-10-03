@@ -8,12 +8,16 @@ const baseURL = `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({
   testDir: "./e2e",
+  // dev-session.spec.ts needs the real stack — playwright.dev.config.ts.
+  testIgnore: "**/dev-session.spec.ts",
   forbidOnly: !!process.env.CI,
   // The first spec pays the cold cost of vite transforming the app module
   // graph, which exceeds the 30s default on a GitHub runner. Both of these are
-  // per-test options, so they sit at the top level rather than under `use`.
+  // per-test options, so they sit at the top level rather than under `use`;
+  // the expect budget is raised too, because a cold page load is slow for
+  // assertions on that page as well.
   timeout: 90_000,
-  expect: { timeout: 10_000 },
+  expect: { timeout: 30_000 },
   // The two directories ci.yml uploads on a red run. Declared rather than left
   // at their defaults so the paths the workflow names live in this file too.
   outputDir: "test-results",
@@ -26,8 +30,10 @@ export default defineConfig({
   use: {
     baseURL,
     // A retained trace is the only record of the DOM, network and console of a
-    // failure that is gone by the time anyone reads the log.
-    trace: "retain-on-failure",
+    // failure that is gone by the time anyone reads the log. Only in CI: the
+    // trace is recorded on every test and discarded on a pass, so a local run
+    // pays that cost for an artifact nobody uploads.
+    trace: process.env.CI ? "retain-on-failure" : "off",
     // "on-first-retry" would never fire with retries: 0, so every failure
     // gets one. ponytail: no retries, a flake is red rather than green on a
     // second run; add `retries` when a flake actually shows up.

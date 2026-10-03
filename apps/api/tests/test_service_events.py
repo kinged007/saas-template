@@ -7,11 +7,13 @@ NATS or the in-process delivery machinery.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from src.db.session import SessionFactory
 from src.events.subjects import Subjects
-from src.services.api_keys import ApiKeyService
+from src.services.api_keys import ApiKeyService, _payload_iso
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
 from tests.bus_doubles import RecordingBus
@@ -125,7 +127,9 @@ async def test_logout_emits_user_audit(bus):
 
 
 async def test_workspace_create_emits_event_and_audit(bus, owner):
-    workspace = await _create_workspace(bus, owner.id, slug="acme")
+    # Padded input: the service strips before storing, so the event and the
+    # audit carry the stored name.
+    workspace = await _create_workspace(bus, owner.id, slug="acme", name="  Acme Corp  ")
 
     created = bus.by_subject(Subjects.WORKSPACE_CREATED)
     assert len(created) == 1
@@ -147,7 +151,7 @@ async def test_workspace_update_emits_audit_only_when_changed(bus, owner):
     async with SessionFactory() as session:
         service = WorkspaceService(session, bus)
         await service.update_workspace(
-            workspace.id, name="Acme Renamed", actor=owner, ip_address="10.0.0.1"
+            workspace.id, name="  Acme Renamed  ", actor=owner, ip_address="10.0.0.1"
         )
     assert bus.actions() == ["workspace.updated"]
     assert bus.by_subject(Subjects.WORKSPACE_CREATED) == []
@@ -157,7 +161,9 @@ async def test_workspace_update_emits_audit_only_when_changed(bus, owner):
     bus.events.clear()
     async with SessionFactory() as session:
         service = WorkspaceService(session, bus)
-        await service.update_workspace(workspace.id, name="Acme Renamed", actor=owner)
+        # Same name, still padded: the strip runs before the comparison, so
+        # this is not a change and emits nothing.
+        await service.update_workspace(workspace.id, name="  Acme Renamed  ", actor=owner)
     assert bus.events == []  # no change → no event
 
 
@@ -207,6 +213,10 @@ async def test_invitation_to_unregistered_email_emits_invitation_event_only(bus,
     invitation = bus.by_subject(Subjects.WORKSPACE_INVITATION_CREATED)
     assert len(invitation) == 1
     assert invitation[0][0]["is_registered"] is False
+    # The token stays out of the payload: invitation.created is a public webhook
+    # event, so subscribers must never see it. The handler re-reads the row.
+    assert "token" not in invitation[0][0]
+    assert "accept_url" not in invitation[0][0]
     # No in-app notification for unregistered recipients — email hook instead.
     assert bus.by_subject(Subjects.WORKSPACE_MEMBER_INVITED) == []
 
@@ -359,7 +369,7 @@ async def test_api_key_create_and_revoke_emit_events_and_audit(bus, owner):
     async with SessionFactory() as session:
         key, raw = await ApiKeyService(session, bus).create_api_key(
             workspace_id=workspace.id,
-            name="ci-key",
+            name="  ci-key  ",
             permissions=["workspace:read"],
             actor=owner,
             ip_address="10.0.0.1",
@@ -405,6 +415,36 @@ async def test_api_key_create_and_revoke_emit_events_and_audit(bus, owner):
     assert audit["ip_address"] == "10.0.0.1"
 
 
+async def test_api_key_created_event_expiry_is_offset_aware(bus, owner):
+    """`apikey.created` publishes the exact expiry string, or None for a key
+    without one."""
+    workspace = await _create_workspace(bus, owner.id, slug="acme8")
+    async with SessionFactory() as session:
+        await ApiKeyService(session, bus).create_api_key(
+            workspace_id=workspace.id,
+            name="ci-key",
+            permissions=["workspace:read"],
+            actor=owner,
+            expires_at=datetime(2027, 1, 1, tzinfo=UTC),
+        )
+        await ApiKeyService(session, bus).create_api_key(
+            workspace_id=workspace.id,
+            name="forever-key",
+            permissions=["workspace:read"],
+            actor=owner,
+        )
+
+    published = [payload["expires_at"] for payload, _, _ in bus.by_subject(Subjects.APIKEY_CREATED)]
+    assert published == ["2027-01-01T00:00:00+00:00", None]
+
+
+def test_api_key_expiry_payload_normalizes_a_naive_attribute():
+    """A naive expiry — what SQLite returns for `DateTime(timezone=True)` —
+    must not reach a consumer as a local-time ISO string."""
+    assert _payload_iso(datetime(2027, 1, 1)) == "2027-01-01T00:00:00+00:00"
+    assert _payload_iso(None) is None
+
+
 # ------------------------------------------------------------------- roles
 
 
@@ -414,7 +454,7 @@ async def test_custom_role_create_emits_audit(bus, owner):
     async with SessionFactory() as session:
         await WorkspaceService(session, bus).create_custom_role(
             workspace.id,
-            name="billing",
+            name="  billing  ",
             description="billing admin",
             permissions=["audit:read"],
             actor=owner,

@@ -5,7 +5,8 @@ import os  # noqa: E402
 from datetime import timedelta  # noqa: E402
 from typing import TYPE_CHECKING  # noqa: E402
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_saas_template.db"
+_TEST_DB_NAME = "test_saas_template.db"
+os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///./{_TEST_DB_NAME}"
 os.environ["SECRET_KEY"] = "test-secret-key-not-for-production"
 os.environ["FERNET_KEYS"] = "test-fernet-key-value"
 os.environ["EVENT_BUS_DRIVER"] = "inprocess"
@@ -13,12 +14,12 @@ os.environ["ENVIRONMENT"] = "test"
 os.environ["CORS_ORIGINS"] = "http://localhost:5173"
 os.environ["SUPERADMIN_EMAIL"] = "root@example.com"
 
-import warnings  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 import pytest  # noqa: E402
 from asgi_lifespan import LifespanManager  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
-from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
+from sqlalchemy.engine import make_url  # noqa: E402
 
 from src import models as _models  # noqa: E402,F401  (register tables on Base.metadata)
 from src.db.base import Base  # noqa: E402
@@ -29,50 +30,50 @@ if TYPE_CHECKING:  # noqa: E402
     from src.models.jobs import JobRun
 
 
-async def _drop_all_with_retry(tries: int = 24, delay: float = 0.25) -> None:
-    """Drop all tables, retrying transient sqlite locks.
+def _db_path() -> Path:
+    """Filesystem path of the sqlite file the suite shares.
 
-    Background bus workers may still be draining their last transactions when a
-    test ends; a fresh engine connection then blocks on the file lock. Dispose
-    pooled connections first, then retry briefly.
-
-    The drop runs on a dedicated engine with a *short* busy timeout: the
-    background worker holding the lock always finishes within a few seconds, so
-    waiting 30s (the app engine's timeout) per attempt only turns a transient
-    contention into a multi-minute stall.
-
-    The budget is ~6s: workspace provisioning (workspaces.created workflow)
-    and scheduled-job workers add a little more post-test drain time than the
-    notification workflows alone.
+    sqlite resolves a relative URL against the cwd, so the unlink must use the
+    same path the engine opens. The name is pinned to the suite's scratch file:
+    if DATABASE_URL is ever pointed at a real database, this fails loudly here
+    instead of silently deleting it.
     """
-    drop_engine = create_async_engine(settings.resolved_database_url, connect_args={"timeout": 2})
-    try:
-        for attempt in range(tries):
-            try:
-                await engine.dispose()  # force-close any leaked pooled connections
-                await drop_engine.dispose()
-                async with drop_engine.begin() as conn:
-                    await conn.run_sync(Base.metadata.drop_all)
-                return
-            except Exception as exc:
-                if attempt == tries - 1:
-                    raise
-                # ponytail: warn (not log — no logger configured in tests) so the next
-                # flake shows it was lock contention and how many retries it took.
-                msg = f"db drop attempt {attempt + 1}/{tries} failed, retrying: {exc}"
-                warnings.warn(msg, stacklevel=2)
-                await asyncio.sleep(delay)
-    finally:
-        await drop_engine.dispose()
+    url = make_url(settings.resolved_database_url)
+    assert url.get_backend_name() == "sqlite", f"expected a sqlite test database, got {url}"
+    path = Path(url.database or "")
+    assert path.name == _TEST_DB_NAME, f"refusing to unlink {path}"
+    return path
+
+
+async def _discard_db_file() -> None:
+    """Take the sqlite file away from every connection that is still open."""
+    await engine.dispose()  # close this suite's pooled connections first
+    path = _db_path()
+    path.unlink(missing_ok=True)
+    for suffix in ("-journal", "-wal", "-shm"):  # sidecars outlive the db file
+        path.with_name(path.name + suffix).unlink(missing_ok=True)
+
+
+async def _fresh_db() -> None:
+    """Hand the test a database no other connection can be looking at.
+
+    # ponytail: unlink rather than drop_all, so a background bus worker or job
+    # task still draining at the end of a test keeps its lock and its stale
+    # read snapshot on an inode nobody else can open. Ceiling: POSIX-only (a
+    # Windows box cannot unlink a file sqlite has open). Upgrade path: a
+    # per-test path plus rebinding `engine`, which needs the >=8 src modules
+    # that bind `SessionFactory` by name at import.
+    """
+    await _discard_db_file()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
 
 @pytest.fixture(autouse=True)
 async def _clean_db():
-    await _drop_all_with_retry()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await _fresh_db()
     yield
-    await _drop_all_with_retry()
+    await _discard_db_file()
 
 
 @pytest.fixture
@@ -125,6 +126,27 @@ async def login(client: AsyncClient, email: str = "user@example.com") -> dict:
 
 def auth_headers(tokens: dict) -> dict:
     return {"Authorization": f"Bearer {tokens['access_token']}"}
+
+
+async def break_single_workspace_join(client: AsyncClient, email: str = "first@example.com") -> str:
+    """Leave the single workspace with only its owner role, so an auto-join raises.
+
+    Returns the workspace id. The failure is real (no monkeypatch), which
+    matters: a fake failure raises before the join opened a transaction, so the
+    rollback that follows has nothing to expire.
+    """
+    from sqlalchemy import delete
+
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    tokens = await register_user(client, email)
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    ws_id = me.json()["workspaces"][0]["id"]
+    async with SessionFactory() as session:
+        await session.execute(delete(Role).where(Role.workspace_id == ws_id, Role.name != "owner"))
+        await session.commit()
+    return ws_id
 
 
 async def create_workspace(client: AsyncClient, tokens: dict, name: str = "Acme Corp") -> dict:

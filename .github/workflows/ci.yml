@@ -83,3 +83,6 @@ jobs:
             apps/web/playwright-report/
             apps/web/test-results/
           retention-days: 7
+          # A red e2e leg always writes both directories; finding neither means
+          # the run failed before Playwright did, which the default `warn` hides.
+          if-no-files-found: error

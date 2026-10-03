@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { Member } from "@/types";
-import { resolveTransferTarget, transferEligibleMembers } from "./transfer-ownership.ts";
+import {
+  resolveTransferTarget,
+  transferEligibleMembers,
+} from "./transfer-ownership.ts";
 
 const member = (over: Partial<Member> = {}): Member => ({
   id: "u-1",
@@ -25,6 +28,14 @@ test("transferEligibleMembers offers active non-owners only", () => {
   );
 });
 
+test("transferEligibleMembers drops a status it has never seen", () => {
+  const unknown = member({
+    membership_id: "m-3",
+    status: "archived" as unknown as Member["status"],
+  });
+  assert.deepEqual(transferEligibleMembers([unknown]), []);
+});
+
 test("resolveTransferTarget returns the picked candidate", () => {
   const admin = member({ membership_id: "m-1" });
   assert.equal(resolveTransferTarget([admin], "m-1"), admin);
@@ -45,3 +56,9 @@ test("resolveTransferTarget disarms when the id outlives the candidate set", () 
 test("resolveTransferTarget is disarmed before a selection is made", () => {
   assert.equal(resolveTransferTarget([member()], ""), undefined);
 });
+
+// Coverage: these are the pure helpers behind the transfer Select. The effect
+// that clears a stale id in GeneralSection.tsx is wiring over
+// resolveTransferTarget, not a tested unit — `node --test` cannot load .tsx
+// (see AGENTS.md), so that wiring is verified by hand. What it relies on is
+// covered above: an unresolvable id yields undefined.

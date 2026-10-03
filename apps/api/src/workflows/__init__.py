@@ -38,6 +38,7 @@ from src.core.security.crypto import SecretCipher
 from src.db.session import SessionFactory
 from src.events.bus import EventBus
 from src.events.factory import WorkflowRegistry
+from src.events.publisher import publish_audit
 from src.events.subjects import Subjects
 from src.jobs.executor import execute_run
 from src.models.workspace import WorkspaceMember
@@ -45,12 +46,46 @@ from src.realtime.manager import ConnectionManager
 from src.services.audit import AuditService
 from src.services.jobs import JobService
 from src.services.notifications import NotificationService
+from src.services.workspaces import is_owner_role_name
 
 logger = logging.getLogger(__name__)
 
 # Frontend route the invitation notification's "Open" button links to. The dev
 # seed (src/seed.py) imports it, so the two payload sides cannot drift.
 INVITATIONS_ROUTE = "/invitations"
+
+
+async def _audit_email_failure(
+    bus: EventBus,
+    notification,
+    *,
+    correlation_id: str | None,
+    user_id: str,
+    n_type: str,
+    email: str | None,
+    reason: str,
+) -> None:
+    """Log and audit one notification email that was not delivered.
+
+    `reason` is `no_recipient`, `no_email` or `send_failed`. Published after
+    the attempt, so a failing publish nacks the message and the in-app
+    notification row is created again on redelivery.
+    """
+    logger.error(
+        "notification email failed for %s (notification %s, reason=%s)",
+        email or f"user {user_id}",
+        notification.id,
+        reason,
+    )
+    await publish_audit(
+        bus,
+        correlation_id=correlation_id,
+        workspace_id=notification.workspace_id,
+        resource_type="notification",
+        resource_id=notification.id,
+        action="notification.email_failed",
+        details={"user_id": user_id, "type": n_type, "email": email, "reason": reason},
+    )
 
 
 async def _create_notification(
@@ -60,7 +95,9 @@ async def _create_notification(
 
     Honors the recipient's channel preference: `off` skips the insert;
     `email` inserts and sends an immediate email, fail-closed (the in-app
-    row is kept and the failure logged when sending fails).
+    row is kept and the failure logged and audited
+    (`notification.email_failed`) when the recipient is missing, has no
+    address, or sending fails).
     """
     service = NotificationService(session, bus)
     n_type = kwargs.get("type", "")
@@ -79,9 +116,18 @@ async def _create_notification(
 
     recipient = await session.get(User, n_user_id)
     if recipient is None or not recipient.email:
+        await _audit_email_failure(
+            bus,
+            notification,
+            correlation_id=correlation_id,
+            user_id=n_user_id,
+            n_type=n_type,
+            email=recipient.email if recipient else None,
+            reason="no_recipient" if recipient is None else "no_email",
+        )
         return
     token = await service.token_for(n_user_id, n_type)
-    await send_email(
+    sent = await send_email(
         notification_email(
             recipient.email,
             title=notification.title,
@@ -89,6 +135,17 @@ async def _create_notification(
             workspace_name=(notification.payload or {}).get("workspace_name", ""),
             unsubscribe_url=unsubscribe_url_for(token or "", n_type, settings.frontend_url),
         )
+    )
+    if sent:
+        return
+    await _audit_email_failure(
+        bus,
+        notification,
+        correlation_id=correlation_id,
+        user_id=n_user_id,
+        n_type=n_type,
+        email=recipient.email,
+        reason="send_failed",
     )
 
 
@@ -184,21 +241,33 @@ def build_workflows(
         if not user_id or not workspace_id:
             return
         workspace_name = payload.get("workspace_name", "workspace")
-        from_role = payload.get("from_role") or "unknown"
-        to_role = payload.get("to_role") or "unknown"
+        from_role = payload.get("from_role")
+        to_role = payload.get("to_role")
         changed_by = payload.get("changed_by_name") or "A member"
         # The member is the actor (a self-demotion, or an ownership transfer):
         # naming them in their own notification reads as "you changed your
         # own role". set_member_role refuses to touch the owner's role, so a
         # self-change from owner is always a transfer.
         if user_id == payload.get("changed_by_user_id"):
-            body = (
-                f"You transferred ownership. Your role is now {to_role}."
-                if from_role == "owner"
-                else f"Your role is now {to_role}."
-            )
+            if is_owner_role_name(from_role):
+                # A null to_role names no new role, so the clause is dropped
+                # and the transfer itself is still reported.
+                body = (
+                    f"You transferred ownership. Your role is now {to_role}."
+                    if to_role
+                    else "You transferred ownership."
+                )
+            elif not to_role:
+                body = "Your role was changed."
+            else:
+                body = f"Your role is now {to_role}."
+        elif not to_role:
+            body = f"{changed_by} changed your role."
         else:
-            body = f"{changed_by} changed your role from {from_role} to {to_role}."
+            # A null from_role has no name to print, so the sentence says there
+            # was one instead of substituting a placeholder that reads like a role.
+            previous = from_role or "a previous role"
+            body = f"{changed_by} changed your role from {previous} to {to_role}."
         async with SessionFactory() as session:
             await _create_notification(
                 session,
@@ -243,7 +312,13 @@ def build_workflows(
             )
 
     async def on_invitation_created(payload: dict, metadata) -> None:
-        """Email unregistered recipients their invite link (fail-closed)."""
+        """Email unregistered recipients their invite link.
+
+        Delivery failure is not fatal: the invitation row is already committed
+        and this handler runs after the response, so a failed send is audited
+        (`invitation.email_failed`). `resend` skips a still-pending, unexpired
+        invitation, so that audit entry is the signal to revoke and re-invite.
+        """
         if payload.get("is_registered"):
             return
         email = payload.get("email")
@@ -270,17 +345,34 @@ def build_workflows(
             if token
             else f"{settings.frontend_url.rstrip('/')}/invitations"
         )
-        try:
-            await send_email(
-                invitation_template(
-                    email,
-                    workspace_name=payload.get("workspace_name", "workspace"),
-                    invite_url=invite_url,
-                    invited_by=payload.get("invited_by_name", ""),
-                )
+        sent = await send_email(
+            invitation_template(
+                email,
+                workspace_name=payload.get("workspace_name", "workspace"),
+                invite_url=invite_url,
+                invited_by=payload.get("invited_by_name", ""),
             )
-        except Exception:
-            logger.exception("invitation email failed for %s", email)
+        )
+        if sent:
+            return
+        logger.error("invitation email failed for %s (invitation %s)", email, invitation_id)
+        if not invitation_id:
+            return
+        # Published after the send, so a failing publish nacks the message and
+        # the invite email is delivered again.
+        await publish_audit(
+            bus,
+            correlation_id=metadata.correlation_id,
+            workspace_id=payload.get("workspace_id"),
+            resource_type="invitation",
+            resource_id=invitation_id,
+            action="invitation.email_failed",
+            details={
+                "email": email,
+                "invited_by_user_id": payload.get("invited_by_user_id"),
+                "invited_by_name": payload.get("invited_by_name"),
+            },
+        )
 
     async def on_workspace_created(payload: dict, metadata) -> None:
         """Provision workspace-scoped scheduled jobs for the new workspace.

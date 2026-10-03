@@ -23,6 +23,7 @@ import {
   pageRange,
   type AdminUserDetail,
 } from "./users-toggle";
+import { errorMessage } from "@/utils/errorMessage";
 
 export function UsersSection() {
   const { identity, isSuperuser } = useAdminGuard();
@@ -60,7 +61,7 @@ export function UsersSection() {
         void detailQuery.query.refetch();
       },
       onError: (e) => {
-        toast.error(String((e as { message?: string })?.message ?? e));
+        toast.error(errorMessage(e));
       },
     });
   };
