@@ -145,6 +145,16 @@ export type Role = {
  */
 export type MemberStatus = "active" | "invited" | "suspended";
 
+/**
+ * What the admin users list shows for `AdminUser.is_active`; not a stored value.
+ *
+ * Its `"active"` collapses into `MemberStatus`'s `"active"` in
+ * `StatusBadgeStatus`, so the two meanings share one badge variant. They
+ * currently agree on `secondary`; a per-meaning variant needs a discriminated
+ * map, not a flat `Record`.
+ */
+export type AdminUserStatus = "active" | "disabled";
+
 export type Member = {
   id: string;
   email: string;
