@@ -162,6 +162,24 @@ async def list_global_job_runs(
 # captured as a definition id.
 
 
+async def _get_run_or_deny(principal: AuthPrincipal, run_id: str, db: AsyncSession) -> JobRun:
+    """Resolve a run, or raise the only answer the caller may get.
+
+    No key is ever a deployment admin (`AuthPrincipal.is_deployment_admin`), so
+    no run outside its own workspace is readable by one — a global run
+    included. Answering a miss with 404 and a global run with 403 turns that
+    pair into an existence oracle on a surface the key is denied, so a miss
+    raises the same deployment-admin 403 the gate would. Session callers keep
+    the plain 404: a mistyped id is their own lookup, and the 403 a global run
+    already gives them discloses nothing beyond that.
+    """
+    run = await JobService(db).get_run(run_id)
+    if run is None:
+        if principal.api_key is not None:
+            raise deployment_admin_denied(principal)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
+    return run
+
 @router.get("/runs/{run_id}")
 async def get_job_run(
     response: Response,
@@ -169,9 +187,7 @@ async def get_job_run(
     principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
 ):
-    run = await JobService(db).get_run(run_id)
-    if run is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
+    run = await _get_run_or_deny(principal, run_id, db)
     await _require_run_access(db, principal, run, response)
     schema = {}
     definition = await JobService(db).get_definition(run.definition_id)
@@ -188,9 +204,7 @@ async def get_job_run_logs(
     db: AsyncSession = Depends(get_db),
 ):
     service = JobService(db)
-    run = await service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
+    run = await _get_run_or_deny(principal, run_id, db)
     await _require_run_access(db, principal, run, response)
     return [job_log_to_dict(e) for e in await service.list_run_logs(run_id)]
 
