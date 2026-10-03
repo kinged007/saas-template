@@ -94,6 +94,12 @@ def parse_query(request: Request, *, max_limit: int = 100) -> QuerySpec:
         spec.sort_order = q.getlist("order[]")
         if len(spec.sort_order) < len(spec.sort_by):
             spec.sort_order.extend(["asc"] * (len(spec.sort_by) - len(spec.sort_order)))
+    # `apply_query` compares the direction against the literals "desc"/"asc",
+    # so normalize the client's value once here rather than at both call sites
+    # (the leading term and the `id` tiebreaker). `DESC` is the SQL convention a
+    # client may well send; unnormalized it took the `else` branch and sorted
+    # ascending, silently.
+    spec.sort_order = [o.strip().lower() for o in spec.sort_order]
     spec.ids = q.getlist("ids[]")
     if not spec.ids and "id" in q:  # simple-rest getMany sends repeated `id=`
         spec.ids = q.getlist("id")
