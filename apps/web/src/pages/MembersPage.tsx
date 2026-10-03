@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { useCan, useCreate, useCustomMutation, useGetIdentity, useInvalidate, useUpdate } from "@refinedev/core";
+import { useCan, useCreate, useCustomMutation, useGetIdentity, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Link } from "react-router";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 
 import { Button } from "@/components/ui/button";
@@ -31,7 +32,8 @@ import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceConte
 import { canResendInvitation, canRevokeInvitation, invitationStatus } from "./invitation-actions";
 import { resolveInviteRole } from "./invite-role";
 import { canReactivateMember, canSuspendMember } from "./member-actions";
-import { assignableRoles, rolePickerCapNotice } from "./role-picker-cap";
+import { assignableRoles, roleCapNoticeText, rolePickerCapNotice } from "./role-picker-cap";
+import { isWorkspaceAdmin } from "./settings/workspace/WorkspaceSettingsLayout";
 import type { Identity, Invitation, Member, Role } from "../types";
 import { getMemberDisplayName } from "../types";
 
@@ -51,9 +53,38 @@ const INVITE_ROLE_CAP_ID = "invite-role-cap";
 
 // The explicit return type keeps the annotation honest: a `text && <p>` body
 // would widen it to `string | ReactElement | null` and fail the typecheck.
-const RoleCapNotice = ({ id, text }: { id: string; text: string | null }): ReactElement | null => {
+// The id sits on the span, not the paragraph, so the triggers' aria-describedby
+// resolves to the notice sentence without the link appended to it.
+// `listUrl("roles")` is the settings route holding the role list and the
+// create-role dialog. `link` is its label, or null when the caller may not open
+// that route: the roles settings layout guards itself, so a link there is a dead
+// end, and a label promising the dropped roles is false because that list caps
+// at one page too. The two notices label it differently so a links list can tell
+// them apart.
+const RoleCapNotice = ({
+  id,
+  text,
+  link,
+}: {
+  id: string;
+  text: string | null;
+  link: string | null;
+}): ReactElement | null => {
+  const { listUrl } = useNavigation();
   if (!text) return null;
-  return <p id={id} className="text-muted-foreground text-sm">{text}</p>;
+  return (
+    <p className="text-muted-foreground text-sm">
+      <span id={id}>{text}</span>
+      {link && (
+        <>
+          {" "}
+          <Link className="underline" to={listUrl("roles")}>
+            {link}
+          </Link>
+        </>
+      )}
+    </p>
+  );
 };
 
 export function MembersPage() {
@@ -103,7 +134,7 @@ export function MembersPage() {
   // The pickers and the notice count this one list, so the notice can never
   // claim a role the dropdown does not offer.
   const assignable = assignableRoles(roleOptions);
-  const roleCapNotice = rolePickerCapNotice(rolesResult?.total ?? 0, roleOptions);
+  const roleCapNotice = roleCapNoticeText(rolePickerCapNotice(rolesResult?.total ?? 0, roleOptions));
 
   useEffect(() => {
     if (membersPage > membersTotalPages) setMembersPage(membersTotalPages);
@@ -114,6 +145,11 @@ export function MembersPage() {
 
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
   const canManageRoles = !!canManage?.can && MANAGER_ROLES.includes(myRole ?? "");
+  // The roles settings route guards itself with isWorkspaceAdmin, so the link is
+  // gated on that predicate and not on the notice's own gate: member:create
+  // alone lets a non-admin inviter read the notice and reach only "Access
+  // denied". Using that predicate is also why no permission logic is duplicated.
+  const canOpenRolesSettings = isWorkspaceAdmin(identity, workspace?.id);
   // Describe by the notice only where it renders: it is gated per section, and
   // it stays null until the role page is short.
   const memberRoleCapId = canManageRoles && roleCapNotice ? MEMBERS_ROLE_CAP_ID : undefined;
@@ -160,7 +196,13 @@ export function MembersPage() {
   return (
     <ListView>
       <ListViewHeader title="Members" canCreate={false} />
-      {canManageRoles && <RoleCapNotice id={MEMBERS_ROLE_CAP_ID} text={roleCapNotice} />}
+      {canManageRoles && (
+        <RoleCapNotice
+          id={MEMBERS_ROLE_CAP_ID}
+          text={roleCapNotice}
+          link={canOpenRolesSettings ? "Manage roles in settings" : null}
+        />
+      )}
       <div className="border-border overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>
@@ -326,7 +368,11 @@ export function MembersPage() {
                   ))}
                 </SelectContent>
               </Select>
-              <RoleCapNotice id={INVITE_ROLE_CAP_ID} text={roleCapNotice} />
+              <RoleCapNotice
+                id={INVITE_ROLE_CAP_ID}
+                text={roleCapNotice}
+                link={canOpenRolesSettings ? "See roles in settings" : null}
+              />
             </div>
             <Button type="submit" disabled={mutation.isPending || !email.trim() || !inviteRole}>
               {mutation.isPending ? "Sending…" : "Invite"}

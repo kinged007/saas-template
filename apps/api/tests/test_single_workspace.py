@@ -19,6 +19,13 @@ from tests.conftest import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _default_role_is_viewer(monkeypatch):
+    # `settings` is a module singleton built at import, so a developer's
+    # SINGLE_WORKSPACE_DEFAULT_ROLE (env or .env) would reach these tests.
+    monkeypatch.setattr(settings, "single_workspace_default_role", "viewer")
+
+
 @pytest.fixture
 def single_workspace_on(monkeypatch):
     monkeypatch.setattr(settings, "single_workspace", True)

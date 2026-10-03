@@ -645,7 +645,7 @@ export function InboxPage() {
                     size="icon"
                     onClick={() => setLeftCollapsed((v) => !v)}
                     aria-label={leftCollapsed ? "Expand panel" : "Collapse panel"}
-                    title={leftCollapsed ? "Expand" : "Collapse"}
+                    title={leftCollapsed ? "Expand panel" : "Collapse panel"}
                     className="ml-auto hidden h-9 w-9 shrink-0 md:inline-flex"
                   >
                     <PanelLeftClose className="h-4 w-4" />
@@ -1100,7 +1100,7 @@ export function InboxPage() {
                   size="icon"
                   onClick={() => setLeftCollapsed((v) => !v)}
                   aria-label={leftCollapsed ? "Expand panel" : "Collapse panel"}
-                  title={leftCollapsed ? "Expand" : "Collapse"}
+                  title={leftCollapsed ? "Expand panel" : "Collapse panel"}
                   className="hidden h-9 w-9 shrink-0 md:inline-flex"
                 >
                   <PanelLeftClose className="h-4 w-4" />

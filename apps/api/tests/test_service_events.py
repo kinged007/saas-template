@@ -127,7 +127,9 @@ async def test_logout_emits_user_audit(bus):
 
 
 async def test_workspace_create_emits_event_and_audit(bus, owner):
-    workspace = await _create_workspace(bus, owner.id, slug="acme")
+    # Padded input: the service strips before storing, so the event and the
+    # audit carry the stored name.
+    workspace = await _create_workspace(bus, owner.id, slug="acme", name="  Acme Corp  ")
 
     created = bus.by_subject(Subjects.WORKSPACE_CREATED)
     assert len(created) == 1
@@ -149,7 +151,7 @@ async def test_workspace_update_emits_audit_only_when_changed(bus, owner):
     async with SessionFactory() as session:
         service = WorkspaceService(session, bus)
         await service.update_workspace(
-            workspace.id, name="Acme Renamed", actor=owner, ip_address="10.0.0.1"
+            workspace.id, name="  Acme Renamed  ", actor=owner, ip_address="10.0.0.1"
         )
     assert bus.actions() == ["workspace.updated"]
     assert bus.by_subject(Subjects.WORKSPACE_CREATED) == []
@@ -159,7 +161,9 @@ async def test_workspace_update_emits_audit_only_when_changed(bus, owner):
     bus.events.clear()
     async with SessionFactory() as session:
         service = WorkspaceService(session, bus)
-        await service.update_workspace(workspace.id, name="Acme Renamed", actor=owner)
+        # Same name, still padded: the strip runs before the comparison, so
+        # this is not a change and emits nothing.
+        await service.update_workspace(workspace.id, name="  Acme Renamed  ", actor=owner)
     assert bus.events == []  # no change → no event
 
 
@@ -365,7 +369,7 @@ async def test_api_key_create_and_revoke_emit_events_and_audit(bus, owner):
     async with SessionFactory() as session:
         key, raw = await ApiKeyService(session, bus).create_api_key(
             workspace_id=workspace.id,
-            name="ci-key",
+            name="  ci-key  ",
             permissions=["workspace:read"],
             actor=owner,
             ip_address="10.0.0.1",
@@ -450,7 +454,7 @@ async def test_custom_role_create_emits_audit(bus, owner):
     async with SessionFactory() as session:
         await WorkspaceService(session, bus).create_custom_role(
             workspace.id,
-            name="billing",
+            name="  billing  ",
             description="billing admin",
             permissions=["audit:read"],
             actor=owner,

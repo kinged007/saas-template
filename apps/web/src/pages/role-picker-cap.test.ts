@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { assignableRoles, roleCapNotice, rolePickerCapNotice } from "./role-picker-cap.ts";
+import { assignableRoles, roleCapNotice, roleCapNoticeText, rolePickerCapNotice } from "./role-picker-cap.ts";
 import type { Role } from "../types.ts";
 
 const role = (id: string, name: string): Role => ({
@@ -75,4 +75,20 @@ test("a capped page reports fetched of total; a complete page reports nothing", 
   // A total below the fetched count means the count is unusable, not that the
   // page is capped, so it says nothing rather than "Showing 5 of 3 roles."
   assert.equal(roleCapNotice(5, 3), null);
+});
+
+// The notice is the accessible description of the trigger it annotates, so a
+// whitespace-only string must not render: the `aria-describedby` target would be
+// present and carry no description. rolePickerCapNotice only ever formats
+// numbers, so this pins the boundary rather than a live path.
+test("a whitespace-only notice resolves to no text", () => {
+  assert.equal(roleCapNoticeText(" "), null);
+  assert.equal(roleCapNoticeText("\n\t "), null);
+  assert.equal(roleCapNoticeText(""), null);
+  assert.equal(roleCapNoticeText(null), null);
+});
+
+test("a real notice is returned trimmed", () => {
+  assert.equal(roleCapNoticeText("Showing 99 of 104 roles."), "Showing 99 of 104 roles.");
+  assert.equal(roleCapNoticeText("  Showing 99 of 104 roles.\n"), "Showing 99 of 104 roles.");
 });

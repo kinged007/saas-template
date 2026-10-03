@@ -69,7 +69,7 @@ Settings (env vars, days; `0` disables that cutoff):
 | `JOBS_LOG_RETENTION_DAYS` | 90 | job runs + logs older than cutoff |
 | `NOTIFICATIONS_RETENTION_DAYS` | 90 | acknowledged notifications older than cutoff (unacknowledged are kept) |
 | `AUDIT_LOG_RETENTION_DAYS` | 0 (forever) | audit entries older than cutoff, only when non-zero |
-| `API_KEY_RETENTION_DAYS` | 30 | API keys revoked before the cutoff, in every workspace (0 keeps them) |
+| `API_KEY_RETENTION_DAYS` | 30 | API keys revoked before the cutoff, in every workspace (`apikeys.cleanup`; 0 keeps them) |
 
 The `system.retention_cleanup` builtin job (global, daily 04:00 UTC, enabled
 by default) enforces the day-based cutoffs. Audit rows are append-only and
@@ -82,13 +82,13 @@ The `apikeys.cleanup` builtin job (global, daily 05:00 UTC, enabled by
 default) enforces `API_KEY_RETENTION_DAYS`. It revokes keys that are not
 already revoked and whose `expires_at` has passed — those keys already fail
 authentication, so revoking them records state that stopped working — then
-deletes every key whose `revoked_at` is past the cutoff. That delete has no
-workspace filter, so one run removes rows in every workspace of every
-tenant. The clock runs from `revoked_at`, not from `expires_at`: a key
-revoked by a user starts the window then, and a key expired by the job
-starts when the job revoked it, so nothing is deleted on the day it
-expires. Each revocation publishes an `apikeys.revoked` event and an
-`apikey.revoked` audit entry with `reason: "expired"` and no actor.
+hard-deletes every key whose `revoked_at` is past the cutoff. That
+hard-delete has no workspace filter, so one run removes rows in every
+workspace of every tenant. The clock runs from `revoked_at`, not from
+`expires_at`: a key revoked by a user starts the window then, and a key
+expired by the job starts when the job revoked it, so nothing is deleted
+on the day it expires. Each revocation publishes an `apikeys.revoked` event
+and an `apikey.revoked` audit entry with `reason: "expired"` and no actor.
 
 ## Backup / restore
 
