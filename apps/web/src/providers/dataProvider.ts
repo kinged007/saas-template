@@ -113,7 +113,10 @@ function normalizeError(error: AxiosError): AxiosError {
   // refine reads `statusCode` for its generic error notification and
   // authProvider.onError reads it to detect a 401; axios errors carry no such
   // field, so without this every notification says "status code: undefined".
-  Object.assign(error, { statusCode: error.response?.status });
+  // 0 is the "no HTTP response" sentinel (offline, DNS, CORS, abort) — refine
+  // always renders a status code, so the notification strips the parenthetical
+  // for anything that is not a real HTTP status.
+  Object.assign(error, { statusCode: error.response?.status ?? 0 });
   const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail;
   // 2FA challenge responses carry an object detail ({code: "2fa_required",
   // challenge_token}) — leave the message alone so the login page can branch

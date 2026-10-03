@@ -14,6 +14,36 @@ rid=abc123 GET /api/v1/workspaces/{id} -> 200 12ms
 Path labels use route templates, never raw ids. `GET /healthz` and `GET
 /readyz` stay unauthenticated for load-balancer probes.
 
+## Client IP attribution
+
+The API never parses `X-Forwarded-For` itself. It records `scope["client"]`,
+which uvicorn's `ProxyHeadersMiddleware` overwrites from `X-Forwarded-For` —
+but only when uvicorn runs with `--proxy-headers` and the connecting peer
+matches `--forwarded-allow-ips`. Everything recorded from that address (session
+rows, audit log entries, webhook deliveries) is correct as long as that flag
+names your proxy. `infra/docker/docker-compose.prod.yml` pins the compose
+network to `172.30.0.0/24` and defaults `FORWARDED_ALLOW_IPS` to that subnet —
+the api service publishes no ports, so nginx is its only peer — and
+`infra/docker/.env` overrides it.
+
+Keep the list narrow. Under `'*'`, uvicorn takes the leftmost `X-Forwarded-For`
+entry verbatim, so any peer that can reach the API port picks the address
+recorded against it. Set the flag to your proxy's IP, CIDR, or a
+comma-separated list. Running the image outside compose means supplying both
+proxy flags yourself; without them no header is read and every address is the
+proxy's.
+
+Behind an external load balancer or CDN, add its address to
+`FORWARDED_ALLOW_IPS`. nginx appends to `X-Forwarded-For`, so an unlisted LB
+makes uvicorn stop at the LB entry: every recorded client IP becomes the LB's,
+and the OAuth rate limiter (`oauth:{ip}:{provider}` at
+`apps/api/src/api/routes/oauth.py`) collapses into one bucket shared by all
+users.
+
+Only `X-Forwarded-For` is honoured. `X-Real-IP` and `CF-Connecting-IP` are read
+by neither uvicorn nor this code, so a proxy configured to send only
+`X-Real-IP` records the proxy's address.
+
 ## Metrics
 
 `GET /metrics` exposes Prometheus text exposition (no auth, same as
@@ -39,6 +69,7 @@ Settings (env vars, days; `0` disables that cutoff):
 | `JOBS_LOG_RETENTION_DAYS` | 90 | job runs + logs older than cutoff |
 | `NOTIFICATIONS_RETENTION_DAYS` | 90 | acknowledged notifications older than cutoff (unacknowledged are kept) |
 | `AUDIT_LOG_RETENTION_DAYS` | 0 (forever) | audit entries older than cutoff, only when non-zero |
+| `API_KEY_RETENTION_DAYS` | 30 | API keys revoked before the cutoff, in every workspace (`apikeys.cleanup`; 0 keeps them) |
 
 The `system.retention_cleanup` builtin job (global, daily 04:00 UTC, enabled
 by default) enforces the day-based cutoffs. Audit rows are append-only and
@@ -46,6 +77,18 @@ kept forever unless the operator explicitly opts into deletion by setting a
 non-zero `AUDIT_LOG_RETENTION_DAYS` — this breaks the ARCHITECTURE.md
 "never updated or deleted" guarantee, so only enable it where a data-
 retention policy requires it.
+
+The `apikeys.cleanup` builtin job (global, daily 05:00 UTC, enabled by
+default) enforces `API_KEY_RETENTION_DAYS`. It revokes keys that are not
+already revoked and whose `expires_at` has passed — those keys already fail
+authentication, so revoking them records state that stopped working — then
+hard-deletes every key whose `revoked_at` is past the cutoff. That
+hard-delete has no workspace filter, so one run removes rows in every
+workspace of every tenant. The clock runs from `revoked_at`, not from
+`expires_at`: a key revoked by a user starts the window then, and a key
+expired by the job starts when the job revoked it, so nothing is deleted
+on the day it expires. Each revocation publishes an `apikeys.revoked` event
+and an `apikey.revoked` audit entry with `reason: "expired"` and no actor.
 
 ## Backup / restore
 

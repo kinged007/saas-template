@@ -1,9 +1,24 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field, StrictBool
+from pydantic import (
+    AnyHttpUrl,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    StrictBool,
+    StringConstraints,
+    field_validator,
+)
+
+# strip_whitespace runs before the length check, so padding is normalized on
+# write (names are compared exactly on read, e.g. the auto-join lookup) and a
+# name that is blank after stripping fails min_length. Only what every name
+# field shares lives here; the bound is per-field in Field(max_length=...).
+StrippedName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class LoginRequest(BaseModel):
@@ -94,13 +109,13 @@ class SessionRead(BaseModel):
 
 
 class WorkspaceCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=150)
+    name: StrippedName = Field(max_length=150)
     slug: str | None = Field(default=None, max_length=100)
     description: str | None = Field(default=None, max_length=500)
 
 
 class WorkspaceUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=150)
+    name: StrippedName | None = Field(default=None, max_length=150)
     description: str | None = Field(default=None, max_length=500)
     # StrictBool so a string/int is rejected with 422 rather than coerced.
     # None = leave the flag alone; the flag itself is default-on.
@@ -127,25 +142,35 @@ class OwnershipTransfer(BaseModel):
 
 
 class RoleCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=50)
+    name: StrippedName = Field(max_length=50)
     description: str | None = Field(default=None, max_length=300)
     permissions: list[str] = Field(default_factory=list)
 
 
 class RoleUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=50)
+    name: StrippedName | None = Field(default=None, max_length=50)
     description: str | None = Field(default=None, max_length=300)
     permissions: list[str] | None = None
 
 
 class ApiKeyCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=150)
+    name: StrippedName = Field(max_length=150)
     permissions: list[str] = Field(default_factory=list)
-    usage_quota: int | None = Field(default=None, ge=0)
+    usage_quota: int | None = Field(default=None, ge=1)
+    # Optional hard expiry. Naive input is rejected: without an offset the
+    # instant is ambiguous, and the service compares against UTC.
+    expires_at: datetime | None = Field(default=None, examples=["2027-01-01T00:00:00Z"])
+
+    @field_validator("expires_at")
+    @classmethod
+    def _expires_at_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("expires_at must include a timezone offset (e.g. 2027-01-01T00:00Z)")
+        return value
 
 
 class ApiKeyQuotaUpdate(BaseModel):
-    usage_quota: int | None = Field(default=None, ge=0)
+    usage_quota: int | None = Field(default=None, ge=1)
 
 
 class NotificationAck(BaseModel):

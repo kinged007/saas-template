@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { Bold, Italic, Code2, SquareCode, List, ListOrdered, Link2, Quote } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { pickerIndex, rankMentionTargets, type MentionTarget } from "@/lib/mentions";
 
 const turndownService = new TurndownService({
   headingStyle: "atx",
@@ -23,22 +24,6 @@ turndownService.addRule("mention", {
   replacement: (_content, node) => `@${node.getAttribute("data-label") ?? ""}`,
 });
 
-/**
- * An entity the `@` picker can insert. This array is the extension point:
- * adding agents or any other mentionable later means appending entries, not
- * changing the picker.
- */
-export type MentionTarget = {
-  id: string;
-  type: string;
-  label: string;
-  email?: string | null;
-  avatar_url?: string | null;
-  first_name?: string | null;
-  last_name?: string | null;
-  role?: string | null;
-};
-
 type MentionListRef = {
   onKeyDown: (props: SuggestionKeyDownProps) => boolean;
 };
@@ -47,8 +32,11 @@ const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(f
   props,
   ref,
 ) {
-  const [index, setIndex] = useState(0);
+  // The picked person, not their position: a keystroke re-ranks the list, and
+  // a position would land on whoever moved into that slot.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const items = props.items;
+  const index = pickerIndex(selectedId, items, props.query);
 
   const select = (i: number) => {
     const item = items[i];
@@ -57,15 +45,19 @@ const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(f
 
   useImperativeHandle(ref, () => ({
     onKeyDown: ({ event }) => {
+      if (items.length === 0) return false;
       if (event.key === "ArrowUp") {
-        setIndex((i) => (i + items.length - 1) % items.length);
+        setSelectedId(items[index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length].id);
         return true;
       }
       if (event.key === "ArrowDown") {
-        setIndex((i) => (i + 1) % items.length);
+        setSelectedId(items[index < 0 ? 0 : (index + 1) % items.length].id);
         return true;
       }
       if (event.key === "Enter" || event.key === "Tab") {
+        // Nothing to highlight: pass the key on to the editor rather than
+        // swallowing it, so Enter still inserts a newline.
+        if (index < 0) return false;
         select(index);
         return true;
       }
@@ -83,7 +75,8 @@ const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(f
 
   return (
     <div className="bg-popover text-popover-foreground overflow-hidden rounded-md border shadow-md">
-      <ul className="max-h-60 overflow-y-auto p-1">
+      {/* max-h-72 is 288px, so all MENTION_PICKER_LIMIT (8) rows of 32px fit. */}
+      <ul className="max-h-72 overflow-y-auto p-1">
         {items.map((item, i) => (
           <li key={item.id}>
             <button
@@ -136,6 +129,10 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
   const mentionsRef = useRef(mentions);
   mentionsRef.current = mentions;
 
+  // Which formatting control holds the toolbar's single tab stop.
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const [toolbarIndex, setToolbarIndex] = useState(0);
+
   const editor = useEditor(
     {
       extensions: [
@@ -162,12 +159,7 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           ],
           suggestion: {
             char: "@",
-            // ponytail: naive substring match, so "an" also matches "Ann". Swap in a
-            // fuzzy matcher if the workspace member list ever gets large.
-            items: ({ query }) => {
-              const q = query.toLowerCase();
-              return (mentionsRef.current ?? []).filter((m) => m.label.toLowerCase().includes(q));
-            },
+            items: ({ query }) => rankMentionTargets(mentionsRef.current ?? [], query),
             render: () => {
               let component: ReactRenderer<MentionListRef> | null = null;
               let unmount: (() => void) | null = null;
@@ -256,16 +248,59 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
 
   if (!editor) return null;
 
+  const toolbarButtons = () => Array.from(toolbarRef.current?.querySelectorAll("button") ?? []);
+
+  /** The toolbar control the event came from, or -1 when it came from the container. */
+  const toolbarIndexOf = (target: EventTarget | null) =>
+    target instanceof HTMLButtonElement ? toolbarButtons().indexOf(target) : -1;
+
+  /**
+   * APG toolbar: one tab stop for the whole group, arrow keys move inside it.
+   * The tab stop follows whatever control last took focus.
+   */
+  const onToolbarKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const buttons = toolbarButtons();
+    const current = toolbarIndexOf(e.target);
+    const last = buttons.length - 1;
+    const next =
+      e.key === "ArrowRight" ? (current + 1) % buttons.length
+      : e.key === "ArrowLeft" ? (current === 0 ? last : current - 1)
+      : e.key === "Home" ? 0
+      : e.key === "End" ? last
+      : -1;
+    if (current < 0 || next < 0) return;
+    e.preventDefault();
+    buttons[next].focus();
+  };
+
+  const onToolbarFocus = (e: React.FocusEvent<HTMLDivElement>) => {
+    const index = toolbarIndexOf(e.target);
+    if (index >= 0) setToolbarIndex(index);
+  };
+
   return (
+    // Every control below keeps the editor's focus by eating mousedown and
+    // acting on `click`, the one event a keyboard activation fires too.
     <div className={cn("rounded-md border bg-background", className)}>
-      <div className="flex flex-wrap items-center gap-1 border-b p-1">
+      <div
+        ref={toolbarRef}
+        role="toolbar"
+        aria-label="Formatting"
+        className="flex flex-wrap items-center gap-1 border-b p-1"
+        onKeyDown={onToolbarKeyDown}
+        onFocus={onToolbarFocus}
+      >
         <Button
           type="button"
           variant={editor.isActive("bold") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
-          onMouseDown={(e) => {
-            e.preventDefault();
+          title="Bold"
+          aria-label="Bold"
+          aria-pressed={editor.isActive("bold")}
+          tabIndex={toolbarIndex === 0 ? 0 : -1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
             editor.chain().focus().toggleBold().run();
           }}
         >
@@ -276,8 +311,12 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           variant={editor.isActive("italic") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
-          onMouseDown={(e) => {
-            e.preventDefault();
+          title="Italic"
+          aria-label="Italic"
+          aria-pressed={editor.isActive("italic")}
+          tabIndex={toolbarIndex === 1 ? 0 : -1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
             editor.chain().focus().toggleItalic().run();
           }}
         >
@@ -290,8 +329,10 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           className="h-7 w-7"
           title="Inline code"
           aria-label="Inline code"
-          onMouseDown={(e) => {
-            e.preventDefault();
+          aria-pressed={editor.isActive("code")}
+          tabIndex={toolbarIndex === 2 ? 0 : -1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
             editor.chain().focus().toggleCode().run();
           }}
         >
@@ -304,8 +345,10 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           className="h-7 w-7"
           title="Code block"
           aria-label="Code block"
-          onMouseDown={(e) => {
-            e.preventDefault();
+          aria-pressed={editor.isActive("codeBlock")}
+          tabIndex={toolbarIndex === 3 ? 0 : -1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
             editor.chain().focus().toggleCodeBlock().run();
           }}
         >
@@ -318,8 +361,10 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           className="h-7 w-7"
           title="Bullet list"
           aria-label="Bullet list"
-          onMouseDown={(e) => {
-            e.preventDefault();
+          aria-pressed={editor.isActive("bulletList")}
+          tabIndex={toolbarIndex === 4 ? 0 : -1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
             editor.chain().focus().toggleBulletList().run();
           }}
         >
@@ -330,8 +375,12 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           variant={editor.isActive("orderedList") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
-          onMouseDown={(e) => {
-            e.preventDefault();
+          title="Ordered list"
+          aria-label="Ordered list"
+          aria-pressed={editor.isActive("orderedList")}
+          tabIndex={toolbarIndex === 5 ? 0 : -1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
             editor.chain().focus().toggleOrderedList().run();
           }}
         >
@@ -342,8 +391,12 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           variant={editor.isActive("blockquote") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
-          onMouseDown={(e) => {
-            e.preventDefault();
+          title="Quote"
+          aria-label="Quote"
+          aria-pressed={editor.isActive("blockquote")}
+          tabIndex={toolbarIndex === 6 ? 0 : -1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
             editor.chain().focus().toggleBlockquote().run();
           }}
         >
@@ -351,11 +404,15 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
         </Button>
         <Button
           type="button"
+          // Link is an action, not a toggle: it prompts for a URL, so it has no pressed state.
           variant={editor.isActive("link") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
-          onMouseDown={(e) => {
-            e.preventDefault();
+          title="Link"
+          aria-label="Link"
+          tabIndex={toolbarIndex === 7 ? 0 : -1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
             const prev = editor.getAttributes("link").href as string | undefined;
             const url = window.prompt("Enter URL", prev || "https://");
             if (url === null) return;

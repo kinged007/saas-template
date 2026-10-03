@@ -140,6 +140,25 @@ export type Role = {
   created_at?: string;
 };
 
+/**
+ * The domain `ck_workspace_members_status` in `apps/api/src/models/workspace.py`
+ * enforces, so it is copied off the constraint rather than enumerated. The API
+ * writes `active` and `suspended`; `invited` has no writer and survives only as
+ * a pre-0017 value, and is kept so narrowing does not strip the Suspend action
+ * from such a row.
+ */
+export type MemberStatus = "active" | "invited" | "suspended";
+
+/**
+ * What the admin users list shows for `AdminUser.is_active`; not a stored value.
+ *
+ * Its `"active"` collapses into `MemberStatus`'s `"active"` in
+ * `StatusBadgeStatus`, so the two meanings share one badge variant. They
+ * currently agree on `secondary`; a per-meaning variant needs a discriminated
+ * map, not a flat `Record`.
+ */
+export type AdminUserStatus = "active" | "disabled";
+
 export type Member = {
   id: string;
   email: string;
@@ -151,9 +170,16 @@ export type Member = {
   membership_id: string;
   role_id: string;
   role: string;
-  status: string;
+  status: MemberStatus;
   joined_at?: string;
 };
+
+export type InvitationStatus =
+  | "pending"
+  | "declined"
+  | "accepted"
+  | "revoked"
+  | "expired";
 
 export type Invitation = {
   id: string;
@@ -162,7 +188,7 @@ export type Invitation = {
   role_id: string;
   invited_by_user_id?: string;
   token: string;
-  status: string;
+  status: InvitationStatus;
   expires_at?: string;
   accepted_at?: string;
   created_at?: string;
@@ -243,6 +269,8 @@ export type ApiKey = {
   permissions: string[];
   created_by_user_id?: string;
   last_used_at?: string;
+  /** Optional hard expiry; the key is rejected once this passes. */
+  expires_at?: string | null;
   /** Lifetime authenticated uses; null usage_quota = unlimited. */
   usage_count?: number;
   usage_quota?: number | null;

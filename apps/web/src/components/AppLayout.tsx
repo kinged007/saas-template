@@ -130,7 +130,14 @@ function SidebarNav() {
 
   const renderGroup = (group: (typeof visibleGroups)[number]) => (
     <SidebarGroup key={group.id}>
-      {group.title && <SidebarGroupLabel>{group.title}</SidebarGroupLabel>}
+      {/* The label element is the heading. `h2` matches the level the app gives its
+          landmark titles (ListView, PageHeader); the sidebar sits beside <main>, so
+          a group title is not subordinate to the page heading. */}
+      {group.title && (
+        <SidebarGroupLabel asChild>
+          <h2>{group.title}</h2>
+        </SidebarGroupLabel>
+      )}
       <SidebarMenu>
         {group.items.map((item, index) => {
           const Icon = item.icon;
@@ -167,12 +174,16 @@ function SidebarNav() {
   const topGroups = visibleGroups.filter((g) => g.position === "top");
   const bottomGroups = visibleGroups.filter((g) => g.position === "bottom");
 
+  // The landmark belongs at the call site, not in the shared shadcn primitive.
+  // It takes over the flex classes SidebarContent used to give the groups, so
+  // the scroll and collapsed layout are unchanged. Named because the settings
+  // pages render a nav of their own.
   return (
-    <>
+    <nav aria-label="Main" className="flex min-h-0 flex-1 flex-col gap-2">
       {topGroups.map(renderGroup)}
       {topGroups.length > 0 && bottomGroups.length > 0 && <SidebarSeparator />}
       {bottomGroups.map(renderGroup)}
-    </>
+    </nav>
   );
 }
 
@@ -186,9 +197,8 @@ function useSingleWorkspace(): boolean {
   return identity?.single_workspace === true;
 }
 
-function WorkspaceSwitcher() {
+function WorkspaceSwitcher({ single }: { single: boolean }) {
   const { workspaces, workspace, setWorkspace } = useWorkspace();
-  const single = useSingleWorkspace();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   if (workspaces.length === 0) return null;
@@ -261,15 +271,17 @@ function UserMenu() {
   const permissions = activeWorkspacePermissions(identity);
   const canViewApiKeys = permissions.includes("*") || permissions.includes("apikey:read");
 
-  // Workspace settings — only owners and admins may see this entry. The page
-  // itself re-checks this gate and renders an "Access denied" fallback if the
-  // role was downgraded after the menu rendered.
+  // Workspace settings — only owners and admins may see this entry, and
+  // SINGLE_WORKSPACE hides it entirely. The page itself re-checks the role gate
+  // and renders an "Access denied" fallback if the role was downgraded after
+  // the menu rendered; hiding the entry leaves the route itself reachable.
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
   const isWorkspaceAdmin =
     identity?.is_superuser === true ||
     (myRole !== undefined && ["owner", "admin"].includes(myRole)) ||
     permissions.includes("*") ||
     permissions.includes("workspace:update");
+  const showWorkspaceSettings = isWorkspaceAdmin && identity?.single_workspace !== true;
 
   return (
     <DropdownMenu>
@@ -303,7 +315,7 @@ function UserMenu() {
           <Settings />
           Profile Settings
         </DropdownMenuItem>
-        {isWorkspaceAdmin && (
+        {showWorkspaceSettings && (
           <DropdownMenuItem onClick={() => navigate("/settings/workspace")}>
             <Building2 />
             Workspace Settings
@@ -340,6 +352,7 @@ function UserMenu() {
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const { workspaces } = useWorkspace();
+  const single = useSingleWorkspace();
 
   return (
     <SidebarProvider>
@@ -357,7 +370,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               className="hidden w-auto max-w-8 shrink-0 group-data-[collapsible=icon]:block"
             />
           </div>
-          <WorkspaceSwitcher />
+          <WorkspaceSwitcher single={single} />
         </SidebarHeader>
         <SidebarContent>
           {workspaces.length === 0 ? (
@@ -365,13 +378,17 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               <p className="text-muted-foreground text-sm">
                 You're not a member of any workspace yet.
               </p>
-              <Button
-                onClick={() => navigate("/workspaces/create")}
-                className="gap-2 justify-start"
-              >
-                <Building2 className="h-4 w-4" />
-                Create workspace
-              </Button>
+              {/* /workspaces/create redirects home while the flag is set, so the
+                  button would navigate nowhere. */}
+              {!single && (
+                <Button
+                  onClick={() => navigate("/workspaces/create")}
+                  className="gap-2 justify-start"
+                >
+                  <Building2 className="h-4 w-4" />
+                  Create workspace
+                </Button>
+              )}
             </div>
           ) : (
             <SidebarNav />

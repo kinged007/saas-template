@@ -11,7 +11,7 @@ import { SettingsNav } from "./components/SettingsNav";
 
 const MANAGER_ROLES = ["owner", "admin"];
 
-function isWorkspaceAdmin(identity: Identity | undefined, workspaceId: string | undefined): boolean {
+export function isWorkspaceAdmin(identity: Identity | undefined, workspaceId: string | undefined): boolean {
   if (!identity || !workspaceId) return false;
   if (identity.is_superuser) return true;
   const ws = identity.workspaces.find((w) => w.id === workspaceId);

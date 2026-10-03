@@ -9,6 +9,7 @@ from src.settings import Settings
 def _clean_db_env(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("USE_SQLITE", raising=False)
+    monkeypatch.delenv("SINGLE_WORKSPACE_DEFAULT_ROLE", raising=False)
 
 
 def test_single_workspace_default_role_defaults_to_viewer():

@@ -44,6 +44,7 @@ class ProviderConfig:
     authorize_url: str | None = None
     token_url: str | None = None
     userinfo_url: str | None = None
+    emails_url: str | None = None
     jwks_uri: str | None = None
 
     @property
@@ -69,6 +70,7 @@ def get_provider(provider_id: str) -> ProviderConfig:
                 authorize_url=raw.get("authorize_url"),
                 token_url=raw.get("token_url"),
                 userinfo_url=raw.get("userinfo_url"),
+                emails_url=raw.get("emails_url"),
                 jwks_uri=raw.get("jwks_uri"),
             )
     raise OAuthError(f"unknown oauth provider '{provider_id}'")
@@ -96,7 +98,9 @@ async def _discovery(provider: ProviderConfig, cache: TtlCache) -> dict[str, Any
             resp.raise_for_status()
             doc = resp.json()
     except Exception as exc:
-        raise OAuthError(f"could not load discovery document for '{provider.id}'") from exc
+        raise OAuthError(
+            f"could not load discovery document for '{provider.id}': {_failure_detail(exc)}"
+        ) from exc
     cache.set(key, doc)
     return doc
 
@@ -158,7 +162,7 @@ async def exchange_code(
             resp.raise_for_status()
             return resp.json()
     except Exception as exc:
-        raise OAuthError("code exchange failed") from exc
+        raise OAuthError(f"code exchange failed: {_failure_detail(exc)}") from exc
 
 
 def _jwks_client(provider: ProviderConfig, doc: dict[str, Any]) -> jwt.PyJWKClient | None:
@@ -175,6 +179,12 @@ def claims_from_id_token(
     client = _jwks_client(provider, doc)
     if client is None:
         return None
+    # The document's issuer is what the IdP itself states, so it wins over the
+    # configured one; the config covers providers that skip discovery.
+    issuer = doc.get("issuer") or provider.issuer
+    if not issuer:
+        # Nothing to compare `iss` against, so only its presence is enforced.
+        logger.warning("no issuer configured for provider %s; id_token iss not pinned", provider.id)
     try:
         key = client.get_signing_key_from_jwt(id_token).key
         return jwt.decode(
@@ -182,11 +192,39 @@ def claims_from_id_token(
             key,
             algorithms=["RS256", "ES256"],
             audience=provider.client_id,
+            issuer=issuer,
             options={"require": ["exp", "iss", "sub"]},
         )
     except Exception:
         logger.warning("id_token verification failed for provider %s", provider.id)
         return None
+
+
+async def _verified_email(client: httpx.AsyncClient, url: str, headers: dict[str, str]) -> str:
+    """Primary verified address from a provider's email list.
+
+    GitHub returns a null email from /user whenever the account keeps its
+    address private, and only this endpoint states whether an address is
+    verified. The claim is the provider's, not proof of mailbox control.
+    """
+    resp = await client.get(url, headers=headers)
+    resp.raise_for_status()
+    data = resp.json()
+    entries = (
+        [e for e in data if isinstance(e, dict) and e.get("verified") and e.get("email")]
+        if isinstance(data, list)
+        else []
+    )
+    # No primary flag: fall back to the provider's list order, so the winner
+    # is deterministic only while that ordering is stable.
+    chosen = next((e for e in entries if e.get("primary")), None) or next(iter(entries), None)
+    return str(chosen["email"]) if chosen else ""
+
+
+def _failure_detail(exc: Exception) -> str:
+    """HTTP status when the provider answered, else the exception type."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return f"HTTP {status}" if status else type(exc).__name__
 
 
 async def fetch_userinfo(
@@ -195,14 +233,38 @@ async def fetch_userinfo(
     endpoint = doc.get("userinfo_endpoint") or provider.userinfo_url
     if not endpoint:
         return {}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(endpoint, headers={"Authorization": f"Bearer {access_token}"})
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        headers = {"Authorization": f"Bearer {access_token}"}
+        try:
+            resp = await client.get(endpoint, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-            return data if isinstance(data, dict) else {}
-    except Exception as exc:
-        raise OAuthError("could not fetch user info") from exc
+        except Exception as exc:
+            raise OAuthError(
+                f"could not fetch user info for '{provider.id}' from {endpoint}: "
+                f"{_failure_detail(exc)}"
+            ) from exc
+        if not isinstance(data, dict):
+            return {}
+        if not data.get("email") and provider.emails_url:
+            try:
+                data["email"] = await _verified_email(client, provider.emails_url, headers)
+            except Exception as exc:
+                # Branch on the status itself: the rendered detail is wording,
+                # and rewording it must not silence the hint below.
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                detail = _failure_detail(exc)
+                # GitHub answers 404 on /user/emails when the token lacks the
+                # email scope: a config fix, so name the scopes to compare.
+                if status == 404:
+                    detail = (
+                        f"HTTP 404, token likely lacks an email scope (asked: {provider.scopes})"
+                    )
+                raise OAuthError(
+                    f"could not fetch verified email for '{provider.id}' from "
+                    f"{provider.emails_url}: {detail}"
+                ) from exc
+        return data
 
 
 def normalize_identity(

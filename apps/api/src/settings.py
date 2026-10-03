@@ -40,7 +40,8 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
     # Browser session refresh cookie (HttpOnly; JS can never read it).
-    # refresh_cookie_secure=None (default) → Secure unless development.
+    # refresh_cookie_secure=None (default) → Secure on https requests; plain http
+    # falls back to Secure unless ENVIRONMENT is development or test.
     refresh_cookie_name: str = "st_refresh"
     refresh_cookie_domain: str = ""
     refresh_cookie_path: str = "/api/v1/auth"
@@ -109,8 +110,8 @@ class Settings(BaseSettings):
     # one shared workspace (owned by whoever arrives first, normally the
     # superadmin) and every later login/register auto-joins it as
     # single_workspace_default_role. Creating a second workspace and deleting
-    # the workspace are rejected; the sidebar switcher and the delete
-    # danger-zone are hidden.
+    # the workspace are rejected; the sidebar switcher, the workspace settings
+    # entry in the user menu, and the delete danger-zone are hidden.
     single_workspace: bool = False
     # Role given to users who auto-join the single workspace: any of its
     # system or custom role names. An unknown or blank name falls back to
@@ -127,6 +128,9 @@ class Settings(BaseSettings):
     jobs_log_retention_days: int = Field(default=90, ge=0)
     notifications_retention_days: int = Field(default=90, ge=0)
     audit_log_retention_days: int = Field(default=0, ge=0)
+    # Days a revoked or expired API key is kept before the apikeys.cleanup job
+    # hard-deletes it. 0 disables deletion.
+    api_key_retention_days: int = Field(default=30, ge=0)
 
     @property
     def database_url_sqlite(self) -> bool:

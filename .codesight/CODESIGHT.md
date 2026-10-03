@@ -350,7 +350,6 @@
 - **WorkspaceProvider** — `apps/web/src/contexts/WorkspaceContext.tsx`
 - **MOBILE_BREAKPOINT** — `apps/web/src/hooks/use-mobile.tsx`
 - **LinkBase** — props: href, className — `apps/web/src/lib/markdown.tsx`
-- **AdminPage** — `apps/web/src/pages/AdminPage.tsx`
 - **ApiKeyCreatePage** — `apps/web/src/pages/ApiKeyCreatePage.tsx`
 - **ApiKeysPage** — `apps/web/src/pages/ApiKeysPage.tsx`
 - **DashboardPage** — `apps/web/src/pages/DashboardPage.tsx`
@@ -413,7 +412,6 @@
 - `apps/api/src/api/crud.py`
   - function parse_query: (request, *, max_limit) -> QuerySpec
   - function apply_query: (stmt, model, spec, *, sortable, filterable) -> Select
-  - function run_list: (session, stmt, model, request, *, sortable, filterable) -> tuple[list[Any], int]
   - class QuerySpec
   - class InvalidQuery
 - `apps/api/src/api/deps.py`

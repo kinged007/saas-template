@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from src.db.base import Base, StringUUID, TimestampMixin
+from src.db.base import Base, StrEnum, StringUUID, TimestampMixin
 
 
 class User(Base, TimestampMixin):
@@ -108,6 +108,19 @@ class Role(Base, TimestampMixin):
     description: Mapped[str | None] = mapped_column(String(300), nullable=True)
     permissions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class MemberStatus(StrEnum):
+    """The domain `ck_workspace_members_status` below enforces.
+
+    Copied off the constraint rather than enumerated, as `MemberStatus` in
+    `apps/web/src/types.ts` is. The API writes `active` and `suspended`;
+    `invited` has no writer and survives only as a pre-0017 value.
+    """
+
+    ACTIVE = "active"
+    INVITED = "invited"
+    SUSPENDED = "suspended"
 
 
 class WorkspaceMember(Base, TimestampMixin):

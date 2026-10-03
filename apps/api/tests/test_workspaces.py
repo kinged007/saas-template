@@ -1,3 +1,6 @@
+import pytest
+from sqlalchemy import select
+
 from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
 
 
@@ -248,3 +251,196 @@ async def test_simple_rest_range_pagination_query(app_client):
     )
     assert resp.status_code == 200
     assert len(resp.json()) == 2
+
+
+async def test_suspended_actor_cannot_widen_a_custom_role(app_client):
+    """A suspended actor is capped as if unauthenticated, not by its own role.
+
+    The role-capping sites resolve the actor's membership with
+    `active_only=True`; a suspended row therefore reads as "no actor cap" and
+    every requested permission is denied.
+    """
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role, WorkspaceMember
+    from src.services.auth import AuthService
+    from src.services.workspaces import WorkspaceForbidden, WorkspaceService
+
+    client = app_client
+    owner = await register_user(client, "cap-owner@example.com")
+    ws = await create_workspace(client, owner)
+    await register_user(client, "cap-admin@example.com")
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session)
+        admin_user = await AuthService(session).get_by_email("cap-admin@example.com")
+        role_ids = {
+            name: (
+                await session.execute(
+                    select(Role).where(Role.workspace_id == ws["id"], Role.name == name)
+                )
+            )
+            .scalar_one()
+            .id
+            for name in ("admin", "editor")
+        }
+        session.add(
+            WorkspaceMember(
+                workspace_id=ws["id"],
+                user_id=admin_user.id,
+                role_id=role_ids["admin"],
+                status="suspended",
+            )
+        )
+        await session.commit()
+
+        # `member:read` is in the admin role's permission set, so this only
+        # fails when the suspended membership is not treated as an actor cap.
+        with pytest.raises(WorkspaceForbidden):
+            await service.create_custom_role(
+                ws["id"],
+                name="ops",
+                description=None,
+                permissions=["member:read"],
+                actor=admin_user,
+            )
+        with pytest.raises(WorkspaceForbidden):
+            await service.update_role(
+                ws["id"], role_ids["editor"], permissions=["member:read"], actor=admin_user
+            )
+
+
+async def test_service_stores_trimmed_names(app_client):
+    """The service trims even when no schema validated the input.
+
+    The schema is the validation boundary; the service is the normalization
+    boundary. Direct callers (seed, bootstrap, tests) never pass through the
+    schema, so a padded name must not reach the row.
+    """
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role, Workspace
+    from src.services.auth import AuthService
+    from src.services.workspaces import WorkspaceService
+
+    client = app_client
+    await register_user(client, "trim-owner@example.com")
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session)
+        user = await AuthService(session).get_by_email("trim-owner@example.com")
+        workspace = await service.create_workspace(
+            name="  Acme  ", slug=None, description=None, owner=user
+        )
+        role = await service.create_custom_role(
+            workspace.id,
+            name="  ops  ",
+            description=None,
+            permissions=["member:read"],
+            actor=user,
+        )
+        await service.update_workspace(workspace.id, name="  Acme Renamed  ")
+        await service.update_role(workspace.id, role.id, name="  operators  ")
+
+    # Re-read so the assertion is on the stored row, not the in-memory object.
+    async with SessionFactory() as session:
+        stored_ws = await session.get(Workspace, workspace.id)
+        assert stored_ws.name == "Acme Renamed"
+        assert stored_ws.slug == "acme"
+        stored_role = await session.get(Role, role.id)
+        assert stored_role.name == "operators"
+
+
+async def test_create_workspace_strips_padded_name(app_client):
+    client = app_client
+    tokens = await register_user(client, "pad-ws@example.com")
+    resp = await client.post(
+        "/api/v1/workspaces", json={"name": "  Acme  "}, headers=auth_headers(tokens)
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == "Acme"
+    assert resp.json()["slug"] == "acme"
+
+    blank = await client.post(
+        "/api/v1/workspaces", json={"name": "   "}, headers=auth_headers(tokens)
+    )
+    assert blank.status_code == 422
+
+
+async def test_update_workspace_strips_padded_name(app_client):
+    client = app_client
+    tokens = await register_user(client, "pad-ws-upd@example.com")
+    ws = await create_workspace(client, tokens, name="Acme Corp")
+    headers = ws_headers(tokens, ws["id"])
+    resp = await client.patch(
+        f"/api/v1/workspaces/{ws['id']}", json={"name": "  Acme Renamed  "}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["name"] == "Acme Renamed"
+
+    blank = await client.patch(
+        f"/api/v1/workspaces/{ws['id']}", json={"name": "   "}, headers=headers
+    )
+    assert blank.status_code == 422
+
+
+async def _set_member_status(membership_id: str, status: str) -> None:
+    from src.db.session import SessionFactory
+    from src.models.workspace import WorkspaceMember
+
+    async with SessionFactory() as session:
+        member = await session.get(WorkspaceMember, membership_id)
+        assert member is not None
+        member.status = status
+        await session.commit()
+
+
+async def test_transfer_ownership_refuses_every_non_active_status(app_client):
+    """Both terminal statuses are refused and `active` is still offered.
+
+    `transfer_ownership` decides from a table over the member-status domain
+    (#810), so both halves are pinned: an assertion on the refusal side alone
+    also passes against a `!= "active"` comparison, and one on the offer side
+    alone misses a table that grants every status.
+    """
+    client = app_client
+    owner = await register_user(client, "xfer-owner@example.com")
+    ws = await create_workspace(client, owner)
+    heir = await register_user(client, "xfer-heir@example.com")
+    token = await _invite(client, owner, ws, "xfer-heir@example.com", "editor")
+    accepted = await client.post(
+        f"/api/v1/invitations/accept?token={token}", headers=auth_headers(heir)
+    )
+    assert accepted.status_code == 200, accepted.text
+    members = await client.get("/api/v1/members", headers=ws_headers(owner, ws["id"]))
+    target_id = next(
+        m["membership_id"] for m in members.json() if m["email"] == "xfer-heir@example.com"
+    )
+    headers = ws_headers(owner, ws["id"])
+
+    for status in ("suspended", "invited"):
+        await _set_member_status(target_id, status)
+        refused = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/transfer",
+            json={"new_owner_membership_id": target_id},
+            headers=headers,
+        )
+        assert refused.status_code == 409, status
+        assert refused.json()["detail"] == "new owner must be an active member"
+
+    await _set_member_status(target_id, "active")
+    transferred = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/transfer",
+        json={"new_owner_membership_id": target_id},
+        headers=headers,
+    )
+    assert transferred.status_code == 200, transferred.text
+    roles = await client.get("/api/v1/members", headers=headers)
+    heir_row = next(m for m in roles.json() if m["email"] == "xfer-heir@example.com")
+    assert heir_row["role"] == "owner"
+
+
+def test_transfer_eligibility_decides_every_member_status():
+    """A status the domain gains is refused until this table decides it."""
+    from src.models.workspace import MemberStatus
+    from src.services.workspaces import _TRANSFER_ELIGIBLE
+
+    assert set(_TRANSFER_ELIGIBLE) == {status.value for status in MemberStatus}
