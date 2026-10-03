@@ -154,6 +154,23 @@ test.describe("composer toolbar", () => {
     await expect(editor.locator("a")).toHaveCount(0);
   });
 
+  test("a bare host typed in the text still autolinks", async ({ page }) => {
+    await openToolbar(page);
+    const editor = page.getByRole("dialog").locator('[contenteditable="true"]');
+
+    // The editor's href allow-list must not cost the composer autolinking:
+    // `www.example.com ` is stored as `http://www.example.com/`, never as the
+    // relative href the bare text would otherwise be.
+    await editor.click();
+    await page.keyboard.type("www.example.com ");
+    await expect(editor.locator('a[href^="http://www.example.com"]')).toHaveText("www.example.com");
+
+    // A protocol-relative value is not a host, so it is still refused.
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.type("//evil.example.com ");
+    await expect(editor.locator("a")).toHaveCount(0);
+  });
+
   test("the toolbar is a single tab stop with arrow-key navigation", async ({ page }) => {
     const toolbar = await openToolbar(page);
     const buttons = toolbar.getByRole("button");

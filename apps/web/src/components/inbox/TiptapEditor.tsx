@@ -13,7 +13,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { Bold, Italic, Code2, SquareCode, List, ListOrdered, Link2, Quote } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { normalizeLinkUrl } from "@/lib/link-url";
+import { isAllowedLinkHref, normalizeLinkUrl } from "@/lib/link-url";
 import { pickerIndex, rankMentionTargets, type MentionTarget } from "@/lib/mentions";
 
 const turndownService = new TurndownService({
@@ -158,11 +158,11 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           autolink: true,
           linkOnPaste: true,
           HTMLAttributes: { rel: "noopener noreferrer", target: null },
-          // Autolink and linkOnPaste have to refuse the same schemes the
-          // popover's editor does; `protocols` only adds to the extension's
-          // default list, so the allow-list is replaced here. A missing href is
-          // left to the extension, as it is today.
-          isAllowedUri: (url) => !url || normalizeLinkUrl(url) !== null,
+          // Autolink and linkOnPaste have to refuse the same hrefs the popover's
+          // editor does; `protocols` only adds to the extension's default list,
+          // so the allow-list is replaced here. A missing href is left to the
+          // extension, as it is today.
+          isAllowedUri: (url) => !url || isAllowedLinkHref(url),
         }),
         Mention.configure({
           HTMLAttributes: { class: "mention" },

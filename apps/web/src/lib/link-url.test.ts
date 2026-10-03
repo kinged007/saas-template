@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { normalizeLinkUrl } from "./link-url.ts";
+import { isAllowedLinkHref, normalizeLinkUrl } from "./link-url.ts";
 
 describe("normalizeLinkUrl", () => {
   it("keeps an absolute https URL and normalises it", () => {
@@ -34,5 +34,33 @@ describe("normalizeLinkUrl", () => {
     assert.equal(normalizeLinkUrl("data:text/html,<script>alert(1)</script>"), null);
     assert.equal(normalizeLinkUrl("file:///etc/passwd"), null);
     assert.equal(normalizeLinkUrl("mailto:a@example.com"), null);
+  });
+});
+
+describe("isAllowedLinkHref", () => {
+  it("accepts an absolute http(s) URL", () => {
+    assert.equal(isAllowedLinkHref("https://example.com/x"), true);
+  });
+
+  it("accepts the scheme-less hosts the extension autolinks to http://", () => {
+    assert.equal(isAllowedLinkHref("www.example.com"), true);
+    assert.equal(isAllowedLinkHref("example.com"), true);
+    assert.equal(isAllowedLinkHref("example.com/docs?a=1"), true);
+    assert.equal(isAllowedLinkHref(" example.com "), true);
+  });
+
+  it("still refuses a plain word, a relative path and a protocol-relative host", () => {
+    // The widening is for bare hosts, not for the relative hrefs that resolve
+    // against the app origin.
+    assert.equal(isAllowedLinkHref("hello"), false);
+    assert.equal(isAllowedLinkHref("/inbox"), false);
+    assert.equal(isAllowedLinkHref("//evil.example.com"), false);
+    assert.equal(isAllowedLinkHref(""), false);
+  });
+
+  it("still refuses every scheme other than http and https", () => {
+    assert.equal(isAllowedLinkHref("javascript:alert(1)"), false);
+    assert.equal(isAllowedLinkHref("mailto:a@example.com"), false);
+    assert.equal(isAllowedLinkHref("data:text/html,<script>alert(1)</script>"), false);
   });
 });
