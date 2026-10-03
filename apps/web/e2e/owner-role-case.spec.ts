@@ -40,9 +40,11 @@ const member = (email: string, roleId: string, roleName: string) => ({
 /**
  * A manager identity holding neither `"*"` nor superuser: both short-circuit
  * every `useCan` on the page, so the gates under test would pass or fail for
- * the wrong reason.
+ * the wrong reason. `singleWorkspace` is on by default because the workspace
+ * settings page is only reachable on a single-workspace account; the danger
+ * zone that holds the transfer block needs it off.
  */
-const identity = (myRole: string) => ({
+const identity = (myRole: string, { singleWorkspace = true } = {}) => ({
   id: "user-1",
   email: "manager@example.com",
   first_name: "Manager",
@@ -56,7 +58,7 @@ const identity = (myRole: string) => ({
     "role:create",
   ],
   workspaces: [{ id: "ws-1", name: "Acme Corp", role: myRole }],
-  single_workspace: true,
+  single_workspace: singleWorkspace,
 });
 
 const roles = (page: Page, rows: unknown[]) =>
@@ -120,5 +122,34 @@ test.describe("owner role named in another case", () => {
 
     await expect(page.getByRole("button", { name: "Edit admin" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Edit Owner" })).toHaveCount(0);
+  });
+
+  test("an `Owner` identity is offered Transfer ownership", async ({ page }) => {
+    // transfer_ownership gates on the folded owner name, so the block renders
+    // for a workspace whose owner row is spelled `Owner`. The danger zone is the
+    // anchor: it renders for both identities, so a visibility check reads the
+    // gate and not a page that has not loaded.
+    await mockApi(page, {
+      signedIn: true,
+      identity: identity("Owner", { singleWorkspace: false }),
+    });
+    await members(page, [member("owner@example.com", "1", "Owner")]);
+    await page.goto("/settings/workspace");
+
+    await expect(page.getByRole("heading", { name: "Danger zone" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Transfer ownership" })).toBeVisible();
+  });
+
+  test("an `admin` identity is offered no Transfer ownership", async ({ page }) => {
+    // The mirror of the case above on the same block: only the role name differs.
+    await mockApi(page, {
+      signedIn: true,
+      identity: identity("admin", { singleWorkspace: false }),
+    });
+    await members(page, [member("owner@example.com", "1", "Owner")]);
+    await page.goto("/settings/workspace");
+
+    await expect(page.getByRole("heading", { name: "Danger zone" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Transfer ownership" })).toHaveCount(0);
   });
 });

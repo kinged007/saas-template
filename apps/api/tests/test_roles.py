@@ -95,6 +95,22 @@ async def _seed_legacy_case_role(
         return role.id
 
 
+async def _rename_seeded_role(workspace_id: str, name: str, new_name: str) -> None:
+    """Rewrite a seeded row's name out of band, as pre-#328 data spells it."""
+    from sqlalchemy import select
+
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    async with SessionFactory() as session:
+        role = await session.scalar(
+            select(Role).where(Role.workspace_id == workspace_id, Role.name == name)
+        )
+        assert role is not None, name
+        role.name = new_name
+        await session.commit()
+
+
 async def _add_member_holding_role(
     client, owner_tokens, ws, email: str, role_id: str
 ) -> tuple[dict, str]:
@@ -941,6 +957,36 @@ async def test_legacy_owner_case_row_transfers_without_the_owner_permission(app_
     }
     assert roles["ci14t@example.com"] == "owner"
     assert roles["ci14h@example.com"] == "admin"
+
+
+async def test_transfer_finds_the_owner_and_admin_rows_by_case_folded_name(app_client):
+    """The gate and the lookup have to fold alike.
+
+    `transfer_ownership` gates on `is_owner_role_name` and then resolves both
+    roles it writes through `_role_by_name`, which compared `Role.name` exactly:
+    a workspace whose owner row is spelled `Owner` passed the gate and 404'd on
+    the lookup, which is what the client fix in #772 exposed.
+    """
+    client = app_client
+    owner = await register_user(client, "ci16@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    await _rename_seeded_role(ws["id"], "owner", "Owner")
+    await _rename_seeded_role(ws["id"], "admin", "Admin")
+    await _add_member(client, owner, ws, "ci16h@example.com", "editor")
+    target_id = await _membership_id(client, owner, ws, "ci16h@example.com")
+
+    transfer = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/transfer",
+        json={"new_owner_membership_id": target_id},
+        headers=headers,
+    )
+    assert transfer.status_code == 200, transfer.text
+    roles = {
+        m["email"]: m["role"] for m in (await client.get("/api/v1/members", headers=headers)).json()
+    }
+    assert roles["ci16h@example.com"] == "Owner"
+    assert roles["ci16@example.com"] == "Admin"
 
 
 async def test_check_name_free_names_the_seeded_row(app_client):

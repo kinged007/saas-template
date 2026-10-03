@@ -1060,7 +1060,17 @@ class WorkspaceService:
         raise WorkspaceError(f"role {self.SINGLE_WORKSPACE_ROLE} not found")
 
     async def _role_by_name(self, workspace_id: str, name: str) -> Role:
-        stmt = select(Role).where(Role.workspace_id == workspace_id, Role.name == name)
+        # Folded like the predicates its callers guard on, so a workspace whose
+        # role rows predate #328 resolve through the same rule as the gate that
+        # admits the caller. A legacy row can sit beside the seeded one, so an
+        # exact-case row wins and the limit keeps the second row from turning the
+        # lookup into a 500.
+        stmt = (
+            select(Role)
+            .where(Role.workspace_id == workspace_id, func.lower(Role.name) == name.lower())
+            .order_by(Role.name != name)
+            .limit(1)
+        )
         result = await self._session.execute(stmt)
         role = result.scalar_one_or_none()
         if role is None:
