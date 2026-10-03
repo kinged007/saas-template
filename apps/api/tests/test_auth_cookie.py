@@ -183,6 +183,28 @@ async def test_refresh_accepts_same_origin(app_client):
     assert r.status_code == 200, r.text
 
 
+async def test_refresh_accepts_proxied_dev_origin(app_client, monkeypatch):
+    """The vite proxy rewrites Host (changeOrigin) and sends the browser Origin
+    on through, so the API's check reads the web origin. Both loopback names have
+    to be allowlisted (`make dev` does it) or the refresh cookie is rejected as
+    cross-origin and the session dies on the next page load."""
+    monkeypatch.setattr(settings, "cors_origins", "http://localhost:5173,http://127.0.0.1:5173")
+    await register_user(app_client, "cookie5b@example.com")
+    resp = await app_client.post(
+        "/api/v1/auth/login",
+        json={"email": "cookie5b@example.com", "password": "Password123!", "use_cookies": True},
+    )
+    assert resp.status_code == 200
+    ok = {**CSRF, "Origin": "http://127.0.0.1:5173", "Host": "localhost:8000"}
+    r = await app_client.post("/api/v1/auth/refresh", json={}, headers=ok)
+    assert r.status_code == 200, r.text
+    assert r.json()["access_token"]
+    forged = {**ok, "Origin": "https://evil.test"}
+    r2 = await app_client.post("/api/v1/auth/refresh", json={}, headers=forged)
+    assert r2.status_code == 403
+    assert r2.json()["detail"] == "cross-origin request rejected"
+
+
 async def test_2fa_cookie_login_omits_json_refresh(app_client):
     from src.core.security.totp import current_code, secret_from_base32
 
