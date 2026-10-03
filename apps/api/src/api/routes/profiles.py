@@ -89,7 +89,7 @@ async def get_user_profile(
 ):
     service = ProfileService(db, container.bus)
     proj = await service.get_public_projection(
-        user_id, viewer=principal.user, is_superuser=principal.is_deployment_admin
+        user_id, viewer=principal.user, is_deployment_admin=principal.is_deployment_admin
     )
     if proj is None:
         raise HTTPException(status_code=404, detail="user or profile not found")

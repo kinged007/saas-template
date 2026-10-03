@@ -784,11 +784,24 @@ async def test_superuser_key_cannot_reach_superuser_routes(app_client):
     ]:
         resp = await client.request(method, url, headers=key_headers)
         assert resp.status_code == 403, (method, url, resp.status_code, resp.text)
+        # One kind of denial, one message: every path above is the
+        # deployment-admin gate, so a key caller is told the same thing
+        # whichever route it probed.
+        assert resp.json()["detail"] == (
+            "deployment administration is not available to API keys"
+        ), (method, url, resp.text)
 
     # The profile projection's superuser bypass is off for a key, so it
     # falls back to co-membership and finds none (404, not a 403 leak).
     resp = await client.get(f"/api/v1/users/{victim_id}/profile", headers=key_headers)
     assert resp.status_code == 404, resp.text
+
+    # The same path names the missing privilege to a session caller, without
+    # revealing whether that session would otherwise be a superuser.
+    plain = await register_user(client, "plain@example.com")
+    resp = await client.get("/api/v1/admin/users", headers=auth_headers(plain))
+    assert resp.status_code == 403, resp.status_code
+    assert resp.json()["detail"] == "superuser access required", resp.text
 
     # The superuser's own session still reaches all of them.
     session = await client.get("/api/v1/admin/users", headers=auth_headers(root))
