@@ -78,6 +78,12 @@ export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: str
   return {};
 }
 
+// Module scope, not the ref below: the workspace provider leaves its loading
+// gate as the identity settles, which unmounts and remounts this page with a
+// fresh ref while the URL still carries the code — the ref alone resets with
+// the instance and the code is exchanged twice.
+let consumedCode: string | null = null;
+
 export function OAuthCallbackPage() {
   const [status, setStatus] = useState("Signing you in…");
   const navigate = useNavigate();
@@ -98,6 +104,8 @@ export function OAuthCallbackPage() {
       setStatus("Missing sign-in code.");
       return;
     }
+    if (consumedCode === code) return;
+    consumedCode = code;
     exchangeOAuthCode(code)
       .then((res) => {
         if (res.twoFactor) {
