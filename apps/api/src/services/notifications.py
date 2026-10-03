@@ -38,6 +38,16 @@ def unsubscribe_url_for(token: str, type: str, frontend_url: str) -> str:
     return f"{base}/api/v1/notifications/unsubscribe?token={token}&type={type}"
 
 
+def preferences_response(prefs) -> dict:
+    """Wire shape for `GET|PUT /preferences` and its target-scoped twin, so both
+    routes answer identically. It lives here because it needs `DIGEST_TYPE`, and
+    `services.serializers` already imports this module."""
+    return {
+        "channels": {p.type: p.channel for p in prefs if p.type != DIGEST_TYPE},
+        "digest_enabled": next((p.digest_enabled for p in prefs if p.type == DIGEST_TYPE), False),
+    }
+
+
 class NotificationSpec(TypedDict):
     """Input for a notification to persist via `create_many`."""
 

@@ -1,6 +1,13 @@
 import { Refine, Authenticated } from "@refinedev/core";
 import routerProvider from "@refinedev/react-router";
-import { BrowserRouter, Navigate, Outlet, Route, Routes } from "react-router";
+import {
+  BrowserRouter,
+  Navigate,
+  Outlet,
+  Route,
+  Routes,
+  useParams,
+} from "react-router";
 
 import { useNotificationProvider } from "./components/refine-ui/notification/use-notification-provider";
 import { Toaster } from "./components/refine-ui/notification/toaster";
@@ -48,6 +55,14 @@ import { RolesSection } from "./pages/settings/workspace/sections/RolesSection";
 import { JobsSection } from "./pages/settings/workspace/sections/JobsSection";
 import { UsersSection } from "./pages/settings/workspace/sections/UsersSection";
 import { AuditLogSection } from "./pages/settings/workspace/sections/AuditLogSection";
+
+// A splat route resolves a relative `to` against the matched splat, so an unknown
+// member-editor tab would grow the URL on every hop. Match the two sibling
+// settings layouts: redirect to an absolute path.
+function MemberSettingsFallback() {
+  const { id = "" } = useParams();
+  return <Navigate to={`/users/${id}/settings/general`} replace />;
+}
 
 export function App() {
   return (
@@ -137,7 +152,7 @@ export function App() {
                 {userSettings.sections.map((s) => (
                   <Route key={s.key} path={s.key} element={<s.component />} />
                 ))}
-                <Route path="*" element={<Navigate to="general" replace />} />
+                <Route path="*" element={<MemberSettingsFallback />} />
               </Route>
               <Route path="settings/workspace" element={<WorkspaceSettingsLayout />}>
                 <Route index element={<Navigate to="general" replace />} />

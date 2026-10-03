@@ -368,10 +368,6 @@ def _require_session_user(principal: AuthPrincipal) -> None:
         )
 
 
-def _session_to_dict(row, *, current: bool) -> dict:
-    return session_to_dict(row, current=current)
-
-
 @router.post("/change-password", status_code=204)
 async def change_password(
     body: ChangePasswordRequest,
@@ -561,7 +557,7 @@ async def list_sessions(
     rows = await AuthService(db).list_sessions(principal.user.id)
     now = now_utc()
     return [
-        _session_to_dict(r, current=(r.id == principal.session_id))
+        session_to_dict(r, current=(r.id == principal.session_id))
         for r in rows
         if r.revoked_at is None and ensure_utc(r.expires_at) >= now
     ]

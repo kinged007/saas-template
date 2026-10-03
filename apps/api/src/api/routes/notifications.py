@@ -22,10 +22,7 @@ from src.events.publisher import publish_audit
 from src.models.core import Notification
 from src.models.workspace import Workspace
 from src.schemas.api import NotificationAck, NotificationPreferencesUpdate
-from src.services.notifications import (
-    DIGEST_TYPE,
-    NotificationService,
-)
+from src.services.notifications import NotificationService, preferences_response
 from src.services.serializers import notification_to_dict
 
 logger = logging.getLogger(__name__)
@@ -102,13 +99,6 @@ async def unread_count(
     return {"count": count}
 
 
-def _preferences_response(prefs) -> dict:
-    return {
-        "channels": {p.type: p.channel for p in prefs if p.type != DIGEST_TYPE},
-        "digest_enabled": next((p.digest_enabled for p in prefs if p.type == DIGEST_TYPE), False),
-    }
-
-
 @router.get("/preferences")
 async def get_preferences(
     user=Depends(get_current_user),
@@ -116,7 +106,7 @@ async def get_preferences(
     _=Depends(require_key_permission(NOTIFICATION_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    return _preferences_response(await NotificationService(db).get_preferences(user.id))
+    return preferences_response(await NotificationService(db).get_preferences(user.id))
 
 
 @router.put("/preferences")
@@ -136,7 +126,7 @@ async def update_preferences(
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     if body.digest_enabled is not None:
         await service.set_digest(user.id, body.digest_enabled)
-    return _preferences_response(await service.get_preferences(user.id))
+    return preferences_response(await service.get_preferences(user.id))
 
 
 @router.get("/unsubscribe", response_class=PlainTextResponse)

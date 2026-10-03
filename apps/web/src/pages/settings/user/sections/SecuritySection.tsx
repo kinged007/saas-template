@@ -48,6 +48,11 @@ export function SecuritySection() {
   const list: AuthSession[] = Array.isArray(sessions.result?.data)
     ? (sessions.result.data as AuthSession[])
     : [];
+  // `result` is undefined on error as well as on empty, so a failed query would
+  // otherwise render as "No active sessions." — say what happened instead.
+  const sessionsError = sessions.query.isError
+    ? (sessions.query.error?.message ?? "Could not load sessions.")
+    : null;
 
   const passwordValid =
     password.length >= 8 && password === confirmPassword && confirmPassword.length > 0;
@@ -57,6 +62,8 @@ export function SecuritySection() {
       await call(`${base}/password`, "post", { new_password: password });
       setPassword("");
       setConfirmPassword("");
+      // Setting a password revokes every session of the target.
+      sessions.query.refetch();
       toast.success("Password set. All of that member's sessions were revoked.");
     } catch (e) {
       toast.error((e as Error)?.message ?? "Could not set the password");
@@ -164,7 +171,9 @@ export function SecuritySection() {
                     </TableCell>
                   </TableRow>
                 ))}
-                {list.length === 0 && <EmptyRow colSpan={4}>No active sessions.</EmptyRow>}
+                {list.length === 0 && (
+                  <EmptyRow colSpan={4}>{sessionsError ?? "No active sessions."}</EmptyRow>
+                )}
               </TableBody>
             </Table>
           </div>

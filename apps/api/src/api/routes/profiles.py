@@ -27,9 +27,14 @@ from src.schemas.api import (
     SessionRead,
 )
 from src.services.auth import AuthError, AuthService, CurrentSessionError
-from src.services.notifications import DIGEST_TYPE, NotificationService
+from src.services.notifications import NotificationService, preferences_response
 from src.services.profiles import ProfileService
-from src.services.serializers import profile_to_dict, session_to_dict
+from src.services.serializers import (
+    delegate_custom_data,
+    profile_to_dict,
+    session_to_dict,
+    strip_private_custom_data,
+)
 from src.services.workspaces import WorkspaceService
 
 logger = logging.getLogger(__name__)
@@ -125,7 +130,12 @@ async def get_user_profile(
             raise HTTPException(status_code=404, detail="user or profile not found")
         profile = await service.get_or_create(user_id)
         # avatar_url lives on the user row, not the profile, and is editable here.
-        return {**profile_to_dict(profile), "avatar_url": target.avatar_url}
+        # `custom_data` keeps the `_private*` contract `public_projection` documents.
+        return {
+            **profile_to_dict(profile),
+            "avatar_url": target.avatar_url,
+            "custom_data": strip_private_custom_data(profile.custom_data),
+        }
     proj = await service.get_public_projection(
         user_id, viewer=principal.user, is_superuser=principal.is_deployment_admin
     )
@@ -146,21 +156,24 @@ async def update_user_profile(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    profile = await ProfileService(db, container.bus).update(
+    service = ProfileService(db, container.bus)
+    payload = _profile_payload(body)
+    if payload.get("custom_data") is not None:
+        existing = await service.get_or_create(target_id)
+        payload["custom_data"] = delegate_custom_data(payload["custom_data"], existing.custom_data)
+    profile = await service.update(
         target_id,
-        _profile_payload(body),
+        payload,
         is_put=request.method == "PUT",
         ip_address=_client_ip(request),
         actor_user_id=principal.user.id,
         workspace_id=workspace_id,
     )
-    return profile_to_dict(profile)
-
-
-def _preferences_response(prefs) -> dict:
+    # Same `_private*` contract as the delegated read: the caller does not get
+    # the target's private keys back through the write response either.
     return {
-        "channels": {p.type: p.channel for p in prefs if p.type != DIGEST_TYPE},
-        "digest_enabled": next((p.digest_enabled for p in prefs if p.type == DIGEST_TYPE), False),
+        **profile_to_dict(profile),
+        "custom_data": strip_private_custom_data(profile.custom_data),
     }
 
 
@@ -170,7 +183,7 @@ async def get_user_notification_preferences(
     target_id: str = Depends(require_target_profile_update),
     db: AsyncSession = Depends(get_db),
 ):
-    return _preferences_response(await NotificationService(db).get_preferences(target_id))
+    return preferences_response(await NotificationService(db).get_preferences(target_id))
 
 
 @router.put("/users/{user_id}/notification-preferences")
@@ -189,7 +202,7 @@ async def update_user_notification_preferences(
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     if body.digest_enabled is not None:
         await service.set_digest(target_id, body.digest_enabled)
-    return _preferences_response(await service.get_preferences(target_id))
+    return preferences_response(await service.get_preferences(target_id))
 
 
 @router.get("/users/{user_id}/sessions", response_model=list[SessionRead])
@@ -324,6 +337,7 @@ async def export_user_data(
     container=Depends(get_container),
 ):
     service = ProfileService(db, container.bus)
+    uuid_or_404(user_id, "user")
     bundle = await service.export_bundle(user_id)
     import json
 

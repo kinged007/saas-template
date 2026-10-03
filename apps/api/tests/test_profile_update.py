@@ -7,6 +7,7 @@ permission is evaluated in.
 
 import asyncio
 
+import pytest
 from sqlalchemy import select
 
 from src.core.permissions import ALL_PERMISSIONS, PROFILE_UPDATE, permissions_for_role
@@ -732,3 +733,86 @@ async def test_a_malformed_target_id_is_404_not_500(app_client):
         headers=headers,
     )
     assert resp.status_code == 404, resp.text
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("PATCH", "/api/v1/users/{sid}/profile", {"first_name": "Nope"}),
+        ("PUT", "/api/v1/users/{sid}/profile", {"first_name": "Nope"}),
+        ("GET", "/api/v1/users/{sid}/notification-preferences", None),
+        (
+            "PUT",
+            "/api/v1/users/{sid}/notification-preferences",
+            {"channels": {"member_joined": "email"}},
+        ),
+        ("GET", "/api/v1/users/{sid}/sessions", None),
+        ("DELETE", "/api/v1/users/{sid}/sessions", None),
+        ("POST", "/api/v1/users/{sid}/password", {"new_password": "Sup3rSecret!"}),
+    ],
+)
+async def test_every_target_route_404s_for_a_non_member(app_client, method, path, payload):
+    """Each target route has to answer 404 for a stranger, not just the profile
+    write: a target outside the caller's workspace must never be confirmed."""
+    client = app_client
+    owner = await register_user(client, "ada@example.com")
+    ws = await create_workspace(client, owner)
+    admin = await _add_member(client, owner, ws, "abby@example.com", "admin")
+    stranger = await _user_id(client, await register_user(client, "mallory@example.com"))
+    headers = ws_headers(admin, ws["id"])
+
+    resp = await client.request(method, path.format(sid=stranger), headers=headers, json=payload)
+    assert resp.status_code == 404, f"{method} {path} -> {resp.status_code}: {resp.text}"
+
+
+async def test_a_delegated_editor_cannot_read_or_overwrite_private_custom_data(app_client):
+    """`_private*` custom_data keys belong to the account holder. The delegated
+    read strips them and the delegated write neither sets nor drops them — a PUT
+    replaces custom_data wholesale, so the stored private keys must survive."""
+    client = app_client
+    owner = await register_user(client, "ada@example.com")
+    ws = await create_workspace(client, owner)
+    admin = await _add_member(client, owner, ws, "abby@example.com", "admin")
+    target = await _add_member(client, owner, ws, "bob@example.com", "viewer")
+
+    resp = await client.patch(
+        "/api/v1/me/profile",
+        json={"custom_data": {"theme": "dark", "_private_note": "keep me"}},
+        headers=auth_headers(target),
+    )
+    assert resp.status_code == 200, resp.text
+
+    seen = await client.get(
+        f"/api/v1/users/{target['id']}/profile", headers=ws_headers(admin, ws["id"])
+    )
+    assert seen.json()["custom_data"] == {"theme": "dark"}
+
+    # The editor may change the public keys, but not the private one.
+    resp = await client.patch(
+        f"/api/v1/users/{target['id']}/profile",
+        json={"custom_data": {"theme": "light", "_private_note": "overwritten"}},
+        headers=ws_headers(admin, ws["id"]),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["custom_data"] == {"theme": "light"}
+
+    # A PUT replaces custom_data wholesale — the private key must survive it.
+    resp = await client.put(
+        f"/api/v1/users/{target['id']}/profile",
+        json={"custom_data": {"theme": "solar"}},
+        headers=ws_headers(admin, ws["id"]),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["custom_data"] == {"theme": "solar"}
+
+    stored = await client.get("/api/v1/me/profile", headers=auth_headers(target))
+    assert stored.json()["custom_data"] == {"theme": "solar", "_private_note": "keep me"}
+
+    # Self-service is untouched: the owner still writes their own private keys.
+    resp = await client.patch(
+        "/api/v1/me/profile",
+        json={"custom_data": {"_private_note": "mine"}},
+        headers=auth_headers(target),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["custom_data"]["_private_note"] == "mine"
