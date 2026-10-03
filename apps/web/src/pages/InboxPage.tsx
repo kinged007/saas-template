@@ -266,7 +266,6 @@ export function InboxPage() {
     },
     queryOptions: {
       enabled: !!selectedConvId && tab === "messages",
-      retry: false,
     },
   });
   const messages: Message[] = useMemo(() => {

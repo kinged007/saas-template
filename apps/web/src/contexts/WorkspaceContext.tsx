@@ -21,7 +21,7 @@ import {
   getActiveWorkspaceId,
   setActiveWorkspaceId,
 } from "../utils/storage";
-import { clearAllCaches, clearWorkspaceCaches } from "../providers/queryClient";
+import { clearAllCaches, clearWorkspaceCaches, isClientError } from "../providers/queryClient";
 import { API_URL, httpClient } from "../providers/dataProvider";
 
 type WorkspaceContextValue = {
@@ -43,9 +43,13 @@ export const useWorkspace = () => useContext(WorkspaceContext);
 // would otherwise settle with no identity and mount pages without a workspace.
 // Shared by every useGetIdentity observer so they don't override each other's
 // options on the shared query (react-query merges observer options).
+// This override exists because refine spreads its own queryOptions after its
+// hardcoded `retry: false`, so the client's retry policy never reaches this
+// query. 4xx is refused here too: a 401 from /me has already triggered
+// forceLogout() in the response interceptor, and its retries raced the redirect.
 export const IDENTITY_QUERY_OPTIONS = {
   staleTime: 30_000,
-  retry: 2,
+  retry: (failureCount: number, error: unknown) => failureCount < 2 && !isClientError(error),
   retryDelay: (attempt: number) => Math.min(500 * 2 ** attempt, 4000),
 };
 
