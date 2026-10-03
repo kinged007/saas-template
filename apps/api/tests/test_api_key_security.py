@@ -10,6 +10,8 @@ Covers, end to end over the HTTP API:
   * edit access — PATCH/POST mutations require the matching permission
   * delete access — DELETE mutations require the matching permission
   * workspace scoping — a key minted in one workspace can never touch another
+  * user scoping — a key reaches only its creator's own notifications, the
+    property that makes the key-only scopes safe to offer
   * ownership scoping — users see and manage ONLY their own keys; neither
     listing nor revoking ever crosses the creator boundary, not even for
     wildcard-permission admins
@@ -708,6 +710,75 @@ async def test_key_cannot_cross_workspace_boundaries(app_client):
     akey = await _create_key(client, ws_headers(owner, ws_a["id"]), "a-apikey", ["apikey:read"])
     resp = await client.get("/api/v1/api-keys", headers=_key_headers(akey["key"], ws_b["id"]))
     assert resp.status_code == 403
+
+
+# ------------------------------------------------- notification scoping
+
+
+async def test_key_reaches_only_its_creators_notifications(app_client):
+    """The user-scoping guarantee behind `KEY_ONLY_PERMISSIONS`.
+
+    `core.permissions` offers `notification:read` / `notification:update` to any
+    member with `apikey:read` on the strength of the scopes being user-scoped:
+    a key resolves to its creator's `User` and reaches nothing that creator
+    could not reach with a session. That is a claim about reach, so it is
+    asserted as one — which scopes the endpoint *offers* is a different
+    statement. Drop the `user_id` predicate from the notification queries and
+    this is what goes red."""
+    client = app_client
+    owner = await register_user(client, "notif-owner@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+
+    alice = await _add_member(client, owner_headers, ws["id"], "alice@example.com", "editor")
+    alice_headers = ws_headers(alice, ws["id"])
+    bob = await _add_member(client, owner_headers, ws["id"], "bob@example.com", "editor")
+    alice_id = await _user_id(client, alice)
+    bob_id = await _user_id(client, bob)
+
+    mine = await _insert_notification(ws["id"], alice_id, "Alice's alert")
+    theirs = await _insert_notification(ws["id"], bob_id, "Bob's alert")
+
+    key = await _create_key(
+        client, alice_headers, "alice-notifs", ["notification:read", "notification:update"]
+    )
+    kh = _key_headers(key["key"], ws["id"])
+
+    # the list is filtered per user, not per workspace. Alice also has the
+    # notifications her own membership produced, so the assertion is about
+    # whose rows these are, not about how many there are.
+    listed = await client.get("/api/v1/notifications", headers=kh)
+    assert listed.status_code == 200, listed.text
+    ids = {n["id"] for n in listed.json()}
+    assert mine in ids
+    assert theirs not in ids
+
+    # ... and neither ack nor delete reaches the other member's row by id
+    for method, url, body in [
+        ("patch", f"/api/v1/notifications/{theirs}", {"acknowledged": True}),
+        ("delete", f"/api/v1/notifications/{theirs}", None),
+    ]:
+        resp = await client.request(method, url, json=body, headers=kh)
+        assert resp.status_code == 404, (method, url, resp.status_code, resp.text)
+
+    # The refusals left Bob's notification untouched, and Bob's own session
+    # still reaches it — so the 404s above are the user predicate, not a row
+    # that was missing or already acted on.
+    bob_headers = ws_headers(bob, ws["id"])
+    bob_listed = await client.get("/api/v1/notifications", headers=bob_headers)
+    assert theirs in {n["id"] for n in bob_listed.json()}
+    resp = await client.patch(
+        f"/api/v1/notifications/{theirs}", json={"acknowledged": True}, headers=bob_headers
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Alice's key still reaches her own notification on both verbs
+    for method, url, body, status in [
+        ("patch", f"/api/v1/notifications/{mine}", {"acknowledged": True}, 200),
+        ("delete", f"/api/v1/notifications/{mine}", None, 204),
+    ]:
+        resp = await client.request(method, url, json=body, headers=kh)
+        assert resp.status_code == status, (method, url, resp.status_code, resp.text)
 
 
 # ------------------------------------------------- authentication hygiene
