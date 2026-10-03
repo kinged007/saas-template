@@ -24,8 +24,24 @@ const REACTIVATE_ALLOWED: Record<MemberStatus, boolean> = {
   suspended: true,
 };
 
+/**
+ * `WorkspaceService.transfer_ownership` in
+ * `apps/api/src/services/workspaces.py` rejects with 409 unless the target is
+ * `active` ("new owner must be an active member"), so the same status decides
+ * the candidate list. Adding a member to `MemberStatus` without deciding it
+ * here is a type error.
+ */
+const TRANSFER_ELIGIBLE: Record<MemberStatus, boolean> = {
+  active: true,
+  invited: false,
+  suspended: false,
+};
+
 export const canSuspendMember = (m: MemberRow): boolean =>
   SUSPEND_ALLOWED[m.status] ?? false;
 
 export const canReactivateMember = (m: MemberRow): boolean =>
   REACTIVATE_ALLOWED[m.status] ?? false;
+
+export const canReceiveOwnership = (m: MemberRow): boolean =>
+  TRANSFER_ELIGIBLE[m.status] ?? false;

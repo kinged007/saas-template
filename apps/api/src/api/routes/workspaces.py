@@ -114,6 +114,8 @@ async def export_workspace(
 
 _WORKSPACE_SORTABLE = {"name", "slug", "created_at"}
 _WORKSPACE_FILTERABLE = {"name", "slug"}
+# Newest first, id breaking created_at ties — see _MEMBER_DEFAULT_ORDER.
+_WORKSPACE_DEFAULT_ORDER = (Workspace.created_at.desc(), Workspace.id.desc())
 
 
 @router.get("", response_model=list[dict])
@@ -150,6 +152,8 @@ async def list_workspaces(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(*_WORKSPACE_DEFAULT_ORDER)
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     memberships = await service.list_workspaces(user.id)

@@ -103,7 +103,7 @@ API_KEYS = [
 ]
 
 
-def _notifications() -> list[dict]:
+def _notifications() -> list[tuple[str, str, str, str, str, bool, int]]:
     """(user email, workspace slug, type, title, body, acknowledged, age_hours)."""
     return [
         # ---- admin — Acme Corp ----
@@ -167,7 +167,43 @@ def _notifications() -> list[dict]:
     ]
 
 
+def _check_fixtures() -> None:
+    """Every fixture row must name a slug the seed defines, and a user it owns.
+
+    The `slug not in workspaces` guard in each loop is the single-workspace and
+    foreign-workspace skip, and it stays: a known slug can legitimately be absent
+    from a run. A slug that is in no fixture at all is a typo, and skipping it
+    ships a demo quietly missing rows.
+
+    The email check applies only where the loop reads `users[email]` (members,
+    api keys, notifications), where an unknown email is a bare KeyError.
+    `INVITATIONS` invites an address that need not be registered yet — that is
+    the accept-invitation flow — so only its slug is checked.
+    """
+    slugs = {spec["slug"] for spec in WORKSPACES}
+    emails = {email for email, _, _ in DEMO_USERS}
+    # (fixture name, slug, email to check or None) — notification rows are
+    # (email, slug, ...).
+    rows = [
+        (name, slug, email if checks_email else None)
+        for name, fixture, checks_email in (
+            ("memberships", MEMBERSHIPS, True),
+            ("invitations", INVITATIONS, False),
+            ("api keys", API_KEYS, True),
+        )
+        for slug, email, *_ in fixture
+    ]
+    rows += [("notifications", slug, email) for email, slug, *_ in _notifications()]
+    for name, slug, email in rows:
+        if slug not in slugs:
+            raise RuntimeError(f"{name} fixture names unknown workspace slug {slug!r}")
+        if email is not None and email not in emails:
+            raise RuntimeError(f"{name} fixture names unknown user email {email!r}")
+
+
 async def main() -> None:
+    _check_fixtures()
+
     async with SessionFactory() as session:
         auth = AuthService(session)
         ws_service = WorkspaceService(session)

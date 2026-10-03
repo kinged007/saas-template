@@ -197,9 +197,8 @@ function useSingleWorkspace(): boolean {
   return identity?.single_workspace === true;
 }
 
-function WorkspaceSwitcher() {
+function WorkspaceSwitcher({ single }: { single: boolean }) {
   const { workspaces, workspace, setWorkspace } = useWorkspace();
-  const single = useSingleWorkspace();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   if (workspaces.length === 0) return null;
@@ -272,15 +271,17 @@ function UserMenu() {
   const permissions = activeWorkspacePermissions(identity);
   const canViewApiKeys = permissions.includes("*") || permissions.includes("apikey:read");
 
-  // Workspace settings — only owners and admins may see this entry. The page
-  // itself re-checks this gate and renders an "Access denied" fallback if the
-  // role was downgraded after the menu rendered.
+  // Workspace settings — only owners and admins may see this entry, and
+  // SINGLE_WORKSPACE hides it entirely. The page itself re-checks the role gate
+  // and renders an "Access denied" fallback if the role was downgraded after
+  // the menu rendered; hiding the entry leaves the route itself reachable.
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
   const isWorkspaceAdmin =
     identity?.is_superuser === true ||
     isManagerRoleName(myRole) ||
     permissions.includes("*") ||
     permissions.includes("workspace:update");
+  const showWorkspaceSettings = isWorkspaceAdmin && identity?.single_workspace !== true;
 
   return (
     <DropdownMenu>
@@ -314,7 +315,7 @@ function UserMenu() {
           <Settings />
           Profile Settings
         </DropdownMenuItem>
-        {isWorkspaceAdmin && (
+        {showWorkspaceSettings && (
           <DropdownMenuItem onClick={() => navigate("/settings/workspace")}>
             <Building2 />
             Workspace Settings
@@ -369,7 +370,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               className="hidden w-auto max-w-8 shrink-0 group-data-[collapsible=icon]:block"
             />
           </div>
-          <WorkspaceSwitcher />
+          <WorkspaceSwitcher single={single} />
         </SidebarHeader>
         <SidebarContent>
           {workspaces.length === 0 ? (

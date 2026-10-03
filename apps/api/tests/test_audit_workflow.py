@@ -9,11 +9,19 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import ipaddress
+import re
+from pathlib import Path
 
+import yaml
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from src.db.session import SessionFactory
 from src.models.audit import AuditLogEntry
+
+COMPOSE = Path(__file__).resolve().parents[3] / "infra/docker/docker-compose.prod.yml"
 
 
 async def _audit_rows():
@@ -199,5 +207,104 @@ async def test_audit_rows_carry_ip_address(app_client):
         lambda: _actions_equal(["user.register", "user.email_verification_sent"])
     )
     rows = await _audit_rows()
-    assert rows[0].ip_address is not None  # client IP recorded
-    assert rows[0].ip_address != ""
+    assert rows[0].ip_address == "127.0.0.1"  # the ASGI peer, exactly
+
+
+async def test_audit_row_ignores_forwarded_for_without_proxy_middleware(app_client):
+    """App code must not read X-Forwarded-For itself — only uvicorn's middleware does.
+
+    With no ProxyHeadersMiddleware in the chain, a client-supplied header changes nothing.
+    """
+    await app_client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "audit5@example.com",
+            "password": "Password123!",
+            "first_name": "Audit",
+            "last_name": "User",
+        },
+        headers={"X-Forwarded-For": "203.0.113.9"},
+    )
+    assert await _wait_for(
+        lambda: _actions_equal(["user.register", "user.email_verification_sent"])
+    )
+    rows = await _audit_rows()
+    assert rows[0].ip_address == "127.0.0.1"
+
+
+async def test_audit_row_records_forwarded_client_from_trusted_proxy(app):
+    """Behind the shipped nginx, uvicorn --proxy-headers rewrites scope["client"]
+    from X-Forwarded-For, so the end user's address is what lands in the audit log."""
+    middleware = ProxyHeadersMiddleware(app, trusted_hosts="10.0.0.5")
+    transport = ASGITransport(app=middleware, client=("10.0.0.5", 40000))
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "audit7@example.com",
+                "password": "Password123!",
+                "first_name": "Audit",
+                "last_name": "User",
+            },
+            headers={"X-Forwarded-For": "203.0.113.9"},
+        )
+    assert resp.status_code == 201, resp.text
+    assert await _wait_for(
+        lambda: _actions_equal(["user.register", "user.email_verification_sent"])
+    )
+    rows = await _audit_rows()
+    assert rows[0].ip_address == "203.0.113.9"
+
+
+async def test_forwarded_for_from_untrusted_peer_is_ignored(app):
+    """Why --forwarded-allow-ips must name the proxy instead of '*'.
+
+    Under a narrowed list uvicorn walks X-Forwarded-For from the right and keeps
+    the address of the connecting peer. Under '*' it takes the leftmost entry
+    verbatim, so any peer can declare its own recorded IP.
+    """
+    middleware = ProxyHeadersMiddleware(app, trusted_hosts="10.0.0.5")
+    transport = ASGITransport(app=middleware, client=("198.51.100.7", 40000))
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "audit8@example.com",
+                "password": "Password123!",
+                "first_name": "Audit",
+                "last_name": "User",
+            },
+            headers={"X-Forwarded-For": "203.0.113.9"},
+        )
+    assert resp.status_code == 201, resp.text
+    assert await _wait_for(
+        lambda: _actions_equal(["user.register", "user.email_verification_sent"])
+    )
+    rows = await _audit_rows()
+    assert rows[0].ip_address == "198.51.100.7"
+
+
+def test_prod_compose_trusts_only_the_pinned_proxy_network():
+    """The shipped value the tests above stand in for must stay narrow.
+
+    Reverting docker-compose.prod.yml to '--forwarded-allow-ips=*' leaves every
+    other test green while reopening the spoofing hole, so pin the config too:
+    every entry must be a network, no entry may be a default route, the subnet
+    the compose file pins nginx to must be inside the trusted set, and
+    --proxy-headers must be on or the allowlist never applies.
+    """
+    compose = yaml.safe_load(COMPOSE.read_text())
+    command = compose["services"]["api"]["command"]
+    default = re.search(r"--forwarded-allow-ips=\$\{FORWARDED_ALLOW_IPS:-([^}]+)\}", command)
+    assert default, f"no --forwarded-allow-ips default in: {command}"
+    trusted = [
+        ipaddress.ip_network(entry.strip(), strict=False) for entry in default.group(1).split(",")
+    ]
+    assert all(net.prefixlen > 0 for net in trusted), (
+        f"FORWARDED_ALLOW_IPS default trusts every peer: {trusted}"
+    )
+    subnet = ipaddress.ip_network(compose["networks"]["default"]["ipam"]["config"][0]["subnet"])
+    assert all(subnet.subnet_of(net) for net in trusted), (
+        f"pinned subnet {subnet} outside FORWARDED_ALLOW_IPS default {trusted}"
+    )
+    assert "--proxy-headers" in command, f"--proxy-headers missing from: {command}"

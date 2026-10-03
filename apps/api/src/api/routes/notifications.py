@@ -35,6 +35,8 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 _NOTIFICATION_FILTERABLE = {"type", "acknowledged_at", "acknowledged", "workspace_id"}
 _NOTIFICATION_SORTABLE = {"created_at", "type", "acknowledged_at"}
+# Newest first, id breaking created_at ties — see _MEMBER_DEFAULT_ORDER.
+_NOTIFICATION_DEFAULT_ORDER = (Notification.created_at.desc(), Notification.id.desc())
 
 
 def _row_dict(n: Notification, workspace_name: str | None = None) -> dict:
@@ -85,6 +87,8 @@ async def list_notifications(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(*_NOTIFICATION_DEFAULT_ORDER)
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)

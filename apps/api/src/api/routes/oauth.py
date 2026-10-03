@@ -148,6 +148,15 @@ async def oauth_callback(
     except AuthError as exc:
         logger.info("oauth signup rejected provider=%s: %s", provider_id, exc)
         return _error_redirect("registration is disabled")
+    # Join before the 2FA branch and before issue_tokens, as POST /auth/login
+    # does. A failed join stays log-only and the 302 happens either way; the
+    # helper can hand back a re-read instance, so bind it and read from that.
+    try:
+        user = await _join_single_workspace_best_effort(db, container, user)
+    except HTTPException:
+        # The helper's "account no longer exists" guard: a browser mid-redirect
+        # needs the error redirect, not a JSON 401 body.
+        return _error_redirect("sign-in failed")
     if user.totp_enabled:
         # Passwordless SSO still honors 2FA: park the user id behind the
         # one-time code and let the frontend complete the challenge.
@@ -164,8 +173,6 @@ async def oauth_callback(
     except Exception:
         logger.exception("oauth token issue failed user=%s", user.id)
         return _error_redirect("sign-in failed")
-    # A failed join stays log-only: the 302 must happen either way.
-    user = await _join_single_workspace_best_effort(db, container, user)
     one_time = secrets.token_urlsafe(32)
     container.cache.set(
         CODE_TTL_HINT + one_time,

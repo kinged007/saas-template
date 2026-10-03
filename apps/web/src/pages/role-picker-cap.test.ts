@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { assignableRoles, roleCapNotice, rolePickerCapNotice } from "./role-picker-cap.ts";
+import { assignableRoles, roleCapNotice, roleCapNoticeText, rolePickerCapNotice } from "./role-picker-cap.ts";
 import type { Role } from "../types.ts";
 
 const role = (id: string, name: string): Role => ({
@@ -20,7 +20,7 @@ const page = (rest: number): Role[] => [
 
 /** A full picker page holding no owner row, so `count` custom roles and no owner. */
 const pageWithoutOwner = (count: number): Role[] =>
-  Array.from({ length: count }, (_, i) => role(String(i + 1), `r${i}`));
+  Array.from({ length: count }, (_, i) => role(String(i + 2), `r${i}`));
 
 // The role endpoints answer with one capped page. When a workspace has more
 // roles than that page holds, both pickers on MembersPage render a short list,
@@ -59,14 +59,36 @@ test("the owner role is matched case-insensitively, like the backend", () => {
   );
 });
 
-// A missing `X-Total-Count` makes the total 0, so the denominator is clamped at
-// 0 rather than going negative and the notice stays suppressed.
+// A missing `X-Total-Count` makes the total 0, so an unknown total keeps the
+// notice suppressed. That pins the suppression, not the clamp at 0: nothing
+// compares `pickable` except `pickable > assignable.length`.
 test("no notice when the workspace total is missing", () => {
   assert.equal(rolePickerCapNotice(0, page(99)), null);
 });
 
-test("the roles table counts every fetched row, owner included", () => {
+// The gate itself: a page short of the total reports the pair, a page that
+// covers it reports nothing.
+test("a capped page reports fetched of total; a complete page reports nothing", () => {
   assert.equal(roleCapNotice(5, 7), "Showing 5 of 7 roles.");
   assert.equal(roleCapNotice(4, 4), null);
   assert.equal(roleCapNotice(0, 0), null);
+  // A total below the fetched count means the count is unusable, not that the
+  // page is capped, so it says nothing rather than "Showing 5 of 3 roles."
+  assert.equal(roleCapNotice(5, 3), null);
+});
+
+// The notice is the accessible description of the trigger it annotates, so a
+// whitespace-only string must not render: the `aria-describedby` target would be
+// present and carry no description. rolePickerCapNotice only ever formats
+// numbers, so this pins the boundary rather than a live path.
+test("a whitespace-only notice resolves to no text", () => {
+  assert.equal(roleCapNoticeText(" "), null);
+  assert.equal(roleCapNoticeText("\n\t "), null);
+  assert.equal(roleCapNoticeText(""), null);
+  assert.equal(roleCapNoticeText(null), null);
+});
+
+test("a real notice is returned trimmed", () => {
+  assert.equal(roleCapNoticeText("Showing 99 of 104 roles."), "Showing 99 of 104 roles.");
+  assert.equal(roleCapNoticeText("  Showing 99 of 104 roles.\n"), "Showing 99 of 104 roles.");
 });

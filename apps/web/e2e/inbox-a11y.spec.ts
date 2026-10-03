@@ -8,6 +8,13 @@ import { mockApi } from "./mock-api";
  * the `title` + `aria-label` pair #332 established in the composer toolbar:
  * `title` paints the hover tooltip, `aria-label` is what a screen reader
  * announces. A control with neither is announced as a bare "button".
+ *
+ * The accessible name is the invariant and `title` duplicates it, so a control
+ * whose two attributes disagree announces one action and hovers another. Align
+ * `title` up to the accessible name, never shorten `aria-label` to the tooltip
+ * (WCAG 2.5.3, Label in Name). #702: the inbox keeps the native `title` rather
+ * than a Radix `Tooltip` (a wrapper span and a portal per button), so the
+ * assertion is against the rendered `title` attribute.
  */
 
 const CONVERSATION = {
@@ -60,7 +67,7 @@ const NAMED = /^-\s[\w-]+(?:\s+"[^"]+"|:.*\S)/;
  * Every visible button in `scope` carries an accessible name, read from the
  * accessibility snapshot rather than the JSX so a button named by its own text
  * passes without an aria-label; and every icon-only one carries both
- * `title` and `aria-label`.
+ * `title` and `aria-label`, equal to each other.
  */
 async function expectButtonsNamed(scope: Locator) {
   const iconOnly: Locator[] = [];
@@ -73,6 +80,10 @@ async function expectButtonsNamed(scope: Locator) {
   for (const button of iconOnly) {
     await expect(button).toHaveAttribute("title", /\S/);
     await expect(button).toHaveAttribute("aria-label", /\S/);
+    expect(
+      await button.getAttribute("title"),
+      "title and aria-label disagree — align title to the accessible name",
+    ).toBe(await button.getAttribute("aria-label"));
   }
 }
 
@@ -97,5 +108,15 @@ test.describe("inbox icon buttons", () => {
     const header = page.getByRole("heading", { name: "Release plan" }).locator("xpath=../../..");
     await expectButtonsNamed(header);
     await expect(header.getByRole("button", { name: "Edit title", exact: true })).toBeVisible();
+  });
+
+  test("every icon-only button in the notifications pane is named", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    await page.goto("/inbox");
+    // `exact` picks this tab over the header's notification trigger, which is
+    // the same word in another case and so matches a case-insensitive query.
+    await pageBody(page).getByRole("button", { name: "Notifications", exact: true }).click();
+
+    await expectButtonsNamed(pageBody(page));
   });
 });

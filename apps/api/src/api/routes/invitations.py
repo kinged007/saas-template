@@ -35,6 +35,8 @@ router = APIRouter(prefix="/invitations", tags=["invitations"])
 
 _INVITATION_FILTERABLE = {"status", "email"}
 _INVITATION_SORTABLE = {"created_at", "status", "expires_at"}
+# Newest first, id breaking created_at ties — see _MEMBER_DEFAULT_ORDER.
+_INVITATION_DEFAULT_ORDER = (Invitation.created_at.desc(), Invitation.id.desc())
 
 
 def _invite_dict(i: Invitation) -> dict:
@@ -74,6 +76,8 @@ async def list_invitations(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(*_INVITATION_DEFAULT_ORDER)
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)

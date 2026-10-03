@@ -40,6 +40,14 @@ test("transferEligibleMembers drops the case-variant owner row too", () => {
   );
 });
 
+test("transferEligibleMembers drops a status it has never seen", () => {
+  const unknown = member({
+    membership_id: "m-3",
+    status: "archived" as unknown as Member["status"],
+  });
+  assert.deepEqual(transferEligibleMembers([unknown]), []);
+});
+
 test("resolveTransferTarget returns the picked candidate", () => {
   const admin = member({ membership_id: "m-1" });
   assert.equal(resolveTransferTarget([admin], "m-1"), admin);

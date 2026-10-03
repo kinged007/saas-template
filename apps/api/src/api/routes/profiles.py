@@ -9,6 +9,7 @@ from src.api.deps import (
     AuthPrincipal,
     get_container,
     get_current_user,
+    require_session_user,
     require_superuser,
     resolve_auth_principal,
 )
@@ -42,7 +43,7 @@ async def get_my_profile(
 async def put_my_profile(
     body: ProfileUpdate,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -64,7 +65,7 @@ async def put_my_profile(
 async def patch_my_profile(
     body: ProfileUpdate,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -89,7 +90,7 @@ async def get_user_profile(
 ):
     service = ProfileService(db, container.bus)
     proj = await service.get_public_projection(
-        user_id, viewer=principal.user, is_superuser=principal.is_deployment_admin
+        user_id, viewer=principal.user, is_deployment_admin=principal.is_deployment_admin
     )
     if proj is None:
         raise HTTPException(status_code=404, detail="user or profile not found")
@@ -99,7 +100,7 @@ async def get_user_profile(
 @router.get("/me/export")
 async def export_my_data(
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
@@ -136,7 +137,7 @@ async def export_user_data(
 async def delete_me(
     body: DeleteMeRequest,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
