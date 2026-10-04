@@ -41,7 +41,7 @@ from src.events.factory import WorkflowRegistry
 from src.events.publisher import publish_audit
 from src.events.subjects import Subjects
 from src.jobs.executor import execute_run
-from src.models.workspace import WorkspaceMember
+from src.models.workspace import ACTIVE_MEMBERSHIP_STATUSES, WorkspaceMember
 from src.realtime.manager import ConnectionManager
 from src.services.audit import AuditService
 from src.services.jobs import JobService
@@ -210,10 +210,11 @@ def build_workflows(
                     },
                     correlation_id=metadata.correlation_id,
                 )
+            # A member who no longer has access is not told about new joins.
             result = await session.execute(
                 select(WorkspaceMember).where(
                     WorkspaceMember.workspace_id == workspace_id,
-                    WorkspaceMember.status == "active",
+                    WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
                 )
             )
             for member in result.scalars().all():

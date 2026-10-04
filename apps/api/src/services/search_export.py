@@ -27,7 +27,13 @@ from src.models.core import Invitation, Notification
 from src.models.jobs import JobDefinition
 from src.models.user_profile import UserProfile
 from src.models.webhook import WebhookSubscription
-from src.models.workspace import Role, User, Workspace, WorkspaceMember
+from src.models.workspace import (
+    ACTIVE_MEMBERSHIP_STATUSES,
+    Role,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
 from src.services.jobs import _mask_params
 from src.services.profile_helpers import escape_like
 from src.services.serializers import (
@@ -118,7 +124,7 @@ async def _ensure_membership(session: AsyncSession, workspace_id: str, user_id: 
         select(WorkspaceMember).where(
             WorkspaceMember.workspace_id == workspace_id,
             WorkspaceMember.user_id == user_id,
-            WorkspaceMember.status == "active",
+            WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
         )
     )
     if result.scalar_one_or_none() is None:
@@ -223,7 +229,7 @@ class SearchExportService:
                 .outerjoin(UserProfile, UserProfile.user_id == User.id)
                 .where(
                     WorkspaceMember.workspace_id == workspace_id,
-                    WorkspaceMember.status == "active",
+                    WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
                     or_(
                         User.email.ilike(like, escape="\\"),
                         User.display_name.ilike(like, escape="\\"),

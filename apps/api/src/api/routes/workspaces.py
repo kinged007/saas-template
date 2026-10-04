@@ -21,7 +21,7 @@ from src.api.deps import (
 )
 from src.core.permissions import AUDIT_READ, WORKSPACE_DELETE, WORKSPACE_READ, WORKSPACE_UPDATE
 from src.db.session import get_db
-from src.models.workspace import Workspace, WorkspaceMember
+from src.models.workspace import ACTIVE_MEMBERSHIP_STATUSES, Workspace, WorkspaceMember
 from src.schemas.api import OwnershipTransfer, WorkspaceCreate, WorkspaceUpdate
 from src.services.conversations import ConversationForbidden
 from src.services.search_export import CSV_RESOURCES, SearchExportService
@@ -141,7 +141,10 @@ async def list_workspaces(
     stmt = (
         select(Workspace)
         .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
-        .where(WorkspaceMember.user_id == user.id, WorkspaceMember.status == "active")
+        .where(
+            WorkspaceMember.user_id == user.id,
+            WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
+        )
     )
     try:
         spec = parse_query(request)
