@@ -37,12 +37,13 @@ and add `workspace_id` only when the caller sends one. Every access path:
 | Path | Predicates | Index used |
 | --- | --- | --- |
 | `GET /notifications` rows and its `COUNT(*)` (`apps/api/src/api/routes/notifications.py:81`) | `user_id`, `workspace_id`, `ORDER BY created_at DESC, id DESC` | `ix_notifications_user_id` + `ix_notifications_workspace_id` (BitmapAnd) |
-| `GET /notifications/unread-count`, `PATCH /notifications/read-all` | `user_id`, `workspace_id`, `acknowledged_at IS NULL`, `type <>` | same |
-| `acknowledge_for_conversation` (`apps/api/src/services/notifications.py:246`) | `user_id`, `workspace_id`, `type =`, `acknowledged_at IS NULL` | same |
+| `GET /notifications/unread-count`, `PATCH /notifications/read-all` | `user_id`, `workspace_id`, `acknowledged_at IS NULL`, `type <>` | `ix_notifications_user_id` + `ix_notifications_workspace_id` (BitmapAnd) |
+| `acknowledge_for_conversation` (`apps/api/src/services/notifications.py:246`) | `user_id`, `workspace_id`, `type =`, `acknowledged_at IS NULL` | `ix_notifications_user_id` + `ix_notifications_workspace_id` (BitmapAnd) |
 | `PATCH /notifications/{id}`, `DELETE /notifications/{id}` (`apps/api/src/services/notifications.py:423`, `apps/api/src/api/routes/notifications.py:219`) | `id`, `user_id`, optional `workspace_id` | primary key |
-| global search (`apps/api/src/services/search_export.py:282`) | `workspace_id`, `user_id`, `title/body ILIKE` | same |
+| global search (`apps/api/src/services/search_export.py:282`) | `workspace_id`, `user_id`, `title/body ILIKE` | `ix_notifications_user_id` + `ix_notifications_workspace_id` (BitmapAnd) |
 | digest (`apps/api/src/jobs/builtin.py:178`), GDPR count and delete (`apps/api/src/services/profiles.py:282`) | `user_id` | `ix_notifications_user_id` |
 | workspace JSON export (`apps/api/src/services/search_export.py:419`) | `workspace_id` | `ix_notifications_workspace_id` |
+| workspace delete cascade (`apps/api/src/services/workspaces.py:323`) | `workspace_id` | `ix_notifications_workspace_id` |
 | retention cleanup (`apps/api/src/jobs/builtin.py:244`) | `acknowledged_at IS NOT NULL`, `created_at <` cutoff | none, seq scan |
 
 Measured on embedded Postgres at 1M rows (50 workspaces × 100 users, each user
@@ -70,15 +71,19 @@ rather than reads, but they find their rows through the same `BitmapAnd`, so
 they pay that ~10,200-entry scan on every call too.
 
 Decision: no composite. `ix_notifications_workspace_id` stays regardless —
-the workspace JSON export filters on `workspace_id` alone and keeps planning
-through it.
+the workspace JSON export and the workspace delete cascade both filter on
+`workspace_id` alone and keep planning through it.
 
 Revisit when a slow-query log or `EXPLAIN` shows one of those reads scanning
 more than ~1k index entries for a single request, one user passes ~10k rows,
 or the table passes ~5M rows. Then it is a **swap, not an addition**:
 `ix_notifications_user_id` is a leftmost prefix of the composite and becomes
 redundant, so drop it in the same migration and the index count and write cost
-stay flat. On a large table both halves run `CONCURRENTLY` inside an
+stay flat. That argument needs `workspace_id` to stay `nullable=False`
+(`apps/api/src/models/core.py:68`) — the composite's leading column then still
+serves the `user_id`-only paths — and it fails silently on a nullable column.
+
+On a large table both halves run `CONCURRENTLY` inside an
 `autocommit_block()`: a plain `CREATE INDEX` holds a `ShareLock` that blocks
 notification inserts for the duration, and the table grows without bound
 because retention purges only acknowledged rows. Order matters — create the
