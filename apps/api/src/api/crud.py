@@ -60,6 +60,16 @@ class QuerySpec:
     ids: list[str] = field(default_factory=list)
     filters: list[tuple[str, str, str]] = field(default_factory=list)  # (field, op, value)
 
+    def validate_sort(self) -> None:
+        """Reject a direction list that does not line up with the sort list.
+
+        Called by `apply_query` and by the routes that sort in their service
+        layer, so a malformed sort query answers the same on every route
+        whether the client wrote `sort[]`/`order[]` or `_sort`/`_order`.
+        """
+        if len(self.sort_by) != len(self.sort_order):
+            raise InvalidQuery("sort[] and order[] must have the same number of entries")
+
 
 class InvalidQuery(Exception):
     pass
@@ -84,8 +94,11 @@ def parse_query(request: Request, *, max_limit: int = 100) -> QuerySpec:
     except ValueError:
         raise InvalidQuery("offset/limit must be integers") from None
     # simple-rest sorts with comma-joined `_sort`/`_order`; legacy uses
-    # repeated `sort[]`/`order[]`.
-    if "_sort" in q:
+    # repeated `sort[]`/`order[]`. The dialect is read from either of its
+    # parameters, so `_order` on its own is parsed (and rejected by the
+    # length guard) rather than falling through to the repeated style and
+    # being dropped.
+    if "_sort" in q or "_order" in q:
         spec.sort_by = [s for s in q.get("_sort", "").split(",") if s]
         orders = [s for s in q.get("_order", "").split(",") if s]
         spec.sort_order = orders + ["asc"] * (len(spec.sort_by) - len(orders))
@@ -163,8 +176,7 @@ def apply_query(
         stmt = stmt.where(_COMPARATORS[op](column, _coerce(column, value)))
     if spec.ids:
         stmt = stmt.where(model.id.in_(spec.ids))
-    if len(spec.sort_by) != len(spec.sort_order):
-        raise InvalidQuery("sort[] and order[] must have the same number of entries")
+    spec.validate_sort()
     for fname, order in zip(spec.sort_by, spec.sort_order, strict=True):
         if fname not in sortable:
             raise InvalidQuery(f"sort on unknown field: {fname}")
