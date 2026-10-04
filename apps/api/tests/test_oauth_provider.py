@@ -14,6 +14,8 @@ real socket is the only way to exercise signature handling as written.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import socket
 import threading
@@ -21,7 +23,7 @@ import time
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 import jwt
 import pytest
@@ -29,10 +31,13 @@ from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from src.core.cache import TtlCache
 from src.services.oauth import (
+    STATE_TTL_HINT,
     OAuthError,
     ProviderConfig,
     _discovery,
+    build_authorize_url,
     claims_from_id_token,
+    consume_state,
     exchange_code,
     fetch_userinfo,
     get_provider,
@@ -348,8 +353,39 @@ async def test_discovery_raises_oauth_error_when_unreachable():
         await _discovery(dead, TtlCache(ttl_seconds=60))
 
 
+def test_authorize_url_carries_s256_challenge(provider, idp):
+    """The challenge in the redirect must be the S256 digest of the verifier
+    the server kept: the client only ever sees the public half."""
+    cache = TtlCache(ttl_seconds=60)
+
+    params = parse_qs(urlsplit(build_authorize_url(provider, idp.doc, cache, REDIRECT_URI)).query)
+
+    assert params["code_challenge_method"] == ["S256"]
+    assert "code_verifier" not in params
+    verifier = consume_state(cache, params["state"][0])["code_verifier"]
+    assert 43 <= len(verifier) <= 128
+    expected = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+    assert params["code_challenge"] == [expected.rstrip(b"=").decode()]
+
+
+def test_consume_state_rejects_entry_without_verifier(provider):
+    """An entry carrying no verifier would mint a verifier-less exchange, the one
+    request the challenge exists to prevent."""
+    cache = TtlCache(ttl_seconds=60)
+    cache.set(STATE_TTL_HINT + "s", {"provider": provider.id, "redirect_uri": REDIRECT_URI})
+
+    with pytest.raises(OAuthError, match="invalid or expired state"):
+        consume_state(cache, "s")
+
+
 async def test_exchange_code_posts_grant_and_returns_tokens(provider, idp):
-    tokens = await exchange_code(provider, idp.doc, code="good-code", redirect_uri=REDIRECT_URI)
+    tokens = await exchange_code(
+        provider,
+        idp.doc,
+        code="good-code",
+        redirect_uri=REDIRECT_URI,
+        code_verifier="verifier-abc",
+    )
 
     assert tokens["access_token"] == "at-stub"
     form = idp.token_forms[-1]
@@ -358,11 +394,21 @@ async def test_exchange_code_posts_grant_and_returns_tokens(provider, idp):
     assert form["redirect_uri"] == [REDIRECT_URI]
     assert form["client_id"] == [CLIENT_ID]
     assert form["client_secret"] == [CLIENT_SECRET]
+    assert form["code_verifier"] == ["verifier-abc"]
 
 
-async def test_exchange_code_raises_on_provider_error(provider, idp):
-    with pytest.raises(OAuthError, match="code exchange failed"):
-        await exchange_code(provider, idp.doc, code="bad-code", redirect_uri=REDIRECT_URI)
+async def test_exchange_code_raises_on_provider_error(provider, idp, caplog):
+    with caplog.at_level("WARNING", logger="src.services.oauth"):
+        with pytest.raises(OAuthError, match="code exchange failed"):
+            await exchange_code(
+                provider,
+                idp.doc,
+                code="bad-code",
+                redirect_uri=REDIRECT_URI,
+                code_verifier="verifier-abc",
+            )
+    # The body is what separates a rejected code_verifier from an expired code.
+    assert "invalid_grant" in caplog.text
 
 
 async def test_fetch_userinfo_sends_bearer_token(provider, idp):
