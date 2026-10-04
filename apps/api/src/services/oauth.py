@@ -107,6 +107,8 @@ async def _discovery(provider: ProviderConfig, cache: TtlCache) -> dict[str, Any
         raise OAuthError(
             f"could not load discovery document for '{provider.id}': {_failure_detail(exc)}"
         ) from exc
+    if not isinstance(doc, dict):
+        raise OAuthError(f"discovery document for '{provider.id}' is not an object")
     cache.set(key, doc)
     return doc
 
@@ -215,8 +217,10 @@ async def _jwks(
     exchange.
     """
     uri = doc.get("jwks_uri") or provider.jwks_uri
-    if not uri:
-        raise OAuthError(f"oauth provider '{provider.id}' has no jwks_uri")
+    # The non-string case is refused here rather than left to httpx, whose TypeError
+    # does not say which provider published it.
+    if not isinstance(uri, str) or not uri:
+        raise OAuthError(f"oauth provider '{provider.id}' has no usable jwks_uri")
     key = f"oauth:jwks:{provider.id}"
     cached = None if refresh else cache.get(key)
     if cached is not None:
@@ -228,31 +232,35 @@ async def _jwks(
             resp = await client.get(uri)
             resp.raise_for_status()
             keys = resp.json()
-        # Parsed before it is cached: an unusable set would otherwise sit in the cache
-        # for its whole TTL and cost a refetch on every login that meets it.
-        jwt.PyJWKSet.from_dict(keys)
+        # Parsed before it is cached: a set with no key a token could verify against
+        # would otherwise sit in the cache for its whole TTL and cost a refetch on every
+        # login that meets it.
+        if not _signing_candidates(keys):
+            raise ValueError("no key published for signing")
     except Exception as exc:
         raise OAuthError(f"could not load signing keys: {_failure_detail(exc)}") from exc
     cache.set(key, keys)
     return keys
 
 
-def _signing_key(jwks_doc: dict[str, Any], id_token: str) -> jwt.PyJWK | None:
-    """The signing key whose kid the token names, or None when the set has no match.
+def _signing_candidates(jwks_doc: dict[str, Any]) -> list[jwt.PyJWK]:
+    """The published keys a token could be verified against.
 
     Mirrors `jwt.PyJWKClient.get_signing_key`: only keys published for signing that carry a
     kid are candidates, and the token's kid has to match one, so a token without a kid is
     refused rather than verified against the sole published key.
     """
-    kid = jwt.get_unverified_header(id_token).get("kid")
-    signing = [
+    return [
         k
         for k in jwt.PyJWKSet.from_dict(jwks_doc).keys
         if k.public_key_use in (None, "sig") and k.key_id
     ]
-    for key in signing:
-        if key.key_id == kid:
-            return key
+
+
+def _signing_key(jwks_doc: dict[str, Any], id_token: str) -> jwt.PyJWK | None:
+    """The signing key whose kid the token names, or None when the set has no match."""
+    kid = jwt.get_unverified_header(id_token).get("kid")
+    return next((k for k in _signing_candidates(jwks_doc) if k.key_id == kid), None)
 
 
 async def claims_from_id_token(
