@@ -3,6 +3,7 @@ import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import dataProviderModule from "@refinedev/simple-rest";
 
 import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId, sessionHint } from "../utils/storage";
+import { adminListQuery } from "./adminListQuery";
 import { clearAllCaches, queryClient } from "./queryClient";
 import { hasReadById, resourcePath } from "./resourcePaths";
 
@@ -188,21 +189,7 @@ const baseDataProvider = dataProviderModule(API_URL, httpClient);
 function adminList(path: string): DataProvider["getList"] {
   return async ({ pagination, filters, sorters }) => {
     const { currentPage = 1, pageSize = 10 } = pagination ?? {};
-    const params = new URLSearchParams({
-      offset: String((currentPage - 1) * pageSize),
-      limit: String(pageSize),
-    });
-    for (const f of filters ?? []) {
-      if (!("field" in f)) continue;
-      // `q` is the cross-field search term (backend `?q=`), not a column.
-      params.append(f.field === "q" ? "q" : `${f.field}_like`, String(f.value));
-    }
-    for (const s of sorters ?? []) {
-      if (!s.field) continue;
-      params.append("sort[]", s.field);
-      // a sorter with no direction degrades to the API default (`asc`), not `order[]=undefined`
-      if (s.order) params.append("order[]", s.order);
-    }
+    const params = adminListQuery({ currentPage, pageSize, filters, sorters });
     const { data, headers } = await httpClient.get(`${API_URL}${path}?${params}`);
     const total = Number(headers["x-total-count"]);
     return { data, total: Number.isFinite(total) ? total : data.length };
