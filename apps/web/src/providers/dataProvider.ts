@@ -213,9 +213,12 @@ const adminLists = {
 } as const;
 
 // Refine resource name → backend path when they differ (hyphenated resource
-// names are not valid backend route prefixes).
+// names are not valid backend route prefixes, and a resource can live under a
+// sub-collection: the webhooks router serves subscriptions at
+// `webhooks/subscriptions`, with nothing at its own prefix).
 const RESOURCE_PATHS: Record<string, string> = {
   "admin-users": "admin/users",
+  webhooks: "webhooks/subscriptions",
 };
 const resourcePath = (resource: string) => RESOURCE_PATHS[resource] ?? resource;
 
@@ -236,6 +239,10 @@ export const dataProvider: DataProvider = {
     baseDataProvider.getOne({ resource: resourcePath(resource), ...params }),
   update: ({ resource, ...params }) =>
     baseDataProvider.update({ resource: resourcePath(resource), ...params }),
+  create: ({ resource, ...params }) =>
+    baseDataProvider.create({ resource: resourcePath(resource), ...params }),
+  deleteOne: ({ resource, ...params }) =>
+    baseDataProvider.deleteOne({ resource: resourcePath(resource), ...params }),
   custom: async ({ url, ...params }) => {
     const resolved =
       !url || /^https?:\/\//.test(url) || url.startsWith("/")

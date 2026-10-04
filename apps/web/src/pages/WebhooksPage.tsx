@@ -92,7 +92,7 @@ function DeliveryLog({ subscriptionId }: { subscriptionId: string }) {
 }
 
 export function WebhooksPage() {
-  const { result } = useWorkspaceList<WebhookSubscription>({ resource: "webhooks" });
+  const { result, query } = useWorkspaceList<WebhookSubscription>({ resource: "webhooks" });
   const { data: canManage } = useCan({ resource: "webhooks", action: "delete" });
   const [openId, setOpenId] = useState<string | null>(null);
 
@@ -175,7 +175,21 @@ export function WebhooksPage() {
                 )}
               </Fragment>
             ))}
-            {rows.length === 0 && (
+            {/* A request that failed is not a list that came back empty, and
+                saying otherwise is what made a dead endpoint read as "no
+                subscriptions". */}
+            {query.isPending && rows.length === 0 && (
+              <EmptyRow colSpan={5}>Loading…</EmptyRow>
+            )}
+            {query.isError && (
+              <EmptyRow colSpan={5}>
+                <span className="text-destructive">
+                  Could not load webhook subscriptions:{" "}
+                  {query.error?.message ?? "Unknown error"}
+                </span>
+              </EmptyRow>
+            )}
+            {!query.isPending && !query.isError && rows.length === 0 && (
               <EmptyRow colSpan={5}>No webhook subscriptions yet.</EmptyRow>
             )}
           </TableBody>
