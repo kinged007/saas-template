@@ -230,8 +230,9 @@ async def test_unknown_role_name_falls_back_to_viewer(app_client, single_workspa
         assert me.json()["workspaces"][0]["role"] == "viewer", value
 
 
+@pytest.mark.parametrize("legacy_pair", [False, True])
 async def test_auto_join_resolves_the_configured_role_through_the_fold(
-    app_client, single_workspace_on, monkeypatch
+    app_client, single_workspace_on, monkeypatch, legacy_pair
 ):
     """The candidate chain and the owner filter have to fold alike.
 
@@ -239,6 +240,11 @@ async def test_auto_join_resolves_the_configured_role_through_the_fold(
     `is_owner_role_name` and then looked its candidates up by exact name, so a
     workspace whose rows spell the role in another case missed the configured
     one entirely and auto-joined the newcomer as `editor` instead.
+
+    `legacy_pair` puts a custom `viewer` beside the renamed seeded `Viewer`, the
+    indistinguishable pair a pre-#328 workspace holds: the map folds the key and
+    `setdefault` keeps the first row in `_ROLE_PICK_ORDER`, which has to be the
+    row `_role_by_name` picks for the same folded name.
     """
     from sqlalchemy import select
 
@@ -253,6 +259,16 @@ async def test_auto_join_resolves_the_configured_role_through_the_fold(
         )
         assert viewer is not None
         viewer.name = "Viewer"
+        if legacy_pair:
+            session.add(
+                Role(
+                    workspace_id=ws_id,
+                    name="viewer",
+                    description=None,
+                    permissions=[],
+                    system=False,
+                )
+            )
         await session.commit()
 
     monkeypatch.setattr(settings, "single_workspace_default_role", "viewer")

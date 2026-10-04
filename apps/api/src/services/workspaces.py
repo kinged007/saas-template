@@ -120,10 +120,11 @@ def is_manager_role_name(name: str | None) -> bool:
     return lowered == "admin" or is_owner_role_name(lowered)
 
 
-# The order every folded role-name lookup resolves a match in, so an
+# The order every site that breaks a folded role-name tie resolves in, so an
 # indistinguishable pair — a workspace created before the case-insensitive name
 # check (#328) can hold a case-variant row beside the seeded one — names the
-# same row in the 409 and in the row handed to the caller. System row first,
+# same row in the 409, in the row handed to the caller, and in the auto-join
+# candidate map. System row first,
 # then oldest, then `id`: `created_at` is `server_default=func.now()`, which ties
 # on SQLite's second granularity, so it cannot be the last key. System-first
 # deliberately inverts the "oldest first" preference in #592: the row a user
@@ -1112,9 +1113,11 @@ class WorkspaceService:
         # role rows predate #328 resolve through the same rule as the gate that
         # admits the caller. `func.lower()` is the database's fold and
         # `str.lower()` this file's, and they are not the same function on a
-        # collation-aware database; the pair is deliberate and role names are
-        # ASCII, so change one only together with the other and with
+        # collation-aware database; the pair is deliberate for ASCII role names,
+        # so change one only together with the other and with
         # `apps/web/src/pages/role-name.ts`, which folds the same way.
+        # ponytail: ceiling is that ASCII premise, which the role-name schemas
+        # do not enforce; forbid non-ASCII there when it stops holding.
         #
         # `_ROLE_PICK_ORDER`, the order `_check_name_free` uses, so both folded
         # lookups name the same row of an indistinguishable pair. The `limit`
@@ -1159,9 +1162,8 @@ class WorkspaceService:
         self, workspace_id: str, name: str, *, exclude_id: str | None = None
     ) -> None:
         # Case-insensitive: an "Admin" beside the seeded "admin" is a second,
-        # indistinguishable row in listings and selects. `.first()`, not
-        # `scalar_one_or_none()`: a workspace created before the case-insensitive
-        # check can already hold such a pair, and the predicate then matches both.
+        # indistinguishable row in listings and selects. `.limit(1)`, so such a
+        # pair matches the predicate twice without raising on the second row.
         # The order is what makes the message deterministic, and it is
         # `_ROLE_PICK_ORDER`, the order `_role_by_name` resolves its own match
         # in: both folded lookups name the same row of an indistinguishable pair.
