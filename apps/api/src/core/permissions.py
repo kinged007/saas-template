@@ -41,6 +41,9 @@ WEBHOOK_DELETE = "webhook:delete"  # unsubscribe
 
 AUDIT_READ = "audit:read"
 
+FILE_READ = "file:read"  # list + download workspace files
+FILE_CREATE = "file:create"  # upload
+
 # API-key-only scopes: never granted to roles, never required of sessions.
 # Declared before PERMISSION_DEFINITIONS so ALL_PERMISSIONS can exclude them.
 #
@@ -109,6 +112,10 @@ def register_permission(permission: str, *, resource: str, action: str) -> str:
     return permission
 
 
+register_permission(FILE_READ, resource="file", action="read")
+register_permission(FILE_CREATE, resource="file", action="create")
+
+
 def permissions_for_role(role_name: str) -> list[str]:
     """Default permission set per seeded system role."""
     all_ = set(ALL_PERMISSIONS)
@@ -129,6 +136,8 @@ def permissions_for_role(role_name: str) -> list[str]:
                 MESSAGE_READ,
                 MESSAGE_CREATE,
                 MESSAGE_UPDATE,
+                FILE_READ,
+                FILE_CREATE,
             ]
         case "viewer":
             return [
@@ -140,6 +149,7 @@ def permissions_for_role(role_name: str) -> list[str]:
                 APIKEY_DELETE,
                 MESSAGE_READ,
                 MESSAGE_CREATE,
+                FILE_READ,
             ]
         case _:
             raise ValueError(f"unknown role {role_name}")

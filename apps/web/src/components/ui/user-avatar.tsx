@@ -3,7 +3,8 @@
 import * as React from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { getAvatarSrc, getInitials, getInitialsFromNames } from "@/lib/avatar";
+import { getInitials, getInitialsFromNames } from "@/lib/avatar";
+import { useAvatarSrc } from "@/hooks/useAvatarSrc";
 import { cn } from "@/lib/utils";
 
 export type UserAvatarProps = {
@@ -57,7 +58,7 @@ export function UserAvatar({
     return getInitials(displayName);
   }, [firstName, lastName, displayName]);
 
-  const src = getAvatarSrc(avatarUrl);
+  const src = useAvatarSrc(avatarUrl);
 
   const avatar = (
     <Avatar className={cn(sizeClassName, className)}>

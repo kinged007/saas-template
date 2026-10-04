@@ -19,6 +19,7 @@ from src.models.conversation import (
     Message,
 )
 from src.models.core import Invitation, Notification
+from src.models.file_object import FileObject
 from src.models.jobs import JobDefinition, JobLogEntry, JobRun
 from src.models.secret import StoredSecret
 from src.models.webhook import WebhookDelivery, WebhookSubscription
@@ -26,6 +27,7 @@ from src.models.workspace import Role, WorkspaceMember
 
 WORKSPACE_CASCADE = (
     ApiKey,
+    FileObject,
     Invitation,
     StoredSecret,
     Notification,

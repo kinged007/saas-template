@@ -11,6 +11,9 @@ htmlcov/
 dist/
 build/
 
+# Local file storage (STORAGE_DIR default: apps/api/var/storage)
+apps/api/var/
+
 # Node
 node_modules/
 apps/web/dist/

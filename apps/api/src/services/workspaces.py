@@ -20,7 +20,9 @@ from src.events.subjects import Subjects
 from src.models.core import Invitation
 from src.models.workspace import MemberStatus, Role, User, Workspace, WorkspaceMember
 from src.services.auth import AuthService
+from src.services.files import purge_objects
 from src.services.serializers import ONBOARDING_ENABLED_FLAG
+from src.storage.base import FileStorage
 
 
 class WorkspaceError(Exception):
@@ -106,9 +108,15 @@ class WorkspaceService:
     # Viewer: edit access requires explicit designation.
     SINGLE_WORKSPACE_ROLE = "viewer"
 
-    def __init__(self, session: AsyncSession, bus: EventBus | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        bus: EventBus | None = None,
+        storage: FileStorage | None = None,
+    ) -> None:
         self._session = session
         self._bus = bus
+        self._storage = storage
 
     # ------------------------------------------------------- single workspace
 
@@ -315,7 +323,17 @@ class WorkspaceService:
             WORKSPACE_CASCADE,
         )
         from src.models.conversation import Conversation
+        from src.models.file_object import FileObject
         from src.models.jobs import JobDefinition, JobRun
+
+        # Read the object keys before the rows go: the bytes outlive the cascade.
+        file_keys = list(
+            (
+                await self._session.execute(
+                    select(FileObject.storage_key).where(FileObject.workspace_id == workspace_id)
+                )
+            ).scalars()
+        )
 
         for model in WORKSPACE_CASCADE:
             if model in (Conversation, JobRun, JobDefinition):
@@ -381,6 +399,7 @@ class WorkspaceService:
         # Finally delete the workspace row itself
         await self._session.delete(workspace)
         await self._session.commit()
+        await purge_objects(self._storage, file_keys)
         await publish_audit(
             self._bus,
             workspace_id=workspace_id,

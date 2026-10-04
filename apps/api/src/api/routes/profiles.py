@@ -141,7 +141,7 @@ async def delete_me(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    service = ProfileService(db, container.bus)
+    service = ProfileService(db, container.bus, container.storage)
     await service.delete_account(
         user.id,
         confirm=body.confirm,
@@ -160,6 +160,6 @@ async def delete_user(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    service = ProfileService(db, container.bus)
+    service = ProfileService(db, container.bus, container.storage)
     await service.delete_account_superuser(user_id, actor=actor, ip_address=_client_ip(request))
     return None

@@ -15,21 +15,30 @@ from src.events.publisher import publish_audit
 from src.models.api_key import ApiKey
 from src.models.audit import AuditLogEntry
 from src.models.core import Invitation, Notification
+from src.models.file_object import FileObject
 from src.models.user_profile import UserProfile
 from src.models.workspace import RefreshToken, Role, User, Workspace, WorkspaceMember
+from src.services.files import purge_objects
 from src.services.profile_helpers import (
     format_display_name,
     merge_custom_data,
 )
 from src.services.serializers import profile_to_dict
+from src.storage.base import FileStorage
 
 logger = logging.getLogger(__name__)
 
 
 class ProfileService:
-    def __init__(self, session: AsyncSession, bus: EventBus | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        bus: EventBus | None = None,
+        storage: FileStorage | None = None,
+    ) -> None:
         self._session = session
         self._bus = bus
+        self._storage = storage
 
     async def get(self, user_id: str) -> UserProfile | None:
         return await self._session.get(UserProfile, user_id)
@@ -308,6 +317,12 @@ class ProfileService:
             logger.exception("failed to publish export audit for %s", user_id)
         return bundle
 
+    async def _file_storage_keys(self, user_id: str) -> list[str]:
+        rows = await self._session.execute(
+            select(FileObject.storage_key).where(FileObject.owner_user_id == user_id)
+        )
+        return list(rows.scalars())
+
     async def delete_account(
         self,
         user_id: str,
@@ -347,6 +362,7 @@ class ProfileService:
 
         # Delete related rows
         # DRY: use delete statements
+        file_keys = await self._file_storage_keys(user_id)
         await self._session.execute(delete(RefreshToken).where(RefreshToken.user_id == user_id))
         await self._session.execute(
             delete(WorkspaceMember).where(WorkspaceMember.user_id == user_id)
@@ -365,6 +381,7 @@ class ProfileService:
         # stored secrets? per workspace, not user, skip
         # Delete profile explicitly (FK cascade would handle, but explicit for sqlite)
         await self._session.execute(delete(UserProfile).where(UserProfile.user_id == user_id))
+        await self._session.execute(delete(FileObject).where(FileObject.owner_user_id == user_id))
         # For conversations, handle participant cleanup: set user_id null?
         # But we can delete participations
         # Not required for MVP; leave.
@@ -388,6 +405,7 @@ class ProfileService:
         # Finally delete user
         await self._session.delete(user)
         await self._session.commit()
+        await purge_objects(self._storage, file_keys)
         logger.info("user deleted user_id=%s", user_id)
 
     async def delete_account_superuser(
@@ -413,6 +431,7 @@ class ProfileService:
         except Exception:
             logger.exception("failed to publish superuser delete audit for %s", target_user_id)
         # Delete related rows same as above
+        file_keys = await self._file_storage_keys(target_user_id)
         await self._session.execute(
             delete(RefreshToken).where(RefreshToken.user_id == target_user_id)
         )
@@ -435,6 +454,9 @@ class ProfileService:
         await self._session.execute(
             delete(UserProfile).where(UserProfile.user_id == target_user_id)
         )
+        await self._session.execute(
+            delete(FileObject).where(FileObject.owner_user_id == target_user_id)
+        )
         from src.models.conversation import ConversationParticipant
 
         try:
@@ -453,4 +475,5 @@ class ProfileService:
             pass
         await self._session.delete(target)
         await self._session.commit()
+        await purge_objects(self._storage, file_keys)
         logger.info("superuser deleted user_id=%s by %s", target_user_id, actor.id)

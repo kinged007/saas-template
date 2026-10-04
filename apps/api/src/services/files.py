@@ -1,0 +1,271 @@
+"""File upload orchestration: validate → store bytes → persist metadata."""
+
+from __future__ import annotations
+
+import logging
+import re
+import uuid
+from collections.abc import Sequence
+from pathlib import Path
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.api.prefix import API
+from src.events.bus import EventBus
+from src.events.publisher import publish_audit
+from src.models.file_object import FileObject
+from src.models.workspace import WorkspaceMember
+from src.storage.base import FileStorage, StorageError
+
+logger = logging.getLogger(__name__)
+
+ALLOWED_AVATAR_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+# Avatars render on every authenticated page, so the bytes are cached and
+# revalidated by ETag instead of being pulled through the API on each render.
+# The response is workspace-scoped, but a switch of the active workspace does
+# not evict what the browser already cached, so the previous avatar can stay on
+# screen for max-age. Isolation is not breached — the API still refuses the other
+# workspace's id — and `private` keeps it out of shared caches. Lower the window
+# when an upload UI makes avatar replacement common.
+FILE_CACHE_CONTROL = "private, max-age=300"
+_FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+class FileError(Exception):
+    pass
+
+
+class FileForbidden(FileError):
+    pass
+
+
+class FileNotFound(FileError):
+    pass
+
+
+class FileTooLarge(FileError):
+    pass
+
+
+class FileTypeRejected(FileError):
+    pass
+
+
+def _safe_filename(name: str) -> str:
+    base = (name or "upload").rsplit("/", 1)[-1].rsplit("\\", 1)[-1].strip() or "upload"
+    return _FILENAME_SAFE.sub("_", base)[:200]
+
+
+def _sniff(content: bytes) -> str | None:
+    """Return the allowed type these bytes actually are, or None.
+
+    The request's Content-Type and the filename extension are both supplied by
+    the caller, so the stored bytes themselves decide what this is.
+    """
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if content.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if content[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def file_etag(row: FileObject) -> str:
+    """Stable validator for stored bytes, which never change once written."""
+    return f'"{row.id}-{row.size_bytes}"'
+
+
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    return bool(if_none_match) and etag in {t.strip() for t in if_none_match.split(",")}
+
+
+async def purge_objects(storage: FileStorage | None, keys: Sequence[str]) -> None:
+    """Drop the stored bytes behind rows that are being deleted.
+
+    Best-effort by design: a storage failure must not fail an account or
+    workspace deletion, so every error is logged and the sweep continues.
+    """
+    if not keys:
+        return
+    if storage is None:
+        logger.warning("no storage driver configured; %d stored objects orphaned", len(keys))
+        return
+    for key in keys:
+        try:
+            await storage.delete(key=key)
+        except Exception:
+            logger.exception("failed to delete stored object %s", key)
+
+
+class FileService:
+    def __init__(
+        self,
+        session: AsyncSession,
+        storage: FileStorage,
+        max_upload_bytes: int,
+        bus: EventBus | None = None,
+    ) -> None:
+        self._session = session
+        self._storage = storage
+        self._max_bytes = max_upload_bytes
+        self._bus = bus
+
+    async def _ensure_membership(self, workspace_id: str, user_id: str) -> None:
+        result = await self._session.execute(
+            select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == workspace_id,
+                WorkspaceMember.user_id == user_id,
+                WorkspaceMember.status == "active",
+            )
+        )
+        if result.scalar_one_or_none() is None:
+            raise FileForbidden("you are not a member of this workspace")
+
+    @staticmethod
+    def to_dict(row: FileObject) -> dict:
+        return {
+            "id": row.id,
+            "workspace_id": row.workspace_id,
+            "owner_user_id": row.owner_user_id,
+            "filename": row.filename,
+            "content_type": row.content_type,
+            "size_bytes": row.size_bytes,
+            # Relative: the API cannot know the origin it is served from, and the client's
+            # origin proxies /api/ to it. This is the address of the resource,
+            # not an image URL: GET needs a bearer token and X-Workspace-ID, so
+            # a browser cannot load it as a plain <img> src. Consumers fetch it
+            # with credentials and use the bytes (see the web app's
+            # src/hooks/useAvatarSrc.ts).
+            "url": f"{API}/files/{row.id}",
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+
+    async def upload(
+        self,
+        *,
+        workspace_id: str,
+        owner_user_id: str,
+        filename: str,
+        content_type: str | None,
+        content: bytes,
+        ip_address: str | None = None,
+    ) -> dict:
+        await self._ensure_membership(workspace_id, owner_user_id)
+        mime = (content_type or "").split(";")[0].strip().lower()
+        if mime not in ALLOWED_AVATAR_TYPES:
+            raise FileTypeRejected(f"unsupported content type: {content_type or 'unknown'}")
+        # Extension of the name as sent: _safe_filename truncates at 200
+        # characters, so deriving it after sanitising reported a long but valid
+        # name as "unsupported file extension: none".
+        ext = Path(filename or "upload").suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            raise FileTypeRejected(f"unsupported file extension: {ext or 'none'}")
+        if len(content) > self._max_bytes:
+            raise FileTooLarge(f"file exceeds {self._max_bytes} bytes")
+        if not content:
+            raise FileError("empty file")
+        if _sniff(content) != mime:
+            raise FileTypeRejected(f"content does not match declared type: {mime}")
+        safe = _safe_filename(filename)
+        key = f"{workspace_id}/{uuid.uuid4()}-{safe}"
+        try:
+            await self._storage.put(key=key, content=content, content_type=mime)
+        except StorageError as exc:
+            raise FileError(str(exc)) from exc
+        row = FileObject(
+            workspace_id=workspace_id,
+            owner_user_id=owner_user_id,
+            filename=safe,
+            content_type=mime,
+            size_bytes=len(content),
+            storage_key=key,
+        )
+        self._session.add(row)
+        try:
+            await self._session.commit()
+        except Exception:
+            # Row insert failed (e.g. transient DB error): remove the
+            # orphaned bytes so storage never holds unreferenced objects.
+            await self._storage.delete(key=key)
+            raise
+        await self._session.refresh(row)
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="file",
+            resource_id=row.id,
+            action="file.uploaded",
+            actor_user_id=owner_user_id,
+            details={"filename": safe, "size_bytes": len(content)},
+            ip_address=ip_address,
+        )
+        return self.to_dict(row)
+
+    async def download(
+        self,
+        *,
+        workspace_id: str,
+        file_id: str,
+        user_id: str,
+        if_none_match: str | None = None,
+        ip_address: str | None = None,
+    ) -> tuple[FileObject, bytes | None]:
+        """Return the row and its bytes, or (row, None) when the caller is current.
+
+        A matching ETag short-circuits before storage is read.
+        """
+        await self._ensure_membership(workspace_id, user_id)
+        row = await self._session.get(FileObject, file_id)
+        if row is None or row.workspace_id != workspace_id:
+            raise FileNotFound("file not found")
+        if _etag_matches(if_none_match, file_etag(row)):
+            return row, None
+        try:
+            stored = await self._storage.get(key=row.storage_key)
+        except StorageError as exc:
+            raise FileError(str(exc)) from exc
+        if stored is None:
+            raise FileNotFound("file not found")
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="file",
+            resource_id=row.id,
+            action="file.downloaded",
+            actor_user_id=user_id,
+            details={"filename": row.filename, "size_bytes": row.size_bytes},
+            ip_address=ip_address,
+        )
+        return row, stored.content
+
+    async def list_files(
+        self, *, workspace_id: str, user_id: str, offset: int = 0, limit: int = 20
+    ) -> tuple[list[dict], int]:
+        await self._ensure_membership(workspace_id, user_id)
+        total = (
+            await self._session.execute(
+                select(func.count())
+                .select_from(FileObject)
+                .where(FileObject.workspace_id == workspace_id)
+            )
+        ).scalar_one()
+        rows = (
+            (
+                await self._session.execute(
+                    select(FileObject)
+                    .where(FileObject.workspace_id == workspace_id)
+                    .order_by(FileObject.created_at.desc())
+                    .offset(offset)
+                    .limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [self.to_dict(r) for r in rows], int(total)

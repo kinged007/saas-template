@@ -6,14 +6,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
+from src.api.prefix import API
 from src.api.routes import (
     admin,
     api_keys,
     audit,
     auth,
     conversations,
+    files,
     invitations,
     jobs,
     members,
@@ -84,6 +86,7 @@ async def lifespan(app: FastAPI):
         await scheduler.stop()
         uninstall_run_capture()
         await registry.stop()
+        await container.storage.aclose()
 
 
 app = FastAPI(
@@ -108,6 +111,37 @@ class ApiVersionMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# Multipart framing (boundaries, part headers) rides on the request body, so the
+# Content-Length of a legal upload exceeds the file cap by roughly this much.
+MULTIPART_OVERHEAD_BYTES = 64 * 1024
+
+
+class UploadSizeLimitMiddleware(BaseHTTPMiddleware):
+    """Reject an oversize upload before Starlette spools the body to a temp file.
+
+    The route's bounded read caps memory but not the parser's on-disk spool,
+    which rolls over to an unbounded temp file above 1 MiB.
+    ponytail: only Content-Length is checked, so a chunked-encoding upload still
+    reaches the parser; enforce the real ceiling at the proxy instead.
+    """
+
+    def __init__(self, app, path: str) -> None:
+        super().__init__(app)
+        self._path = path
+
+    async def dispatch(self, request: Request, call_next):
+        if request.method == "POST" and request.url.path == self._path:
+            length = request.headers.get("content-length")
+            limit = settings.storage_max_upload_bytes
+            if length and length.isdigit() and int(length) > limit + MULTIPART_OVERHEAD_BYTES:
+                return JSONResponse({"detail": f"file exceeds {limit} bytes"}, status_code=413)
+        return await call_next(request)
+
+
+app.add_middleware(UploadSizeLimitMiddleware, path=f"{API}/files")
+
+# Added after the size middleware so it wraps it (the last middleware added is the
+# outermost one): the 413 that middleware returns early still gets X-API-Version.
 app.add_middleware(ApiVersionMiddleware)
 
 app.add_middleware(
@@ -139,7 +173,6 @@ async def root() -> dict:
     }
 
 
-API = "/api/v1"
 app.include_router(meta.router, prefix=API)
 app.include_router(admin.router, prefix=API)
 app.include_router(auth.router, prefix=API)
@@ -153,6 +186,7 @@ app.include_router(jobs.router, prefix=API)
 app.include_router(webhooks.router, prefix=API)
 app.include_router(notifications.router, prefix=API)
 app.include_router(conversations.router, prefix=API)
+app.include_router(files.router, prefix=API)
 app.include_router(profiles.router, prefix=API)
 app.include_router(audit.router, prefix=API)
 app.include_router(ws.router, prefix=API)

@@ -45,6 +45,23 @@ export function getAvatarSrc(avatarUrl?: string | null): string | undefined {
 }
 
 /**
+ * True when the value addresses a file on this app's own API — the path
+ * `POST /files` returns. That endpoint requires a bearer token and the
+ * X-Workspace-ID header, so a browser cannot load it as a plain <img> src;
+ * the consumer has to fetch it and use the bytes.
+ */
+export function isStoredFileUrl(url: string, apiPath: string): boolean {
+  const path = apiPath.replace(/^https?:\/\/[^/]+/, "").replace(/\/+$/, "");
+  const prefix = `${path}/files/`;
+  if (!/^https?:\/\//.test(url)) return url.startsWith(prefix);
+  // Absolute: only the API's own host, so the bearer token never leaves it.
+  // A relative apiPath means same-origin, which no absolute URL can be.
+  if (!/^https?:\/\//.test(apiPath)) return false;
+  const target = new URL(url);
+  return target.origin === new URL(apiPath).origin && target.pathname.startsWith(prefix);
+}
+
+/**
  * Convenience helper that returns both src and fallback for a user-like entity.
  * Accepts any object with avatar_url/display_name/first_name/last_name/email.
  */

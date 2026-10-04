@@ -56,6 +56,17 @@ class Settings(BaseSettings):
     # Secret store driver: "db" (encrypted table) | "vault" (future adapter)
     secret_store_driver: str = "db"
 
+    # File storage: local (filesystem at STORAGE_DIR) | s3 (S3-compatible HTTP)
+    storage_driver: str = "local"
+    storage_dir: str = "./var/storage"
+    storage_max_upload_bytes: int = 5 * 1024 * 1024
+    s3_endpoint: str = ""
+    s3_bucket: str = ""
+    s3_region: str = "us-east-1"
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+    s3_timeout_s: float = 10.0
+
     # Events
     event_bus_driver: EventBusDriver = EventBusDriver.INPROCESS
     nats_url: str = "nats://localhost:4222"
