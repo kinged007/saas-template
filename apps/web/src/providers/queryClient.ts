@@ -1,6 +1,16 @@
 import { QueryClient } from "@tanstack/react-query";
 
 /**
+ * True when the server answered with a 4xx. `statusCode` is stamped on every
+ * error by `normalizeError` (dataProvider); 0 is its "no HTTP response"
+ * sentinel, so anything other than 400-499 stays retryable.
+ */
+export function isClientError(error: unknown): boolean {
+  const status = (error as { statusCode?: number } | null | undefined)?.statusCode;
+  return typeof status === "number" && status >= 400 && status < 500;
+}
+
+/**
  * Singleton QueryClient for the app.
  *
  * Providing an explicit instance to <Refine> lets non-React code
@@ -16,12 +26,18 @@ import { QueryClient } from "@tanstack/react-query";
  * workspace switch or a logout→login as a different user, the stale
  * rows are kept as placeholder until the new workspace/user fetch
  * resolves. Disabling it forces a loading/empty state instead of stale.
+ *
+ * `retry` is react-query's own default budget (3 retries — 4 requests —
+ * 1s + 2s + 4s) unless it is set here. Retrying a 4xx cannot succeed and
+ * spent ~7s of "Loading…" in front of every refusal, so 4xx now fails on
+ * the first attempt. 5xx and network failures keep the 3-retry budget.
  */
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
       placeholderData: undefined,
+      retry: (failureCount, error) => failureCount < 3 && !isClientError(error),
     },
   },
 });
