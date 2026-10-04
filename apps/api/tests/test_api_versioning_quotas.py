@@ -2,6 +2,18 @@
 
 from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
 
+# Pinned deliberately: the words an HTTP caller reads for a refused quota. The
+# schema validator and the service guard both raise this, and the assertions
+# below compare the 422 body against this literal, so neither copy can be
+# reworded on its own.
+QUOTA_MIN_MESSAGE = "usage quota must be at least 1 (leave it empty for unlimited)"
+
+
+def _quota_msg(resp) -> str:
+    detail = resp.json()["detail"]
+    assert isinstance(detail, list) and detail, resp.text
+    return detail[0]["msg"]
+
 
 async def test_api_version_header_on_api_responses(app_client):
     resp = await app_client.get("/")
@@ -138,6 +150,7 @@ async def test_quota_patch_validates_and_scopes_to_owner(app_client):
         headers=headers,
     )
     assert resp.status_code == 422
+    assert _quota_msg(resp) == QUOTA_MIN_MESSAGE
 
     stranger = await register_user(client, "zane@example.com")
     resp = await client.patch(
@@ -163,6 +176,9 @@ async def test_zero_quota_is_rejected(app_client):
         headers=headers,
     )
     assert resp.status_code == 422, resp.text
+    # The schema refuses the quota with the same words the service guard uses
+    # for direct callers, so the two copies cannot drift into a third wording.
+    assert _quota_msg(resp) == QUOTA_MIN_MESSAGE
     assert (await client.get("/api/v1/api-keys", headers=headers)).json() == []
 
     # A positive quota is still the way to bound a key.
@@ -181,6 +197,7 @@ async def test_zero_quota_is_rejected(app_client):
         headers=headers,
     )
     assert resp.status_code == 422, resp.text
+    assert _quota_msg(resp) == QUOTA_MIN_MESSAGE
     keys = (await client.get("/api/v1/api-keys", headers=headers)).json()
     assert keys[0]["usage_quota"] == 2, keys
 

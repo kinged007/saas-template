@@ -14,6 +14,7 @@ from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
 from src.models.api_key import ApiKey
 from src.models.workspace import User
+from src.schemas.api import QUOTA_MIN_MESSAGE
 from src.services.workspaces import WorkspaceService
 
 
@@ -120,7 +121,7 @@ class ApiKeyService:
             raise ApiKeyForbidden(f"cannot grant permissions you do not have: {', '.join(denied)}")
 
         if usage_quota is not None and usage_quota < 1:
-            raise ApiKeyError("usage quota must be at least 1 (leave it empty for unlimited)")
+            raise ApiKeyError(QUOTA_MIN_MESSAGE)
         if expires_at is not None and ensure_utc(expires_at) <= now_utc():
             raise ApiKeyError("expiry must be in the future")
 
@@ -318,7 +319,7 @@ class ApiKeyService:
         if actor is not None and key.created_by_user_id != actor.id:
             raise ApiKeyNotFound("api key not found")
         if usage_quota is not None and usage_quota < 1:
-            raise ApiKeyError("usage quota must be at least 1 (leave it empty for unlimited)")
+            raise ApiKeyError(QUOTA_MIN_MESSAGE)
         key.usage_quota = usage_quota
         await self._session.commit()
         await publish_event(

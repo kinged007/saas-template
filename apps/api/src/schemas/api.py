@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 from pydantic import (
     AnyHttpUrl,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     EmailStr,
     Field,
@@ -13,6 +14,7 @@ from pydantic import (
     StringConstraints,
     field_validator,
 )
+from pydantic_core import PydanticCustomError
 
 # strip_whitespace runs before the length check, so padding is normalized on
 # write (names are compared exactly on read, e.g. the auto-join lookup) and a
@@ -147,10 +149,28 @@ class RoleUpdate(BaseModel):
     permissions: list[str] | None = None
 
 
+QUOTA_MIN_MESSAGE = "usage quota must be at least 1 (leave it empty for unlimited)"
+
+def _quota_at_least_one(value: Any) -> Any:
+    """Refuse a quota below 1 ahead of the ge=1 bound, in the service's words.
+
+    ApiKeyService raises the same constant for callers that never reach this
+    schema (seed data, direct service calls). PydanticCustomError keeps the
+    422 message free of the "Value error," prefix pydantic adds to a plain
+    ValueError.
+    """
+    if isinstance(value, int) and value < 1:
+        raise PydanticCustomError("usage_quota_min", QUOTA_MIN_MESSAGE)
+    return value
+
+# BeforeValidator runs before the ge=1 bound on the fields below, so the 422
+# carries QUOTA_MIN_MESSAGE. ge=1 stays on the fields so OpenAPI states the bound.
+QuotaAtLeastOne = Annotated[int | None, BeforeValidator(_quota_at_least_one)]
+
 class ApiKeyCreate(BaseModel):
     name: StrippedName = Field(max_length=150)
     permissions: list[str] = Field(default_factory=list)
-    usage_quota: int | None = Field(default=None, ge=1)
+    usage_quota: QuotaAtLeastOne = Field(default=None, ge=1)
     # Optional hard expiry. Naive input is rejected: without an offset the
     # instant is ambiguous, and the service compares against UTC.
     expires_at: datetime | None = Field(default=None, examples=["2027-01-01T00:00:00Z"])
@@ -164,7 +184,7 @@ class ApiKeyCreate(BaseModel):
 
 
 class ApiKeyQuotaUpdate(BaseModel):
-    usage_quota: int | None = Field(default=None, ge=1)
+    usage_quota: QuotaAtLeastOne = Field(default=None, ge=1)
 
 
 class NotificationAck(BaseModel):
