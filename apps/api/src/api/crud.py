@@ -98,21 +98,33 @@ def parse_query(request: Request, *, max_limit: int = 100) -> QuerySpec:
     # parameters, so `_order` on its own is parsed (and rejected by the
     # length guard) rather than falling through to the repeated style and
     # being dropped.
-    if "_sort" in q or "_order" in q:
-        spec.sort_by = [s for s in q.get("_sort", "").split(",") if s]
-        orders = [s for s in q.get("_order", "").split(",") if s]
-        spec.sort_order = orders + ["asc"] * (len(spec.sort_by) - len(orders))
+    repeated = "sort[]" in q or "order[]" in q
+    if repeated and ("_sort" in q or "_order" in q):
+        # Name the mix here. Falling through reads it as an order with no
+        # sort (or the reverse) and reports the length guard, whose message
+        # names `sort[]`/`order[]` even when the client sent `_sort`/`_order`.
+        raise InvalidQuery("mixing sort[]/order[] with _sort/_order is not supported")
+    if repeated:
+        sort_by, orders = q.getlist("sort[]"), q.getlist("order[]")
     else:
-        spec.sort_by = q.getlist("sort[]")
-        spec.sort_order = q.getlist("order[]")
-        if len(spec.sort_order) < len(spec.sort_by):
-            spec.sort_order.extend(["asc"] * (len(spec.sort_by) - len(spec.sort_order)))
+        sort_by = q.get("_sort", "").split(",")
+        orders = q.get("_order", "").split(",")
+    # An empty entry names no column, so it drops in both dialects: `_sort=,`
+    # and `?sort[]=` both mean no sort.
+    spec.sort_by = [s for s in sort_by if s]
+    spec.sort_order = [o for o in orders if o]
+    spec.sort_order.extend(["asc"] * (len(spec.sort_by) - len(spec.sort_order)))
     # `apply_query` compares the direction against the literals "desc"/"asc",
     # so normalize the client's value once here rather than at both call sites
     # (the leading term and the `id` tiebreaker). `DESC` is the SQL convention a
     # client may well send; unnormalized it took the `else` branch and sorted
     # ascending, silently.
     spec.sort_order = [o.strip().lower() for o in spec.sort_order]
+    # `apply_query` reads anything but "desc" as ascending, so a misspelled
+    # direction would come back 200 and oldest-first with nothing to notice.
+    for o in spec.sort_order:
+        if o not in ("asc", "desc"):
+            raise InvalidQuery(f"sort order must be 'asc' or 'desc': {o}")
     spec.ids = q.getlist("ids[]")
     if not spec.ids and "id" in q:  # simple-rest getMany sends repeated `id=`
         spec.ids = q.getlist("id")

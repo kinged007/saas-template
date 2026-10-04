@@ -227,11 +227,100 @@ async def test_list_query_rejects_order_without_sort(app_client):
 
     `order[]=desc` alone reached the length guard while `_order=desc` alone
     parsed to an empty spec, so the same request was 422 or 200 depending on
-    the parameter spelling. Both dialects, plus the mixed pair, are rejected.
+    the parameter spelling. Both dialects are rejected.
     """
     client = app_client
     tokens = await register_user(client, "logan@example.com")
-    for query in ("order[]=desc", "_order=desc", "sort[]=name&_order=asc"):
+    for query in ("order[]=desc", "_order=desc"):
+        resp = await client.get(
+            f"/api/v1/workspaces?{query}",
+            headers=auth_headers(tokens),
+        )
+        assert resp.status_code == 422, (query, resp.text)
+        assert "same number of entries" in resp.json()["detail"]
+
+
+async def test_list_query_rejects_unknown_sort_direction(app_client):
+    """A direction that is neither asc nor desc must not read as ascending (#965).
+
+    `apply_query` treats anything but `desc` as ascending, so a client with a
+    typo in the direction got 200 and the wrong order with nothing to notice.
+    Both dialects are refused, and the message names the values that are legal.
+    """
+    client = app_client
+    tokens = await register_user(client, "monty@example.com")
+    for i in range(3):
+        await create_workspace(client, tokens, name=f"WS {i}")
+
+    for query in (
+        "_sort=name&_order=sideways",
+        "_sort=name&_order=DESCENT",
+        "_sort=name,created_at&_order=asc,sideways",
+        "sort[]=name&order[]=sideways",
+        "sort[]=name&sort[]=created_at&order[]=asc&order[]=sideways",
+    ):
+        resp = await client.get(
+            f"/api/v1/workspaces?{query}",
+            headers=auth_headers(tokens),
+        )
+        assert resp.status_code == 422, (query, resp.text)
+        detail = resp.json()["detail"]
+        assert "asc" in detail and "desc" in detail, detail
+
+
+async def test_list_query_rejects_mixed_dialects(app_client):
+    """One dialect per query, in both mixed spellings (#1054).
+
+    `sort[]=name&_order=asc` reached the length guard with a message naming
+    `sort[]`/`order[]`, the spelling the client never sent. Its mirror
+    `_sort=name&order[]=desc` was worse: `order[]` was dropped, padded to
+    `asc`, and answered 200 oldest-first. Both name the mix instead.
+    """
+    client = app_client
+    tokens = await register_user(client, "nadia@example.com")
+    for i in range(3):
+        await create_workspace(client, tokens, name=f"WS {i}")
+
+    for query in ("sort[]=name&_order=asc", "_sort=name&order[]=desc"):
+        resp = await client.get(
+            f"/api/v1/workspaces?{query}",
+            headers=auth_headers(tokens),
+        )
+        assert resp.status_code == 422, (query, resp.text)
+        detail = resp.json()["detail"]
+        assert "_sort" in detail and "sort[]" in detail, detail
+
+
+async def test_list_query_drops_empty_sort_fields_in_both_dialects(app_client):
+    """An empty sort name means no sort in either dialect (#1056).
+
+    `_sort=,` filtered the empty out and answered 200, while `?sort[]=` kept
+    the empty and 422d on `sort on unknown field: `. Dropping an empty sort
+    leaves a bare order, which is still an order with no sort (#968).
+    """
+    client = app_client
+    tokens = await register_user(client, "oscar@example.com")
+    for i in range(3):
+        await create_workspace(client, tokens, name=f"WS {i}")
+
+    for query in ("_sort=,", "sort[]="):
+        resp = await client.get(
+            f"/api/v1/workspaces?{query}",
+            headers=auth_headers(tokens),
+        )
+        assert resp.status_code == 200, (query, resp.text)
+        assert sorted(w["name"] for w in resp.json()) == ["WS 0", "WS 1", "WS 2"]
+
+    # An empty order is no order: the surviving sort field keeps its default.
+    for query in ("_sort=name,&_order=,", "sort[]=name&order[]="):
+        resp = await client.get(
+            f"/api/v1/workspaces?{query}",
+            headers=auth_headers(tokens),
+        )
+        assert resp.status_code == 200, (query, resp.text)
+        assert [w["name"] for w in resp.json()] == ["WS 0", "WS 1", "WS 2"]
+
+    for query in ("_sort=,&_order=desc", "sort[]=&order[]=desc"):
         resp = await client.get(
             f"/api/v1/workspaces?{query}",
             headers=auth_headers(tokens),

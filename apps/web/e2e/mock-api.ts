@@ -22,6 +22,10 @@ export const ACCESS_TOKEN = [
  * endpoints decide auth; the list endpoints must answer with a bare array
  * (@refinedev/simple-rest maps the body straight to `data`); `/auth/config`
  * must report registration_enabled, or RegisterPage bounces to /login.
+ *
+ * The returned `signIn()` flips the mocked session mid-test, for flows that
+ * start signed out and end signed in (the sign-in round trip). Specs that do
+ * not need it ignore the return value.
  */
 export async function mockApi(
   page: Page,
@@ -36,16 +40,17 @@ export async function mockApi(
     lists?: Record<string, unknown[]>;
   },
 ) {
+  const session = { signedIn };
   await page.route("**/api/v1/**", async (route) => {
     const reply = (status: number, body: unknown) =>
       route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
     const { pathname } = new URL(route.request().url());
     if (pathname.endsWith("/auth/refresh")) {
-      if (!signedIn) return reply(401, { detail: "No refresh token" });
+      if (!session.signedIn) return reply(401, { detail: "No refresh token" });
       return reply(200, { access_token: ACCESS_TOKEN, token_type: "bearer" });
     }
     if (pathname.endsWith("/auth/me")) {
-      if (!signedIn) return reply(401, { detail: "Not authenticated" });
+      if (!session.signedIn) return reply(401, { detail: "Not authenticated" });
       return reply(200, identity);
     }
     if (pathname.endsWith("/auth/config")) {
@@ -70,4 +75,5 @@ export async function mockApi(
     ({ hasSession }) => window.localStorage.setItem("tf_has_session", hasSession ? "1" : "0"),
     { hasSession: signedIn },
   );
+  return { signIn: () => void (session.signedIn = true) };
 }

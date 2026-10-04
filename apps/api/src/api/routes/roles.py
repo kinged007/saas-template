@@ -13,6 +13,7 @@ from src.api.deps import (
     get_current_workspace_id,
     require_permission,
 )
+from src.core.dates import iso_or_none
 from src.core.permissions import ALL_PERMISSIONS, ROLE_CREATE, ROLE_READ
 from src.db.session import get_db
 from src.models.workspace import Role
@@ -56,7 +57,7 @@ def _role_dict(r: Role) -> dict:
         "description": r.description,
         "permissions": r.permissions,
         "system": r.system,
-        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "created_at": iso_or_none(r.created_at),
     }
 
 

@@ -65,6 +65,8 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 - **AuditLogEntry** — immutable audit trail for every user/system action
   (actor, IP, action, details), never updated; deleted only when the operator
   explicitly opts into `AUDIT_LOG_RETENTION_DAYS` (see docs/OPERATIONS.md).
+  At most one entry per source event: the bus is at-least-once, so a
+  redelivered event is not filed twice.
 - **StoredSecret** — Fernet-encrypted values at rest (versioned key),
   namespaced per workspace, behind a `SecretStore` interface.
 

@@ -1,6 +1,7 @@
+import { useEffect } from "react";
 import { Refine, Authenticated } from "@refinedev/core";
 import routerProvider from "@refinedev/react-router";
-import { BrowserRouter, Navigate, Outlet, Route, Routes } from "react-router";
+import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router";
 
 import { useNotificationProvider } from "./components/refine-ui/notification/use-notification-provider";
 import { Toaster } from "./components/refine-ui/notification/toaster";
@@ -46,6 +47,25 @@ import { RolesSection } from "./pages/settings/workspace/sections/RolesSection";
 import { JobsSection } from "./pages/settings/workspace/sections/JobsSection";
 import { UsersSection } from "./pages/settings/workspace/sections/UsersSection";
 import { AuditLogSection } from "./pages/settings/workspace/sections/AuditLogSection";
+import { returnToStore } from "./utils/storage";
+
+/**
+ * Where the guard sends a signed-out visitor. The destination they asked for is
+ * recorded so sign-in can return them to it.
+ *
+ * This is the `/` group's `Authenticated` fallback, so it only ever runs for a
+ * guarded route — never on /login, /register or /invitations/accept, which
+ * would record the sign-in page as its own destination. Written on mount, not
+ * on every location change: <Navigate> replaces this render immediately, and
+ * only the location at the moment of denial is the destination.
+ */
+function ToLogin() {
+  const { pathname, search, hash } = useLocation();
+  useEffect(() => {
+    returnToStore.set(pathname + search + hash);
+  }, []);
+  return <Navigate to="/login" replace />;
+}
 
 /**
  * With zero workspaces nothing auto-selects, so useWorkspaceQuery keeps every
@@ -106,7 +126,7 @@ export function App() {
             <Route
               path="/"
               element={
-                <Authenticated key="app" fallback={<Navigate to="/login" replace />}>
+                <Authenticated key="app" fallback={<ToLogin />}>
                   <AppLayout>
                     <Outlet />
                   </AppLayout>

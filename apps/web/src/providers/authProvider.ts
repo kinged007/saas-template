@@ -5,6 +5,8 @@ import { API_URL, cancelPendingRefresh, ensureSession, httpClient } from "./data
 import {
   identityStore,
   pendingInvitationStore,
+  resetSessionState,
+  returnToStore,
   tokenStore,
   workspaceStore,
   setActiveWorkspaceId,
@@ -53,11 +55,25 @@ export async function seedWorkspace(identity: Identity): Promise<void> {
 
 /**
  * Where a freshly authenticated user lands: the pending invitation accept
- * page when they arrived from an invite link, the dashboard otherwise.
+ * page when they arrived from an invite link, the destination the auth guard
+ * recorded when it denied them, the dashboard otherwise.
  */
 export const afterAuthRedirect = () => {
+  // A pending invitation outranks the recorded destination: the invite is an
+  // explicit, expiring, one-shot action, and skipping it would leave its token
+  // stored to hijack the next sign-in.
   const token = pendingInvitationStore.get();
-  return token ? `/invitations/accept?token=${encodeURIComponent(token)}` : "/";
+  if (token) {
+    // The destination is not being honoured, so drop it — a later sign-in must
+    // not land on a page this session never reached.
+    returnToStore.clear();
+    return `/invitations/accept?token=${encodeURIComponent(token)}`;
+  }
+  // take(), so the destination cannot be replayed by a later sign-in. Only a
+  // single-slash relative path is honoured: a `//host/path` value survives the
+  // guard and react-router normalises it into a dead local route.
+  const dest = returnToStore.take();
+  return dest && dest.startsWith("/") && !dest.startsWith("//") ? dest : "/";
 };
 
 export const authProvider: AuthProvider = {
@@ -94,9 +110,7 @@ export const authProvider: AuthProvider = {
       // without this the app would mount with the previous user's workspace
       // id and rows (dashboard empty / notifications from the old workspace).
       // Unconditional — a no-op when logout already cleared.
-      workspaceStore.clear();
-      setActiveWorkspaceId(null);
-      identityStore.set(null);
+      resetSessionState();
       clearAllCaches(queryClient);
       tokenStore.setTokens(tokens.access_token);
       try {
@@ -129,10 +143,8 @@ export const authProvider: AuthProvider = {
       if (last_name) body.last_name = last_name;
       if (display_name && !body.display_name) body.display_name = display_name;
       const tokens = await post("/auth/register", { ...body, use_cookies: true });
-      // Same stale-session reset + workspace seed as login (see above).
-      workspaceStore.clear();
-      setActiveWorkspaceId(null);
-      identityStore.set(null);
+      // Same stale-session reset + workspace seed as login, via resetSessionState().
+      resetSessionState();
       clearAllCaches(queryClient);
       tokenStore.setTokens(tokens.access_token);
       try {

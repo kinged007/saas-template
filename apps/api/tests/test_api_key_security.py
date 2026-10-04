@@ -1189,8 +1189,9 @@ async def test_one_quota_unit_cannot_be_spent_twice(app_client):
         assert row.usage_count == 1, "a refused charge must not be spent"
 
 
-async def _seed_definition(workspace_id: str) -> str:
-    """A workspace-scoped definition row, bypassing async provisioning."""
+async def _seed_definition(workspace_id: str | None) -> str:
+    """A definition row owned by `workspace_id` (None for a global one),
+    bypassing async provisioning."""
     import uuid
 
     async with SessionFactory() as session:
@@ -1212,7 +1213,8 @@ async def _seed_definition(workspace_id: str) -> str:
 
 async def test_job_definition_access_uses_the_keys_own_permissions(app_client):
     """A definition is authorized against the key's own permission list and its
-    own workspace — a foreign-workspace key gets 404, never the definition."""
+    own workspace — a foreign-workspace key gets the deployment-admin refusal,
+    the same one it gets for a global definition, and never the definition."""
     client = app_client
     owner = await register_user(client, "jobdef-owner@example.com")
     ws = await create_workspace(client, owner, "Jobdef Owner Inc")
@@ -1230,7 +1232,10 @@ async def test_job_definition_access_uses_the_keys_own_permissions(app_client):
         resp = await client.get(
             f"/api/v1/jobs/{definition_id}", headers=_key_headers(key["key"], header_ws)
         )
-        assert resp.status_code == 404, (header_ws, resp.status_code, resp.text)
+        assert resp.status_code == 403, (header_ws, resp.status_code, resp.text)
+        assert resp.json()["detail"] == (
+            "deployment administration is not available to API keys"
+        ), header_ws
 
     # The owner's own key still reads its own definition, and not the other one.
     own = await _create_key(client, headers, "jobdef-own", [JOB_READ])
@@ -1242,7 +1247,71 @@ async def test_job_definition_access_uses_the_keys_own_permissions(app_client):
     resp = await client.get(
         f"/api/v1/jobs/{foreign_id}", headers=_key_headers(own["key"], ws["id"])
     )
-    assert resp.status_code == 404, resp.text
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == "deployment administration is not available to API keys"
+
+
+async def test_key_cannot_probe_definition_existence(app_client):
+    """A definition id that resolves to nothing must not answer differently for
+    a key, on any of the four definition routes.
+
+    The route bodies used to resolve the definition first and raise
+    `404 "job not found"` on a miss, while `_require_job_access` answered a
+    global definition with the deployment-admin 403 and another workspace's
+    with a 404 — three states a key may not read, three answers, so the pair
+    told the key which state produced it. All three must be the one refusal,
+    exactly as the run routes do it. Regression test for #1033.
+    """
+    import uuid
+
+    client = app_client
+    owner = await register_user(client, "defprobe-owner@example.com")
+    ws = await create_workspace(client, owner, "Def Probe Inc")
+    entitled = await _seed_definition(ws["id"])
+    global_id = await _seed_definition(None)
+    other = await register_user(client, "defprobe-other@example.com")
+    foreign_ws = await create_workspace(client, other, "Def Probe Other Inc")
+    foreign = await _seed_definition(foreign_ws["id"])
+    key = await _create_key(
+        client, ws_headers(owner, ws["id"]), "def-prober", [JOB_READ, JOB_UPDATE]
+    )
+    kh = _key_headers(key["key"], ws["id"])
+
+    missing = str(uuid.uuid4())
+    answers = set()
+    for definition_id in (global_id, foreign, missing):
+        for method, url, body in [
+            ("get", f"/api/v1/jobs/{definition_id}", None),
+            ("patch", f"/api/v1/jobs/{definition_id}", {"cron_schedule": "30 4 * * *"}),
+            ("post", f"/api/v1/jobs/{definition_id}/execute", {}),
+            ("get", f"/api/v1/jobs/{definition_id}/runs", None),
+        ]:
+            resp = await client.request(method, url, json=body, headers=kh)
+            answers.add((resp.status_code, resp.json().get("detail")))
+
+    assert answers == {(403, "deployment administration is not available to API keys")}, answers
+
+    # The same key still reads, edits, runs and lists runs for the definition
+    # it is entitled to, so the collapsed answer is not the routes refusing
+    # everything.
+    ok = await client.get(f"/api/v1/jobs/{entitled}", headers=kh)
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["id"] == entitled
+    edited = await client.patch(
+        f"/api/v1/jobs/{entitled}", json={"cron_schedule": "45 5 * * *"}, headers=kh
+    )
+    assert edited.status_code == 200, edited.text
+    executed = await client.post(f"/api/v1/jobs/{entitled}/execute", json={}, headers=kh)
+    assert executed.status_code == 201, executed.text
+    listed = await client.get(f"/api/v1/jobs/{entitled}/runs", headers=kh)
+    assert listed.status_code == 200, listed.text
+
+    # A session caller is unaffected: a missing definition is still a 404, and
+    # a global one still the superuser gate.
+    missing_session = await client.get(f"/api/v1/jobs/{missing}", headers=auth_headers(owner))
+    assert missing_session.status_code == 404, missing_session.text
+    global_session = await client.get(f"/api/v1/jobs/{global_id}", headers=auth_headers(owner))
+    assert global_session.status_code == 403, global_session.text
 
 
 async def test_key_cannot_touch_two_factor(app_client):

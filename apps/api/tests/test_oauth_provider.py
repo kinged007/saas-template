@@ -49,6 +49,8 @@ KID = "stub-key-1"
 EC_KID = "stub-ec-1"
 ROTATED_KID = "stub-key-2"
 REDIRECT_URI = "http://localhost:8000/api/v1/auth/oauth/stub/callback"
+# Distinguishes "a test did not ask for a broken document" from a `null` one.
+UNSET = object()
 
 
 def _jwk(
@@ -88,6 +90,12 @@ class _StubIdP:
         self.garbage_jwks = False
         self.undecodable_jwks = False
         self.truncated_jwks = False
+        # Set by a test to make the well-known document answer with `broken_doc`
+        # instead of an object, which a provider should never publish.
+        self.broken_doc: Any = UNSET
+        # Set by a test to answer the bad-code token request with raw text of its
+        # own, so it can carry bytes json.dumps would escape.
+        self.token_error_body: str | None = None
         self.jwks_delay = 0.0
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -157,12 +165,17 @@ class _StubIdP:
                 self.end_headers()
                 self.wfile.write(body)
 
-            def _send(self, code: int, payload: dict[str, Any]) -> None:
-                self._send_raw(code, json.dumps(payload).encode())
+            # `raw` sends text verbatim; without it the payload is JSON, so a bare
+            # str stays a JSON string rather than becoming an unparseable body.
+            def _send(self, code: int, payload: Any, raw: str | None = None) -> None:
+                body = raw.encode() if raw is not None else json.dumps(payload).encode()
+                self._send_raw(code, body)
 
             def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
                 stub.hits.append(self.path)
-                if self.path.startswith("/.well-known/openid-configuration"):
+                if self.path.startswith("/.well-known/openid-configuration-broken"):
+                    self._send(200, stub.doc if stub.broken_doc is UNSET else stub.broken_doc)
+                elif self.path.startswith("/.well-known/openid-configuration"):
                     self._send(200, stub.doc)
                 elif self.path == "/jwks":
                     if stub.jwks_delay:
@@ -207,7 +220,7 @@ class _StubIdP:
                 form = parse_qs(self.rfile.read(length).decode())
                 stub.token_forms.append(form)
                 if form.get("code", [""])[0] == "bad-code":
-                    self._send(400, {"error": "invalid_grant"})
+                    self._send(400, {"error": "invalid_grant"}, stub.token_error_body)
                 else:
                     self._send(
                         200,
@@ -454,6 +467,32 @@ async def test_unusable_jwks_is_not_served_from_the_cache(provider, idp, cache):
     assert idp.hits.count("/jwks-broken") == before + 1, "the bad set was served from the cache"
 
 
+async def test_jwks_without_a_usable_signing_key_is_not_cached(provider, idp, cache):
+    """#1024: `from_dict` parses an encryption-only set, but `_signing_key` can never
+    select from it, so caching it costs every later login a kid-miss refetch."""
+    doc = dict(idp.doc, jwks_uri=f"{idp.base}/jwks-broken")
+    enc_key = _jwk(idp.other_key, "enc-1", "RS256")
+    enc_key["use"] = "enc"
+    idp.broken_jwks = {"keys": [enc_key]}
+    try:
+        assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+        assert cache.get(f"oauth:jwks:{provider.id}") is None, "an unusable set was cached"
+        before = idp.hits.count("/jwks-broken")
+        for _ in range(3):
+            assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+        assert idp.hits.count("/jwks-broken") == before + 3, (
+            "the cached set saved nothing, so each login paid a refetch on top of the cache hit"
+        )
+    finally:
+        idp.broken_jwks = None
+
+
+async def test_claims_from_id_token_survives_a_non_string_jwks_uri(provider, idp, cache):
+    """A `jwks_uri` that is not a string must fail the sign-in, not raise."""
+    doc = dict(idp.doc, jwks_uri=12345)
+    assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+
+
 async def test_signing_key_is_matched_by_kid_not_position(provider, idp, cache):
     """Key selection is hand-rolled here, so the first published key is not the answer."""
     idp.published = [
@@ -586,6 +625,22 @@ async def test_discovery_raises_oauth_error_when_unreachable():
         await _discovery(dead, TtlCache(ttl_seconds=60))
 
 
+@pytest.mark.parametrize("broken", [["not", "a", "dict"], "str", 42, None])
+async def test_discovery_refuses_a_document_that_is_not_an_object(provider, idp, cache, broken):
+    """#1020: the callback catches only `OAuthError`, so a non-object document has to
+    fail here or its `AttributeError` escapes as a 500."""
+    idp.broken_doc = broken
+    doc_provider = replace(
+        provider, discovery_url=f"{idp.base}/.well-known/openid-configuration-broken"
+    )
+    try:
+        with pytest.raises(OAuthError, match="is not an object"):
+            await _discovery(doc_provider, cache)
+    finally:
+        idp.broken_doc = UNSET
+    assert cache.get(f"oauth:discovery:{provider.id}") is None, "the bad document was cached"
+
+
 def test_authorize_url_carries_s256_challenge(provider, idp):
     """The challenge in the redirect must be the S256 digest of the verifier
     the server kept: the client only ever sees the public half."""
@@ -642,6 +697,26 @@ async def test_exchange_code_raises_on_provider_error(provider, idp, caplog):
             )
     # The body is what separates a rejected code_verifier from an expired code.
     assert "invalid_grant" in caplog.text
+
+
+async def test_exchange_code_flattens_cr_in_the_logged_provider_body(provider, idp, caplog):
+    """A bare CR overwrites the line it lands on, so it is flattened like the LF."""
+    idp.token_error_body = '{"error": "invalid_grant\rforged: 500"}'
+    try:
+        with caplog.at_level("WARNING", logger="src.services.oauth"):
+            with pytest.raises(OAuthError, match="code exchange failed"):
+                await exchange_code(
+                    provider,
+                    idp.doc,
+                    code="bad-code",
+                    redirect_uri=REDIRECT_URI,
+                    code_verifier="verifier-abc",
+                )
+    finally:
+        idp.token_error_body = None
+
+    assert "invalid_grant forged: 500" in caplog.text
+    assert "\r" not in caplog.text
 
 
 async def test_fetch_userinfo_sends_bearer_token(provider, idp):

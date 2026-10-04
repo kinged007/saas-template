@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { afterAuthRedirect, authProvider, seedWorkspace } from "@/providers/authProvider";
 import { API_URL, httpClient } from "@/providers/dataProvider";
-import { identityStore, tokenStore, workspaceStore } from "@/utils/storage";
+import { identityStore, resetSessionState, tokenStore } from "@/utils/storage";
 import { clearAllCaches, queryClient } from "@/providers/queryClient";
 
 export type AuthConfig = {
@@ -65,8 +65,7 @@ export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: str
     use_cookies: true,
   });
   if (data.two_factor_required) return { twoFactor: data.challenge_token as string };
-  workspaceStore.clear();
-  identityStore.set(null);
+  resetSessionState();
   clearAllCaches(queryClient);
   // Refresh token is in the HttpOnly cookie; only the access token is stored.
   tokenStore.setTokens(data.access_token);
@@ -105,7 +104,16 @@ export function OAuthCallbackPage() {
     // loading gate as the identity settles, and that remount can land after
     // navigate() has rewritten the URL — code is null but it was ours, so
     // stopping here keeps a succeeding sign-in from painting an error.
-    if (oauthCodeConsumed(code, consumedCode)) return;
+    // Gated on the session: consumedCode is module state that no sign-out
+    // clears, and the access token the exchange stored is in-memory only, so
+    // logout and the 401 handler both drop it while the latch survives. Honoring
+    // a latch with no session left it on "Signing you in…" forever.
+    // ponytail: a signed-out repeat still lands on the terminal
+    // "Missing sign-in code." — add a retry/link to /login, or replace the
+    // module latch with per-code state, when /oauth/callback gets a client-side
+    // entry point (e.g. lifting the public auth routes out of
+    // <WorkspaceProvider>).
+    if (oauthCodeConsumed(code, consumedCode, tokenStore.getAccess() !== null)) return;
     if (!code) {
       setStatus("Missing sign-in code.");
       return;

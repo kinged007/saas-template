@@ -20,12 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, apply_query, parse_query
 from src.api.deps import get_container, require_superuser
+from src.core.dates import iso_or_none
 from src.db.session import get_db
 from src.events.publisher import publish_audit
 from src.models.audit import AuditLogEntry
 from src.models.user_profile import UserProfile
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.schemas.api import AdminUserUpdate, AdminWorkspaceFlags
+from src.services.audit import public_details
 from src.services.profile_helpers import escape_like, format_display_name
 from src.services.serializers import user_to_dict, workspace_to_dict
 
@@ -55,7 +57,7 @@ def _admin_user_dict(u: User) -> dict:
     return {
         **user_to_dict(u),
         "is_active": bool(u.is_active),
-        "created_at": u.created_at.isoformat() if u.created_at else None,
+        "created_at": iso_or_none(u.created_at),
     }
 
 
@@ -289,9 +291,9 @@ async def list_all_audit_logs(
                 "resource_type": entry.resource_type,
                 "resource_id": entry.resource_id,
                 "action": entry.action,
-                "details": entry.details,
+                "details": public_details(entry.details),
                 "ip_address": entry.ip_address,
-                "created_at": entry.created_at.isoformat() if entry.created_at else None,
+                "created_at": iso_or_none(entry.created_at),
             }
         )
     return out

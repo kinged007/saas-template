@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime
 
+from src.core.dates import iso_or_none
+from src.events.bus import SOURCE_EVENT_KEY
 from src.models.core import Notification
 from src.models.user_profile import UserProfile
 from src.models.workspace import User, Workspace
-
-
-def _to_iso(value: Any) -> str | None:
-    return value.isoformat() if value else None
 
 
 def notification_to_dict(n: Notification, *, workspace_name: str | None = None) -> dict:
@@ -19,9 +17,9 @@ def notification_to_dict(n: Notification, *, workspace_name: str | None = None) 
         "type": n.type,
         "title": n.title,
         "body": n.body,
-        "payload": n.payload,
-        "acknowledged_at": _to_iso(n.acknowledged_at),
-        "created_at": _to_iso(n.created_at),
+        "payload": {k: v for k, v in (n.payload or {}).items() if k != SOURCE_EVENT_KEY},
+        "acknowledged_at": iso_or_none(n.acknowledged_at),
+        "created_at": iso_or_none(n.created_at),
     }
     if workspace_name is not None:
         data["workspace_name"] = workspace_name
@@ -48,7 +46,7 @@ def workspace_to_dict(
     *,
     role: str | None = None,
     permissions: list[str] | None = None,
-    joined_at=None,
+    joined_at: datetime | None = None,
 ) -> dict:
     data = {
         "id": w.id,
@@ -56,7 +54,7 @@ def workspace_to_dict(
         "slug": w.slug,
         "description": w.description,
         "created_by_user_id": w.created_by_user_id,
-        "created_at": _to_iso(w.created_at),
+        "created_at": iso_or_none(w.created_at),
         # Default-on: only an explicit False disables it (FEATURE_FLAGS.md).
         ONBOARDING_ENABLED_FLAG: (w.flags or {}).get(ONBOARDING_ENABLED_FLAG) is not False,
     }
@@ -65,7 +63,7 @@ def workspace_to_dict(
     if permissions is not None:
         data["permissions"] = permissions
     if joined_at is not None:
-        data["joined_at"] = _to_iso(joined_at)
+        data["joined_at"] = iso_or_none(joined_at)
     return data
 
 
@@ -79,12 +77,13 @@ def profile_to_dict(p: UserProfile) -> dict:
         "phone_number": p.phone_number,
         "timezone": p.timezone,
         "locale": p.locale,
+        # A `Date` column has no offset to give.
         "date_of_birth": p.date_of_birth.isoformat() if p.date_of_birth else None,
         "website_url": p.website_url,
         "location": p.location,
         "custom_data": p.custom_data if p.custom_data is not None else {},
-        "created_at": _to_iso(p.created_at),
-        "updated_at": _to_iso(p.updated_at),
+        "created_at": iso_or_none(p.created_at),
+        "updated_at": iso_or_none(p.updated_at),
     }
 
 

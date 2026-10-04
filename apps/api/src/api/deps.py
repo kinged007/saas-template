@@ -159,6 +159,28 @@ def deployment_admin_denied(principal: AuthPrincipal) -> HTTPException:
     )
 
 
+async def resolve_or_deny(principal: AuthPrincipal, lookup, missing_detail: str):
+    """Resolve a record, or raise the only answer the caller may get.
+
+    No key is ever a deployment admin (`AuthPrincipal.is_deployment_admin`), so
+    nothing outside its own workspace is readable by one — a deployment-wide
+    record included. Answering a miss with 404 and a real record with 403 turns
+    that pair into an existence oracle on a surface the key is denied, so a
+    miss raises the same deployment-admin 403 the gate would. The gate gives a
+    key that one answer for every other record too.
+
+    A session caller keeps the 404: a browser session has to tell an id that
+    matches nothing apart from one it may not read, and that is the single
+    distinction it is allowed to make.
+    """
+    record = await lookup
+    if record is None:
+        if principal.api_key is not None:
+            raise deployment_admin_denied(principal)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, missing_detail)
+    return record
+
+
 async def get_current_workspace_id(
     x_workspace_id: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
 ) -> str:

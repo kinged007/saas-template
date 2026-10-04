@@ -33,10 +33,22 @@ const ACCEPTED = {
 const row = (page: Page, email: string) => page.getByRole("row").filter({ hasText: email });
 const deleteButton = (page: Page, email: string) => row(page, email).getByRole("button", { name: "Delete" });
 
-/** A role that may invite (member:create) but may not revoke (member:delete). */
+/**
+ * A manager who may invite (member:create) but may not revoke
+ * (member:delete). The owner/admin role name and member:update are what the
+ * row actions require: `WorkspaceService.resend_invitation` refuses any other
+ * actor with 403, and MembersPage gates both row controls on that same pair.
+ */
 const inviter = {
   ...IDENTITY,
-  workspaces: [{ id: "ws-1", name: "Acme Corp", role: "custom", permissions: ["member:read", "member:create"] }],
+  workspaces: [
+    {
+      id: "ws-1",
+      name: "Acme Corp",
+      role: "admin",
+      permissions: ["member:read", "member:create", "member:update"],
+    },
+  ],
 };
 
 // A route registered after mockApi takes precedence over its catch-all.
@@ -59,6 +71,9 @@ test.describe("invitations", () => {
 
     // The section itself follows member:create, which also gates the list.
     await expect(page.getByRole("heading", { name: "Invited members" })).toBeVisible();
+    // Re-send is a manager action, so this actor is offered one control and not
+    // the other: the missing Delete below is a per-action gate, not an empty
+    // actions cell.
     await expect(row(page, "expired@example.com").getByRole("button", { name: "Re-send" })).toBeVisible();
     // DELETE /invitations/{id} requires member:delete: offer nothing rather
     // than a button that can never fire.

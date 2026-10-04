@@ -115,6 +115,27 @@ class MemberStatus(StrEnum):
     SUSPENDED = "suspended"
 
 
+# Whether a status reads as an active membership, decided per status so a
+# status the domain gains later is refused at every read until it is stated
+# here. Every `MemberStatus` has an entry; pinned by
+# `test_active_membership_decides_every_member_status`.
+#
+# `active` is active at every read. `suspended` is active nowhere: no access,
+# no listing, no co-member profile visibility, no `member_joined`
+# notification, and it cannot leave on its own (a manager removes or
+# reactivates it). `invited` is active nowhere too — it has no writer and
+# survives only as a pre-0017 value, stated so a future invite-pending status
+# cannot reuse the value silently.
+READS_AS_ACTIVE: dict[str, bool] = {
+    MemberStatus.ACTIVE.value: True,
+    MemberStatus.INVITED.value: False,
+    MemberStatus.SUSPENDED.value: False,
+}
+ACTIVE_MEMBERSHIP_STATUSES: tuple[str, ...] = tuple(
+    status for status, active in READS_AS_ACTIVE.items() if active
+)
+
+
 class WorkspaceMember(Base, TimestampMixin):
     __tablename__ = "workspace_members"
 
