@@ -109,6 +109,9 @@ export const tokenStore = {
     storage.remove(WORKSPACE_PREFIX + "legacy");
     storage.remove(LEGACY_WORKSPACE_KEY);
     storage.remove(PENDING_INVITATION_KEY);
+    // The session is over without an intentional redirect, so a destination
+    // recorded by the guard belongs to whoever signs in next, not to them.
+    storage.remove(RETURN_TO_KEY);
     notifyTokensChanged();
   },
   /** Logout variant: also drops the signing-out user's workspace selection. */
@@ -215,7 +218,6 @@ export const pendingInvitationStore = {
  * page and comes back on a fresh URL.
  */
 export const returnToStore = {
-  get: () => storage.get(RETURN_TO_KEY),
   set: (path: string) => storage.set(RETURN_TO_KEY, path),
   /** Read once and clear: the destination is spent the moment it is used. */
   take: () => {

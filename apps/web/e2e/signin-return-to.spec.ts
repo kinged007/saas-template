@@ -53,6 +53,23 @@ test.describe("sign-in return-to", () => {
     await page.waitForURL(/\/invitations\/accept/);
     expect(new URL(page.url()).pathname).toBe("/invitations/accept");
     expect(new URL(page.url()).searchParams.get("token")).toBe("inv-token");
+    // The loser must go too, or it fires at the next sign-in.
+    expect(await returnTo(page)).toBeNull();
+  });
+
+  test("a destination that is not a plain relative path is dropped", async ({ page }) => {
+    const api = await mockApi(page, { signedIn: false });
+    await page.goto("/api-keys?page=2");
+    await path(page).toBe("/login");
+    // A crafted same-origin link records "//host/path" verbatim; react-router
+    // would normalise it into a dead local route with the destination spent.
+    await page.evaluate(() => window.localStorage.setItem("tf_return_to", "//evil.example/x"));
+
+    api.signIn();
+    await signIn(page);
+
+    await path(page).toBe("/");
+    expect(await returnTo(page)).toBeNull();
   });
 
   test("signing in converges on the destination instead of looping", async ({ page }) => {
