@@ -134,6 +134,11 @@ class NotificationService:
         conversation would otherwise mean one transaction per participant.
         `source_event_id` drops the recipients this event already notified
         (see `create`).
+
+        Returns the rows it created, so the count is below `len(specs)`
+        whenever a recipient was already notified; the drop is logged here
+        rather than reported through the return value, the way
+        `AuditService.record` reports a suppressed audit entry.
         """
         pending = list(specs)
         for spec in pending:
@@ -147,6 +152,14 @@ class NotificationService:
             pending = [
                 s for s in pending if (s["user_id"], s["workspace_id"], s["type"]) not in already
             ]
+            if len(pending) != len(specs):
+                logger.info(
+                    "notification fan-out for source event %s dropped %d of %d "
+                    "already-notified recipients",
+                    source_event_id,
+                    len(specs) - len(pending),
+                    len(specs),
+                )
         rows: list[Notification] = []
         for spec in pending:
             rows.append(
