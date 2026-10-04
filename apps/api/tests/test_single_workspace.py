@@ -272,13 +272,15 @@ async def test_refresh_survives_join_failure(app_client, single_workspace_on):
     assert stale.status_code == 401, stale.text
 
 
-async def test_register_survives_join_failure(app_client, single_workspace_on):
+async def test_register_survives_join_failure(app_client, single_workspace_on, caplog):
     await break_single_workspace_join(app_client)
     tokens = await register_user(app_client, "newcomer@example.com")
 
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
     assert me.status_code == 200, me.text
     assert me.json()["workspaces"] == []
+    # The operator gets the real reason, not the configured default role.
+    assert "has no non-owner role to join" in caplog.text
 
 
 async def test_delete_nonexistent_returns_404_in_single_mode(app_client, single_workspace_on):
