@@ -32,6 +32,8 @@ export function WorkspaceExportCard() {
   const { result: resourcesResult, query: resourcesQuery } = useCustom<{ resources: string[] }>({
     url: "workspaces/export/resources",
     method: "get",
+    // Recovery is user-initiated: a mount makes one attempt, no storm.
+    // e2e/export-card.spec.ts asserts exactly one request per attempt.
     queryOptions: { enabled: !!workspace && canExport?.can === true, retry: false },
     // The card reports this failure inline; refine's generic toast would
     // report the same failure a second time.

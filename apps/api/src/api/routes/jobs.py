@@ -166,6 +166,28 @@ async def list_global_job_runs(
 # captured as a definition id.
 
 
+async def _get_run_or_deny(service: JobService, principal: AuthPrincipal, run_id: str) -> JobRun:
+    """Resolve a run, or raise the only answer the caller may get.
+
+    No key is ever a deployment admin (`AuthPrincipal.is_deployment_admin`), so
+    no run outside its own workspace is readable by one — a global run
+    included. Answering a miss with 404 and a global run with 403 turns that
+    pair into an existence oracle on a surface the key is denied, so a miss
+    raises the same deployment-admin 403 the gate would.
+    `_require_run_access` gives a key that one answer for every other run too.
+
+    A session caller keeps the 404: the run page has to tell an id that
+    matches no run apart from one it may not read, and that is the single
+    distinction a browser session is allowed to make.
+    """
+    run = await service.get_run(run_id)
+    if run is None:
+        if principal.api_key is not None:
+            raise deployment_admin_denied(principal)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
+    return run
+
+
 @router.get("/runs/{run_id}")
 async def get_job_run(
     response: Response,
@@ -173,12 +195,11 @@ async def get_job_run(
     principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
 ):
-    run = await JobService(db).get_run(run_id)
-    if run is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
+    service = JobService(db)
+    run = await _get_run_or_deny(service, principal, run_id)
     await _require_run_access(db, principal, run, response)
     schema = {}
-    definition = await JobService(db).get_definition(run.definition_id)
+    definition = await service.get_definition(run.definition_id)
     if definition is not None:
         schema = definition.params_schema or {}
     return job_run_to_dict(run, schema=schema)
@@ -192,9 +213,7 @@ async def get_job_run_logs(
     db: AsyncSession = Depends(get_db),
 ):
     service = JobService(db)
-    run = await service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
+    run = await _get_run_or_deny(service, principal, run_id)
     await _require_run_access(db, principal, run, response)
     return [job_log_to_dict(e) for e in await service.list_run_logs(run_id)]
 
@@ -209,10 +228,12 @@ async def _require_run_access(
 
     An API key is authorized by its own permission list and stays inside its
     own workspace — never by the creator's role, and never over a global run.
-    A key outside the run's workspace gets 404, a session user who is not a
-    member gets 403. A key that passes spends one unit of its usage quota, the
-    same charge require_permission makes, and `response` is what makes that
-    charge observable (the quota headers) — so callers must thread their own
+    A key outside the run's workspace gets the same deployment-admin refusal as
+    a global run and as a lookup miss, so no pair of those states is readable
+    from the answer it gets; a session user who is not a member gets 403. A key
+    that passes spends one unit of its usage quota, the same charge
+    require_permission makes, and `response` is what makes that charge
+    observable (the quota headers) — so callers must thread their own
     Response through, never drop it.
     """
     if run.workspace_id is None:
@@ -222,8 +243,7 @@ async def _require_run_access(
     if principal.api_key is not None:
         api_key = principal.api_key
         if api_key.workspace_id != run.workspace_id:
-            # A key learns nothing about runs outside its own workspace.
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
+            raise deployment_admin_denied(principal)
         if "*" in api_key.permissions or JOB_READ in api_key.permissions:
             await record_key_use(api_key, db, response)
             return
