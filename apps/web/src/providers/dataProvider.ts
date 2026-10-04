@@ -88,6 +88,10 @@ async function tryRefresh(): Promise<boolean> {
           {
             withCredentials: true,
             headers: { "X-Requested-With": "XMLHttpRequest" },
+            // The Web Lock is exclusive for this call's whole duration, and every
+            // request awaits tryRefresh() while the access token is expired, so a
+            // stalled POST would block every tab of the origin indefinitely.
+            timeout: 15_000,
           },
         );
         // Logout may have cleared tokens while refresh was in-flight —

@@ -413,7 +413,7 @@ class AuthService:
         current_session_id: str | None,
         ip_address: str | None = None,
         action: RevokeSessionsAction = "user.sessions_revoked",
-        revoke_reason: RevokeReason = "user",
+        revoke_reason: RevokeReason,
         actor_user_id: str | None,
         details: dict[str, object] | None = None,
     ) -> int:
@@ -473,12 +473,20 @@ class AuthService:
         return await self._session.get(User, row.user_id)
 
     async def revoke_refresh(self, refresh_token: str, *, ip_address: str | None = None) -> None:
+        """Revoke one live session, on logout.
+
+        A row that is already dead keeps the reason it died with. ``POST /logout``
+        is unauthenticated for JSON callers, so writing ``logout`` over a
+        ``rotated`` reason would erase the marker that makes a replay of that row a
+        compromise signal, and leave the holder of a stolen token to revoke the
+        signal instead of the session.
+        """
         stmt = select(RefreshToken).where(
             RefreshToken.token_hash == OpaqueToken.hash(refresh_token)
         )
         result = await self._session.execute(stmt)
         row = result.scalar_one_or_none()
-        if row is not None:
+        if row is not None and row.revoked_at is None:
             user_id = row.user_id
             row.revoked_at = now_utc()
             row.revoke_reason = "logout"

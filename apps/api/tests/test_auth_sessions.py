@@ -227,3 +227,48 @@ async def test_expired_rotated_token_does_not_revoke_sessions(app_client):
     # the untouched session is still live: an expired replay revoked nothing
     resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": keep["refresh_token"]})
     assert resp.status_code == 200, resp.text
+
+
+async def test_logout_keeps_the_rotation_marker(app_client):
+    """Logout must not rewrite the reason on an already-dead refresh token row.
+
+    `POST /logout` is unauthenticated for JSON callers, and `revoke_reason` is what
+    separates a rotation from a user revocation. Overwriting "rotated" with
+    "logout" disarms the reuse signal, leaving the victim's other sessions live
+    when the stolen token is replayed.
+    """
+    from sqlalchemy import select
+
+    from src.core.security.tokens import OpaqueToken
+    from src.db.session import SessionFactory
+    from src.models.workspace import RefreshToken
+
+    client = app_client
+    await register_user(client, "logout-marker@example.com")
+    keep = await login(client, "logout-marker@example.com")
+    stale = await login(client, "logout-marker@example.com")
+
+    rotated = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": stale["refresh_token"]}
+    )
+    assert rotated.status_code == 200, rotated.text
+
+    resp = await client.post("/api/v1/auth/logout", json={"refresh_token": stale["refresh_token"]})
+    assert resp.status_code == 204, resp.text
+
+    async with SessionFactory() as session:
+        row = (
+            await session.execute(
+                select(RefreshToken).where(
+                    RefreshToken.token_hash == OpaqueToken.hash(stale["refresh_token"])
+                )
+            )
+        ).scalar_one()
+        assert row.revoke_reason == "rotated"
+
+    # the replay still fires the compromise signal
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": stale["refresh_token"]})
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["detail"] == "invalid refresh token"
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": keep["refresh_token"]})
+    assert resp.status_code == 401, resp.text

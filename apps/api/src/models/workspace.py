@@ -9,8 +9,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 from src.db.base import Base, StringUUID, TimestampMixin
 
 # Why a refresh token row died. Only "rotated" means "was exchanged, so a later
-# presentation of it is a replay" — the reuse signal keys off it, so a typo here
-# silently disarms that security check. One literal, shared by every writer.
+# presentation of it is a replay" — the reuse signal keys off it. Shared by every
+# writer, and spelled out again in the ck_refresh_tokens_revoke_reason check
+# constraint below: no type checker runs on this package, so the database is what
+# rejects a reason outside this set.
 RevokeReason = Literal["rotated", "user", "logout", "password", "reuse"]
 
 
@@ -66,6 +68,16 @@ class AuthToken(Base, TimestampMixin):
 
 class RefreshToken(Base, TimestampMixin):
     __tablename__ = "refresh_tokens"
+
+    # Same constraint 0019 creates; kept on the model so `create_all` (tests,
+    # fresh installs) and the ORM agree on the domain.
+    __table_args__ = (
+        CheckConstraint(
+            "revoke_reason IS NULL OR revoke_reason IN "
+            "('rotated', 'user', 'logout', 'password', 'reuse')",
+            name="ck_refresh_tokens_revoke_reason",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(
         StringUUID(), primary_key=True, default=lambda: str(uuid.uuid4())
