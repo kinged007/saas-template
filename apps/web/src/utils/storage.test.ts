@@ -6,6 +6,7 @@ import {
   identityStore,
   onboardingStore,
   resetSessionState,
+  returnToStore,
   setActiveWorkspaceId,
   workspaceStore,
 } from "./storage.ts";
@@ -34,4 +35,17 @@ test("resetSessionState() drops the outgoing user's active workspace and identit
   assert.equal(identityStore.get(), null);
   // The incoming user's own selection survives — seedWorkspace reads it back.
   assert.equal(workspaceStore.get("u2"), "w2");
+});
+
+test("returnToStore.take() returns the stored path and clears it", () => {
+  returnToStore.set("/api-keys?page=2");
+
+  assert.equal(returnToStore.take(), "/api-keys?page=2");
+  assert.equal(returnToStore.take(), null);
+});
+
+test("returnToStore.take() is null when nothing was stored", () => {
+  returnToStore.take();
+
+  assert.equal(returnToStore.take(), null);
 });

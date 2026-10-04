@@ -6,6 +6,7 @@ import {
   identityStore,
   pendingInvitationStore,
   resetSessionState,
+  returnToStore,
   tokenStore,
   workspaceStore,
   setActiveWorkspaceId,
@@ -54,11 +55,25 @@ export async function seedWorkspace(identity: Identity): Promise<void> {
 
 /**
  * Where a freshly authenticated user lands: the pending invitation accept
- * page when they arrived from an invite link, the dashboard otherwise.
+ * page when they arrived from an invite link, the destination the auth guard
+ * recorded when it denied them, the dashboard otherwise.
  */
 export const afterAuthRedirect = () => {
+  // A pending invitation outranks the recorded destination: the invite is an
+  // explicit, expiring, one-shot action, and skipping it would leave its token
+  // stored to hijack the next sign-in.
   const token = pendingInvitationStore.get();
-  return token ? `/invitations/accept?token=${encodeURIComponent(token)}` : "/";
+  if (token) {
+    // The destination is not being honoured, so drop it — a later sign-in must
+    // not land on a page this session never reached.
+    returnToStore.clear();
+    return `/invitations/accept?token=${encodeURIComponent(token)}`;
+  }
+  // take(), so the destination cannot be replayed by a later sign-in. Only a
+  // single-slash relative path is honoured: a `//host/path` value survives the
+  // guard and react-router normalises it into a dead local route.
+  const dest = returnToStore.take();
+  return dest && dest.startsWith("/") && !dest.startsWith("//") ? dest : "/";
 };
 
 export const authProvider: AuthProvider = {
