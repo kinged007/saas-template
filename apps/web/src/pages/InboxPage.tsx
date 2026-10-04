@@ -266,6 +266,8 @@ export function InboxPage() {
     },
     queryOptions: {
       enabled: !!selectedConvId && tab === "messages",
+      // Network failures make one attempt; a 4xx never retries anyway.
+      retry: false,
     },
   });
   const messages: Message[] = useMemo(() => {
@@ -274,6 +276,7 @@ export function InboxPage() {
     return [];
   }, [messagesResult]);
   const messagesLoading = (messagesQuery as unknown as { isLoading?: boolean })?.isLoading ?? false;
+  const messagesError = (messagesQuery as unknown as { isError?: boolean })?.isError ?? false;
 
   // Auto scroll to bottom when messages change
   useEffect(() => {
@@ -962,6 +965,8 @@ export function InboxPage() {
                   <div className="flex flex-col gap-4">
                     {messagesLoading ? (
                       <p className="text-muted-foreground text-sm">Loading…</p>
+                    ) : messagesError && messages.length === 0 ? (
+                      <p className="text-destructive text-sm">Could not load messages.</p>
                     ) : messages.length === 0 ? (
                       <p className="text-muted-foreground text-sm">No messages yet.</p>
                     ) : (

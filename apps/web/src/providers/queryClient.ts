@@ -27,10 +27,10 @@ export function isClientError(error: unknown): boolean {
  * rows are kept as placeholder until the new workspace/user fetch
  * resolves. Disabling it forces a loading/empty state instead of stale.
  *
- * `retry` is react-query's own default budget (3 attempts, 1s + 2s + 4s)
- * unless it is set here. Retrying a 4xx cannot succeed and spent ~7s of
- * "Loading…" in front of every refusal, so 4xx now fails on the first
- * attempt. 5xx and network failures keep the 3-attempt budget.
+ * `retry` is react-query's own default budget (3 retries — 4 requests —
+ * 1s + 2s + 4s) unless it is set here. Retrying a 4xx cannot succeed and
+ * spent ~7s of "Loading…" in front of every refusal, so 4xx now fails on
+ * the first attempt. 5xx and network failures keep the 3-retry budget.
  */
 export const queryClient = new QueryClient({
   defaultOptions: {

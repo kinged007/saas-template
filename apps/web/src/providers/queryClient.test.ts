@@ -29,7 +29,7 @@ test("a 5xx, an absent response and an unknown error stay retryable", () => {
   }
 });
 
-test("the retry budget is 3 attempts for 5xx, and the refusal is what costs a retry", () => {
+test("the retry budget is 3 retries for 5xx, and the refusal is what costs a retry", () => {
   assert.equal(retry(2, { statusCode: 500 }), true);
   assert.equal(retry(3, { statusCode: 500 }), false);
   // react-query's default retryDelay ramps 1s -> 2s -> 4s; retrying a 4xx is
@@ -37,21 +37,24 @@ test("the retry budget is 3 attempts for 5xx, and the refusal is what costs a re
   assert.equal(retry(2, { statusCode: 404 }), false);
 });
 
-test("only the audited call sites override the retry policy", () => {
+test("an explicit retry budget is set only where it is audited", () => {
   const sources = (dir: string): string[] =>
     readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) return sources(path);
       return /\.tsx?$/.test(entry.name) && !/\.test\.ts$/.test(entry.name) ? [path] : [];
     });
+  // Matches a real override (`retry: false`, `retry: 2`, `retry: (…) =>`), not
+  // a prop type or a JSX attribute that happens to be called retry.
   const hits = sources(srcDir)
-    .filter((path) => /retry:/.test(readFileSync(path, "utf8")))
+    .filter((path) => /retry:\s*(false|\d|\()/.test(readFileSync(path, "utf8")))
     .map((path) => relative(srcDir, path))
     .sort();
   assert.deepEqual(hits, [
     "components/WorkspaceExportCard.tsx", // no-storm path: e2e asserts one attempt on network failure
     "components/WorkspaceSearch.tsx", // key contains the query text, so a retry is always superseded
     "contexts/WorkspaceContext.tsx", // refine hardcodes retry:false for useGetIdentity
-    "providers/queryClient.ts",
+    "pages/InboxPage.tsx", // one attempt on a network failure; the pane renders its own error line
+    "providers/queryClient.ts", // the default itself
   ]);
 });
