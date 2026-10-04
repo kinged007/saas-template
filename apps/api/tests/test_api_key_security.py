@@ -952,7 +952,8 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     resp = await client.get(
         f"/api/v1/jobs/runs/{foreign}", headers=_key_headers(narrow["key"], foreign_ws["id"])
     )
-    assert resp.status_code == 404, resp.text
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == "deployment administration is not available to API keys"
 
     viewer = await _create_key(client, headers, "jobs-read", ["jobs:read"])
     viewer_headers = _key_headers(viewer["key"], ws["id"])
@@ -961,15 +962,18 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     logs = await client.get(f"/api/v1/jobs/runs/{runs['workspace']}/logs", headers=viewer_headers)
     assert logs.status_code == 200, logs.text
 
-    # ... but the same key never reaches a global run or another workspace.
+    # ... but the same key never reaches a global run or another workspace, and
+    # one refusal covers both.
     for url in [
         f"/api/v1/jobs/runs/{runs['global']}",
         f"/api/v1/jobs/runs/{runs['global']}/logs",
+        f"/api/v1/jobs/runs/{foreign}",
     ]:
         resp = await client.get(url, headers=viewer_headers)
         assert resp.status_code == 403, (url, resp.text)
-    resp = await client.get(f"/api/v1/jobs/runs/{foreign}", headers=viewer_headers)
-    assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == (
+            "deployment administration is not available to API keys"
+        ), url
 
     # usage_quota = 0 buys nothing: the conditional UPDATE's
     # `usage_count < usage_quota` is `0 < 0`, so the very first request is
@@ -1035,12 +1039,14 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     after = await client.get(f"/api/v1/jobs/{runs['definition']}", headers=auth_headers(owner))
     assert after.json()["cron_schedule"] == "30 4 * * *", after.text
 
+
 async def test_key_cannot_probe_global_run_existence(app_client):
     """A run id that resolves to nothing must not answer differently for a key.
 
     The run routes used to fetch the run first, so a key got 403 on an
     existing global run and 404 on an id that matched none — a run-existence
-    oracle on a surface it can never read. Both must be the one
+    oracle on a surface it can never read. Three states a key may not read
+    (global run, another workspace's run, no such run) must all be the one
     deployment-admin refusal. Regression test for #856.
     """
     import uuid
@@ -1049,6 +1055,9 @@ async def test_key_cannot_probe_global_run_existence(app_client):
     owner = await register_user(client, "probe-owner@example.com")
     ws = await create_workspace(client, owner, "Probe Inc")
     runs = await _seed_runs(ws["id"])
+    other = await register_user(client, "probe-other@example.com")
+    foreign_ws = await create_workspace(client, other, "Probe Other Inc")
+    foreign = (await _seed_runs(foreign_ws["id"]))["workspace"]
     key = await _create_key(client, ws_headers(owner, ws["id"]), "prober", [JOB_READ])
     kh = _key_headers(key["key"], ws["id"])
 
@@ -1056,13 +1065,15 @@ async def test_key_cannot_probe_global_run_existence(app_client):
     for url in [
         f"/api/v1/jobs/runs/{runs['global']}",
         f"/api/v1/jobs/runs/{runs['global']}/logs",
+        f"/api/v1/jobs/runs/{foreign}",
+        f"/api/v1/jobs/runs/{foreign}/logs",
         f"/api/v1/jobs/runs/{missing}",
         f"/api/v1/jobs/runs/{missing}/logs",
     ]:
         resp = await client.get(url, headers=kh)
         assert resp.status_code == 403, (url, resp.status_code, resp.text)
-        assert (
-            resp.json()["detail"] == "deployment administration is not available to API keys"
+        assert resp.json()["detail"] == (
+            "deployment administration is not available to API keys"
         ), url
 
     # The same key still reads the run it is entitled to, so the collapsed

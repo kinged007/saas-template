@@ -29,6 +29,12 @@ as `api_version`.
   This matches the run routes and every other workspace-owned resource. An
   API key scoped to another workspace still gets `404`, so key callers learn
   nothing about definitions outside their scope.
+- `GET /api/v1/jobs/runs/{id}` and `GET /api/v1/jobs/runs/{id}/logs` answer
+  an API-key caller with `403 "deployment administration is not available to
+  API keys"` for every run it may not read: a global run, a run outside the
+  key's workspace, and an id matching no run — one answer for all three, so no
+  pair of them tells the key which state produced it. A session caller still
+  gets `404 "run not found"` for an id matching no run.
 
 ## Why prefix strategy
 
