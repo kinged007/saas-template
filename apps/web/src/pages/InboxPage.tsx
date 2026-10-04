@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { markdownComponents, markdownComponentsInverted, stripMarkdown, truncate as truncatePreview } from "@/lib/markdown";
 import { mentionRemarkPlugin, mentionUrlTransform, type MentionTarget } from "@/lib/mentions";
 import { notificationLinkUrl } from "@/lib/notificationLink";
+import { errorMessage } from "@/utils/errorMessage";
 import { activeWorkspacePermissions } from "../utils/permissions";
 
 import { Badge } from "@/components/ui/badge";
@@ -478,7 +479,7 @@ export function InboxPage() {
           }
         },
         onError: (e) => {
-          toast.error(String((e as { message?: string })?.message ?? e));
+          toast.error(errorMessage(e));
         },
       }
     );
@@ -510,7 +511,7 @@ export function InboxPage() {
           invalidate({ resource: "notifications", invalidates: ["list"] });
         },
         onError: (e) => {
-          toast.error(String((e as { message?: string })?.message ?? e));
+          toast.error(errorMessage(e));
         },
       }
     );
@@ -532,7 +533,7 @@ export function InboxPage() {
           convQuery.refetch();
         },
         onError: (e) => {
-          toast.error(String((e as { message?: string })?.message ?? e));
+          toast.error(errorMessage(e));
         },
       }
     );

@@ -13,6 +13,8 @@ import { Check, Copy } from "lucide-react";
 import { Navigate } from "react-router";
 import { toast } from "sonner";
 
+import { errorMessage } from "@/utils/errorMessage";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -110,7 +112,7 @@ export function ApiKeyCreatePage() {
       }
     } catch (err) {
       toast.error("Could not create API key", {
-        description: String((err as { message?: string })?.message ?? err),
+        description: errorMessage(err),
       });
     }
   };
