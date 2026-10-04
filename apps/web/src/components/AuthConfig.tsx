@@ -105,7 +105,16 @@ export function OAuthCallbackPage() {
     // loading gate as the identity settles, and that remount can land after
     // navigate() has rewritten the URL — code is null but it was ours, so
     // stopping here keeps a succeeding sign-in from painting an error.
-    if (oauthCodeConsumed(code, consumedCode)) return;
+    // Gated on the session: consumedCode is module state that no sign-out
+    // clears, and the access token the exchange stored is in-memory only, so
+    // logout and the 401 handler both drop it while the latch survives. Honoring
+    // a latch with no session left it on "Signing you in…" forever.
+    // ponytail: a signed-out repeat still lands on the terminal
+    // "Missing sign-in code." — add a retry/link to /login, or replace the
+    // module latch with per-code state, when /oauth/callback gets a client-side
+    // entry point (e.g. lifting the public auth routes out of
+    // <WorkspaceProvider>).
+    if (oauthCodeConsumed(code, consumedCode, tokenStore.getAccess() !== null)) return;
     if (!code) {
       setStatus("Missing sign-in code.");
       return;
