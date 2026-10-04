@@ -590,6 +590,15 @@ async def test_an_unreadable_jwks_body_names_the_cause(
     assert cause in caplog.text
 
 
+async def test_a_rejected_token_names_the_pyjwt_error(provider, idp, cache, caplog):
+    """PyJWT's messages are prose, so the log line carries the class name: an operator
+    separates an expired token from a wrong audience without knowing PyJWT's wording."""
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        expired = idp.mint(exp=int(time.time()) - 10)
+        assert await claims_from_id_token(provider, idp.doc, expired, cache) is None
+    assert "ExpiredSignatureError" in caplog.text
+
+
 async def test_non_http_jwks_uri_is_never_read(provider, idp, cache, caplog):
     """A `file://` jwks_uri must not read the host's filesystem. httpx refuses the
     scheme before any I/O, so it degrades like any other unreadable key set."""

@@ -293,13 +293,14 @@ async def claims_from_id_token(
         # claims". OAuthError is `_jwks` reporting the IdP side — unreachable, an
         # HTTP error, a body that is not a usable key set, a non-JSON or non-UTF-8
         # body, a response cut off mid-body — and the "no matching signing key"
-        # below. PyJWTError is the token or the published set being unusable, and
-        # covers the PyJWKSetError an unknown `kty` produces. Anything else is a
-        # defect in this module or in the provider config and has to reach the
-        # traceback instead of being reported as a rejected login.
+        # below. PyJWTError is `jwt.decode` refusing the token: expired, wrong
+        # audience or issuer, or signed by another key. Anything else is a defect
+        # in this module or in the provider config and has to reach the traceback
+        # instead of being reported as a rejected login.
         logger.warning(
-            "id_token verification failed for provider %s: %s",
+            "id_token verification failed for provider %s: %s: %s",
             provider.id,
+            type(exc).__name__,
             exc,
             exc_info=logger.isEnabledFor(logging.DEBUG),
         )
