@@ -255,3 +255,34 @@ async def test_message_without_mentions_leaves_participants_alone(app_client):
         f"/api/v1/conversations/{conv['id']}", headers=ws_headers(owner["tokens"], ws["id"])
     )
     assert _ids(after.json()) == {owner["id"], members[0]["id"], members[1]["id"]}
+
+
+# ------------------------------------------------------------- list sort guard
+
+
+async def test_list_rejects_malformed_sort(app_client):
+    """Both conversation list routes reject what `apply_query` rejects (#969).
+
+    These two sites read `sort_order[0]` instead of calling `apply_query`, so a
+    surplus order was 422 on `/api/v1/workspaces` and 200 here. `sort[]` with no
+    order still works: `parse_query` pads it to `asc`.
+    """
+    client = app_client
+    owner, ws, members = await _setup(client)
+    conv = await _open_conversation(client, owner, ws, members)
+    headers = ws_headers(owner["tokens"], ws["id"])
+    paths = ("/api/v1/conversations", f"/api/v1/conversations/{conv['id']}/messages")
+
+    for path in paths:
+        for query in (
+            "sort[]=title&order[]=asc&order[]=desc",
+            "_sort=title&_order=asc,desc",
+            "order[]=desc",
+            "_order=desc",
+        ):
+            resp = await client.get(f"{path}?{query}", headers=headers)
+            assert resp.status_code == 422, (path, query, resp.text)
+            assert "same number of entries" in resp.json()["detail"]
+
+        resp = await client.get(f"{path}?sort[]=created_at", headers=headers)
+        assert resp.status_code == 200, resp.text

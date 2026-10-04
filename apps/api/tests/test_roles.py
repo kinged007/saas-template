@@ -3,6 +3,8 @@
 import re
 from pathlib import Path
 
+import pytest
+
 import src.core.permissions as perms
 from tests.conftest import (
     auth_headers,
@@ -95,6 +97,22 @@ async def _seed_legacy_case_role(
         return role.id
 
 
+async def _rename_seeded_role(workspace_id: str, name: str, new_name: str) -> None:
+    """Rewrite a seeded row's name out of band, as pre-#328 data spells it."""
+    from sqlalchemy import select
+
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    async with SessionFactory() as session:
+        role = await session.scalar(
+            select(Role).where(Role.workspace_id == workspace_id, Role.name == name)
+        )
+        assert role is not None, name
+        role.name = new_name
+        await session.commit()
+
+
 async def _add_member_holding_role(
     client, owner_tokens, ws, email: str, role_id: str
 ) -> tuple[dict, str]:
@@ -169,6 +187,42 @@ async def test_permission_catalog_filtered_to_assignable(app_client):
     # scopes carry a key-only scope, so the intersection must drop it.
     assert not (set(viewer_catalog["catalog"]) & set(perms.KEY_ONLY_PERMISSIONS))
     assert not (set(viewer_catalog["permissions"]) & set(perms.KEY_ONLY_PERMISSIONS))
+
+
+async def test_permission_catalog_handler_refuses_suspended_member(app_client):
+    """#300: the handler's own membership lookup must skip suspended rows, so
+    the endpoint it reads as authorizing cannot be reached by a suspended
+    caller even when a route guard is bypassed."""
+    from fastapi import HTTPException
+
+    from src.api.routes.roles import permission_catalog
+    from src.db.session import SessionFactory
+    from src.models.workspace import User
+
+    client = app_client
+    owner = await register_user(client, "cat-susp-owner@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+    admin = await _add_member(client, owner, ws, "cat-susp-admin@example.com", "admin")
+    member_id = next(
+        m
+        for m in (await client.get("/api/v1/members", headers=owner_headers)).json()
+        if m["email"] == "cat-susp-admin@example.com"
+    )["membership_id"]
+    admin_id = (await client.get("/api/v1/auth/me", headers=auth_headers(admin))).json()["id"]
+    suspended = await client.post(f"/api/v1/members/{member_id}/suspend", headers=owner_headers)
+    assert suspended.status_code == 200, suspended.text
+
+    async with SessionFactory() as session:
+        user = await session.get(User, admin_id)
+        with pytest.raises(HTTPException) as excinfo:
+            await permission_catalog(workspace_id=ws["id"], user=user, db=session)
+    assert excinfo.value.status_code == 403
+    # End to end the route guard refuses them first.
+    refused = await client.get(
+        "/api/v1/roles/permission-catalog", headers=ws_headers(admin, ws["id"])
+    )
+    assert refused.status_code == 403, refused.text
 
 
 # ------------------------------------------------------------------ create
@@ -317,6 +371,75 @@ async def test_create_role_capped_by_creator_permissions(app_client):
         headers=owner_headers,
     )
     assert resp.status_code == 201, resp.text
+
+
+async def test_suspended_actor_is_capped_on_role_writes(app_client):
+    """A suspended actor is capped as if unauthenticated, not by its own role.
+
+    The role-capping sites resolve the actor's membership with
+    `active_only=True`; a suspended row therefore reads as "no actor cap" and
+    every requested permission is denied. The same actor, active, must still be
+    able to write — otherwise a refusal for everyone would satisfy the deny
+    half.
+    """
+    from src.db.session import SessionFactory
+    from src.models.workspace import WorkspaceMember
+    from src.services.auth import AuthService
+    from src.services.workspaces import WorkspaceForbidden, WorkspaceService
+
+    client = app_client
+    owner = await register_user(client, "cap-owner@example.com")
+    ws = await create_workspace(client, owner)
+    await register_user(client, "cap-admin@example.com")
+    owner_headers = ws_headers(owner, ws["id"])
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session)
+        admin_user = await AuthService(session).get_by_email("cap-admin@example.com")
+        assert admin_user is not None, "cap-admin@example.com was not registered"
+        role_ids = {
+            name: await _role_id(client, owner_headers, name) for name in ("admin", "editor")
+        }
+        member = WorkspaceMember(
+            workspace_id=ws["id"],
+            user_id=admin_user.id,
+            role_id=role_ids["admin"],
+            status="active",
+        )
+        session.add(member)
+        await session.commit()
+
+        # `member:read` is in the admin role's permission set, so the writes
+        # below only fail when something other than the suspension stops them.
+        created = await service.create_custom_role(
+            ws["id"], name="ops", description=None, permissions=["member:read"], actor=admin_user
+        )
+        assert created.name == "ops"
+        # A different payload than the suspended call: `update_role` returns
+        # early on an unchanged permission set, which would skip the check.
+        narrowed = await service.update_role(
+            ws["id"],
+            role_ids["editor"],
+            permissions=["member:read", "audit:read"],
+            actor=admin_user,
+        )
+        assert sorted(narrowed.permissions) == ["audit:read", "member:read"]
+
+        member.status = "suspended"
+        await session.commit()
+
+        with pytest.raises(WorkspaceForbidden):
+            await service.create_custom_role(
+                ws["id"],
+                name="ops",
+                description=None,
+                permissions=["member:read"],
+                actor=admin_user,
+            )
+        with pytest.raises(WorkspaceForbidden):
+            await service.update_role(
+                ws["id"], role_ids["editor"], permissions=["member:read"], actor=admin_user
+            )
 
 
 # ------------------------------------------------------------------ update
@@ -941,6 +1064,36 @@ async def test_legacy_owner_case_row_transfers_without_the_owner_permission(app_
     }
     assert roles["ci14t@example.com"] == "owner"
     assert roles["ci14h@example.com"] == "admin"
+
+
+async def test_transfer_finds_the_owner_and_admin_rows_by_case_folded_name(app_client):
+    """The gate and the lookup have to fold alike.
+
+    `transfer_ownership` gates on `is_owner_role_name` and then resolves both
+    roles it writes through `_role_by_name`, which compared `Role.name` exactly:
+    a workspace whose owner row is spelled `Owner` passed the gate and 404'd on
+    the lookup, which is what the client fix in #772 exposed.
+    """
+    client = app_client
+    owner = await register_user(client, "ci16@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    await _rename_seeded_role(ws["id"], "owner", "Owner")
+    await _rename_seeded_role(ws["id"], "admin", "Admin")
+    await _add_member(client, owner, ws, "ci16h@example.com", "editor")
+    target_id = await _membership_id(client, owner, ws, "ci16h@example.com")
+
+    transfer = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/transfer",
+        json={"new_owner_membership_id": target_id},
+        headers=headers,
+    )
+    assert transfer.status_code == 200, transfer.text
+    roles = {
+        m["email"]: m["role"] for m in (await client.get("/api/v1/members", headers=headers)).json()
+    }
+    assert roles["ci16h@example.com"] == "Owner"
+    assert roles["ci16@example.com"] == "Admin"
 
 
 async def test_check_name_free_names_the_seeded_row(app_client):

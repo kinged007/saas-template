@@ -1,6 +1,3 @@
-import pytest
-from sqlalchemy import select
-
 from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
 
 
@@ -209,6 +206,40 @@ async def test_refine_compliant_list_query(app_client):
     assert len(resp.json()) == 2
 
 
+async def test_list_query_rejects_mismatched_sort_and_order_lengths(app_client):
+    """More order[] than sort[] must be a client error, not an unhandled 500."""
+    client = app_client
+    tokens = await register_user(client, "kim@example.com")
+    for query in (
+        "sort[]=name&order[]=asc&order[]=desc",
+        "_sort=name&_order=asc,desc",
+    ):
+        resp = await client.get(
+            f"/api/v1/workspaces?{query}",
+            headers=auth_headers(tokens),
+        )
+        assert resp.status_code == 422, resp.text
+        assert "same number of entries" in resp.json()["detail"]
+
+
+async def test_list_query_rejects_order_without_sort(app_client):
+    """An order with no sort is malformed in either dialect (#968).
+
+    `order[]=desc` alone reached the length guard while `_order=desc` alone
+    parsed to an empty spec, so the same request was 422 or 200 depending on
+    the parameter spelling. Both dialects, plus the mixed pair, are rejected.
+    """
+    client = app_client
+    tokens = await register_user(client, "logan@example.com")
+    for query in ("order[]=desc", "_order=desc", "sort[]=name&_order=asc"):
+        resp = await client.get(
+            f"/api/v1/workspaces?{query}",
+            headers=auth_headers(tokens),
+        )
+        assert resp.status_code == 422, (query, resp.text)
+        assert "same number of entries" in resp.json()["detail"]
+
+
 async def test_simple_rest_range_pagination_query(app_client):
     """simple-rest's default server pagination (`_start`/`_end`) and comma-
     joined `_sort`/`_order`, plus its `id=` getMany format, must all parse."""
@@ -251,62 +282,6 @@ async def test_simple_rest_range_pagination_query(app_client):
     )
     assert resp.status_code == 200
     assert len(resp.json()) == 2
-
-
-async def test_suspended_actor_cannot_widen_a_custom_role(app_client):
-    """A suspended actor is capped as if unauthenticated, not by its own role.
-
-    The role-capping sites resolve the actor's membership with
-    `active_only=True`; a suspended row therefore reads as "no actor cap" and
-    every requested permission is denied.
-    """
-    from src.db.session import SessionFactory
-    from src.models.workspace import Role, WorkspaceMember
-    from src.services.auth import AuthService
-    from src.services.workspaces import WorkspaceForbidden, WorkspaceService
-
-    client = app_client
-    owner = await register_user(client, "cap-owner@example.com")
-    ws = await create_workspace(client, owner)
-    await register_user(client, "cap-admin@example.com")
-
-    async with SessionFactory() as session:
-        service = WorkspaceService(session)
-        admin_user = await AuthService(session).get_by_email("cap-admin@example.com")
-        role_ids = {
-            name: (
-                await session.execute(
-                    select(Role).where(Role.workspace_id == ws["id"], Role.name == name)
-                )
-            )
-            .scalar_one()
-            .id
-            for name in ("admin", "editor")
-        }
-        session.add(
-            WorkspaceMember(
-                workspace_id=ws["id"],
-                user_id=admin_user.id,
-                role_id=role_ids["admin"],
-                status="suspended",
-            )
-        )
-        await session.commit()
-
-        # `member:read` is in the admin role's permission set, so this only
-        # fails when the suspended membership is not treated as an actor cap.
-        with pytest.raises(WorkspaceForbidden):
-            await service.create_custom_role(
-                ws["id"],
-                name="ops",
-                description=None,
-                permissions=["member:read"],
-                actor=admin_user,
-            )
-        with pytest.raises(WorkspaceForbidden):
-            await service.update_role(
-                ws["id"], role_ids["editor"], permissions=["member:read"], actor=admin_user
-            )
 
 
 async def test_service_stores_trimmed_names(app_client):
@@ -444,3 +419,82 @@ def test_transfer_eligibility_decides_every_member_status():
     from src.services.workspaces import _TRANSFER_ELIGIBLE
 
     assert set(_TRANSFER_ELIGIBLE) == {status.value for status in MemberStatus}
+
+
+async def test_suspend_and_reactivate_agree_with_every_legal_status(app_client):
+    """Both tables preserve today's behaviour for every status the CHECK allows.
+
+    A suspend of an already-suspended member stays an idempotent 200 no-op, a
+    reactivate of anything else stays a 409, a suspend of an `invited` member
+    still succeeds, and a reactivate of a `suspended` member still succeeds.
+    For every legal status the table and the comparison agree by design, so this
+    is the behaviour-preservation pin; the fail-closed default is pinned at table
+    level in `test_suspend_and_reactivate_decide_every_member_status`.
+    """
+    client = app_client
+    owner = await register_user(client, "susp-owner@example.com")
+    ws = await create_workspace(client, owner)
+    token = await _invite(client, owner, ws, "susp-target@example.com", "editor")
+    target = await register_user(client, "susp-target@example.com")
+    accepted = await client.post(
+        f"/api/v1/invitations/accept?token={token}", headers=auth_headers(target)
+    )
+    assert accepted.status_code == 200, accepted.text
+    headers = ws_headers(owner, ws["id"])
+    members = await client.get("/api/v1/members", headers=headers)
+    target_id = next(
+        m["membership_id"] for m in members.json() if m["email"] == "susp-target@example.com"
+    )
+
+    for status in ("active", "invited"):
+        await _set_member_status(target_id, status)
+        refused = await client.post(f"/api/v1/members/{target_id}/reactivate", headers=headers)
+        assert refused.status_code == 409, status
+        assert refused.json()["detail"] == "member is not suspended"
+
+    await _set_member_status(target_id, "invited")
+    suspended = await client.post(f"/api/v1/members/{target_id}/suspend", headers=headers)
+    assert suspended.status_code == 200, suspended.text
+    assert suspended.json()["status"] == "suspended"
+
+    again = await client.post(f"/api/v1/members/{target_id}/suspend", headers=headers)
+    assert again.status_code == 200, again.text
+    assert again.json()["status"] == "suspended"
+
+    # Pins the `SUSPENDED: True` row of `_REACTIVATE_ALLOWED`; the only other
+    # successful reactivate lives in `test_workspace_lifecycle.py`, which does
+    # not assert the status it wrote.
+    reactivated = await client.post(f"/api/v1/members/{target_id}/reactivate", headers=headers)
+    assert reactivated.status_code == 200, reactivated.text
+    assert reactivated.json()["status"] == "active"
+
+    rows = await client.get("/api/v1/members", headers=headers)
+    row = next(m for m in rows.json() if m["membership_id"] == target_id)
+    assert row["status"] == "active"
+
+
+def test_suspend_and_reactivate_decide_every_member_status():
+    """A status the domain gains is refused by both tables until they decide it."""
+    from src.models.workspace import MemberStatus
+    from src.services.workspaces import _REACTIVATE_ALLOWED, _SUSPEND_ALLOWED
+
+    every = {status.value for status in MemberStatus}
+    assert set(_SUSPEND_ALLOWED) == every
+    assert set(_REACTIVATE_ALLOWED) == every
+
+    assert _SUSPEND_ALLOWED == {
+        MemberStatus.ACTIVE.value: True,
+        MemberStatus.INVITED.value: True,
+        MemberStatus.SUSPENDED.value: False,
+    }
+    assert _REACTIVATE_ALLOWED == {
+        MemberStatus.ACTIVE.value: False,
+        MemberStatus.INVITED.value: False,
+        MemberStatus.SUSPENDED.value: True,
+    }
+
+    # A status outside the CHECK domain fails closed in both directions: no
+    # suspend write, no reactivate. `ck_workspace_members_status` is what makes
+    # it unreachable through SQL, so the default is pinned here at table level.
+    assert _SUSPEND_ALLOWED.get("archived", False) is False
+    assert _REACTIVATE_ALLOWED.get("archived", False) is False

@@ -32,3 +32,9 @@ class ApiKey(Base, TimestampMixin):
     revoked_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
     usage_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     usage_quota: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # usage_quota caps usage_window_count, which counts the uses of the current
+    # calendar month (UTC); usage_count stays the lifetime total.
+    usage_window_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    usage_window_start: Mapped[object | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

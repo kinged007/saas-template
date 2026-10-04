@@ -51,6 +51,27 @@ _TRANSFER_ELIGIBLE: dict[str, bool] = {
     MemberStatus.SUSPENDED.value: False,
 }
 
+# Same shape for the two member-status actions, for the same reason: a
+# `== "suspended"` / `!= "suspended"` comparison compiles against any status
+# the domain gains later, and each status gets its own decision here instead.
+# `suspended` is `False` in `_SUSPEND_ALLOWED` to match the web table;
+# `suspend_member` returns early on that status before consulting the table, so
+# an idempotent no-op stays a 200 and an undecided status is refused instead of
+# silently inheriting today's meaning. Mirrors `SUSPEND_ALLOWED` /
+# `REACTIVATE_ALLOWED` in `apps/web/src/pages/member-actions.ts`; pinned by
+# `test_suspend_and_reactivate_decide_every_member_status`.
+_SUSPEND_ALLOWED: dict[str, bool] = {
+    MemberStatus.ACTIVE.value: True,
+    MemberStatus.INVITED.value: True,
+    MemberStatus.SUSPENDED.value: False,
+}
+
+_REACTIVATE_ALLOWED: dict[str, bool] = {
+    MemberStatus.ACTIVE.value: False,
+    MemberStatus.INVITED.value: False,
+    MemberStatus.SUSPENDED.value: True,
+}
+
 
 def is_owner_role_name(name: str | None) -> bool:
     """Whether a role name is the owner role, ignoring case.
@@ -618,8 +639,10 @@ class WorkspaceService:
         role = await self._session.get(Role, member.role_id)
         if role is not None and is_owner_role_name(role.name):
             raise WorkspaceConflict("cannot suspend the workspace owner")
-        if member.status == "suspended":
+        if member.status == MemberStatus.SUSPENDED.value:
             return member
+        if not _SUSPEND_ALLOWED.get(member.status, False):
+            raise WorkspaceConflict("cannot suspend a member in this state")
         member.status = "suspended"
         await self._session.commit()
         await publish_audit(
@@ -646,7 +669,7 @@ class WorkspaceService:
         member = await self._session.get(WorkspaceMember, member_id)
         if member is None or member.workspace_id != workspace_id:
             raise WorkspaceError("member not found in workspace")
-        if member.status != "suspended":
+        if not _REACTIVATE_ALLOWED.get(member.status, False):
             raise WorkspaceConflict("member is not suspended")
         member.status = "active"
         await self._session.commit()
@@ -725,15 +748,11 @@ class WorkspaceService:
         workspace_id: str,
         invitation_id: str,
         *,
-        actor: User | None = None,
+        actor: User,
         expires_in_hours: int = 72,
         ip_address: str | None = None,
     ) -> Invitation:
-        if (
-            actor is not None
-            and await self.get_membership(workspace_id, actor.id, active_only=True) is None
-        ):
-            raise WorkspaceForbidden("you are not a member of this workspace")
+        await self._require_manager(workspace_id, actor)
         invite = await self._session.get(Invitation, invitation_id)
         if invite is None or invite.workspace_id != workspace_id:
             raise WorkspaceError("invitation not found")
@@ -772,7 +791,7 @@ class WorkspaceService:
             resource_type="invitation",
             resource_id=invite.id,
             action="invitation.resent",
-            actor_user_id=actor.id if actor else None,
+            actor_user_id=actor.id,
             details={"email": invite.email},
             ip_address=ip_address,
         )
@@ -924,9 +943,10 @@ class WorkspaceService:
         workspace_id: str,
         invitation_id: str,
         *,
-        actor: User | None = None,
+        actor: User,
         ip_address: str | None = None,
     ) -> Invitation:
+        await self._require_manager(workspace_id, actor)
         invite = await self._session.get(Invitation, invitation_id)
         if invite is None or invite.workspace_id != workspace_id:
             raise WorkspaceError("invitation not found")
@@ -940,7 +960,7 @@ class WorkspaceService:
             resource_type="invitation",
             resource_id=invite.id,
             action="invitation.revoked",
-            actor_user_id=actor.id if actor else None,
+            actor_user_id=actor.id,
             details={"email": invite.email},
             ip_address=ip_address,
         )
@@ -1040,13 +1060,20 @@ class WorkspaceService:
         return role
 
     async def _single_workspace_role(self, workspace_id: str) -> Role:
-        """Auto-join role: SINGLE_WORKSPACE_DEFAULT_ROLE, else viewer.
+        """Auto-join role: SINGLE_WORKSPACE_DEFAULT_ROLE, else
+        viewer/editor/admin/an arbitrary remaining non-owner role.
 
-        Matched by name over the workspace's non-owner roles, so a custom role
-        works too and an unknown, blank or "owner" value resolves viewer; a
-        workspace whose only role is a legacy owner-cased row has no candidate
-        left and raises. The wider chain keeps logins working when the viewer
-        role was renamed or removed, instead of bricking every later login."""
+        Each rung is matched by name over the workspace's non-owner roles, so a
+        custom role works too and an unknown, blank or "owner" value falls
+        through the chain. The wider chain keeps a later login working when the
+        viewer role was renamed or removed, instead of bricking every later
+        login.
+
+        Raises when the workspace has no non-owner role at all: there is
+        nothing to join with, and the caller skips the join rather than
+        granting owner. An owner-only workspace and one holding only a legacy
+        owner-cased row both reach that, since is_owner_role_name drops those
+        from the candidates."""
         from src.settings import settings
 
         result = await self._session.execute(select(Role).where(Role.workspace_id == workspace_id))
@@ -1057,10 +1084,20 @@ class WorkspaceService:
                 return role
         if roles:
             return next(iter(roles.values()))
-        raise WorkspaceError(f"role {self.SINGLE_WORKSPACE_ROLE} not found")
+        raise WorkspaceError(f"workspace {workspace_id} has no non-owner role to join")
 
     async def _role_by_name(self, workspace_id: str, name: str) -> Role:
-        stmt = select(Role).where(Role.workspace_id == workspace_id, Role.name == name)
+        # Folded like the predicates its callers guard on, so a workspace whose
+        # role rows predate #328 resolve through the same rule as the gate that
+        # admits the caller. A legacy row can sit beside the seeded one, so an
+        # exact-case row wins and the limit keeps the second row from turning the
+        # lookup into a 500.
+        stmt = (
+            select(Role)
+            .where(Role.workspace_id == workspace_id, func.lower(Role.name) == name.lower())
+            .order_by(Role.name != name)
+            .limit(1)
+        )
         result = await self._session.execute(stmt)
         role = result.scalar_one_or_none()
         if role is None:

@@ -21,7 +21,7 @@ import {
   getActiveWorkspaceId,
   setActiveWorkspaceId,
 } from "../utils/storage";
-import { clearAllCaches, clearWorkspaceCaches } from "../providers/queryClient";
+import { clearAllCaches, clearWorkspaceCaches, isClientError } from "../providers/queryClient";
 import { API_URL, httpClient } from "../providers/dataProvider";
 
 type WorkspaceContextValue = {
@@ -43,9 +43,14 @@ export const useWorkspace = () => useContext(WorkspaceContext);
 // would otherwise settle with no identity and mount pages without a workspace.
 // Shared by every useGetIdentity observer so they don't override each other's
 // options on the shared query (react-query merges observer options).
+// This override exists because refine hardcodes `retry: false` on
+// useGetIdentity, and an explicit per-query value beats the client default —
+// so it is the only way the retry policy reaches /me. 4xx is refused here
+// too: a 401 from /me has already triggered
+// forceLogout() in the response interceptor, and its retries raced the redirect.
 export const IDENTITY_QUERY_OPTIONS = {
   staleTime: 30_000,
-  retry: 2,
+  retry: (failureCount: number, error: unknown) => failureCount < 2 && !isClientError(error),
   retryDelay: (attempt: number) => Math.min(500 * 2 ** attempt, 4000),
 };
 
@@ -80,6 +85,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     () => queryClient.getQueryData<Identity & { workspaces: Workspace[] }>(["auth", "identity"]),
     () => undefined,
   );
+  // The identity cache is written a round-trip after the token, so on its own
+  // this provider keeps its signed-out render (workspaces: [], workspace:
+  // undefined) while the route that just mounted paints the empty state.
+  // Re-rendering on the token lets the isLoading gate cover that gap.
+  const hasAccessToken = useSyncExternalStore(
+    tokenStore.onTokensChanged,
+    () => !!tokenStore.getAccess(),
+    () => false,
+  );
   const storedIdentity = (identityStore.get() as (Identity & { workspaces: Workspace[] }) | null);
   const identity = cachedIdentity ?? storedIdentity ?? undefined;
   const isLoading = identity === undefined;
@@ -111,11 +125,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
   }, [queryClient]);
 
+  // hasAccessToken is a dependency because a sign-in can set the token while
+  // identity is already undefined — without it this effect never runs for that
+  // render and the provider stays on the loading branch with no observer left
+  // to deliver the identity (children are not mounted).
   useEffect(() => {
-    if (tokenStore.getAccess() && identity === undefined) {
+    if (hasAccessToken && identity === undefined) {
       void fetchIdentity();
     }
-  }, [identity, fetchIdentity]);
+  }, [identity, fetchIdentity, hasAccessToken]);
 
   const refetch = () => {
     queryClient.invalidateQueries({ queryKey: ["auth"] });
@@ -315,7 +333,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // Signed out (e.g. on /login): render children and let the Authenticated
   // guard route to the login flow. Caches were already cleared synchronously
   // in authProvider.logout / the 401 interceptor.
-  if (!tokenStore.getAccess()) {
+  if (!hasAccessToken) {
     return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
   }
 

@@ -60,6 +60,16 @@ class QuerySpec:
     ids: list[str] = field(default_factory=list)
     filters: list[tuple[str, str, str]] = field(default_factory=list)  # (field, op, value)
 
+    def validate_sort(self) -> None:
+        """Reject a direction list that does not line up with the sort list.
+
+        Called by `apply_query` and by the routes that sort in their service
+        layer, so a malformed sort query answers the same on every route
+        whether the client wrote `sort[]`/`order[]` or `_sort`/`_order`.
+        """
+        if len(self.sort_by) != len(self.sort_order):
+            raise InvalidQuery("sort[] and order[] must have the same number of entries")
+
 
 class InvalidQuery(Exception):
     pass
@@ -84,8 +94,11 @@ def parse_query(request: Request, *, max_limit: int = 100) -> QuerySpec:
     except ValueError:
         raise InvalidQuery("offset/limit must be integers") from None
     # simple-rest sorts with comma-joined `_sort`/`_order`; legacy uses
-    # repeated `sort[]`/`order[]`.
-    if "_sort" in q:
+    # repeated `sort[]`/`order[]`. The dialect is read from either of its
+    # parameters, so `_order` on its own is parsed (and rejected by the
+    # length guard) rather than falling through to the repeated style and
+    # being dropped.
+    if "_sort" in q or "_order" in q:
         spec.sort_by = [s for s in q.get("_sort", "").split(",") if s]
         orders = [s for s in q.get("_order", "").split(",") if s]
         spec.sort_order = orders + ["asc"] * (len(spec.sort_by) - len(orders))
@@ -94,6 +107,12 @@ def parse_query(request: Request, *, max_limit: int = 100) -> QuerySpec:
         spec.sort_order = q.getlist("order[]")
         if len(spec.sort_order) < len(spec.sort_by):
             spec.sort_order.extend(["asc"] * (len(spec.sort_by) - len(spec.sort_order)))
+    # `apply_query` compares the direction against the literals "desc"/"asc",
+    # so normalize the client's value once here rather than at both call sites
+    # (the leading term and the `id` tiebreaker). `DESC` is the SQL convention a
+    # client may well send; unnormalized it took the `else` branch and sorted
+    # ascending, silently.
+    spec.sort_order = [o.strip().lower() for o in spec.sort_order]
     spec.ids = q.getlist("ids[]")
     if not spec.ids and "id" in q:  # simple-rest getMany sends repeated `id=`
         spec.ids = q.getlist("id")
@@ -157,15 +176,15 @@ def apply_query(
         stmt = stmt.where(_COMPARATORS[op](column, _coerce(column, value)))
     if spec.ids:
         stmt = stmt.where(model.id.in_(spec.ids))
+    spec.validate_sort()
     for fname, order in zip(spec.sort_by, spec.sort_order, strict=True):
         if fname not in sortable:
             raise InvalidQuery(f"sort on unknown field: {fname}")
         column = getattr(model, fname)
         stmt = stmt.order_by(column.desc() if order == "desc" else column.asc())
     # A unique column last makes the order total, so offset/limit paging can
-    # neither repeat nor skip a row when the leading terms tie. Only where an
-    # order already exists: making one up is not this helper's call.
-    if spec.sort_by and "id" not in spec.sort_by:
-        last = spec.sort_order[-1] if spec.sort_order else "asc"
+    # neither repeat nor skip a row when the leading terms tie.
+    if spec.sort_by:
+        last = spec.sort_order[-1]
         stmt = stmt.order_by(model.id.desc() if last == "desc" else model.id.asc())
     return stmt

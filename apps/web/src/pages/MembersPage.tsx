@@ -34,10 +34,9 @@ import { resolveInviteRole } from "./invite-role";
 import { canReactivateMember, canSuspendMember } from "./member-actions";
 import { assignableRoles, roleCapNoticeText, rolePickerCapNotice } from "./role-picker-cap";
 import { isWorkspaceAdmin } from "./settings/workspace/WorkspaceSettingsLayout";
+import { isManagerRoleName, isOwnerRoleName } from "./role-name";
 import type { Identity, Invitation, Member, Role } from "../types";
 import { getMemberDisplayName } from "../types";
-
-const MANAGER_ROLES = ["owner", "admin"];
 
 const PAGE_SIZE = 10;
 // The role pickers need every role, ordered by the endpoint. Capped at the
@@ -147,7 +146,7 @@ export function MembersPage() {
   }, [invitesPage, invitesTotalPages]);
 
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
-  const canManageRoles = !!canManage?.can && MANAGER_ROLES.includes(myRole ?? "");
+  const canManageRoles = !!canManage?.can && isManagerRoleName(myRole);
   // The roles settings route guards itself with isWorkspaceAdmin, so the link is
   // gated on that predicate and not on the notice's own gate: member:create
   // alone lets a non-admin inviter read the notice and reach only "Access
@@ -243,7 +242,7 @@ export function MembersPage() {
                   </TableCell>
                 <TableCell>{m.role}</TableCell>
                 <TableCell>
-                  {canManageRoles && m.role !== "owner" ? (
+                  {canManageRoles && !isOwnerRoleName(m.role) ? (
                     <Select
                       value={m.role_id}
                       onValueChange={(roleId) =>
@@ -290,7 +289,7 @@ export function MembersPage() {
                         Edit
                       </Button>
                     )}
-                    {canManageRoles && m.role !== "owner" && canSuspendMember(m) && (
+                    {canManageRoles && !isOwnerRoleName(m.role) && canSuspendMember(m) && (
                       <Button variant="ghost" size="sm" onClick={() => suspend(m, true)}>
                         Suspend
                       </Button>
@@ -300,7 +299,7 @@ export function MembersPage() {
                         Reactivate
                       </Button>
                     )}
-                    {canDelete?.can && m.role !== "owner" && (
+                    {canDelete?.can && !isOwnerRoleName(m.role) && (
                       <DeleteButton
                         resource="members"
                         recordItemId={m.membership_id}
@@ -416,8 +415,9 @@ export function MembersPage() {
                     <TableCell className="text-muted-foreground">{formatDate(i.expires_at)}</TableCell>
                     <TableCell className="text-muted-foreground">{formatDate(i.created_at)}</TableCell>
                     <TableCell className="text-right">
+{/* revoke and resend are owner/admin role checks server-side */}
                       <div className="flex justify-end gap-1">
-                        {canRevoke?.can && canRevokeInvitation(i) && (
+                        {canManageRoles && canRevoke?.can && canRevokeInvitation(i) && (
                           <DeleteButton
                             resource="invitations"
                             recordItemId={i.id}
@@ -425,7 +425,7 @@ export function MembersPage() {
                             size="sm"
                           />
                         )}
-                        {canResendInvitation(i) && (
+                        {canManageRoles && canResendInvitation(i) && (
                           <Button
                             variant="ghost"
                             size="sm"

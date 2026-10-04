@@ -510,6 +510,53 @@ async def test_export_resources_endpoint_is_the_selector_source(app_client):
     assert "audit" in resp.json()["resources"]
 
 
+async def test_search_export_permission_check_ignores_suspended_member(app_client):
+    """#300: `_can` decides whether job rows reach the caller, so a suspended
+    member's row must not count as a membership there."""
+    from src.core.permissions import JOB_READ
+    from src.db.session import SessionFactory
+    from src.services.search_export import SearchExportService
+    from tests.conftest import auth_headers
+
+    client = app_client
+    owner = await register_user(client, "can-owner@example.com")
+    ws = await create_workspace(client, owner, name="Can Co")
+    h = ws_headers(owner, ws["id"])
+    admin_role = next(
+        r for r in (await client.get("/api/v1/roles", headers=h)).json() if r["name"] == "admin"
+    )
+    admin_tokens = await register_user(client, "can-admin@example.com")
+    admin_invite = await client.post(
+        "/api/v1/invitations",
+        json={"email": "can-admin@example.com", "role_id": admin_role["id"]},
+        headers=h,
+    )
+    assert admin_invite.status_code == 201, admin_invite.text
+    joined = await client.post(
+        "/api/v1/invitations/accept",
+        params={"token": admin_invite.json()["token"]},
+        headers=auth_headers(admin_tokens),
+    )
+    assert joined.status_code == 200, joined.text
+    admin_id = await _me_id(client, admin_tokens)
+    member_id = next(
+        m
+        for m in (await client.get("/api/v1/members", headers=h)).json()
+        if m["email"] == "can-admin@example.com"
+    )["membership_id"]
+
+    async with SessionFactory() as session:
+        service = SearchExportService(session)
+        assert await service._can(ws["id"], admin_id, JOB_READ) is True
+
+    suspended = await client.post(f"/api/v1/members/{member_id}/suspend", headers=h)
+    assert suspended.status_code == 200, suspended.text
+
+    async with SessionFactory() as session:
+        service = SearchExportService(session)
+        assert await service._can(ws["id"], admin_id, JOB_READ) is False
+
+
 async def test_export_requires_audit_read(app_client):
     """Viewers (workspace:read only) can search but cannot export the full dump."""
     client, h, ws, conv = await _setup(app_client)

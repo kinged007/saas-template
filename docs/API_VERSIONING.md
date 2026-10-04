@@ -29,6 +29,41 @@ as `api_version`.
   This matches the run routes and every other workspace-owned resource. An
   API key scoped to another workspace still gets `404`, so key callers learn
   nothing about definitions outside their scope.
+- `GET /api/v1/jobs/runs/{id}` and `GET /api/v1/jobs/runs/{id}/logs` answer
+  an API-key caller with `403 "deployment administration is not available to
+  API keys"` for every run it may not read: a global run, a run outside the
+  key's workspace, and an id matching no run — one answer for all three, so no
+  pair of them tells the key which state produced it. A session caller still
+  gets `404 "run not found"` for an id matching no run.
+
+## Response headers
+
+Every `/api/*` response carries `X-API-Version`. A request authenticated with
+an API key that has a `usage_quota` set additionally carries these three; an
+unlimited key carries none of them:
+
+| Header | Meaning |
+|---|---|
+| `X-API-Key-Quota` | The key's monthly cap |
+| `X-API-Key-Remaining` | Uses left in the current calendar month (UTC) |
+| `X-API-Key-Window-Reset` | IMF-fixdate of the next month boundary, when the counter resets |
+
+All three ride on the `403 api key quota exceeded` rejection as well, so a
+client that has run out can still read its budget and when it recovers.
+`Remaining` counts the request being answered, so it reaches `0` on the last
+accepted call and the next call is rejected.
+
+### Changed meanings
+
+`usage_quota` and `X-API-Key-Remaining` were lifetime-scoped and are now per
+calendar month (UTC). The names are unchanged and both stay under `/api/v1`,
+so this is the one departure from the additive-only rule above. It is
+announced in the release notes for the release that carries it (issue #69),
+and no version bump was taken because the per-month cap is that issue's
+intent and the lifetime reading was the defect — not a stable contract that a
+client could have relied on. A client that tracked "remaining for the life of
+this key" must read the calendar month instead: the number climbs back on the
+1st.
 
 ## Why prefix strategy
 

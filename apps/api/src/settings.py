@@ -114,8 +114,14 @@ class Settings(BaseSettings):
     # entry in the user menu, and the delete danger-zone are hidden.
     single_workspace: bool = False
     # Role given to users who auto-join the single workspace: any of its
-    # system or custom role names. An unknown or blank name falls back to
-    # viewer (SINGLE_WORKSPACE_DEFAULT_ROLE=editor).
+    # system or custom role names (SINGLE_WORKSPACE_DEFAULT_ROLE). An unknown
+    # or blank name falls through viewer -> editor -> admin -> an arbitrary
+    # remaining non-owner role; a workspace with no non-owner role grants no
+    # membership. The name only picks the role a new member gets: changing an
+    # existing member's role, suspending one and reactivating one check the
+    # role name ("owner"/"admin", any case) and transferring ownership checks
+    # "owner", so a custom role here cannot do any of them however open its
+    # permission list is (src/services/workspaces.py).
     single_workspace_default_role: str = "viewer"
 
     # Scheduled jobs

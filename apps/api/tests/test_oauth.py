@@ -171,6 +171,9 @@ async def test_authorize_redirects_with_state(app_client, oauth_on):
     assert resp.status_code == 302
     assert resp.headers["location"].startswith("https://idp.example/authorize?")
     assert "state=" in resp.headers["location"]
+    assert "code_challenge_method=S256" in resp.headers["location"]
+    assert "code_challenge=" in resp.headers["location"]
+    assert "code_verifier" not in resp.headers["location"]
 
 
 async def test_unknown_provider_404(app_client, oauth_on):
@@ -186,8 +189,11 @@ def _mock_oauth(monkeypatch, *, sub="sub-1", email="sso@example.com"):
             "userinfo_endpoint": provider.userinfo_url,
         }
 
-    async def fake_exchange(provider, doc, *, code, redirect_uri):
+    async def fake_exchange(provider, doc, *, code, redirect_uri, code_verifier):
         assert code == "authcode"
+        # Only the state entry knows this string, so the callback can satisfy it
+        # by reading the PKCE verifier out of the entry it just consumed.
+        assert code_verifier == "verifier-abc"
         return {"access_token": "at", "id_token": None}
 
     async def fake_userinfo(provider, doc, access_token):
@@ -208,7 +214,12 @@ async def _callback(app_client, monkeypatch, state="s", provider="testidp"):
     from src.main import app as fastapi_app
 
     fastapi_app.state.container.cache.set(
-        oauth_svc.STATE_TTL_HINT + state, {"provider": provider, "redirect_uri": "http://test/cb"}
+        oauth_svc.STATE_TTL_HINT + state,
+        {
+            "provider": provider,
+            "redirect_uri": "http://test/cb",
+            "code_verifier": "verifier-abc",
+        },
     )
     resp = await app_client.get(
         f"/api/v1/auth/oauth/{provider}/callback?code=authcode&state={state}",
@@ -399,6 +410,24 @@ async def test_callback_bad_state_redirects_to_login(app_client, oauth_on):
     assert resp.headers["location"].startswith("http://localhost:5173/login?error=")
 
 
+async def test_callback_rejects_state_entry_without_verifier(app_client, oauth_on):
+    # A verifier-less entry would mint a token POST with no code_verifier, the
+    # one request the challenge exists to prevent.
+    from src.main import app as fastapi_app
+
+    fastapi_app.state.container.cache.set(
+        oauth_svc.STATE_TTL_HINT + "noverifier",
+        {"provider": "testidp", "redirect_uri": "http://test/cb"},
+    )
+    resp = await app_client.get(
+        "/api/v1/auth/oauth/testidp/callback?code=authcode&state=noverifier",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=")
+    assert httpx.URL(resp.headers["location"]).params["error"] == "invalid or expired state"
+
+
 async def test_register_blocked_when_disabled(app_client, monkeypatch):
     monkeypatch.setattr(settings, "auth_allow_registration", False)
     try:
@@ -485,7 +514,9 @@ async def test_exchange_failure_names_the_upstream_status(monkeypatch):
     _fake_httpx(monkeypatch, user={}, emails=[], token_status=400)
     cfg = replace(_github_config(), token_url="https://github.com/login/oauth/access_token")
     with pytest.raises(oauth_svc.OAuthError) as err:
-        await oauth_svc.exchange_code(cfg, {}, code="c", redirect_uri="http://app.test/cb")
+        await oauth_svc.exchange_code(
+            cfg, {}, code="c", redirect_uri="http://app.test/cb", code_verifier="verifier-abc"
+        )
     msg = str(err.value)
     assert "code exchange failed" in msg
     assert "400" in msg  # expired code, clock skew or a wrong secret all land here

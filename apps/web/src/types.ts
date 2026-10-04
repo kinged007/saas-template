@@ -270,6 +270,11 @@ export type ApiKey = {
   /** Lifetime authenticated uses; null usage_quota = unlimited. */
   usage_count?: number;
   usage_quota?: number | null;
+  /** Uses in the current calendar month — the window usage_quota caps. */
+  usage_window_count?: number;
+  /** First instant of the current calendar month (UTC), or null before first
+   *  use. It is the month boundary, so it can predate the key's own first use. */
+  usage_window_start?: string | null;
   revoked_at?: string;
   created_at?: string;
 };

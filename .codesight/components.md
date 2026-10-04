@@ -5,11 +5,13 @@
 - **AuditLogTable** — props: resource, searchPlaceholder, searchEnabled, showWorkspace — `apps/web/src/components/AuditLogTable.tsx`
 - **SsoButtons** — props: providers, disabled — `apps/web/src/components/AuthConfig.tsx`
 - **NotificationCenter** — `apps/web/src/components/NotificationCenter.tsx`
+- **PendingInvitationsBadge** — `apps/web/src/components/PendingInvitations.tsx`
 - **UserProfileDialog** — props: userId, open, onOpenChange, fallback — `apps/web/src/components/UserProfileDialog.tsx`
 - **WorkspaceExportCard** — `apps/web/src/components/WorkspaceExportCard.tsx`
 - **WorkspaceSearch** — `apps/web/src/components/WorkspaceSearch.tsx`
 - **ComposeDialog** — props: open, onOpenChange, onCreated — `apps/web/src/components/inbox/ComposeDialog.tsx`
-- **TiptapEditor** — props: value, onChange, placeholder, className, minHeight — `apps/web/src/components/inbox/TiptapEditor.tsx`
+- **EditParticipantsDialog** — props: open, onOpenChange, conversationId, participantIds, onSaved — `apps/web/src/components/inbox/EditParticipantsDialog.tsx`
+- **TiptapEditor** — props: value, onChange, placeholder, className, minHeight, mentions, onMention — `apps/web/src/components/inbox/TiptapEditor.tsx`
 - **CreateButton** [client] — props: resource — `apps/web/src/components/refine-ui/buttons/create.tsx`
 - **DeleteButton** [client] — props: resource, recordItemId — `apps/web/src/components/refine-ui/buttons/delete.tsx`
 - **EditButton** [client] — props: resource, recordItemId — `apps/web/src/components/refine-ui/buttons/edit.tsx`
@@ -31,6 +33,7 @@
 - **DashboardPage** — `apps/web/src/pages/DashboardPage.tsx`
 - **ForgotPasswordPage** — `apps/web/src/pages/ForgotPasswordPage.tsx`
 - **InboxPage** — `apps/web/src/pages/InboxPage.tsx`
+- **InvitationAcceptPage** — `apps/web/src/pages/InvitationAcceptPage.tsx`
 - **JobDetailPage** — `apps/web/src/pages/JobDetailPage.tsx`
 - **JobRunPage** — `apps/web/src/pages/JobRunPage.tsx`
 - **JobsPage** — `apps/web/src/pages/JobsPage.tsx`
@@ -54,6 +57,7 @@
 - **GeneralSection** — `apps/web/src/pages/settings/profile/sections/GeneralSection.tsx`
 - **NotificationsSection** — `apps/web/src/pages/settings/profile/sections/NotificationsSection.tsx`
 - **SecuritySection** — `apps/web/src/pages/settings/profile/sections/SecuritySection.tsx`
+- **WorkspacesSection** — `apps/web/src/pages/settings/profile/sections/WorkspacesSection.tsx`
 - **WorkspaceSettingsLayout** — `apps/web/src/pages/settings/workspace/WorkspaceSettingsLayout.tsx`
 - **AuditLogSection** — `apps/web/src/pages/settings/workspace/sections/AuditLogSection.tsx`
 - **GeneralSection** — `apps/web/src/pages/settings/workspace/sections/GeneralSection.tsx`

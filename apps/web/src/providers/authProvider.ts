@@ -55,7 +55,7 @@ export async function seedWorkspace(identity: Identity): Promise<void> {
  * Where a freshly authenticated user lands: the pending invitation accept
  * page when they arrived from an invite link, the dashboard otherwise.
  */
-const afterAuthRedirect = () => {
+export const afterAuthRedirect = () => {
   const token = pendingInvitationStore.get();
   return token ? `/invitations/accept?token=${encodeURIComponent(token)}` : "/";
 };

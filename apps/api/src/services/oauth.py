@@ -3,12 +3,18 @@
 One config shape covers every enterprise IdP: OIDC discovery
 (discovery_url or issuer) for Google/Microsoft Entra/Okta/GitLab, or
 explicit authorize/token/userinfo URLs for non-OIDC providers like GitHub.
-Secrets come from env (OAUTH_PROVIDERS JSON); only ids and display names
-ever leave the server.
+The authorization-code flow uses PKCE (S256) on every provider; the verifier
+lives in the server-side state entry, never in the browser. Unconditional on
+purpose: RFC 6749 §3.1 obliges a compliant authorization server to ignore
+unknown authorize params, so a per-provider toggle only helps an AS that
+rejects them. Secrets come from env
+(OAUTH_PROVIDERS JSON); only ids and display names ever leave the server.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import secrets
 from dataclasses import dataclass
@@ -105,6 +111,16 @@ async def _discovery(provider: ProviderConfig, cache: TtlCache) -> dict[str, Any
     return doc
 
 
+def _pkce_pair() -> tuple[str, str]:
+    """RFC 7636 verifier + its S256 challenge; token_urlsafe(64) is 86
+    unreserved characters, inside the 43..128 the RFC allows."""
+    verifier = secrets.token_urlsafe(64)
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    )
+    return verifier, challenge
+
+
 def build_authorize_url(
     provider: ProviderConfig, doc: dict[str, Any], cache: TtlCache, redirect_uri: str
 ) -> str:
@@ -112,7 +128,11 @@ def build_authorize_url(
     if not endpoint:
         raise OAuthError(f"oauth provider '{provider.id}' has no authorize endpoint")
     state = secrets.token_urlsafe(32)
-    cache.set(STATE_TTL_HINT + state, {"provider": provider.id, "redirect_uri": redirect_uri})
+    verifier, challenge = _pkce_pair()
+    cache.set(
+        STATE_TTL_HINT + state,
+        {"provider": provider.id, "redirect_uri": redirect_uri, "code_verifier": verifier},
+    )
     params = httpx.QueryParams(
         {
             "response_type": "code",
@@ -120,6 +140,8 @@ def build_authorize_url(
             "redirect_uri": redirect_uri,
             "scope": provider.scopes,
             "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
         }
     )
     return f"{endpoint}?{params}"
@@ -131,7 +153,7 @@ def consume_state(cache: TtlCache, state: str) -> dict[str, Any]:
         raise OAuthError("invalid or expired state")
     # Single-use: drop so a replayed callback cannot mint another code.
     cache.delete(STATE_TTL_HINT + state)
-    if not isinstance(entry, dict) or not entry.get("provider"):
+    if not isinstance(entry, dict) or not entry.get("provider") or not entry.get("code_verifier"):
         raise OAuthError("invalid or expired state")
     return entry
 
@@ -142,6 +164,7 @@ async def exchange_code(
     *,
     code: str,
     redirect_uri: str,
+    code_verifier: str,
 ) -> dict[str, Any]:
     endpoint = doc.get("token_endpoint") or provider.token_url
     if not endpoint:
@@ -156,29 +179,86 @@ async def exchange_code(
                     "redirect_uri": redirect_uri,
                     "client_id": provider.client_id,
                     "client_secret": provider.client_secret,
+                    "code_verifier": code_verifier,
                 },
                 headers={"Accept": "application/json"},
             )
             resp.raise_for_status()
             return resp.json()
     except Exception as exc:
+        # The body names the cause the status cannot ("invalid_grant" vs. a
+        # rejected code_verifier); log-only, the redirect detail stays
+        # allowlisted. Newlines are flattened so a provider cannot forge lines.
+        body = getattr(getattr(exc, "response", None), "text", "")
+        if body:
+            logger.warning(
+                "oauth token endpoint error body provider=%s: %s",
+                provider.id,
+                body[:200].replace("\n", " "),
+            )
         raise OAuthError(f"code exchange failed: {_failure_detail(exc)}") from exc
 
 
-def _jwks_client(provider: ProviderConfig, doc: dict[str, Any]) -> jwt.PyJWKClient | None:
+async def _jwks(
+    provider: ProviderConfig, doc: dict[str, Any], cache: TtlCache, refresh: bool = False
+) -> dict[str, Any]:
+    """The provider's key set, cached next to discovery so a login does not refetch it.
+
+    Fetched over httpx rather than `jwt.PyJWKClient` so the round trip is awaited
+    (PyJWKClient fetches with blocking urllib) and covered by the same 10s timeout
+    as the module's other IdP calls.
+
+    `refresh=True` bypasses the cache and writes the result back, so a kid the
+    provider does not publish costs one extra IdP round trip per failed login for
+    as long as the entry lives. Bounding that needs a fetch timestamp on the
+    cached document; the cost is kept because the path requires a completed code
+    exchange.
+    """
     uri = doc.get("jwks_uri") or provider.jwks_uri
     if not uri:
-        return None
-    return jwt.PyJWKClient(uri)
+        raise OAuthError(f"oauth provider '{provider.id}' has no jwks_uri")
+    key = f"oauth:jwks:{provider.id}"
+    cached = None if refresh else cache.get(key)
+    if cached is not None:
+        return cached
+    try:
+        # `PyJWKClient` fetched through urllib, which follows redirects; httpx does not
+        # follow them by default.
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            resp = await client.get(uri)
+            resp.raise_for_status()
+            keys = resp.json()
+        # Parsed before it is cached: an unusable set would otherwise sit in the cache
+        # for its whole TTL and cost a refetch on every login that meets it.
+        jwt.PyJWKSet.from_dict(keys)
+    except Exception as exc:
+        raise OAuthError(f"could not load signing keys: {_failure_detail(exc)}") from exc
+    cache.set(key, keys)
+    return keys
 
 
-def claims_from_id_token(
-    provider: ProviderConfig, doc: dict[str, Any], id_token: str
+def _signing_key(jwks_doc: dict[str, Any], id_token: str) -> jwt.PyJWK | None:
+    """The signing key whose kid the token names, or None when the set has no match.
+
+    Mirrors `jwt.PyJWKClient.get_signing_key`: only keys published for signing that carry a
+    kid are candidates, and the token's kid has to match one, so a token without a kid is
+    refused rather than verified against the sole published key.
+    """
+    kid = jwt.get_unverified_header(id_token).get("kid")
+    signing = [
+        k
+        for k in jwt.PyJWKSet.from_dict(jwks_doc).keys
+        if k.public_key_use in (None, "sig") and k.key_id
+    ]
+    for key in signing:
+        if key.key_id == kid:
+            return key
+
+
+async def claims_from_id_token(
+    provider: ProviderConfig, doc: dict[str, Any], id_token: str, cache: TtlCache
 ) -> dict[str, Any] | None:
     """Verify the id_token signature via JWKS; None when unverifiable."""
-    client = _jwks_client(provider, doc)
-    if client is None:
-        return None
     # The document's issuer is what the IdP itself states, so it wins over the
     # configured one; the config covers providers that skip discovery.
     issuer = doc.get("issuer") or provider.issuer
@@ -186,7 +266,12 @@ def claims_from_id_token(
         # Nothing to compare `iss` against, so only its presence is enforced.
         logger.warning("no issuer configured for provider %s; id_token iss not pinned", provider.id)
     try:
-        key = client.get_signing_key_from_jwt(id_token).key
+        key = _signing_key(await _jwks(provider, doc, cache), id_token)
+        if key is None:
+            # A kid the cached set has never seen is the one case a refetch can fix.
+            key = _signing_key(await _jwks(provider, doc, cache, refresh=True), id_token)
+        if key is None:
+            raise OAuthError("no matching signing key")
         return jwt.decode(
             id_token,
             key,
@@ -195,8 +280,13 @@ def claims_from_id_token(
             issuer=issuer,
             options={"require": ["exp", "iss", "sub"]},
         )
-    except Exception:
-        logger.warning("id_token verification failed for provider %s", provider.id)
+    except Exception as exc:
+        logger.warning(
+            "id_token verification failed for provider %s: %s",
+            provider.id,
+            exc,
+            exc_info=logger.isEnabledFor(logging.DEBUG),
+        )
         return None
 
 

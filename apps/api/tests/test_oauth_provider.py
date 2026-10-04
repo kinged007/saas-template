@@ -3,25 +3,26 @@
 The pre-existing OAuth tests monkeypatch `_discovery`, `exchange_code` and
 `fetch_userinfo` at the service-module boundary, so none of them ever run. This
 file drives them for real against an in-process IdP — a `ThreadingHTTPServer`
-on `127.0.0.1:0` serving a discovery document, an RS256 JWKS, a token endpoint
+on `127.0.0.1:0` serving a discovery document, a JWKS, a token endpoint
 and a userinfo endpoint. No network egress, no mocked seams, no new dependency
 (`pyjwt`, `cryptography` and `httpx` are already runtime deps).
-
-`httpx.MockTransport` would not do: `jwt.PyJWKClient` fetches keys with
-`urllib.request`, so a transport-level httpx mock never sees the key fetch. A
-real socket is the only way to exercise signature handling as written.
 """
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import contextlib
+import hashlib
 import json
+import logging
 import socket
 import threading
 import time
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 import jwt
 import pytest
@@ -29,10 +30,13 @@ from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from src.core.cache import TtlCache
 from src.services.oauth import (
+    STATE_TTL_HINT,
     OAuthError,
     ProviderConfig,
     _discovery,
+    build_authorize_url,
     claims_from_id_token,
+    consume_state,
     exchange_code,
     fetch_userinfo,
     get_provider,
@@ -43,13 +47,17 @@ CLIENT_ID = "cid"
 CLIENT_SECRET = "csecret"
 KID = "stub-key-1"
 EC_KID = "stub-ec-1"
+ROTATED_KID = "stub-key-2"
 REDIRECT_URI = "http://localhost:8000/api/v1/auth/oauth/stub/callback"
 
 
-def _jwk(key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey, kid: str, alg: str) -> dict[str, Any]:
+def _jwk(
+    key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey, kid: str | None, alg: str
+) -> dict[str, Any]:
     algo = {"RS256": jwt.algorithms.RSAAlgorithm, "ES256": jwt.algorithms.ECAlgorithm}[alg]
     pub = json.loads(algo.to_jwk(key.public_key()))
-    return {**pub, "kid": kid, "use": "sig", "alg": alg}
+    # A kid of None omits the member, as a provider that assigns no kid would.
+    return {**pub, **({"kid": kid} if kid else {}), "use": "sig", "alg": alg}
 
 
 class _StubIdP:
@@ -67,6 +75,16 @@ class _StubIdP:
         self.hits: list[str] = []
         self.token_forms: list[dict[str, list[str]]] = []
         self.auth_headers: list[str] = []
+        # Published key set, mutable so a test can rotate it mid-cache. Both key
+        # families are published, so a kid match that ignores the key type is
+        # rejected by the kid↔key-type binding rather than by an absent kid.
+        self.published: list[tuple[Any, str | None, str]] = [
+            (self.signing_key, KID, "RS256"),
+            (self.ec_key, EC_KID, "ES256"),
+        ]
+        # Set by a test to make /jwks-broken answer with an unusable set.
+        self.broken_jwks: dict[str, Any] | None = None
+        self.jwks_delay = 0.0
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
@@ -94,12 +112,15 @@ class _StubIdP:
     def mint(
         self,
         *,
-        kid: str = KID,
+        kid: str | None = KID,
         key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey | None = None,
         alg: str = "RS256",
         **claims: Any,
     ) -> str:
-        """A signed id_token; every claim is overridable so tests can break one at a time."""
+        """A signed id_token; every claim is overridable so tests can break one at a time.
+
+        `kid=None` omits the JWT header.
+        """
         now = int(time.time())
         payload = {
             "iss": self.base,
@@ -110,9 +131,13 @@ class _StubIdP:
             "exp": now + 300,
             **claims,
         }
+        headers = {"kid": kid} if kid is not None else {}
         if alg == "none":
-            return jwt.encode(payload, key="", algorithm="none", headers={"kid": kid})
-        return jwt.encode(payload, key or self.signing_key, algorithm=alg, headers={"kid": kid})
+            return jwt.encode(payload, key="", algorithm="none", headers=headers)
+        return jwt.encode(payload, key or self.signing_key, algorithm=alg, headers=headers)
+
+    def published_jwks(self) -> dict[str, Any]:
+        return {"keys": [_jwk(*p) for p in self.published]}
 
     def _handler(self) -> type[BaseHTTPRequestHandler]:
         stub = self
@@ -134,11 +159,18 @@ class _StubIdP:
                 if self.path.startswith("/.well-known/openid-configuration"):
                     self._send(200, stub.doc)
                 elif self.path == "/jwks":
-                    keys = [
-                        _jwk(stub.signing_key, KID, "RS256"),
-                        _jwk(stub.ec_key, EC_KID, "ES256"),
-                    ]
-                    self._send(200, {"keys": keys})
+                    if stub.jwks_delay:
+                        time.sleep(stub.jwks_delay)
+                    self._send(200, stub.published_jwks())
+                elif self.path == "/jwks-redirect":
+                    self.send_response(302)
+                    self.send_header("Location", f"{stub.base}/jwks")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                elif self.path == "/jwks-broken":
+                    # Answers with `broken_jwks` while a test holds one, so the IdP can
+                    # be made to publish an unusable set and then repair itself.
+                    self._send(200, stub.broken_jwks or stub.published_jwks())
                 elif self.path == "/userinfo":
                     stub.auth_headers.append(self.headers.get("Authorization", ""))
                     self._send(
@@ -185,7 +217,7 @@ async def _clean_db():
 
     These tests never touch the database, and each default unlink/recreate cycle
     churns the SQLite file the whole suite shares (#319). Skipping it here keeps
-    13 pointless teardowns out of every full run.
+    26 pointless teardowns out of every full run.
     """
     yield
 
@@ -212,6 +244,11 @@ def provider(idp, monkeypatch) -> ProviderConfig:
     return get_provider("stub")
 
 
+@pytest.fixture
+def cache() -> TtlCache:
+    return TtlCache(ttl_seconds=60)
+
+
 def _closed_port() -> int:
     """A port nothing listens on: bound, then released."""
     with socket.socket() as s:
@@ -219,53 +256,66 @@ def _closed_port() -> int:
         return int(s.getsockname()[1])
 
 
-def test_claims_from_id_token_rejects_wrong_issuer(provider, idp):
-    assert claims_from_id_token(provider, idp.doc, idp.mint(iss="http://evil.example")) is None
+async def test_claims_from_id_token_rejects_wrong_issuer(provider, idp, cache):
+    assert (
+        await claims_from_id_token(provider, idp.doc, idp.mint(iss="http://evil.example"), cache)
+        is None
+    )
 
 
-def test_claims_from_id_token_rejects_wrong_issuer_without_discovery_doc(provider, idp):
+async def test_claims_from_id_token_rejects_wrong_issuer_without_discovery_doc(
+    provider, idp, cache
+):
     """A provider configured with explicit endpoints and no discovery document: the
     expected issuer comes from the config, so a foreign `iss` is still rejected."""
     doc = {k: v for k, v in idp.doc.items() if k != "issuer"}
-    assert claims_from_id_token(provider, doc, idp.mint(iss="http://evil.example")) is None
+    assert (
+        await claims_from_id_token(provider, doc, idp.mint(iss="http://evil.example"), cache)
+        is None
+    )
 
 
-def test_claims_from_id_token_without_issuer_checks_presence_only(provider, idp):
+async def test_claims_from_id_token_without_issuer_checks_presence_only(provider, idp, cache):
     """Deliberate ceiling: a provider that names no issuer anywhere (the explicit-URL
     shape, e.g. the GitHub config) has nothing to compare `iss` against, so only
     presence is enforced. Configure `issuer` to pin the value."""
     doc = {k: v for k, v in idp.doc.items() if k != "issuer"}
-    assert claims_from_id_token(replace(provider, issuer=None), doc, idp.mint()) is not None
+    claims = await claims_from_id_token(replace(provider, issuer=None), doc, idp.mint(), cache)
+    assert claims is not None
 
 
-def test_claims_from_id_token_accepts_valid_rs256(provider, idp):
+async def test_claims_from_id_token_accepts_valid_rs256(provider, idp, cache):
     """Positive control: if this fails the harness itself is broken."""
-    claims = claims_from_id_token(provider, idp.doc, idp.mint())
+    claims = await claims_from_id_token(provider, idp.doc, idp.mint(), cache)
     assert claims is not None
     assert claims["sub"] == "sub-1"
     assert claims["email"] == "user@example.com"
 
 
-def test_claims_from_id_token_accepts_valid_es256(provider, idp):
+async def test_claims_from_id_token_accepts_valid_es256(provider, idp, cache):
     """Second half of the RS256/ES256 allow-list: some Entra and Okta configs serve ES256."""
-    claims = claims_from_id_token(
-        provider, idp.doc, idp.mint(kid=EC_KID, key=idp.ec_key, alg="ES256")
+    claims = await claims_from_id_token(
+        provider, idp.doc, idp.mint(kid=EC_KID, key=idp.ec_key, alg="ES256"), cache
     )
     assert claims is not None
     assert claims["sub"] == "sub-1"
     assert claims["email"] == "user@example.com"
 
 
-def test_claims_from_id_token_rejects_es256_token_signed_by_another_ec_key(provider, idp):
+async def test_claims_from_id_token_rejects_es256_token_signed_by_another_ec_key(
+    provider, idp, cache
+):
     """Negative control for the ES256 half: same kid, different EC key. Only a real
     signature check catches this, and the RS256 twin says nothing about EC."""
-    claims = claims_from_id_token(
-        provider, idp.doc, idp.mint(kid=EC_KID, key=idp.other_ec_key, alg="ES256")
+    claims = await claims_from_id_token(
+        provider, idp.doc, idp.mint(kid=EC_KID, key=idp.other_ec_key, alg="ES256"), cache
     )
     assert claims is None
 
 
-def test_claims_from_id_token_rejects_es256_token_published_under_the_rsa_kid(provider, idp):
+async def test_claims_from_id_token_rejects_es256_token_published_under_the_rsa_kid(
+    provider, idp, cache
+):
     """Cross-family control: the JWKS resolves an RSA key for an `alg=ES256` token. Both
     same-family twins keep the kid's key type and only swap the private key; this re-labels
     the kid, so only the kid↔key-type binding can reject it. The first mint signs with the
@@ -274,17 +324,19 @@ def test_claims_from_id_token_rejects_es256_token_published_under_the_rsa_kid(pr
     from_published_ec_key = idp.mint(kid=KID, key=idp.ec_key, alg="ES256")
     from_attacker_ec_key = idp.mint(kid=KID, key=idp.other_ec_key, alg="ES256")
 
-    assert claims_from_id_token(provider, idp.doc, from_published_ec_key) is None
-    assert claims_from_id_token(provider, idp.doc, from_attacker_ec_key) is None
+    assert await claims_from_id_token(provider, idp.doc, from_published_ec_key, cache) is None
+    assert await claims_from_id_token(provider, idp.doc, from_attacker_ec_key, cache) is None
 
 
-def test_claims_from_id_token_rejects_rs256_token_published_under_the_ec_kid(provider, idp):
+async def test_claims_from_id_token_rejects_rs256_token_published_under_the_ec_kid(
+    provider, idp, cache
+):
     """The mirror direction, so neither key family is the one that goes uncovered."""
     from_published_rsa_key = idp.mint(kid=EC_KID, key=idp.signing_key, alg="RS256")
     from_attacker_rsa_key = idp.mint(kid=EC_KID, key=idp.other_key, alg="RS256")
 
-    assert claims_from_id_token(provider, idp.doc, from_published_rsa_key) is None
-    assert claims_from_id_token(provider, idp.doc, from_attacker_rsa_key) is None
+    assert await claims_from_id_token(provider, idp.doc, from_published_rsa_key, cache) is None
+    assert await claims_from_id_token(provider, idp.doc, from_attacker_rsa_key, cache) is None
 
 
 def test_jwk_rejects_unknown_algorithm(idp):
@@ -295,34 +347,146 @@ def test_jwk_rejects_unknown_algorithm(idp):
         _jwk(idp.signing_key, "kid-x", "PS256")
 
 
-def test_claims_from_id_token_rejects_wrong_audience(provider, idp):
-    assert claims_from_id_token(provider, idp.doc, idp.mint(aud="another-client")) is None
+async def test_claims_from_id_token_rejects_wrong_audience(provider, idp, cache):
+    assert (
+        await claims_from_id_token(provider, idp.doc, idp.mint(aud="another-client"), cache) is None
+    )
 
 
-def test_claims_from_id_token_rejects_expired_token(provider, idp):
-    assert claims_from_id_token(provider, idp.doc, idp.mint(exp=int(time.time()) - 10)) is None
+async def test_claims_from_id_token_rejects_expired_token(provider, idp, cache):
+    token = idp.mint(exp=int(time.time()) - 10)
+    assert await claims_from_id_token(provider, idp.doc, token, cache) is None
 
 
-def test_claims_from_id_token_rejects_unknown_kid(provider, idp):
-    assert claims_from_id_token(provider, idp.doc, idp.mint(kid="rotated-away")) is None
+async def test_claims_from_id_token_rejects_unknown_kid(provider, idp, cache):
+    assert (
+        await claims_from_id_token(provider, idp.doc, idp.mint(kid="rotated-away"), cache) is None
+    )
 
 
-def test_claims_from_id_token_rejects_token_signed_by_another_key(provider, idp):
+async def test_claims_from_id_token_rejects_token_without_a_kid(provider, idp, cache):
+    """`PyJWKClient` matches on the token's kid and has no kid-less fallback, so a token
+    without one is refused rather than verified against the sole published key. Both halves
+    are asserted: no fallback for a kid-less token, and no candidate in a kid-less key."""
+    assert await claims_from_id_token(provider, idp.doc, idp.mint(kid=None), cache) is None
+    idp.published = [(idp.signing_key, None, "RS256")]
+    try:
+        assert await claims_from_id_token(provider, idp.doc, idp.mint(kid=None), cache) is None
+    finally:
+        idp.published = [(idp.signing_key, KID, "RS256"), (idp.ec_key, EC_KID, "ES256")]
+
+
+async def test_claims_from_id_token_rejects_token_signed_by_another_key(provider, idp, cache):
     """Same kid, different private key: only a real signature check catches this."""
-    assert claims_from_id_token(provider, idp.doc, idp.mint(key=idp.other_key)) is None
+    assert await claims_from_id_token(provider, idp.doc, idp.mint(key=idp.other_key), cache) is None
 
 
-def test_claims_from_id_token_rejects_unsigned_token(provider, idp):
-    assert claims_from_id_token(provider, idp.doc, idp.mint(alg="none")) is None
+async def test_claims_from_id_token_rejects_unsigned_token(provider, idp, cache):
+    assert await claims_from_id_token(provider, idp.doc, idp.mint(alg="none"), cache) is None
 
 
-def test_claims_from_id_token_returns_none_without_jwks_uri(provider, idp):
+async def test_claims_from_id_token_returns_none_without_jwks_uri(provider, idp, cache):
     doc = {k: v for k, v in idp.doc.items() if k != "jwks_uri"}
-    assert claims_from_id_token(provider, doc, idp.mint()) is None
+    assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
 
 
-async def test_discovery_fetches_and_caches(provider, idp):
-    cache = TtlCache(ttl_seconds=60)
+async def test_jwks_is_fetched_once_and_reused(provider, idp, cache):
+    """#341: the key set belongs in the TTL cache next to discovery, not refetched per login."""
+    before = idp.hits.count("/jwks")
+    first = await claims_from_id_token(provider, idp.doc, idp.mint(), cache)
+    second = await claims_from_id_token(provider, idp.doc, idp.mint(), cache)
+    assert first is not None and second is not None
+    assert idp.hits.count("/jwks") == before + 1
+
+
+async def test_jwks_is_refetched_for_a_rotated_kid(provider, idp, cache):
+    """A new kid must not wait out the cache TTL, or every login fails after a key rotation."""
+    assert await claims_from_id_token(provider, idp.doc, idp.mint(), cache) is not None
+    before = idp.hits.count("/jwks")
+    idp.published = [(idp.other_key, ROTATED_KID, "RS256")]
+    try:
+        claims = await claims_from_id_token(
+            provider, idp.doc, idp.mint(key=idp.other_key, kid=ROTATED_KID), cache
+        )
+    finally:
+        idp.published = [(idp.signing_key, KID, "RS256"), (idp.ec_key, EC_KID, "ES256")]
+    assert claims is not None
+    assert idp.hits.count("/jwks") == before + 1
+
+
+async def test_jwks_follows_a_redirect(provider, idp, cache):
+    """`PyJWKClient` fetched through urllib, which follows redirects; httpx does not
+    by default, so without the flag a redirecting `jwks_uri` fails every login."""
+    doc = dict(idp.doc, jwks_uri=f"{idp.base}/jwks-redirect")
+    assert await claims_from_id_token(provider, doc, idp.mint(), cache) is not None
+
+
+async def test_unusable_jwks_is_not_served_from_the_cache(provider, idp, cache):
+    """A malformed key set must cost only the logins it broke, not the whole cache TTL."""
+    doc = dict(idp.doc, jwks_uri=f"{idp.base}/jwks-broken")
+    idp.broken_jwks = {"keys": []}
+    try:
+        assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+        before = idp.hits.count("/jwks-broken")
+        idp.broken_jwks = None
+        claims = await claims_from_id_token(provider, doc, idp.mint(), cache)
+    finally:
+        idp.broken_jwks = None
+    assert claims is not None
+    assert claims["sub"] == "sub-1"
+    assert idp.hits.count("/jwks-broken") == before + 1, "the bad set was served from the cache"
+
+
+async def test_signing_key_is_matched_by_kid_not_position(provider, idp, cache):
+    """Key selection is hand-rolled here, so the first published key is not the answer."""
+    idp.published = [
+        (idp.other_key, "other-kid", "RS256"),
+        (idp.signing_key, KID, "RS256"),
+        (idp.ec_key, EC_KID, "ES256"),
+    ]
+    try:
+        claims = await claims_from_id_token(provider, idp.doc, idp.mint(), cache)
+    finally:
+        idp.published = [(idp.signing_key, KID, "RS256"), (idp.ec_key, EC_KID, "ES256")]
+    assert claims is not None
+    assert claims["sub"] == "sub-1"
+
+
+async def test_claims_from_id_token_keeps_the_event_loop_responsive(provider, idp, cache):
+    """#341: the key fetch has to be async — blocking it on the loop stalls every request."""
+    idp.jwks_delay = 0.4
+    ticks = 0
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    beat = asyncio.create_task(ticker())
+    try:
+        claims = await claims_from_id_token(provider, idp.doc, idp.mint(), cache)
+    finally:
+        beat.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await beat
+        idp.jwks_delay = 0.0
+    assert claims is not None
+    assert ticks > 5, f"event loop stalled while the JWKS host was slow (ticks={ticks})"
+
+
+async def test_claims_from_id_token_returns_none_when_the_jwks_host_is_down(
+    provider, idp, cache, caplog
+):
+    """None is what the caller handles, and the log has to say the key endpoint failed
+    rather than leaving an operator to read a bad token."""
+    doc = dict(idp.doc, jwks_uri=f"http://127.0.0.1:{_closed_port()}/jwks")
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+    assert "could not load signing keys" in caplog.text
+
+
+async def test_discovery_fetches_and_caches(provider, idp, cache):
     before = len(idp.hits)
 
     doc = await _discovery(provider, cache)
@@ -348,8 +512,39 @@ async def test_discovery_raises_oauth_error_when_unreachable():
         await _discovery(dead, TtlCache(ttl_seconds=60))
 
 
+def test_authorize_url_carries_s256_challenge(provider, idp):
+    """The challenge in the redirect must be the S256 digest of the verifier
+    the server kept: the client only ever sees the public half."""
+    cache = TtlCache(ttl_seconds=60)
+
+    params = parse_qs(urlsplit(build_authorize_url(provider, idp.doc, cache, REDIRECT_URI)).query)
+
+    assert params["code_challenge_method"] == ["S256"]
+    assert "code_verifier" not in params
+    verifier = consume_state(cache, params["state"][0])["code_verifier"]
+    assert 43 <= len(verifier) <= 128
+    expected = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+    assert params["code_challenge"] == [expected.rstrip(b"=").decode()]
+
+
+def test_consume_state_rejects_entry_without_verifier(provider):
+    """An entry carrying no verifier would mint a verifier-less exchange, the one
+    request the challenge exists to prevent."""
+    cache = TtlCache(ttl_seconds=60)
+    cache.set(STATE_TTL_HINT + "s", {"provider": provider.id, "redirect_uri": REDIRECT_URI})
+
+    with pytest.raises(OAuthError, match="invalid or expired state"):
+        consume_state(cache, "s")
+
+
 async def test_exchange_code_posts_grant_and_returns_tokens(provider, idp):
-    tokens = await exchange_code(provider, idp.doc, code="good-code", redirect_uri=REDIRECT_URI)
+    tokens = await exchange_code(
+        provider,
+        idp.doc,
+        code="good-code",
+        redirect_uri=REDIRECT_URI,
+        code_verifier="verifier-abc",
+    )
 
     assert tokens["access_token"] == "at-stub"
     form = idp.token_forms[-1]
@@ -358,11 +553,21 @@ async def test_exchange_code_posts_grant_and_returns_tokens(provider, idp):
     assert form["redirect_uri"] == [REDIRECT_URI]
     assert form["client_id"] == [CLIENT_ID]
     assert form["client_secret"] == [CLIENT_SECRET]
+    assert form["code_verifier"] == ["verifier-abc"]
 
 
-async def test_exchange_code_raises_on_provider_error(provider, idp):
-    with pytest.raises(OAuthError, match="code exchange failed"):
-        await exchange_code(provider, idp.doc, code="bad-code", redirect_uri=REDIRECT_URI)
+async def test_exchange_code_raises_on_provider_error(provider, idp, caplog):
+    with caplog.at_level("WARNING", logger="src.services.oauth"):
+        with pytest.raises(OAuthError, match="code exchange failed"):
+            await exchange_code(
+                provider,
+                idp.doc,
+                code="bad-code",
+                redirect_uri=REDIRECT_URI,
+                code_verifier="verifier-abc",
+            )
+    # The body is what separates a rejected code_verifier from an expired code.
+    assert "invalid_grant" in caplog.text
 
 
 async def test_fetch_userinfo_sends_bearer_token(provider, idp):

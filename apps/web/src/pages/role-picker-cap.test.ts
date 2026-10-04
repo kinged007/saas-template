@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { assignableRoles, roleCapNotice, roleCapNoticeText, rolePickerCapNotice } from "./role-picker-cap.ts";
+import { isManagerRoleName } from "./role-name.ts";
 import type { Role } from "../types.ts";
 
 const role = (id: string, name: string): Role => ({
@@ -91,4 +92,18 @@ test("a whitespace-only notice resolves to no text", () => {
 test("a real notice is returned trimmed", () => {
   assert.equal(roleCapNoticeText("Showing 99 of 104 roles."), "Showing 99 of 104 roles.");
   assert.equal(roleCapNoticeText("  Showing 99 of 104 roles.\n"), "Showing 99 of 104 roles.");
+});
+
+// `is_manager_role_name` (workspaces.py) case-folds both halves, so a row spelled
+// `Admin` beside its seeded `admin` is a manager to the API. An exact match here
+// would hide the member and invitation controls the backend accepts for it.
+test("the manager gate case-folds like the backend's", () => {
+  assert.equal(isManagerRoleName("owner"), true);
+  assert.equal(isManagerRoleName("admin"), true);
+  assert.equal(isManagerRoleName("Owner"), true);
+  assert.equal(isManagerRoleName("Admin"), true);
+  assert.equal(isManagerRoleName("viewer"), false);
+  assert.equal(isManagerRoleName("Administrator"), false);
+  assert.equal(isManagerRoleName(""), false);
+  assert.equal(isManagerRoleName(undefined), false);
 });

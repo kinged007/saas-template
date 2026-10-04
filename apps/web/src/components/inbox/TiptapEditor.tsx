@@ -5,11 +5,15 @@ import Link from "@tiptap/extension-link";
 import Mention from "@tiptap/extension-mention";
 import type { SuggestionProps, SuggestionKeyDownProps } from "@tiptap/suggestion";
 import TurndownService from "turndown";
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { Bold, Italic, Code2, SquareCode, List, ListOrdered, Link2, Quote } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isAllowedLinkHref, normalizeLinkUrl } from "@/lib/link-url";
 import { pickerIndex, rankMentionTargets, type MentionTarget } from "@/lib/mentions";
 
 const turndownService = new TurndownService({
@@ -133,6 +137,15 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [toolbarIndex, setToolbarIndex] = useState(0);
 
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const linkInputRef = useRef<HTMLInputElement>(null);
+  const linkTriggerRef = useRef<HTMLButtonElement>(null);
+  const linkDismissedOutside = useRef(false);
+  const linkInputId = useId();
+  const linkLabelId = useId();
+
   const editor = useEditor(
     {
       extensions: [
@@ -148,6 +161,11 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           autolink: true,
           linkOnPaste: true,
           HTMLAttributes: { rel: "noopener noreferrer", target: null },
+          // Autolink and linkOnPaste have to refuse the same hrefs the popover's
+          // editor does; `protocols` only adds to the extension's default list,
+          // so the allow-list is replaced here. A missing href is left to the
+          // extension, as it is today.
+          isAllowedUri: (url) => !url || isAllowedLinkHref(url),
         }),
         Mention.configure({
           HTMLAttributes: { class: "mention" },
@@ -278,6 +296,31 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
     if (index >= 0) setToolbarIndex(index);
   };
 
+  const onLinkOpenChange = (open: boolean) => {
+    setLinkOpen(open);
+    if (open) {
+      setLinkUrl((editor.getAttributes("link").href as string | undefined) ?? "");
+      setLinkError(null);
+    }
+  };
+
+  const applyLink = () => {
+    // An emptied field means "never mind", not a malformed URL.
+    if (!linkUrl.trim()) return setLinkOpen(false);
+    const href = normalizeLinkUrl(linkUrl);
+    if (href === null) {
+      setLinkError("Enter an absolute http:// or https:// URL.");
+      return;
+    }
+    editor.chain().focus().setLink({ href }).run();
+    setLinkOpen(false);
+  };
+
+  const removeLink = () => {
+    editor.chain().focus().unsetLink().run();
+    setLinkOpen(false);
+  };
+
   return (
     // Every control below keeps the editor's focus by eating mousedown and
     // acting on `click`, the one event a keyboard activation fires too.
@@ -402,29 +445,102 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
         >
           <Quote className="h-3.5 w-3.5" />
         </Button>
-        <Button
-          type="button"
-          // Link is an action, not a toggle: it prompts for a URL, so it has no pressed state.
-          variant={editor.isActive("link") ? "secondary" : "ghost"}
-          size="icon"
-          className="h-7 w-7"
-          title="Link"
-          aria-label="Link"
-          tabIndex={toolbarIndex === 7 ? 0 : -1}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => {
-            const prev = editor.getAttributes("link").href as string | undefined;
-            const url = window.prompt("Enter URL", prev || "https://");
-            if (url === null) return;
-            if (url === "") {
-              editor.chain().focus().unsetLink().run();
-            } else {
-              editor.chain().focus().setLink({ href: url }).run();
-            }
-          }}
-        >
-          <Link2 className="h-3.5 w-3.5" />
-        </Button>
+        <Popover open={linkOpen} onOpenChange={onLinkOpenChange}>
+          <PopoverTrigger asChild>
+            <Button
+              ref={linkTriggerRef}
+              type="button"
+              // Link is an action, not a toggle: it opens a URL editor rather than
+              // flipping a state, so it carries no aria-pressed. The variant below
+              // still tracks isActive("link") as the pressed look.
+              variant={editor.isActive("link") ? "secondary" : "ghost"}
+              size="icon"
+              className="h-7 w-7"
+              title="Link"
+              aria-label="Link"
+              tabIndex={toolbarIndex === 7 ? 0 : -1}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <Link2 className="h-3.5 w-3.5" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="start"
+            className="w-80 p-3"
+            aria-labelledby={linkLabelId}
+            onInteractOutside={(e) => {
+              // Clicking the trigger is one of the popover's own exits, but
+              // Radix reports it here before it checks where the click landed,
+              // so it has to be excluded or the caret is dropped on close.
+              if (linkTriggerRef.current?.contains(e.target as Node)) return;
+              linkDismissedOutside.current = true;
+            }}
+            // The trigger eats mousedown so the caret survives, which leaves
+            // nothing to focus the form for us.
+            onOpenAutoFocus={(e) => {
+              e.preventDefault();
+              linkInputRef.current?.focus();
+              linkInputRef.current?.select();
+            }}
+            onCloseAutoFocus={(e) => {
+              // Radix would otherwise park focus on the trigger.
+              e.preventDefault();
+              const dismissedOutside = linkDismissedOutside.current;
+              linkDismissedOutside.current = false;
+              // Apply, Cancel and Escape close the popover from its own controls,
+              // so the caret goes back to the document being edited. A click
+              // elsewhere in the compose dialog owns the focus it landed on.
+              if (!dismissedOutside) editor.commands.focus();
+            }}
+          >
+            {/* noValidate: this form reports its own message, not the browser's. */}
+            <form
+              noValidate
+              className="space-y-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                applyLink();
+              }}
+            >
+              <Label id={linkLabelId} htmlFor={linkInputId}>Link URL</Label>
+              <Input
+                id={linkInputId}
+                ref={linkInputRef}
+                type="url"
+                inputMode="url"
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                placeholder="https://example.com"
+                value={linkUrl}
+                aria-invalid={linkError ? true : undefined}
+                aria-describedby={linkError ? `${linkInputId}-error` : undefined}
+                onChange={(e) => {
+                  setLinkUrl(e.target.value);
+                  setLinkError(null);
+                }}
+              />
+              {linkError && (
+                <p id={`${linkInputId}-error`} role="alert" className="text-destructive text-xs">
+                  {linkError}
+                </p>
+              )}
+              <div className="flex items-center gap-2">
+                <Button type="submit" size="sm">
+                  Apply
+                </Button>
+                <Button type="button" size="sm" variant="ghost" onClick={() => setLinkOpen(false)}>
+                  Cancel
+                </Button>
+                {editor.isActive("link") && (
+                  <Button type="button" size="sm" variant="ghost" className="ml-auto" onClick={removeLink}>
+                    Remove link
+                  </Button>
+                )}
+              </div>
+            </form>
+          </PopoverContent>
+        </Popover>
       </div>
       <EditorContent
         editor={editor}
