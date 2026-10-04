@@ -340,7 +340,7 @@ def build_workflows(
         invite_url = (
             f"{settings.frontend_url.rstrip('/')}/invitations/accept?token={token}"
             if token
-            else f"{settings.frontend_url.rstrip('/')}/invitations"
+            else f"{settings.frontend_url.rstrip('/')}{INVITATIONS_ROUTE}"
         )
         sent = await send_email(
             invitation_template(
