@@ -209,6 +209,22 @@ async def test_refine_compliant_list_query(app_client):
     assert len(resp.json()) == 2
 
 
+async def test_list_query_rejects_mismatched_sort_and_order_lengths(app_client):
+    """More order[] than sort[] must be a client error, not an unhandled 500."""
+    client = app_client
+    tokens = await register_user(client, "kim@example.com")
+    for query in (
+        "sort[]=name&order[]=asc&order[]=desc",
+        "_sort=name&_order=asc,desc",
+    ):
+        resp = await client.get(
+            f"/api/v1/workspaces?{query}",
+            headers=auth_headers(tokens),
+        )
+        assert resp.status_code == 422, resp.text
+        assert "same number of entries" in resp.json()["detail"]
+
+
 async def test_simple_rest_range_pagination_query(app_client):
     """simple-rest's default server pagination (`_start`/`_end`) and comma-
     joined `_sort`/`_order`, plus its `id=` getMany format, must all parse."""
