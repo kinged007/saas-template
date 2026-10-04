@@ -226,6 +226,7 @@ async def test_create_role_rejects_blank_name(app_client):
         headers=ws_headers(owner, ws["id"]),
     )
     assert resp.status_code == 422
+    assert resp.json()["detail"][0]["loc"] == ["body", "name"]
 
 
 async def test_update_role_strips_padded_name(app_client):
@@ -245,6 +246,7 @@ async def test_update_role_strips_padded_name(app_client):
         f"/api/v1/roles/{created['id']}", json={"name": "   "}, headers=headers
     )
     assert resp.status_code == 422
+    assert resp.json()["detail"][0]["loc"] == ["body", "name"]
 
 
 async def test_permission_catalog_excludes_legacy_key_only_scope(app_client):
@@ -470,7 +472,7 @@ async def test_update_role_noop_body_keeps_system_flag(app_client):
     ws = await create_workspace(client, owner)
     headers = ws_headers(owner, ws["id"])
     editor_id = await _role_id(client, headers, "editor")
-    for body in ({}, {"name": "editor"}):
+    for body in ({}, {"name": "editor"}, {"name": "  editor  "}):
         resp = await client.patch(f"/api/v1/roles/{editor_id}", json=body, headers=headers)
         assert resp.status_code == 200, (body, resp.text)
         assert resp.json()["system"] is True, body

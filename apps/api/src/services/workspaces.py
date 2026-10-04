@@ -182,6 +182,8 @@ class WorkspaceService:
         allow_single_workspace_bootstrap: bool = False,
     ) -> Workspace:
         name = name.strip()
+        if not name:
+            raise WorkspaceError("workspace name cannot be blank")
         if self.single_workspace_enabled() and not allow_single_workspace_bootstrap:
             existing = await self.get_single_workspace()
             if existing is not None:
@@ -254,6 +256,8 @@ class WorkspaceService:
         changes: dict = {}
         if name is not None:
             name = name.strip()
+            if not name:
+                raise WorkspaceError("workspace name cannot be blank")
         if name is not None and name != workspace.name:
             changes["name"] = {"from": workspace.name, "to": name}
             workspace.name = name
@@ -1125,6 +1129,8 @@ class WorkspaceService:
         ip_address: str | None = None,
     ) -> Role:
         name = name.strip()
+        if not name:
+            raise WorkspaceError("role name cannot be blank")
         assignable: set[str] = set()
         is_owner = False
         if actor is not None:
@@ -1172,6 +1178,8 @@ class WorkspaceService:
         role = await self.get_role(workspace_id, role_id)
         if is_owner_role_name(role.name):
             raise WorkspaceForbidden("the owner role cannot be edited")
+        if name is not None and not name:
+            raise WorkspaceError("role name cannot be blank")
         changed = False
         if name is not None and name != role.name:
             await self._check_name_free(workspace_id, name, exclude_id=role.id)
