@@ -13,6 +13,14 @@ const retry = queryClient.getDefaultOptions().queries?.retry as (
   error: unknown,
 ) => boolean;
 
+// Matches a real override (`retry: false`, `retry: true`, `retry: 2`,
+// `retry: (…) =>`), not a prop type or a JSX attribute that happens to be
+// called retry. `retry: true` retries forever, so it must not slip past.
+// ponytail: a retry bound to an identifier (`retry: RETRY_BUDGET`) is not
+// detected; extend the alternation when one appears, do not loosen the
+// pattern into matching JSX props.
+const RETRY_OVERRIDE = /retry:\s*(true|false|\d|\()/;
+
 test("a 4xx is never retried", () => {
   for (const statusCode of [400, 401, 403, 404, 409, 422, 429, 499]) {
     assert.equal(retry(0, { statusCode }), false, `status ${statusCode}`);
@@ -37,6 +45,20 @@ test("the retry budget is 3 retries for 5xx, and the refusal is what costs a ret
   assert.equal(retry(2, { statusCode: 404 }), false);
 });
 
+test("the retry-override scan catches an unbounded retry", () => {
+  for (const override of [
+    "queryOptions: { retry: true }",
+    "queryOptions: { retry: false }",
+    "queryOptions: { retry: 2 }",
+    "retry: (failureCount) => failureCount < 2",
+  ]) {
+    assert.equal(RETRY_OVERRIDE.test(override), true, override);
+  }
+  for (const notAnOverride of ["<Button retry={false} />", "retry: RetryPolicy"]) {
+    assert.equal(RETRY_OVERRIDE.test(notAnOverride), false, notAnOverride);
+  }
+});
+
 test("an explicit retry budget is set only where it is audited", () => {
   const sources = (dir: string): string[] =>
     readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -44,10 +66,8 @@ test("an explicit retry budget is set only where it is audited", () => {
       if (entry.isDirectory()) return sources(path);
       return /\.tsx?$/.test(entry.name) && !/\.test\.ts$/.test(entry.name) ? [path] : [];
     });
-  // Matches a real override (`retry: false`, `retry: 2`, `retry: (…) =>`), not
-  // a prop type or a JSX attribute that happens to be called retry.
   const hits = sources(srcDir)
-    .filter((path) => /retry:\s*(false|\d|\()/.test(readFileSync(path, "utf8")))
+    .filter((path) => RETRY_OVERRIDE.test(readFileSync(path, "utf8")))
     .map((path) => relative(srcDir, path))
     .sort();
   assert.deepEqual(hits, [
