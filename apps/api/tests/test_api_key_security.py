@@ -21,6 +21,7 @@ Covers, end to end over the HTTP API:
     export, and the deployment-admin flag all refuse a key
 """
 
+import pytest
 from sqlalchemy import select
 
 from src.core.permissions import ALL_PERMISSIONS, JOB_READ, JOB_UPDATE, permissions_for_role
@@ -988,14 +989,45 @@ async def test_auth_me_reports_the_principals_scope_not_the_owners(app_client):
     assert me_key.status_code == 200, me_key.text
     assert [w["id"] for w in me_key.json()["workspaces"]] == [ws["id"]]
 
-    # The owner's own session still sees the whole inventory, and it is the
-    # reference for what a key may read back: the roles it holds in the one
-    # workspace the key is scoped to, never the union across all of them.
+    # The owner's own session still sees the whole inventory, and its
+    # top-level union is still the union of the roles it holds there.
     me_owner = await client.get("/api/v1/auth/me", headers=auth_headers(owner))
     assert me_owner.status_code == 200, me_owner.text
     assert {w["id"] for w in me_owner.json()["workspaces"]} == {ws["id"], other_ws["id"]}
-    in_scope = next(w for w in me_owner.json()["workspaces"] if w["id"] == ws["id"])
-    assert set(me_key.json()["permissions"]) == set(in_scope["permissions"])
+    assert set(me_owner.json()["permissions"]) == {
+        p for w in me_owner.json()["workspaces"] for p in w["permissions"]
+    }
+
+    # The key's top-level `permissions` is its own grant — the same list
+    # deps.py authorizes it on — and never the creator's role, which for an
+    # owner is the wildcard.
+    assert me_key.json()["permissions"] == sorted(key["permissions"])
+    assert "*" not in me_key.json()["permissions"]
+
+
+@pytest.mark.parametrize("grant", [[], ["member:read"]])
+async def test_auth_me_reports_the_keys_own_grant_not_the_owners_role(app_client, grant):
+    """A key's authority is the grant it was minted with, so `/me` reports it.
+
+    `[]` is the case a truthiness check gets wrong: an empty grant is a real
+    grant, not a missing one, and must not fall back to the creator's role.
+    """
+    client = app_client
+    owner = await register_user(client, "grant@example.com")
+    ws = await create_workspace(client, owner, "Granted Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "granted", grant)
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    assert me_key.json()["permissions"] == sorted(grant)
+    assert me_key.json()["is_superuser"] is False
+
+    # Same user, same endpoint: the creator's session still answers with its
+    # own role union, so the narrowing belongs to the principal, not the route.
+    me_owner = await client.get("/api/v1/auth/me", headers=auth_headers(owner))
+    assert me_owner.status_code == 200, me_owner.text
+    assert "*" in me_owner.json()["permissions"]
+    assert me_key.json()["permissions"] != me_owner.json()["permissions"]
 
 
 async def test_job_run_access_uses_the_keys_own_permissions(app_client):

@@ -130,6 +130,14 @@ async def require_session_user(
     and the password. No permission list covers any of them, so the key would be
     the only thing deciding access. (`GET /me/profile` and `GET /auth/me` stay
     readable by a key: they report the caller's own identity.)
+
+    This list is not exhaustive. `POST /auth/resend-verification` is
+    deliberately left key-reachable: it depends on `get_current_user`, holds no
+    permission list, changes no authority, and mails the address it already
+    knows. It is also neither rate-limited (login, forgot and reset call
+    `get_auth_limiter()`) nor quota-charged — it never reaches
+    `record_key_use` — so a key can trigger a mail per call without spending
+    key quota. See the route's own comment.
     """
     if principal.api_key is not None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "api keys cannot perform this action")

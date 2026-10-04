@@ -252,6 +252,10 @@ async def verify_email(
 
 @router.post("/resend-verification", status_code=202)
 async def resend_verification(
+    # Deliberately `get_current_user`, not `require_session_user`: this stays
+    # key-reachable (see that gate's docstring). It authorizes on nothing — no
+    # permission list, no role — so it is also neither rate-limited nor charged
+    # through `record_key_use`: a key may mail per call without spending quota.
     user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
@@ -656,21 +660,37 @@ async def me(
     memberships = await service.list_workspaces(user.id)
     if principal.api_key is not None:
         # A key learns only its own workspace, never the creator's inventory:
-        # every workspace listed here is one the key can actually reach.
+        # every workspace listed here is one the key can actually reach. It is
+        # already pinned to that one workspace and its gate never reads the
+        # flag, so the single-workspace filter below does not apply to it —
+        # applied a second time it would empty the payload for a key minted
+        # anywhere but the oldest workspace.
         memberships = [m for m in memberships if m[0].id == principal.api_key.workspace_id]
-    if settings.single_workspace:
+    elif settings.single_workspace:
         # Toggling onto an existing deployment: oldest wins, rest stay hidden.
         # (GET /workspaces still lists all memberships; /me is the UI surface.)
         single = await service.get_single_workspace()
         if single is not None:
             memberships = [m for m in memberships if m[0].id == single.id]
+    # Each entry is a *membership* row: the creator's role in that workspace,
+    # which is the fact `require_session_user` already relies on ("an API key
+    # carries its creator's role into the service layer"). For a key this is
+    # not the key's authority — see `permissions` below.
     data["workspaces"] = [
         workspace_to_dict(
             w, role=role.name, permissions=role.permissions, joined_at=member.created_at
         )
         for w, role, member in memberships
     ]
-    data["permissions"] = sorted({p for _, role, _ in memberships for p in role.permissions})
+    # A key's authority is its own grant, never the creator's role: this is the
+    # same list `require_permission` authorizes it on, so `/me` must not report
+    # a wildcard beside `is_superuser: false`. Branch on `is not None`, never on
+    # truthiness — an empty grant is a real grant, not a missing one.
+    data["permissions"] = (
+        sorted(principal.api_key.permissions)
+        if principal.api_key is not None
+        else sorted({p for _, role, _ in memberships for p in role.permissions})
+    )
     data["single_workspace"] = settings.single_workspace
     # Embed profile (lazy create)
     try:

@@ -1,6 +1,6 @@
 """Password recovery + email verification (issue #12)."""
 
-from tests.conftest import auth_headers, register_user
+from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
 
 
 async def test_register_sends_verification_and_verify_flow(app_client, monkeypatch):
@@ -188,3 +188,44 @@ async def test_login_not_blocked_when_unverified(app_client):
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(login_tokens))
     assert me.json()["email_verified"] is False
     _ = tokens
+
+
+async def test_resend_verification_stays_key_reachable_and_unmetered(app_client, monkeypatch):
+    """`require_session_user` is not the whole story, and this is the exception.
+
+    The route authorizes through `get_current_user`, not the session-only gate,
+    so a key reaches it. It also calls neither the auth limiter (login, forgot
+    and reset do) nor `record_key_use`, so a key can mail the creator's inbox
+    without spending quota. Both are documented in the gate's docstring; this
+    test pins what that docstring now claims.
+    """
+    import src.email.factory as factory
+
+    sent = []
+
+    async def _send(message):
+        sent.append(message)
+        return True
+
+    monkeypatch.setattr(factory, "send_email", _send)
+    tokens = await register_user(app_client, "key-resend@example.com")
+    ws = await create_workspace(app_client, tokens, "Resend Inc")
+    owner_headers = ws_headers(tokens, ws["id"])
+
+    resp = await app_client.post(
+        "/api/v1/api-keys",
+        json={"name": "resender", "permissions": ["notification:read"]},
+        headers=owner_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    key = resp.json()
+    key_headers = {"Authorization": f"Bearer {key['key']}", "X-Workspace-ID": ws["id"]}
+
+    sent.clear()
+    for _ in range(2):
+        resp = await app_client.post("/api/v1/auth/resend-verification", headers=key_headers)
+        assert resp.status_code == 202, resp.text
+    assert len(sent) == 2  # every call mails: no limiter trips between them
+
+    keys = await app_client.get("/api/v1/api-keys", headers=owner_headers)
+    assert keys.json()[0]["usage_count"] == 0  # and none of it is charged
