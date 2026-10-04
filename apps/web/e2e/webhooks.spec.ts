@@ -7,15 +7,18 @@ import { IDENTITY, mockApi } from "./mock-api";
  * The webhooks pages use the refine resource `webhooks`, which the dataProvider
  * maps to the `webhooks/subscriptions` collection the API serves — the router
  * has no collection at its own prefix. These specs pin that mapping for the
- * list, create and delete calls, and the one distinction the list view used to
- * lose: a request that failed is not a list that came back empty.
+ * list, create and delete calls, and the one distinction the list and the
+ * delivery log used to lose: a request that failed is not a list that came
+ * back empty.
  */
 
 const SUBSCRIPTION = {
   id: "sub-1",
   workspace_id: "ws-1",
   url: "https://example.com/hooks/acme",
-  events: ["invoice.paid"],
+  // A real event name: the API rejects unknown ones with 422, so a fixture
+  // inventing one would let the stubbed list and a real create diverge.
+  events: ["apikey.created"],
   active: true,
   created_at: "2026-01-01T00:00:00Z",
 };
@@ -61,7 +64,7 @@ const events = (page: Page) =>
       route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ events: ["invoice.paid"] }),
+        body: JSON.stringify({ events: ["apikey.created"] }),
       }),
   );
 
@@ -101,6 +104,28 @@ test.describe("webhooks page", () => {
     await expect(page.getByText("No webhook subscriptions yet.")).toBeVisible();
   });
 
+  test("a failed delivery request reads as an error, not as an empty log", async ({ page }) => {
+    await webhooks(page);
+    await subscriptions(page, 200, [SUBSCRIPTION]);
+    await page.route(
+      (url) => url.pathname.startsWith("/api/v1/webhooks/deliveries"),
+      (route) =>
+        route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Boom" }),
+        }),
+    );
+
+    await page.goto("/webhooks");
+    await page.getByRole("button", { name: "Delivery log" }).click();
+
+    const row = page.getByRole("row").filter({ hasText: "Could not load deliveries" });
+    await expect(row).toBeVisible();
+    await expect(row).toContainText("Boom");
+    await expect(page.getByText("No deliveries yet.")).toHaveCount(0);
+  });
+
   test("create and delete target the same collection", async ({ page }) => {
     await webhooks(page);
     await subscriptions(page, 200, [SUBSCRIPTION]);
@@ -122,7 +147,7 @@ test.describe("webhooks page", () => {
 
     await page.goto("/webhooks/create");
     await page.getByLabel("Target URL").fill(SUBSCRIPTION.url);
-    await page.getByLabel("invoice.paid").check();
+    await page.getByLabel("apikey.created").check();
     await page.getByRole("button", { name: "Create webhook" }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
     expect(calls).toContain(`POST ${COLLECTION}`);
