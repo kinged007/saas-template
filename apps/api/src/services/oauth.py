@@ -280,7 +280,15 @@ async def claims_from_id_token(
             issuer=issuer,
             options={"require": ["exp", "iss", "sub"]},
         )
-    except Exception as exc:
+    except (OAuthError, jwt.PyJWTError) as exc:
+        # Only these two are verification failures, so only these two mean "no
+        # claims". OAuthError is `_jwks` reporting the IdP side — unreachable, an
+        # HTTP error, a body that is not a usable key set, a non-JSON or non-UTF-8
+        # body, a response cut off mid-body — and the "no matching signing key"
+        # below. PyJWTError is the token or the published set being unusable, and
+        # covers the PyJWKSetError an unknown `kty` produces. Anything else is a
+        # defect in this module or in the provider config and has to reach the
+        # traceback instead of being reported as a rejected login.
         logger.warning(
             "id_token verification failed for provider %s: %s",
             provider.id,
