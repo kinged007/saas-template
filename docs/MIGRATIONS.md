@@ -22,6 +22,65 @@ Merge conflicts on `versions/`: two PRs branching a migration off the same
 parent produce two heads. `make db-check` fails CI — the later-merged PR
 repoints its `down_revision` to the new head. One line.
 
+## Indexes
+
+An index needs three things before it becomes a migration: the access path it
+serves, a measurement showing that path is slow, and the write cost it adds.
+The measurement goes in this file so the next reader does not repeat it.
+
+### `notifications`: no composite `(user_id, workspace_id)`
+
+Every read through `NotificationService` and `GET /notifications`
+(`src/api/routes/notifications.py:81`) filters on `user_id` **and**
+`workspace_id`, which is what a composite would serve. Every access path:
+
+| Path | Predicates | Index used |
+| --- | --- | --- |
+| `GET /notifications` rows and its `COUNT(*)` | `user_id`, `workspace_id`, `ORDER BY created_at DESC, id DESC` | `ix_notifications_user_id` + `ix_notifications_workspace_id` (BitmapAnd) |
+| `GET /notifications/unread-count`, `PATCH /notifications/read-all` | `user_id`, `workspace_id`, `acknowledged_at IS NULL`, `type <>` | same |
+| `acknowledge_for_conversation` (`services/notifications.py:246`) | `user_id`, `workspace_id`, `type =`, `acknowledged_at IS NULL` | same |
+| global search (`services/search_export.py:282`) | `workspace_id`, `user_id`, `title/body ILIKE` | same |
+| digest (`jobs/builtin.py:178`), GDPR count and delete (`services/profiles.py:282`) | `user_id` | `ix_notifications_user_id` |
+| workspace JSON export (`services/search_export.py:419`) | `workspace_id` | `ix_notifications_workspace_id` |
+| retention cleanup (`jobs/builtin.py:244`) | `acknowledged_at IS NOT NULL`, `created_at <` cutoff | none, seq scan |
+
+Measured on embedded Postgres at 1M rows (5,000 users × 200 notifications
+across two workspaces each, 327 MB, `VACUUM ANALYZE`d,
+`EXPLAIN (ANALYZE, BUFFERS)`), for a typical user — 200 rows, 100 of them in
+the queried workspace:
+
+| Query | Two single-column indexes | With composite |
+| --- | --- | --- |
+| list rows, `ORDER BY created_at DESC, id DESC LIMIT 50` | BitmapAnd, 200 + 10,000 index entries, 1.1–3.9 ms | Index Scan, 100 entries, 0.2–1.4 ms |
+| its `COUNT(*)` subquery | BitmapAnd, 200 + 10,000 entries, 1.1 ms | Index Only Scan, 5 buffers, 0.13 ms |
+| `unread_count` | BitmapAnd, 200 + 10,000 entries, 1.8 ms | Index Scan, 100 entries, 0.25 ms |
+| retention cleanup | Seq Scan over the whole table | Seq Scan, unchanged |
+
+The spread in the list row is cold vs warm cache. Every read is already served
+by an index and returns in milliseconds, so nothing is slow. The composite
+reads 100 index entries where the current plan reads ~10,200 — a constant
+factor on a path that does not need it, paid for with an index write per
+insert.
+
+Decision: no composite. `ix_notifications_workspace_id` stays regardless —
+the workspace JSON export filters on `workspace_id` alone and keeps planning
+through it.
+
+Revisit when a slow-query log or `EXPLAIN` shows one of those reads scanning
+more than ~1k index entries for a single request, one user passes ~10k rows,
+or the table passes ~5M rows. Then it is a **swap, not an addition**:
+`ix_notifications_user_id` is a leftmost prefix of the composite and becomes
+redundant, so drop it in the same migration and the index count and write cost
+stay flat. Build it with `CREATE INDEX CONCURRENTLY` inside
+`op.get_context().autocommit_block()` on a large table — a plain
+`CREATE INDEX` holds a `ShareLock` that blocks notification inserts for the
+duration, and the table grows without bound because retention purges only
+acknowledged rows.
+
+The one expensive path is the retention cleanup, a seq scan over the whole
+table. A partial index on `created_at WHERE acknowledged_at IS NOT NULL`, or a
+batched delete, is that fix; the composite does not move it.
+
 ## Checks
 
 ```bash
