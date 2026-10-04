@@ -373,6 +373,27 @@ async def test_export_members_csv_keeps_columns_for_members_without_profile(app_
     assert bare["role"]
 
 
+async def test_export_audit_details_drop_the_internal_source_event_id(app_client):
+    """The export is a downloadable artifact, so it strips the dedupe key."""
+    client, h, ws, conv = await _setup(app_client)
+    await _wait_for_audit_export(client, h, ws["id"])
+    async with SessionFactory() as session:
+        session.add(
+            AuditLogEntry(
+                workspace_id=ws["id"],
+                resource_type="workspace",
+                resource_id=ws["id"],
+                action="workspace.renamed",
+                details={"source_event_id": "evt-1", "name": "Renamed"},
+            )
+        )
+        await session.commit()
+
+    bundle = json.loads((await client.get("/api/v1/workspaces/export", headers=h)).text)
+    row = next(a for a in bundle["audit"] if a["action"] == "workspace.renamed")
+    assert row["details"] == {"name": "Renamed"}
+
+
 async def test_export_audit_csv(app_client):
     """The audit log is selectable in the export card and exports as CSV."""
     from src.services.search_export import CSV_RESOURCES
