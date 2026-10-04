@@ -22,11 +22,30 @@ DIGEST_TYPE = "*"
 DIGEST_EXCLUDED_TYPES = ("conversation_message",)
 CHANNELS = ("in-app", "email", "off")
 DEFAULT_CHANNEL = "in-app"
+# Preferences may only be written for a type the notification workflows emit,
+# so nobody can fill a member's table with rows nothing ever reads.
+KNOWN_TYPES = (
+    "workspace_invitation",
+    "member_joined",
+    "member_role_changed",
+    "member_removed",
+    *DIGEST_EXCLUDED_TYPES,
+)
 
 
 def unsubscribe_url_for(token: str, type: str, frontend_url: str) -> str:
     base = (frontend_url or "").rstrip("/")
     return f"{base}/api/v1/notifications/unsubscribe?token={token}&type={type}"
+
+
+def preferences_response(prefs) -> dict:
+    """Wire shape for `GET|PUT /preferences` and its target-scoped twin, so both
+    routes answer identically. It lives here because it needs `DIGEST_TYPE`, and
+    `services.serializers` already imports this module."""
+    return {
+        "channels": {p.type: p.channel for p in prefs if p.type != DIGEST_TYPE},
+        "digest_enabled": next((p.digest_enabled for p in prefs if p.type == DIGEST_TYPE), False),
+    }
 
 
 class NotificationSpec(TypedDict):
@@ -326,9 +345,12 @@ class NotificationService:
     async def upsert_channels(
         self, user_id: str, channels: dict[str, str]
     ) -> list[NotificationPreference]:
-        """Bulk upsert of per-type channels; generates tokens on email opt-in."""
+        """Bulk upsert of per-type channels; generates tokens on email opt-in.
+        Raises ValueError on an unknown type or channel."""
         rows: list[NotificationPreference] = []
         for type, channel in channels.items():
+            if type not in KNOWN_TYPES:
+                raise ValueError(f"unknown type {type!r}")
             if channel not in CHANNELS:
                 raise ValueError(f"invalid channel {channel!r}")
             result = await self._session.execute(

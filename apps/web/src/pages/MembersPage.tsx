@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { useCan, useCreate, useCustomMutation, useGetIdentity, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
+import { useCan, useCreate, useCustomMutation, useGetIdentity, useGo, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Link } from "react-router";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
@@ -109,6 +109,9 @@ export function MembersPage() {
   // which leaves the canRevoke gate below unreachable for it.
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
   const { data: canRevoke } = useCan({ resource: "invitations", action: "delete" });
+  // Profile editing is a distinct scope from role management (member:update).
+  const { data: canEditProfiles } = useCan({ resource: "member-profiles", action: "edit" });
+  const go = useGo();
   const { result: invitationsResult } = useWorkspaceList<Invitation>({
     resource: "invitations",
     pagination: { currentPage: invitesPage, pageSize: PAGE_SIZE },
@@ -274,6 +277,18 @@ export function MembersPage() {
                 <TableCell className="text-muted-foreground">{formatDate(m.joined_at)}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-1">
+                    {/* The editor targets other members: your own profile lives
+                        in Settings → Profile, where the delegated session and
+                        password routes would refuse to act on you. */}
+                    {canEditProfiles?.can && m.id !== identity?.id && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => go({ to: `/users/${m.id}/settings` })}
+                      >
+                        Edit
+                      </Button>
+                    )}
                     {canManageRoles && !isOwnerRoleName(m.role) && canSuspendMember(m) && (
                       <Button variant="ghost" size="sm" onClick={() => suspend(m, true)}>
                         Suspend

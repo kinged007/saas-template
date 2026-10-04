@@ -42,7 +42,12 @@ from src.schemas.api import (
 )
 from src.services.auth import AuthError, AuthService
 from src.services.profiles import ProfileService
-from src.services.serializers import profile_to_dict, user_to_dict, workspace_to_dict
+from src.services.serializers import (
+    profile_to_dict,
+    session_to_dict,
+    user_to_dict,
+    workspace_to_dict,
+)
 from src.services.two_factor import TwoFactorError, TwoFactorService
 from src.services.workspaces import WorkspaceService
 from src.settings import settings
@@ -378,16 +383,12 @@ async def refresh(
     return TokenResponse(**pair.__dict__)
 
 
-def _session_to_dict(row, *, current: bool) -> dict:
-    return {
-        "id": row.id,
-        "created_at": row.created_at,
-        "expires_at": row.expires_at,
-        "revoked_at": row.revoked_at,
-        "ip_address": row.ip_address,
-        "user_agent": row.user_agent,
-        "current": current,
-    }
+def _require_session_user(principal: AuthPrincipal) -> None:
+    """Session routes are a user-session concept; API keys carry no session."""
+    if principal.api_key is not None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "session management is not available to API keys"
+        )
 
 
 @router.post("/change-password", status_code=204)
@@ -573,7 +574,7 @@ async def list_sessions(
     rows = await AuthService(db).list_sessions(principal.user.id)
     now = now_utc()
     return [
-        _session_to_dict(r, current=(r.id == principal.session_id))
+        session_to_dict(r, current=(r.id == principal.session_id))
         for r in rows
         if r.revoked_at is None and ensure_utc(r.expires_at) >= now
     ]

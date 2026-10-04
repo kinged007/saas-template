@@ -1,7 +1,16 @@
 import { useEffect } from "react";
 import { Refine, Authenticated } from "@refinedev/core";
 import routerProvider from "@refinedev/react-router";
-import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router";
+import {
+  BrowserRouter,
+  Navigate,
+  Outlet,
+  Route,
+  Routes,
+  useLocation,
+  useParams,
+} from "react-router";
+
 
 import { useNotificationProvider } from "./components/refine-ui/notification/use-notification-provider";
 import { Toaster } from "./components/refine-ui/notification/toaster";
@@ -40,6 +49,8 @@ import { GeneralSection as ProfileGeneralSection } from "./pages/settings/profil
 import { NotificationsSection as ProfileNotificationsSection } from "./pages/settings/profile/sections/NotificationsSection";
 import { SecuritySection } from "./pages/settings/profile/sections/SecuritySection";
 import { WorkspacesSection } from "./pages/settings/profile/sections/WorkspacesSection";
+import { UserSettingsLayout } from "./pages/settings/user/UserSettingsLayout";
+import { userSettings } from "./pages/settings/user/registry";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { WorkspaceSettingsLayout } from "./pages/settings/workspace/WorkspaceSettingsLayout";
 import { GeneralSection } from "./pages/settings/workspace/sections/GeneralSection";
@@ -65,6 +76,14 @@ function ToLogin() {
     returnToStore.set(pathname + search + hash);
   }, []);
   return <Navigate to="/login" replace />;
+}
+
+// A splat route resolves a relative `to` against the matched splat, so an unknown
+// member-editor tab would grow the URL on every hop. Match the two sibling
+// settings layouts: redirect to an absolute path.
+function MemberSettingsFallback() {
+  const { id = "" } = useParams();
+  return <Navigate to={`/users/${id}/settings/general`} replace />;
 }
 
 /**
@@ -116,6 +135,9 @@ export function App() {
             meta: { label: "Scheduled Jobs" },
           },
           { name: "audit", list: "/audit", meta: { hide: true } },
+          // Member editor. Registered so useGo() can resolve the path; the tabs
+          // themselves are the routes in the <Routes> block below.
+          { name: "member-profiles", show: "/users/:id/settings", meta: { hide: true } },
           { name: "admin-users", list: "/admin/users", meta: { hide: true } },
           { name: "admin-workspaces", list: "/admin/workspaces", meta: { hide: true } },
           { name: "admin-audit", list: "/admin/audit", meta: { hide: true } },
@@ -174,6 +196,15 @@ export function App() {
                 <Route path="security" element={<SecuritySection />} />
                 <Route path="workspaces" element={<WorkspacesSection />} />
                 <Route path="*" element={<Navigate to="/settings/profile/general" replace />} />
+              </Route>
+              {/* Member editor: same sections, target-aware. New tabs come from
+                  `userSettings`; keep this map in sync with that registry. */}
+              <Route path="users/:id/settings" element={<UserSettingsLayout />}>
+                <Route index element={<Navigate to="general" replace />} />
+                {userSettings.sections.map((s) => (
+                  <Route key={s.key} path={s.key} element={<s.component />} />
+                ))}
+                <Route path="*" element={<MemberSettingsFallback />} />
               </Route>
               {/* Legacy redirects — keep old URLs working */}
               <Route path="roles" element={<Navigate to="/settings/workspace/roles" replace />} />

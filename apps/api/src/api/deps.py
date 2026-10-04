@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import format_datetime
@@ -11,6 +12,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dates import now_utc
+from src.core.permissions import PROFILE_UPDATE
 from src.core.security.tokens import decode_access_token
 from src.db.session import get_db
 from src.models.api_key import ApiKey
@@ -26,6 +28,16 @@ bearer = HTTPBearer(auto_error=False)
 
 def get_container(request: Request):
     return request.app.state.container
+
+
+def uuid_or_404(value: str, label: str) -> str:
+    # StringUUID's bind processor raises ValueError (-> 500) on a malformed id,
+    # so validate before it reaches the query.
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{label} not found") from None
+    return value
 
 
 @dataclass
@@ -340,6 +352,83 @@ def require_permission(permission: str):
         ) from None
 
     return checker
+
+
+async def can_target_profile_update(
+    user_id: str,
+    response: Response,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    principal: Annotated[AuthPrincipal, Depends(resolve_auth_principal)],
+    workspace_id: Annotated[str | None, Depends(get_optional_workspace_id)],
+) -> bool:
+    """True when the caller may read and edit `user_id`'s full profile.
+
+    Self and deployment admins always may. Everyone else needs `profile:update`
+    in `X-Workspace-ID` plus an active membership for the target in that same
+    workspace, so the scope never reaches a user outside the caller's own
+    workspace. Without the header there is no workspace to evaluate the
+    permission against, so only self and deployment admins pass — the redacted
+    cross-user read keeps working for plain co-members.
+
+    Never raises for a refusal: the read path falls back to the redacted
+    projection, which is the safe answer. A server-side failure is not a refusal
+    and propagates. `require_target_profile_update` is the strict variant.
+    """
+    try:
+        return await _target_profile_update(user_id, response, db, principal, workspace_id)
+    except HTTPException as exc:
+        if exc.status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
+            raise
+        return False
+
+
+async def _target_profile_update(
+    user_id: str,
+    response: Response,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    principal: Annotated[AuthPrincipal, Depends(resolve_auth_principal)],
+    workspace_id: Annotated[str | None, Depends(get_optional_workspace_id)],
+) -> bool:
+    """The strict check behind both entry points; raises 403/404 on refusal."""
+    # A malformed id can never name a member, so it 404s before any UUID bind.
+    uuid_or_404(user_id, "user")
+    if principal.is_deployment_admin or principal.user.id == user_id:
+        # This branch skips the membership lookup, so it is also the only path
+        # where nothing has checked that the target is a real user: without the
+        # lookup a superuser id writes an orphan `user_profiles` /
+        # `notification_preferences` row, an FK violation on Postgres. Self
+        # hits the session identity map, so it costs no query.
+        if await db.get(User, user_id) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+        return True
+    if workspace_id is None:
+        return False
+    await require_permission(PROFILE_UPDATE)(response, db, principal, workspace_id)
+    # Any membership row that counts for access, i.e. an *active* one: a
+    # suspended member is out of the workspace's editable set, so the target
+    # lookup 404s exactly like a user who was never a member. The caller still
+    # passed an active-membership check of their own inside require_permission.
+    membership = await WorkspaceService(db).get_membership(workspace_id, user_id)
+    if membership is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found in this workspace")
+    return True
+
+
+async def require_target_profile_update(
+    user_id: str,
+    response: Response,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    principal: Annotated[AuthPrincipal, Depends(resolve_auth_principal)],
+    workspace_id: Annotated[str, Depends(get_current_workspace_id)],
+) -> str:
+    """Route guard for every target-scoped profile route.
+
+    Declaring this dependency is all a new profile tab has to do to inherit the
+    authorization contract; a missing target membership is a 404 so the route
+    never confirms whether a user exists outside the caller's workspace.
+    """
+    await _target_profile_update(user_id, response, db, principal, workspace_id)
+    return user_id
 
 
 async def require_existing_workspace(

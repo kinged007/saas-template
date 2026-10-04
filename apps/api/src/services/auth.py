@@ -29,6 +29,10 @@ class AuthError(Exception):
     pass
 
 
+class CurrentSessionError(AuthError):
+    """The caller asked to revoke the session it is authenticated with."""
+
+
 @dataclass
 class TokenPair:
     access_token: str
@@ -350,10 +354,12 @@ class AuthService:
         *,
         current_session_id: str | None,
         ip_address: str | None = None,
+        actor_user_id: str | None = None,
+        workspace_id: str | None = None,
     ) -> None:
         """Revoke one session; raises AuthError when it is current or unknown."""
         if session_id == current_session_id:
-            raise AuthError("cannot revoke the current session")
+            raise CurrentSessionError("cannot revoke the current session")
         rows = await self.list_sessions(user_id)
         row = next((r for r in rows if r.id == session_id), None)
         if row is None:
@@ -364,17 +370,23 @@ class AuthService:
             logger.info("session revoked user=%s session=%s", user_id, session_id)
             await publish_audit(
                 self._bus,
-                workspace_id=None,
+                workspace_id=workspace_id,
                 resource_type="user",
                 resource_id=user_id,
                 action="user.session_revoked",
-                actor_user_id=user_id,
+                actor_user_id=actor_user_id or user_id,
                 details={"session_id": session_id},
                 ip_address=ip_address,
             )
 
     async def revoke_other_sessions(
-        self, user_id: str, *, current_session_id: str | None, ip_address: str | None = None
+        self,
+        user_id: str,
+        *,
+        current_session_id: str | None,
+        ip_address: str | None = None,
+        actor_user_id: str | None = None,
+        workspace_id: str | None = None,
     ) -> int:
         """Revoke every live session except the current one; returns the count."""
         rows = await self.list_sessions(user_id)
@@ -391,23 +403,24 @@ class AuthService:
             logger.info("other sessions revoked user=%s count=%d", user_id, count)
             await publish_audit(
                 self._bus,
-                workspace_id=None,
+                workspace_id=workspace_id,
                 resource_type="user",
                 resource_id=user_id,
                 action="user.sessions_revoked",
-                actor_user_id=user_id,
+                actor_user_id=actor_user_id or user_id,
                 details={"revoked_count": count},
                 ip_address=ip_address,
             )
         return count
 
-    async def list_sessions(self, user_id: str) -> list[RefreshToken]:
-        stmt = (
-            select(RefreshToken)
-            .where(RefreshToken.user_id == user_id)
-            .order_by(RefreshToken.created_at.desc())
-        )
-        result = await self._session.execute(stmt)
+    async def list_sessions(self, user_id: str, *, active_only: bool = False) -> list[RefreshToken]:
+        stmt = select(RefreshToken).where(RefreshToken.user_id == user_id)
+        if active_only:
+            stmt = stmt.where(
+                RefreshToken.revoked_at.is_(None),
+                RefreshToken.expires_at >= now_utc(),
+            )
+        result = await self._session.execute(stmt.order_by(RefreshToken.created_at.desc()))
         return list(result.scalars().all())
 
     async def get_user_by_refresh_token(self, refresh_token: str) -> User | None:
@@ -532,7 +545,13 @@ class AuthService:
         return user
 
     async def change_password(
-        self, user: User, new_password: str, *, ip_address: str | None = None
+        self,
+        user: User,
+        new_password: str,
+        *,
+        ip_address: str | None = None,
+        actor_user_id: str | None = None,
+        workspace_id: str | None = None,
     ) -> User:
         """Set a new password hash and revoke every refresh session.
 
@@ -550,11 +569,11 @@ class AuthService:
         await self._session.commit()
         await publish_audit(
             self._bus,
-            workspace_id=None,
+            workspace_id=workspace_id,
             resource_type="user",
             resource_id=user.id,
             action="user.password_changed",
-            actor_user_id=user.id,
+            actor_user_id=actor_user_id or user.id,
             ip_address=ip_address,
         )
         return user
