@@ -9,6 +9,7 @@ import { markdownComponents, markdownComponentsInverted, stripMarkdown, truncate
 import { mentionRemarkPlugin, mentionUrlTransform, type MentionTarget } from "@/lib/mentions";
 import { notificationLinkUrl } from "@/lib/notificationLink";
 import { activeWorkspacePermissions } from "../utils/permissions";
+import { isClientError } from "../providers/queryClient";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -275,8 +276,13 @@ export function InboxPage() {
     if (raw && Array.isArray(raw)) return raw as Message[];
     return [];
   }, [messagesResult]);
-  const messagesLoading = (messagesQuery as unknown as { isLoading?: boolean })?.isLoading ?? false;
-  const messagesError = (messagesQuery as unknown as { isError?: boolean })?.isError ?? false;
+  const messagesState = messagesQuery as unknown as { isLoading?: boolean; isError?: boolean; error?: unknown };
+  const messagesLoading = messagesState?.isLoading ?? false;
+  const messagesError = messagesState?.isError ?? false;
+  // A 4xx means the server answered and refused; only a transport failure or 5xx
+  // leaves the cached list merely behind.
+  const messagesRefused = messagesError && isClientError(messagesState?.error);
+  const hasCachedMessages = messages.length > 0;
 
   // Auto scroll to bottom when messages change
   useEffect(() => {
@@ -811,6 +817,18 @@ export function InboxPage() {
               <div className="flex min-h-0 flex-1 flex-col">
                 {/* Thread header */}
                 <div className="flex flex-col gap-3 border-b p-4">
+                  {/* A failed refetch keeps the cached messages. The header is outside the
+                      message scroller, so this stays visible at any scroll position. */}
+                  {messagesError && hasCachedMessages && (
+                    <div className="flex items-center justify-between gap-2">
+                      <p role="status" className={cn("text-sm", messagesRefused ? "text-destructive" : "text-muted-foreground")}>
+                        {messagesRefused ? "Could not refresh messages." : "Showing the last messages loaded."}
+                      </p>
+                      <Button variant="ghost" size="sm" onClick={() => void messagesQuery.refetch()}>
+                        Retry
+                      </Button>
+                    </div>
+                  )}
                   <div className="flex items-start gap-2">
                     <Button
                       variant="ghost"
@@ -963,16 +981,11 @@ export function InboxPage() {
                 {/* Messages */}
                 <div className="flex-1 overflow-y-auto p-4">
                   <div className="flex flex-col gap-4">
-                    {messagesError && messages.length > 0 && (
-                      // A failed refetch keeps the cached messages, so caption the list
-                      // instead of blanking it. `text-destructive` stays on the empty-list case.
-                      <p className="text-muted-foreground text-sm">Showing the last messages loaded.</p>
-                    )}
                     {messagesLoading ? (
                       <p className="text-muted-foreground text-sm">Loading…</p>
-                    ) : messagesError && messages.length === 0 ? (
+                    ) : messagesError && !hasCachedMessages ? (
                       <p className="text-destructive text-sm">Could not load messages.</p>
-                    ) : messages.length === 0 ? (
+                    ) : !hasCachedMessages ? (
                       <p className="text-muted-foreground text-sm">No messages yet.</p>
                     ) : (
                       messages.map((m) => {
