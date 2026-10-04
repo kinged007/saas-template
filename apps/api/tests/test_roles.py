@@ -442,6 +442,125 @@ async def test_suspended_actor_is_capped_on_role_writes(app_client):
             )
 
 
+async def test_suspended_narrow_role_actor_is_capped_on_role_writes(app_client):
+    """Same cap for a narrow role, and the refusal names what is missing.
+
+    `admin` holds all but `workspace:delete`, so its denial cannot tell a
+    suspended actor from an admin who happens to lack the permission.
+    `editor` holds nine of them. The positive half writes only from that set,
+    and the update target is a role the actor does not hold, so the deny half
+    below still reads `editor` — not a role the positive half narrowed — as
+    the actor's own role.
+    """
+    from src.db.session import SessionFactory
+    from src.models.workspace import WorkspaceMember
+    from src.services.auth import AuthService
+    from src.services.workspaces import WorkspaceForbidden, WorkspaceService
+
+    client = app_client
+    owner = await register_user(client, "cap-editor-owner@example.com")
+    ws = await create_workspace(client, owner)
+    await register_user(client, "cap-editor@example.com")
+    owner_headers = ws_headers(owner, ws["id"])
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session)
+        editor_user = await AuthService(session).get_by_email("cap-editor@example.com")
+        assert editor_user is not None, "cap-editor@example.com was not registered"
+        editor_id = await _role_id(client, owner_headers, "editor")
+        member = WorkspaceMember(
+            workspace_id=ws["id"],
+            user_id=editor_user.id,
+            role_id=editor_id,
+            status="active",
+        )
+        session.add(member)
+        await session.commit()
+
+        # `member:read` and `message:read` are both in the editor role's set,
+        # so the writes below only fail when something other than the
+        # suspension stops them.
+        created = await service.create_custom_role(
+            ws["id"], name="ops", description=None, permissions=["member:read"], actor=editor_user
+        )
+        assert created.name == "ops"
+        # Widening `ops` inside the editor set. A different payload than the
+        # suspended call: `update_role` returns early on an unchanged
+        # permission set, which would skip the check.
+        widened = await service.update_role(
+            ws["id"], created.id, permissions=["member:read", "message:read"], actor=editor_user
+        )
+        assert sorted(widened.permissions) == ["member:read", "message:read"]
+
+        member.status = "suspended"
+        await session.commit()
+
+        with pytest.raises(WorkspaceForbidden, match="member:read"):
+            await service.create_custom_role(
+                ws["id"],
+                name="ops2",
+                description=None,
+                permissions=["member:read"],
+                actor=editor_user,
+            )
+        with pytest.raises(WorkspaceForbidden, match="member:read"):
+            await service.update_role(
+                ws["id"], created.id, permissions=["member:read"], actor=editor_user
+            )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="#1126: update_role's name/description branch resolves no actor "
+    "membership, so the cap the permission branch enforces is missing here. "
+    "The fix flips this to XPASS, which fails until the marker is removed.",
+)
+async def test_suspended_narrow_actor_cannot_rename_a_role_by_name_only(app_client):
+    """The name-only path, which carries no permission payload to check.
+
+    The suspended calls beside it all send `permissions=`, so they enter the
+    one branch of `update_role` that resolves the actor. A rename carries no
+    permission payload and reaches a branch that resolves nothing.
+    """
+    from src.db.session import SessionFactory
+    from src.models.workspace import WorkspaceMember
+    from src.services.auth import AuthService
+    from src.services.workspaces import WorkspaceForbidden, WorkspaceService
+
+    client = app_client
+    owner = await register_user(client, "cap-rename-owner@example.com")
+    ws = await create_workspace(client, owner)
+    await register_user(client, "cap-rename-editor@example.com")
+    owner_headers = ws_headers(owner, ws["id"])
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session)
+        editor_user = await AuthService(session).get_by_email("cap-rename-editor@example.com")
+        assert editor_user is not None, "cap-rename-editor@example.com was not registered"
+        editor_id = await _role_id(client, owner_headers, "editor")
+        member = WorkspaceMember(
+            workspace_id=ws["id"],
+            user_id=editor_user.id,
+            role_id=editor_id,
+            status="active",
+        )
+        session.add(member)
+        await session.commit()
+
+        # The same call while active, or a refusal for everyone would satisfy
+        # the suspended half.
+        renamed = await service.update_role(
+            ws["id"], editor_id, name="editor-v2", actor=editor_user
+        )
+        assert renamed.name == "editor-v2"
+
+        member.status = "suspended"
+        await session.commit()
+
+        with pytest.raises(WorkspaceForbidden):
+            await service.update_role(ws["id"], editor_id, name="editor-v3", actor=editor_user)
+
+
 # ------------------------------------------------------------------ update
 
 
