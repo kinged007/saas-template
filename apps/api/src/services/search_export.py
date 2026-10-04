@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.dates import iso_or_none
 from src.core.permissions import JOB_READ
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
@@ -355,7 +356,7 @@ class SearchExportService:
                     "membership_id": m.id,
                     "role": r.name,
                     "status": m.status,
-                    "joined_at": m.created_at.isoformat() if m.created_at else None,
+                    "joined_at": iso_or_none(m.created_at),
                 }
             )
             # Key stays present even without a profile row, so importers see a
@@ -476,8 +477,8 @@ class SearchExportService:
                 {
                     "email": i.email,
                     "status": i.status,
-                    "expires_at": i.expires_at.isoformat() if i.expires_at else None,
-                    "created_at": i.created_at.isoformat() if i.created_at else None,
+                    "expires_at": iso_or_none(i.expires_at),
+                    "created_at": iso_or_none(i.created_at),
                 }
                 for i in invites
             ],
@@ -489,8 +490,8 @@ class SearchExportService:
                     "name": k.name,
                     "key_prefix": k.key_prefix,
                     "permissions": k.permissions,
-                    "revoked_at": k.revoked_at.isoformat() if k.revoked_at else None,
-                    "created_at": k.created_at.isoformat() if k.created_at else None,
+                    "revoked_at": iso_or_none(k.revoked_at),
+                    "created_at": iso_or_none(k.created_at),
                 }
                 for k in keys
             ],
@@ -502,7 +503,7 @@ class SearchExportService:
                     "cron_schedule": j.cron_schedule,
                     "params": _mask_params(j.params_schema or {}, j.params or {}),
                     "enabled": j.enabled,
-                    "next_run_at": j.next_run_at.isoformat() if j.next_run_at else None,
+                    "next_run_at": iso_or_none(j.next_run_at),
                 }
                 for j in jobs
             ],
@@ -511,9 +512,9 @@ class SearchExportService:
                     "id": c.id,
                     "title": c.title,
                     "created_by_user_id": c.created_by_user_id,
-                    "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
+                    "last_message_at": iso_or_none(c.last_message_at),
                     "last_message_preview": c.last_message_preview,
-                    "created_at": c.created_at.isoformat() if c.created_at else None,
+                    "created_at": iso_or_none(c.created_at),
                 }
                 for c in convs
             ],
@@ -524,7 +525,7 @@ class SearchExportService:
                     "sender_type": m.sender_type,
                     "sender_id": m.sender_id,
                     "body": m.body,
-                    "created_at": m.created_at.isoformat() if m.created_at else None,
+                    "created_at": iso_or_none(m.created_at),
                 }
                 for m in messages
             ],
@@ -542,7 +543,7 @@ class SearchExportService:
                     # `source_event_id` too.
                     "details": public_details(e.details),
                     "ip_address": e.ip_address,
-                    "created_at": e.created_at.isoformat() if e.created_at else None,
+                    "created_at": iso_or_none(e.created_at),
                 }
                 for e, email in audit_rows
             ],
