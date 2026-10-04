@@ -481,6 +481,55 @@ async def test_redelivered_conversation_event_writes_one_pointer_per_recipient()
     assert await pointers() == 2
 
 
+async def test_create_many_logs_the_recipients_a_redelivery_drops(caplog):
+    """The bulk return value counts created rows only, so a drop is silent
+    unless the service says so. Its only caller discards the return value,
+    so the log line is the signal."""
+    import logging
+
+    from src.services.notifications import NotificationService
+
+    workspace_id = str(uuid.uuid4())
+    source_event_id = str(uuid.uuid4())
+    recipients = [str(uuid.uuid4()) for _ in range(2)]
+
+    def specs() -> list[dict]:
+        return [
+            {
+                "user_id": uid,
+                "workspace_id": workspace_id,
+                "type": "conversation_message",
+                "title": "Hi",
+                "body": "",
+                "metadata": None,
+            }
+            for uid in recipients
+        ]
+
+    with caplog.at_level(logging.INFO, logger="src.services.notifications"):
+        async with SessionFactory() as session:
+            assert (
+                len(
+                    await NotificationService(session).create_many(
+                        specs(), source_event_id=source_event_id
+                    )
+                )
+                == 2
+            )
+        assert "dropped" not in caplog.text  # nothing dropped, nothing logged
+
+        async with SessionFactory() as session:
+            assert (
+                await NotificationService(session).create_many(
+                    specs(), source_event_id=source_event_id
+                )
+                == []
+            )
+
+    assert source_event_id in caplog.text
+    assert "dropped 2 of 2" in caplog.text
+
+
 async def test_two_publishes_still_write_two_audit_rows(monkeypatch):
     """The negative control: a second failure is a new event, not a redelivery."""
 
