@@ -136,7 +136,7 @@ async def oauth_callback(
         )
         claims = None
         if tokens.get("id_token"):
-            claims = claims_from_id_token(provider, doc, tokens["id_token"])
+            claims = await claims_from_id_token(provider, doc, tokens["id_token"], container.cache)
         userinfo = {}
         if tokens.get("access_token"):
             userinfo = await fetch_userinfo(provider, doc, tokens["access_token"])

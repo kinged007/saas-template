@@ -199,20 +199,66 @@ async def exchange_code(
         raise OAuthError(f"code exchange failed: {_failure_detail(exc)}") from exc
 
 
-def _jwks_client(provider: ProviderConfig, doc: dict[str, Any]) -> jwt.PyJWKClient | None:
+async def _jwks(
+    provider: ProviderConfig, doc: dict[str, Any], cache: TtlCache, refresh: bool = False
+) -> dict[str, Any]:
+    """The provider's key set, cached next to discovery so a login does not refetch it.
+
+    Fetched over httpx rather than `jwt.PyJWKClient` so the round trip is awaited
+    (PyJWKClient fetches with blocking urllib) and covered by the same 10s timeout
+    as the module's other IdP calls.
+
+    `refresh=True` bypasses the cache and writes the result back, so a kid the
+    provider does not publish costs one extra IdP round trip per failed login for
+    as long as the entry lives. Bounding that needs a fetch timestamp on the
+    cached document; the cost is kept because the path requires a completed code
+    exchange.
+    """
     uri = doc.get("jwks_uri") or provider.jwks_uri
     if not uri:
-        return None
-    return jwt.PyJWKClient(uri)
+        raise OAuthError(f"oauth provider '{provider.id}' has no jwks_uri")
+    key = f"oauth:jwks:{provider.id}"
+    cached = None if refresh else cache.get(key)
+    if cached is not None:
+        return cached
+    try:
+        # `PyJWKClient` fetched through urllib, which follows redirects; httpx does not
+        # follow them by default.
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            resp = await client.get(uri)
+            resp.raise_for_status()
+            keys = resp.json()
+        # Parsed before it is cached: an unusable set would otherwise sit in the cache
+        # for its whole TTL and cost a refetch on every login that meets it.
+        jwt.PyJWKSet.from_dict(keys)
+    except Exception as exc:
+        raise OAuthError(f"could not load signing keys: {_failure_detail(exc)}") from exc
+    cache.set(key, keys)
+    return keys
 
 
-def claims_from_id_token(
-    provider: ProviderConfig, doc: dict[str, Any], id_token: str
+def _signing_key(jwks_doc: dict[str, Any], id_token: str) -> jwt.PyJWK | None:
+    """The signing key whose kid the token names, or None when the set has no match.
+
+    Mirrors `jwt.PyJWKClient.get_signing_key`: only keys published for signing that carry a
+    kid are candidates, and the token's kid has to match one, so a token without a kid is
+    refused rather than verified against the sole published key.
+    """
+    kid = jwt.get_unverified_header(id_token).get("kid")
+    signing = [
+        k
+        for k in jwt.PyJWKSet.from_dict(jwks_doc).keys
+        if k.public_key_use in (None, "sig") and k.key_id
+    ]
+    for key in signing:
+        if key.key_id == kid:
+            return key
+
+
+async def claims_from_id_token(
+    provider: ProviderConfig, doc: dict[str, Any], id_token: str, cache: TtlCache
 ) -> dict[str, Any] | None:
     """Verify the id_token signature via JWKS; None when unverifiable."""
-    client = _jwks_client(provider, doc)
-    if client is None:
-        return None
     # The document's issuer is what the IdP itself states, so it wins over the
     # configured one; the config covers providers that skip discovery.
     issuer = doc.get("issuer") or provider.issuer
@@ -220,7 +266,12 @@ def claims_from_id_token(
         # Nothing to compare `iss` against, so only its presence is enforced.
         logger.warning("no issuer configured for provider %s; id_token iss not pinned", provider.id)
     try:
-        key = client.get_signing_key_from_jwt(id_token).key
+        key = _signing_key(await _jwks(provider, doc, cache), id_token)
+        if key is None:
+            # A kid the cached set has never seen is the one case a refetch can fix.
+            key = _signing_key(await _jwks(provider, doc, cache, refresh=True), id_token)
+        if key is None:
+            raise OAuthError("no matching signing key")
         return jwt.decode(
             id_token,
             key,
@@ -229,8 +280,13 @@ def claims_from_id_token(
             issuer=issuer,
             options={"require": ["exp", "iss", "sub"]},
         )
-    except Exception:
-        logger.warning("id_token verification failed for provider %s", provider.id)
+    except Exception as exc:
+        logger.warning(
+            "id_token verification failed for provider %s: %s",
+            provider.id,
+            exc,
+            exc_info=logger.isEnabledFor(logging.DEBUG),
+        )
         return None
 
 
