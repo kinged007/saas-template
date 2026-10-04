@@ -397,15 +397,18 @@ async def test_exchange_code_posts_grant_and_returns_tokens(provider, idp):
     assert form["code_verifier"] == ["verifier-abc"]
 
 
-async def test_exchange_code_raises_on_provider_error(provider, idp):
-    with pytest.raises(OAuthError, match="code exchange failed"):
-        await exchange_code(
-            provider,
-            idp.doc,
-            code="bad-code",
-            redirect_uri=REDIRECT_URI,
-            code_verifier="verifier-abc",
-        )
+async def test_exchange_code_raises_on_provider_error(provider, idp, caplog):
+    with caplog.at_level("WARNING", logger="src.services.oauth"):
+        with pytest.raises(OAuthError, match="code exchange failed"):
+            await exchange_code(
+                provider,
+                idp.doc,
+                code="bad-code",
+                redirect_uri=REDIRECT_URI,
+                code_verifier="verifier-abc",
+            )
+    # The body is what separates a rejected code_verifier from an expired code.
+    assert "invalid_grant" in caplog.text
 
 
 async def test_fetch_userinfo_sends_bearer_token(provider, idp):

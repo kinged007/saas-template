@@ -3,8 +3,11 @@
 One config shape covers every enterprise IdP: OIDC discovery
 (discovery_url or issuer) for Google/Microsoft Entra/Okta/GitLab, or
 explicit authorize/token/userinfo URLs for non-OIDC providers like GitHub.
-The authorization-code flow uses PKCE (S256); the verifier lives in the
-server-side state entry, never in the browser. Secrets come from env
+The authorization-code flow uses PKCE (S256) on every provider; the verifier
+lives in the server-side state entry, never in the browser. Unconditional on
+purpose: RFC 6749 §3.1 obliges a compliant authorization server to ignore
+unknown authorize params, so a per-provider toggle only helps an AS that
+rejects them. Secrets come from env
 (OAUTH_PROVIDERS JSON); only ids and display names ever leave the server.
 """
 
@@ -183,6 +186,16 @@ async def exchange_code(
             resp.raise_for_status()
             return resp.json()
     except Exception as exc:
+        # The body names the cause the status cannot ("invalid_grant" vs. a
+        # rejected code_verifier); log-only, the redirect detail stays
+        # allowlisted. Newlines are flattened so a provider cannot forge lines.
+        body = getattr(getattr(exc, "response", None), "text", "")
+        if body:
+            logger.warning(
+                "oauth token endpoint error body provider=%s: %s",
+                provider.id,
+                body[:200].replace("\n", " "),
+            )
         raise OAuthError(f"code exchange failed: {_failure_detail(exc)}") from exc
 
 

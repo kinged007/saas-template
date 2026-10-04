@@ -4,9 +4,10 @@ Flow: GET /auth/oauth/{provider}/authorize → provider → GET
 /auth/oauth/{provider}/callback?code&state → 302 to
 {FRONTEND_URL}/oauth/callback?code=<one-time> → POST /auth/oauth/token.
 The two legs are joined by the PKCE verifier kept in the server-side state
-entry, so a captured authorization code is redeemable by neither the browser
-nor the client secret alone. Tokens never sit in URL logs; the one-time code
-is single-use, 5-minute TTL, stored in the shared container cache.
+entry. The verifier never leaves the server, so a captured authorization code
+is not redeemable with the client secret alone. Tokens never sit in URL logs;
+the one-time code is single-use, 5-minute TTL, stored in the shared
+container cache.
 """
 
 from __future__ import annotations
