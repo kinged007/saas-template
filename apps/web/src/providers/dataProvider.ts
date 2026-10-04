@@ -200,7 +200,8 @@ function adminList(path: string): DataProvider["getList"] {
     for (const s of sorters ?? []) {
       if (!s.field) continue;
       params.append("sort[]", s.field);
-      params.append("order[]", s.order);
+      // a sorter with no direction degrades to the API default (`asc`), not `order[]=undefined`
+      if (s.order) params.append("order[]", s.order);
     }
     const { data, headers } = await httpClient.get(`${API_URL}${path}?${params}`);
     const total = Number(headers["x-total-count"]);
