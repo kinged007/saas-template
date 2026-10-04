@@ -24,6 +24,11 @@ ALLOWED_AVATAR_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 # Avatars render on every authenticated page, so the bytes are cached and
 # revalidated by ETag instead of being pulled through the API on each render.
+# The response is workspace-scoped, but a switch of the active workspace does
+# not evict what the browser already cached, so the previous avatar can stay on
+# screen for max-age. Isolation is not breached — the API still refuses the other
+# workspace's id — and `private` keeps it out of shared caches. Lower the window
+# when an upload UI makes avatar replacement common.
 FILE_CACHE_CONTROL = "private, max-age=300"
 _FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -155,7 +160,10 @@ class FileService:
         mime = (content_type or "").split(";")[0].strip().lower()
         if mime not in ALLOWED_AVATAR_TYPES:
             raise FileTypeRejected(f"unsupported content type: {content_type or 'unknown'}")
-        ext = Path(_safe_filename(filename)).suffix.lower()
+        # Extension of the name as sent: _safe_filename truncates at 200
+        # characters, so deriving it after sanitising reported a long but valid
+        # name as "unsupported file extension: none".
+        ext = Path(filename or "upload").suffix.lower()
         if ext not in ALLOWED_EXTENSIONS:
             raise FileTypeRejected(f"unsupported file extension: {ext or 'none'}")
         if len(content) > self._max_bytes:

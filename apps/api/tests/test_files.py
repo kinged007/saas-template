@@ -263,6 +263,31 @@ async def test_spoofed_extension_rejected(app_client):
     assert resp.status_code == 415, resp.text
 
 
+async def test_extension_check_uses_the_unsanitised_filename(app_client):
+    """A valid suffix past _safe_filename's 200-char truncation is still valid."""
+    from tests.conftest import create_workspace, login, register_user, ws_headers
+
+    await register_user(app_client, email="files-longname@example.com")
+    tokens = await login(app_client, email="files-longname@example.com")
+    ws = await create_workspace(app_client, tokens, name="Long WS")
+    headers = ws_headers(tokens, ws["id"])
+    long_png = "a" * 205 + ".png"
+    resp = await app_client.post(
+        "/api/v1/files",
+        files={"file": (long_png, io.BytesIO(PNG_BYTES), "image/png")},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["filename"] == long_png[:200]
+    # A disallowed suffix in the same position is still rejected.
+    resp = await app_client.post(
+        "/api/v1/files",
+        files={"file": ("a" * 205 + ".php", io.BytesIO(PNG_BYTES), "image/png")},
+        headers=headers,
+    )
+    assert resp.status_code == 415, resp.text
+
+
 async def test_list_rejects_bad_pagination(app_client):
     from tests.conftest import create_workspace, login, register_user, ws_headers
 

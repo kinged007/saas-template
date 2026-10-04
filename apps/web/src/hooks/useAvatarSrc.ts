@@ -21,14 +21,20 @@ export function useAvatarSrc(avatarUrl?: string | null): string | undefined {
   const [objectUrl, setObjectUrl] = React.useState<string>();
 
   React.useEffect(() => {
-    if (!stored || !direct) {
-      setObjectUrl(undefined);
-      return;
-    }
+    // Reset first: cleanup revokes the previous object URL, and without this the
+    // image keeps pointing at the revoked one until the next fetch resolves.
+    setObjectUrl(undefined);
+    if (!stored || !direct) return;
     let cancelled = false;
     let created: string | undefined;
+    // A relative url is the API path, not the page's: every sibling hook prefixes
+    // API_URL, so a split-origin VITE_API_URL would otherwise fetch from the web
+    // origin and 404. isStoredFileUrl already guaranteed the API path prefix.
+    const target = /^https?:\/\//.test(direct)
+      ? direct
+      : new URL(API_URL, window.location.origin).origin + direct;
     httpClient
-      .get(direct, { responseType: "blob" })
+      .get(target, { responseType: "blob" })
       .then((resp) => {
         if (cancelled) return;
         created = window.URL.createObjectURL(resp.data as Blob);
