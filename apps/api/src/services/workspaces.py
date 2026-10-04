@@ -1219,6 +1219,21 @@ class WorkspaceService:
         role = await self.get_role(workspace_id, role_id)
         if is_owner_role_name(role.name):
             raise WorkspaceForbidden("the owner role cannot be edited")
+        # Resolve the actor once, before any mutation: a name-only or
+        # description-only edit carries no permission set to cap, so without
+        # this it wrote — and flipped `system` below — for a suspended caller.
+        # Same shape and message as `set_member_role` and `_require_manager`.
+        # ponytail: ROLE_CREATE stays the route's guard; add the service-side
+        # check when a caller outside the route needs it.
+        assignable: set[str] = set()
+        is_owner = False
+        if actor is not None:
+            membership = await self.get_membership(workspace_id, actor.id, active_only=True)
+            if membership is None:
+                raise WorkspaceForbidden("you are not a member of this workspace")
+            _, actor_role = membership
+            is_owner = "*" in actor_role.permissions
+            assignable = set(actor_role.permissions)
         changed = False
         if name is not None and name != role.name:
             await self._check_name_free(workspace_id, name, exclude_id=role.id)
@@ -1228,14 +1243,6 @@ class WorkspaceService:
             role.description = description
             changed = True
         if permissions is not None and sorted(permissions) != sorted(role.permissions or []):
-            assignable: set[str] = set()
-            is_owner = False
-            if actor is not None:
-                membership = await self.get_membership(workspace_id, actor.id, active_only=True)
-                if membership is not None:
-                    _, actor_role = membership
-                    is_owner = "*" in actor_role.permissions
-                    assignable = set(actor_role.permissions)
             self._check_permissions_assignable(permissions, assignable, owner=is_owner)
             role.permissions = permissions
             changed = True

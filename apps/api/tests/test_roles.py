@@ -440,6 +440,15 @@ async def test_suspended_actor_is_capped_on_role_writes(app_client):
             await service.update_role(
                 ws["id"], role_ids["editor"], permissions=["member:read"], actor=admin_user
             )
+        # #1126: the name/description branch resolved no membership at all, so a
+        # suspended caller renamed `editor` — which also flips `system` and opts
+        # the seeded role out of boot-time convergence.
+        with pytest.raises(WorkspaceForbidden):
+            await service.update_role(
+                ws["id"], role_ids["editor"], name="suspended-rename", actor=admin_user
+            )
+        untouched = await service.get_role(ws["id"], role_ids["editor"])
+        assert untouched.name == "editor"
 
 
 # ------------------------------------------------------------------ update
