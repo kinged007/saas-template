@@ -4,6 +4,7 @@ import dataProviderModule from "@refinedev/simple-rest";
 
 import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId, sessionHint } from "../utils/storage";
 import { clearAllCaches, queryClient } from "./queryClient";
+import { hasReadById, resourcePath } from "./resourcePaths";
 
 // Same-origin API path: the vite dev proxy (and nginx in production) forwards
 // /api → backend, so no CORS/absolute-URL issues regardless of how the app is
@@ -183,7 +184,7 @@ const baseDataProvider = dataProviderModule(API_URL, httpClient);
 // read from the superuser-only GET /admin/* endpoints, which speak the same
 // offset/limit + X-Total-Count dialect as every other list endpoint.
 // They are not real REST resources (detail/toggle use `custom`), so only
-// getList is overridden. (`admin-users` maps through RESOURCE_PATHS above.)
+// getList is overridden. (`admin-users` maps through `resourcePath()`.)
 function adminList(path: string): DataProvider["getList"] {
   return async ({ pagination, filters, sorters }) => {
     const { currentPage = 1, pageSize = 10 } = pagination ?? {};
@@ -212,16 +213,6 @@ const adminLists = {
   "admin-audit": adminList("/admin/audit"),
 } as const;
 
-// Refine resource name → backend path when they differ (hyphenated resource
-// names are not valid backend route prefixes, and a resource can live under a
-// sub-collection: the webhooks router serves subscriptions at
-// `webhooks/subscriptions`, with nothing at its own prefix).
-const RESOURCE_PATHS: Record<string, string> = {
-  "admin-users": "admin/users",
-  webhooks: "webhooks/subscriptions",
-};
-const resourcePath = (resource: string) => RESOURCE_PATHS[resource] ?? resource;
-
 /**
  * simple-rest's `custom` uses the url verbatim — it never prepends the API
  * base URL. Resolve relative custom urls against API_URL so useCustom /
@@ -235,8 +226,22 @@ export const dataProvider: DataProvider = {
     if (admin) return admin({ resource, ...params });
     return baseDataProvider.getList({ resource: resourcePath(resource), ...params });
   },
-  getOne: ({ resource, ...params }) =>
-    baseDataProvider.getOne({ resource: resourcePath(resource), ...params }),
+  getOne: async ({ resource, ...params }) => {
+    if (!hasReadById(resource)) {
+      // `statusCode` is what queryClient.isClientError reads, so a 4xx stops
+      // react-query retrying a request that was never sent — the API would
+      // answer 405/404 for it anyway.
+      throw Object.assign(
+        new Error(
+          `getOne("${resource}") has no backend route: the API serves no GET /${resourcePath(resource)}/{id}. Fetch the collection with custom (GET /${resourcePath(resource)}) and filter instead.`,
+        ),
+        { statusCode: 405 },
+      );
+    }
+    return baseDataProvider.getOne({ resource: resourcePath(resource), ...params });
+  },
+  getMany: ({ resource, ...params }) =>
+    baseDataProvider.getMany({ resource: resourcePath(resource), ...params }),
   update: ({ resource, ...params }) =>
     baseDataProvider.update({ resource: resourcePath(resource), ...params }),
   create: ({ resource, ...params }) =>
