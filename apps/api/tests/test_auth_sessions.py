@@ -55,6 +55,12 @@ async def test_session_routes_reject_api_key_callers(app_client):
 
 
 async def test_reused_refresh_token_revokes_all_sessions(app_client):
+    from sqlalchemy import select
+
+    from src.core.security.tokens import OpaqueToken
+    from src.db.session import SessionFactory
+    from src.models.workspace import RefreshToken
+
     client = app_client
     t1 = await register_user(client, "reuse@example.com")
     t2 = await login(client, "reuse@example.com")
@@ -77,6 +83,14 @@ async def test_reused_refresh_token_revokes_all_sessions(app_client):
     assert resp.status_code == 401, resp.text
     resp = await client.get("/api/v1/auth/me", headers=auth_headers(rotated))
     assert resp.status_code == 401, resp.text
+
+    # the killed sessions carry the reason, so a reuse revocation is told apart
+    # from a password change or a logout in the audit trail
+    hashes = [OpaqueToken.hash(t1["refresh_token"]), OpaqueToken.hash(rotated["refresh_token"])]
+    async with SessionFactory() as session:
+        stmt = select(RefreshToken.revoke_reason).where(RefreshToken.token_hash.in_(hashes))
+        reasons = (await session.execute(stmt)).scalars().all()
+    assert reasons == ["reuse", "reuse"], reasons
 
 
 async def test_unknown_refresh_token_revokes_nothing(app_client):

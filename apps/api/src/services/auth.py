@@ -335,7 +335,9 @@ class AuthService:
                 # Revoked by a user action (logout, "revoke other sessions",
                 # password change). Replaying it is a stale cookie, not theft.
                 raise AuthError("invalid refresh token")
-            # Already rotated: presenting it again is a compromise signal.
+            # Already rotated: presenting it again is a compromise signal. A
+            # refresh whose response never reached the client re-presents this
+            # row benignly and takes the same branch — see #924.
             logger.warning("refresh token reuse user=%s session=%s", row.user_id, row.id)
             revoked = await self.revoke_other_sessions(
                 row.user_id,
