@@ -725,15 +725,11 @@ class WorkspaceService:
         workspace_id: str,
         invitation_id: str,
         *,
-        actor: User | None = None,
+        actor: User,
         expires_in_hours: int = 72,
         ip_address: str | None = None,
     ) -> Invitation:
-        if (
-            actor is not None
-            and await self.get_membership(workspace_id, actor.id, active_only=True) is None
-        ):
-            raise WorkspaceForbidden("you are not a member of this workspace")
+        await self._require_manager(workspace_id, actor)
         invite = await self._session.get(Invitation, invitation_id)
         if invite is None or invite.workspace_id != workspace_id:
             raise WorkspaceError("invitation not found")
@@ -772,7 +768,7 @@ class WorkspaceService:
             resource_type="invitation",
             resource_id=invite.id,
             action="invitation.resent",
-            actor_user_id=actor.id if actor else None,
+            actor_user_id=actor.id,
             details={"email": invite.email},
             ip_address=ip_address,
         )
@@ -924,9 +920,10 @@ class WorkspaceService:
         workspace_id: str,
         invitation_id: str,
         *,
-        actor: User | None = None,
+        actor: User,
         ip_address: str | None = None,
     ) -> Invitation:
+        await self._require_manager(workspace_id, actor)
         invite = await self._session.get(Invitation, invitation_id)
         if invite is None or invite.workspace_id != workspace_id:
             raise WorkspaceError("invitation not found")
@@ -940,7 +937,7 @@ class WorkspaceService:
             resource_type="invitation",
             resource_id=invite.id,
             action="invitation.revoked",
-            actor_user_id=actor.id if actor else None,
+            actor_user_id=actor.id,
             details={"email": invite.email},
             ip_address=ip_address,
         )

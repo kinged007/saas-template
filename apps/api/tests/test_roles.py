@@ -3,6 +3,8 @@
 import re
 from pathlib import Path
 
+import pytest
+
 import src.core.permissions as perms
 from tests.conftest import (
     auth_headers,
@@ -169,6 +171,42 @@ async def test_permission_catalog_filtered_to_assignable(app_client):
     # scopes carry a key-only scope, so the intersection must drop it.
     assert not (set(viewer_catalog["catalog"]) & set(perms.KEY_ONLY_PERMISSIONS))
     assert not (set(viewer_catalog["permissions"]) & set(perms.KEY_ONLY_PERMISSIONS))
+
+
+async def test_permission_catalog_handler_refuses_suspended_member(app_client):
+    """#300: the handler's own membership lookup must skip suspended rows, so
+    the endpoint it reads as authorizing cannot be reached by a suspended
+    caller even when a route guard is bypassed."""
+    from fastapi import HTTPException
+
+    from src.api.routes.roles import permission_catalog
+    from src.db.session import SessionFactory
+    from src.models.workspace import User
+
+    client = app_client
+    owner = await register_user(client, "cat-susp-owner@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+    admin = await _add_member(client, owner, ws, "cat-susp-admin@example.com", "admin")
+    member_id = next(
+        m
+        for m in (await client.get("/api/v1/members", headers=owner_headers)).json()
+        if m["email"] == "cat-susp-admin@example.com"
+    )["membership_id"]
+    admin_id = (await client.get("/api/v1/auth/me", headers=auth_headers(admin))).json()["id"]
+    suspended = await client.post(f"/api/v1/members/{member_id}/suspend", headers=owner_headers)
+    assert suspended.status_code == 200, suspended.text
+
+    async with SessionFactory() as session:
+        user = await session.get(User, admin_id)
+        with pytest.raises(HTTPException) as excinfo:
+            await permission_catalog(workspace_id=ws["id"], user=user, db=session)
+    assert excinfo.value.status_code == 403
+    # End to end the route guard refuses them first.
+    refused = await client.get(
+        "/api/v1/roles/permission-catalog", headers=ws_headers(admin, ws["id"])
+    )
+    assert refused.status_code == 403, refused.text
 
 
 # ------------------------------------------------------------------ create
