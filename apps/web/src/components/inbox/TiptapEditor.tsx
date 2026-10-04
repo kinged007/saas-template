@@ -13,7 +13,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { Bold, Italic, Code2, SquareCode, List, ListOrdered, Link2, Quote } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { isAllowedLinkHref, normalizeLinkUrl } from "@/lib/link-url";
+import { isAllowedDocumentHref, normalizeLinkUrl } from "@/lib/link-url";
 import { pickerIndex, rankMentionTargets, type MentionTarget } from "@/lib/mentions";
 
 const turndownService = new TurndownService({
@@ -161,11 +161,15 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a message�
           autolink: true,
           linkOnPaste: true,
           HTMLAttributes: { rel: "noopener noreferrer", target: null },
-          // Autolink and linkOnPaste have to refuse the same hrefs the popover's
-          // editor does; `protocols` only adds to the extension's default list,
-          // so the allow-list is replaced here. A missing href is left to the
-          // extension, as it is today.
-          isAllowedUri: (url) => !url || isAllowedLinkHref(url),
+          // The extension runs one predicate over every gate — what autolink and
+          // linkOnPaste create, what `parseHTML` keeps from pasted HTML, what
+          // `renderHTML` emits — so it gets the decision that covers all of
+          // them: an href the composer may create, or one already safe as
+          // written, which refusing would silently unlink pasted content.
+          // `protocols` only adds to the extension's default list, so the
+          // allow-list is replaced rather than extended. A missing href is left
+          // to the extension, as it is today.
+          isAllowedUri: (url) => !url || isAllowedDocumentHref(url),
         }),
         Mention.configure({
           HTMLAttributes: { class: "mention" },
