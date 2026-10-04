@@ -175,11 +175,14 @@ async def test_concurrent_refresh_of_one_token_is_deterministic(app_client):
     # live session and no token to retry with.
     assert 200 in (first.status_code, second.status_code), (first.text, second.text)
     for resp in (first, second):
+        if resp.status_code == 200:
+            continue
         # Whoever loses loses to the same no-oracle 401 an unknown token gets, so a
         # loser cannot tell itself apart from a stranger probing for valid hashes.
-        assert resp.status_code in (200, 401), resp.text
-        if resp.status_code != 200:
-            assert resp.json()["detail"] == "invalid refresh token", resp.text
+        # Any other status (500, 429, 403) fails here; `status_code in (200, 401)`
+        # would have passed on it.
+        assert resp.status_code == 401, resp.text
+        assert resp.json()["detail"] == "invalid refresh token", resp.text
 
     # signed out at worst, never disabled: the user can always get back in
     t3 = await login(client, "race@example.com")
