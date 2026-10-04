@@ -123,7 +123,7 @@ class MemberStatus(StrEnum):
 # `active` is active at every read. `suspended` is active nowhere: no access,
 # no listing, no co-member profile visibility, no `member_joined`
 # notification, and it cannot leave on its own (a manager removes or
-# reactivates it). `invited` is active nowhere too -- it has no writer and
+# reactivates it). `invited` is active nowhere too — it has no writer and
 # survives only as a pre-0017 value, stated so a future invite-pending status
 # cannot reuse the value silently.
 READS_AS_ACTIVE: dict[str, bool] = {
