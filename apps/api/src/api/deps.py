@@ -140,15 +140,21 @@ async def require_superuser(
     `principal.is_deployment_admin` to their service instead, so an API key
     can never reach a service superuser branch."""
     if not principal.is_deployment_admin:
-        raise deployment_admin_denied(principal)
+        raise_deployment_admin_denied(principal)
     return principal.user
 
 
-def deployment_admin_denied(principal: AuthPrincipal) -> HTTPException:
-    """Build the 403 for a deployment-wide gate. Shared with the routes that
+def raise_deployment_admin_denied(principal: AuthPrincipal) -> None:
+    """Raise the 403 for a caller that is not a deployment admin.
+
+    Raises for a denied principal and returns None for an allowed one, so no
+    call site can read the gate as a predicate. Shared with the routes that
     resolve their own check, so one denial of the same kind never reaches the
-    caller as two different messages."""
-    return HTTPException(
+    caller as two different messages.
+    """
+    if principal.is_deployment_admin:
+        return
+    raise HTTPException(
         status.HTTP_403_FORBIDDEN,
         "deployment administration is not available to API keys"
         if principal.api_key is not None
