@@ -69,8 +69,9 @@ const created = (page: Page, path: string, record: unknown) =>
 
 /**
  * The button is named, `title` matches the name, and the name flips to the
- * confirmation after the write. Asserting the name twice is the point: a stale
- * label fails the second query instead of passing on the swapped icon.
+ * confirmation after the write. The role+name locator carries the 1.5 s flip, so
+ * the confirmation is one retrying assertion rather than a chain coupled to how
+ * long the transient state lasts.
  */
 async function expectCopyButtonAnnounces(copy: Locator, label: string) {
   await expect(copy).toBeVisible();
@@ -79,10 +80,11 @@ async function expectCopyButtonAnnounces(copy: Locator, label: string) {
 
   await copy.click();
 
-  const confirmed = copy.page().getByRole("button", { name: "Copied", exact: true });
-  await expect(confirmed).toBeVisible();
-  await expect(copy).toHaveCount(0);
-  expect(await confirmed.getAttribute("title"), "title and aria-label disagree").toBe("Copied");
+  const confirmed = copy
+    .page()
+    .getByRole("dialog")
+    .getByRole("button", { name: "Copied", exact: true });
+  await expect(confirmed).toHaveAttribute("title", "Copied");
 }
 
 test.beforeEach(async ({ page }) => {

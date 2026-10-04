@@ -12,17 +12,27 @@ import { Button, type ButtonProps } from "@/components/ui/button";
  * told different things.
  *
  * The clipboard write and the copied timeout stay with the caller.
+ *
+ * `title`, `aria-label`, `variant` and `children` are Omitted so the pair this
+ * component exists to keep cannot be overridden by a call site that silently
+ * loses its value. `type` defaults to `button`; `ui/button.tsx` sets no default,
+ * so a bare `<button>` inside a form would submit it.
  */
 export function CopyButton({
   copied,
   label,
   onClick,
+  type = "button",
   ...props
-}: ButtonProps & { copied: boolean; label: string }) {
+}: Omit<ButtonProps, "title" | "aria-label" | "variant" | "children"> & {
+  copied: boolean;
+  label: string;
+}) {
   const name = copied ? "Copied" : label;
   return (
     <Button
       {...props}
+      type={type}
       variant="outline"
       onClick={onClick}
       title={name}
