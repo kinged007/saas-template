@@ -6,7 +6,7 @@ import { setupSteps } from "./setup-steps.ts";
 const noneYet = { invitationCount: 0, apiKeyCount: 0 };
 
 test("a step the identity may not perform is omitted, so the card can complete", () => {
-  const steps = setupSteps({ ...noneYet, canInvite: false, canCreateKey: false });
+  const steps = setupSteps({ ...noneYet, canInvite: false, canTrackKeyStep: false });
 
   // `every` over an empty list is what makes `allDone` true in the page. Read
   // before the deepEqual below, whose assertion signature would narrow it.
@@ -18,7 +18,7 @@ test("a step the identity may not perform is omitted, so the card can complete",
 });
 
 test("a permitted step is kept and takes its progress from its own data", () => {
-  const open = setupSteps({ ...noneYet, canInvite: true, canCreateKey: true });
+  const open = setupSteps({ ...noneYet, canInvite: true, canTrackKeyStep: true });
   assert.deepEqual(
     open.map((s) => [s.title, s.done]),
     [
@@ -31,7 +31,7 @@ test("a permitted step is kept and takes its progress from its own data", () => 
     invitationCount: 2,
     apiKeyCount: 0,
     canInvite: true,
-    canCreateKey: true,
+    canTrackKeyStep: true,
   });
   assert.deepEqual(
     invited.map((s) => s.done),
@@ -45,7 +45,7 @@ test("a permitted step is kept and takes its progress from its own data", () => 
 });
 
 test("only the step the identity may not perform is omitted", () => {
-  const steps = setupSteps({ ...noneYet, canInvite: false, canCreateKey: true });
+  const steps = setupSteps({ ...noneYet, canInvite: false, canTrackKeyStep: true });
 
   assert.deepEqual(
     steps.map((s) => s.title),
