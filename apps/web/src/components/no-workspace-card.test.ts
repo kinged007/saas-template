@@ -5,6 +5,7 @@ import { test } from "node:test";
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 
 const card = read("./NoWorkspaceCard.tsx");
+const layout = read("./AppLayout.tsx");
 const dashboard = read("../pages/DashboardPage.tsx");
 const section = read("../pages/settings/profile/sections/WorkspacesSection.tsx");
 
@@ -30,6 +31,18 @@ test("the dashboard renders the shared card, not a second copy", () => {
 });
 
 test("the no-workspace copy has one home", () => {
-  const copies = [dashboard, section, card].filter((s) => s.includes("No workspace yet"));
+  const copies = [dashboard, section, layout, card].filter((s) => s.includes("No workspace yet"));
   assert.equal(copies.length, 1, '"No workspace yet" must be written only in NoWorkspaceCard.tsx');
+});
+
+test("the ask-an-admin sentence has one home", () => {
+  // Read out of the card so this test never carries a second literal of the
+  // sentence it guards, which would drift from a copy change unnoticed.
+  const [, sentence] = /export const ASK_AN_ADMIN = "([^"]+)"/.exec(card) ?? [];
+  assert.ok(sentence, "NoWorkspaceCard.tsx must export ASK_AN_ADMIN");
+  assert.deepEqual(
+    [dashboard, section, layout].filter((s) => s.includes(sentence)),
+    [],
+    `AppLayout.tsx and the pages must import ASK_AN_ADMIN, not inline "${sentence}"`,
+  );
 });
