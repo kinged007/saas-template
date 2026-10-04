@@ -17,6 +17,7 @@ import {
 import { EmptyRow, formatDate } from "@/components/ui";
 import { useTargetUserId } from "@/hooks/useProfile";
 import type { AuthSession } from "../../profile/sections/SecuritySection";
+import { sessionsEmptyMessage } from "./sessions-empty";
 
 /**
  * Security tab of the member editor (`users/:id/settings/security`).
@@ -50,9 +51,7 @@ export function SecuritySection() {
     : [];
   // `result` is undefined on error as well as on empty, so a failed query would
   // otherwise render as "No active sessions." — say what happened instead.
-  const sessionsError = sessions.query.isError
-    ? (sessions.query.error?.message ?? "Could not load sessions.")
-    : null;
+  const emptyMessage = sessionsEmptyMessage(list.length, sessions.query);
 
   const passwordValid =
     password.length >= 8 && password === confirmPassword && confirmPassword.length > 0;
@@ -171,9 +170,7 @@ export function SecuritySection() {
                     </TableCell>
                   </TableRow>
                 ))}
-                {list.length === 0 && (
-                  <EmptyRow colSpan={4}>{sessionsError ?? "No active sessions."}</EmptyRow>
-                )}
+                {emptyMessage && <EmptyRow colSpan={4}>{emptyMessage}</EmptyRow>}
               </TableBody>
             </Table>
           </div>

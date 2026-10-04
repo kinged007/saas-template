@@ -346,6 +346,13 @@ async def _target_profile_update(
     # A malformed id can never name a member, so it 404s before any UUID bind.
     uuid_or_404(user_id, "user")
     if principal.is_deployment_admin or principal.user.id == user_id:
+        # This branch skips the membership lookup, so it is also the only path
+        # where nothing has checked that the target is a real user: without the
+        # lookup a superuser id writes an orphan `user_profiles` /
+        # `notification_preferences` row, an FK violation on Postgres. Self
+        # hits the session identity map, so it costs no query.
+        if await db.get(User, user_id) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
         return True
     if workspace_id is None:
         return False

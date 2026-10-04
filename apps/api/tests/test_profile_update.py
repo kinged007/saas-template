@@ -735,22 +735,25 @@ async def test_a_malformed_target_id_is_404_not_500(app_client):
     assert resp.status_code == 404, resp.text
 
 
-@pytest.mark.parametrize(
-    ("method", "path", "payload"),
-    [
-        ("PATCH", "/api/v1/users/{sid}/profile", {"first_name": "Nope"}),
-        ("PUT", "/api/v1/users/{sid}/profile", {"first_name": "Nope"}),
-        ("GET", "/api/v1/users/{sid}/notification-preferences", None),
-        (
-            "PUT",
-            "/api/v1/users/{sid}/notification-preferences",
-            {"channels": {"member_joined": "email"}},
-        ),
-        ("GET", "/api/v1/users/{sid}/sessions", None),
-        ("DELETE", "/api/v1/users/{sid}/sessions", None),
-        ("POST", "/api/v1/users/{sid}/password", {"new_password": "Sup3rSecret!"}),
-    ],
-)
+# Every target-scoped route, so the two refusal contracts below are swept over
+# the same set instead of the one the author remembered to write down.
+_TARGET_ROUTES = [
+    ("PATCH", "/api/v1/users/{sid}/profile", {"first_name": "Nope"}),
+    ("PUT", "/api/v1/users/{sid}/profile", {"first_name": "Nope"}),
+    ("GET", "/api/v1/users/{sid}/profile", None),
+    ("GET", "/api/v1/users/{sid}/notification-preferences", None),
+    (
+        "PUT",
+        "/api/v1/users/{sid}/notification-preferences",
+        {"channels": {"member_joined": "email"}},
+    ),
+    ("GET", "/api/v1/users/{sid}/sessions", None),
+    ("DELETE", "/api/v1/users/{sid}/sessions", None),
+    ("POST", "/api/v1/users/{sid}/password", {"new_password": "Sup3rSecret!"}),
+]
+
+
+@pytest.mark.parametrize(("method", "path", "payload"), _TARGET_ROUTES)
 async def test_every_target_route_404s_for_a_non_member(app_client, method, path, payload):
     """Each target route has to answer 404 for a stranger, not just the profile
     write: a target outside the caller's workspace must never be confirmed."""
@@ -763,6 +766,34 @@ async def test_every_target_route_404s_for_a_non_member(app_client, method, path
 
     resp = await client.request(method, path.format(sid=stranger), headers=headers, json=payload)
     assert resp.status_code == 404, f"{method} {path} -> {resp.status_code}: {resp.text}"
+
+
+@pytest.mark.parametrize(("method", "path", "payload"), _TARGET_ROUTES)
+async def test_every_target_route_404s_for_a_user_that_does_not_exist(
+    app_client, method, path, payload
+):
+    """A deployment admin skips the membership lookup, so on that path nothing
+    else proves the target is a real user: without the guard's own lookup these
+    routes answer 200 and the two writes leave an orphan profile / preference
+    row behind (an FK violation on Postgres)."""
+    client = app_client
+    owner = await register_user(client, "ada@example.com")
+    ws = await create_workspace(client, owner)
+    superuser = await register_user(client, "root@example.com")  # SUPERADMIN_EMAIL
+    headers = ws_headers(superuser, ws["id"])
+    missing = "00000000-0000-4000-8000-000000000000"
+
+    resp = await client.request(method, path.format(sid=missing), headers=headers, json=payload)
+    assert resp.status_code == 404, f"{method} {path} -> {resp.status_code}: {resp.text}"
+
+    from src.db.session import SessionFactory
+    from src.models.core import NotificationPreference
+    from src.models.user_profile import UserProfile
+
+    async with SessionFactory() as session:
+        for model in (UserProfile, NotificationPreference):
+            rows = await session.execute(select(model).where(model.user_id == missing))
+            assert rows.scalars().all() == (), f"{model.__name__} row written for a missing user"
 
 
 async def test_a_delegated_editor_cannot_read_or_overwrite_private_custom_data(app_client):
