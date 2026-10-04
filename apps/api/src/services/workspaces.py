@@ -1176,10 +1176,11 @@ class WorkspaceService:
         is_owner = False
         if actor is not None:
             membership = await self.get_membership(workspace_id, actor.id, active_only=True)
-            if membership is not None:
-                _, actor_role = membership
-                is_owner = "*" in actor_role.permissions
-                assignable = set(actor_role.permissions)
+            if membership is None:
+                raise WorkspaceForbidden("you are not a member of this workspace")
+            _, actor_role = membership
+            is_owner = "*" in actor_role.permissions
+            assignable = set(actor_role.permissions)
         self._check_permissions_assignable(permissions, assignable, owner=is_owner)
         await self._check_name_free(workspace_id, name)
         role = Role(

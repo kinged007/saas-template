@@ -382,8 +382,10 @@ async def test_suspended_actor_is_capped_on_role_writes(app_client):
     able to write — otherwise a refusal for everyone would satisfy the deny
     half.
     """
+    from sqlalchemy import select  # noqa: E402
+
     from src.db.session import SessionFactory
-    from src.models.workspace import WorkspaceMember
+    from src.models.workspace import Role, WorkspaceMember
     from src.services.auth import AuthService
     from src.services.workspaces import WorkspaceForbidden, WorkspaceService
 
@@ -440,15 +442,32 @@ async def test_suspended_actor_is_capped_on_role_writes(app_client):
             await service.update_role(
                 ws["id"], role_ids["editor"], permissions=["member:read"], actor=admin_user
             )
-        # #1126: the name/description branch resolved no membership at all, so a
+        # #1126: the name branch resolved no membership at all, so a
         # suspended caller renamed `editor` — which also flips `system` and opts
         # the seeded role out of boot-time convergence.
         with pytest.raises(WorkspaceForbidden):
             await service.update_role(
                 ws["id"], role_ids["editor"], name="suspended-rename", actor=admin_user
             )
-        untouched = await service.get_role(ws["id"], role_ids["editor"])
-        assert untouched.name == "editor"
+        # Same hole in the sibling writer: an empty permission list cannot trip
+        # the permission check, so it was the only path that mutated with no cap.
+        with pytest.raises(WorkspaceForbidden):
+            await service.create_custom_role(
+                ws["id"],
+                name="ops-empty",
+                description=None,
+                permissions=[],
+                actor=admin_user,
+            )
+        # Re-read via a fresh session so the assertions are on the stored rows.
+        async with SessionFactory() as check:
+            stored = await check.get(Role, role_ids["editor"])
+            assert stored is not None
+            assert stored.name == "editor"
+            leftovers = await check.scalars(
+                select(Role).where(Role.workspace_id == ws["id"], Role.name == "ops-empty")
+            )
+            assert leftovers.first() is None
 
 
 # ------------------------------------------------------------------ update
