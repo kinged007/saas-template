@@ -94,6 +94,12 @@ def parse_query(request: Request, *, max_limit: int = 100) -> QuerySpec:
         spec.sort_order = q.getlist("order[]")
         if len(spec.sort_order) < len(spec.sort_by):
             spec.sort_order.extend(["asc"] * (len(spec.sort_by) - len(spec.sort_order)))
+    # `apply_query` compares the direction against the literals "desc"/"asc",
+    # so normalize the client's value once here rather than at both call sites
+    # (the leading term and the `id` tiebreaker). `DESC` is the SQL convention a
+    # client may well send; unnormalized it took the `else` branch and sorted
+    # ascending, silently.
+    spec.sort_order = [o.strip().lower() for o in spec.sort_order]
     spec.ids = q.getlist("ids[]")
     if not spec.ids and "id" in q:  # simple-rest getMany sends repeated `id=`
         spec.ids = q.getlist("id")
@@ -157,15 +163,16 @@ def apply_query(
         stmt = stmt.where(_COMPARATORS[op](column, _coerce(column, value)))
     if spec.ids:
         stmt = stmt.where(model.id.in_(spec.ids))
+    if len(spec.sort_by) != len(spec.sort_order):
+        raise InvalidQuery("sort[] and order[] must have the same number of entries")
     for fname, order in zip(spec.sort_by, spec.sort_order, strict=True):
         if fname not in sortable:
             raise InvalidQuery(f"sort on unknown field: {fname}")
         column = getattr(model, fname)
         stmt = stmt.order_by(column.desc() if order == "desc" else column.asc())
     # A unique column last makes the order total, so offset/limit paging can
-    # neither repeat nor skip a row when the leading terms tie. Only where an
-    # order already exists: making one up is not this helper's call.
-    if spec.sort_by and "id" not in spec.sort_by:
-        last = spec.sort_order[-1] if spec.sort_order else "asc"
+    # neither repeat nor skip a row when the leading terms tie.
+    if spec.sort_by:
+        last = spec.sort_order[-1]
         stmt = stmt.order_by(model.id.desc() if last == "desc" else model.id.asc())
     return stmt
