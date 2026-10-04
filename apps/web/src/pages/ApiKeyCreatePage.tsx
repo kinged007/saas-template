@@ -9,10 +9,10 @@ import {
 import { useForm } from "@refinedev/react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Check, Copy } from "lucide-react";
 import { Navigate } from "react-router";
 import { toast } from "sonner";
 
+import { CopyButton } from "@/components/CopyButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -268,13 +268,12 @@ export function ApiKeyCreatePage() {
                 value={created?.key ?? ""}
                 className="font-mono"
               />
-              <Button type="button" onClick={copyKey} variant="outline">
-                {copied ? (
-                  <Check className="h-4 w-4" />
-                ) : (
-                  <Copy className="h-4 w-4" />
-                )}
-              </Button>
+              <CopyButton
+                type="button"
+                copied={copied}
+                label="Copy API key"
+                onClick={copyKey}
+              />
             </div>
             {created && created.permissions.length > 0 && (
               <div className="flex flex-wrap gap-1">

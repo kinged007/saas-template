@@ -9,10 +9,10 @@ import {
 import { useForm } from "@refinedev/react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Check, Copy } from "lucide-react";
 import { Navigate } from "react-router";
 import { toast } from "sonner";
 
+import { CopyButton } from "@/components/CopyButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -185,8 +185,9 @@ export function WebhookCreatePage() {
             <Badge variant="outline" className="font-mono text-xs break-all">
               {created?.secret}
             </Badge>
-            <Button
-              variant="outline"
+            <CopyButton
+              copied={copied}
+              label="Copy signing secret"
               size="sm"
               onClick={async () => {
                 if (!created) return;
@@ -194,9 +195,7 @@ export function WebhookCreatePage() {
                 setCopied(true);
                 setTimeout(() => setCopied(false), 1500);
               }}
-            >
-              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            </Button>
+            />
           </div>
           <DialogFooter>
             <Button onClick={() => list("webhooks")}>Done</Button>
