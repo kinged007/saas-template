@@ -26,6 +26,7 @@ from src.api.deps import (
     require_permission,
     require_superuser,
     resolve_auth_principal,
+    resolve_or_deny,
 )
 from src.core.permissions import JOB_READ, JOB_UPDATE
 from src.db.session import get_db
@@ -167,25 +168,8 @@ async def list_global_job_runs(
 
 
 async def _get_run_or_deny(service: JobService, principal: AuthPrincipal, run_id: str) -> JobRun:
-    """Resolve a run, or raise the only answer the caller may get.
-
-    No key is ever a deployment admin (`AuthPrincipal.is_deployment_admin`), so
-    no run outside its own workspace is readable by one — a global run
-    included. Answering a miss with 404 and a global run with 403 turns that
-    pair into an existence oracle on a surface the key is denied, so a miss
-    raises the same deployment-admin 403 the gate would.
-    `_require_run_access` gives a key that one answer for every other run too.
-
-    A session caller keeps the 404: the run page has to tell an id that
-    matches no run apart from one it may not read, and that is the single
-    distinction a browser session is allowed to make.
-    """
-    run = await service.get_run(run_id)
-    if run is None:
-        if principal.api_key is not None:
-            raise deployment_admin_denied(principal)
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
-    return run
+    """`resolve_or_deny` for a run; see there for why a key gets one answer."""
+    return await resolve_or_deny(principal, service.get_run(run_id), "run not found")
 
 
 @router.get("/runs/{run_id}")
@@ -268,11 +252,12 @@ async def _require_job_access(
 ) -> None:
     """Unified check: global → superuser, workspace → jobs:read/update.
 
-    A key outside the definition's workspace gets 404, a session user who is
-    not a member gets 403. A key that passes spends one unit of its usage quota
-    through record_key_use, and `response` is what makes that charge observable
-    (the quota headers) — callers must thread their own Response through, never
-    drop it.
+    A key outside the definition's workspace gets the deployment-admin
+    refusal, the same one the global branch and a miss give it; a session user
+    who is not a member gets 403. A key that passes spends one unit of its
+    usage quota through record_key_use, and `response` is what makes that
+    charge observable (the quota headers) — callers must thread their own
+    Response through, never drop it.
     """
     required = JOB_UPDATE if need_edit else JOB_READ
     if definition.workspace_id is None:
@@ -283,7 +268,7 @@ async def _require_job_access(
     if principal.api_key is not None:
         api_key = principal.api_key
         if api_key.workspace_id != definition.workspace_id:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+            raise deployment_admin_denied(principal)
         if "*" in api_key.permissions or required in api_key.permissions:
             await record_key_use(api_key, db, response)
             return
@@ -318,9 +303,9 @@ async def get_job(
     principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
 ):
-    definition = await JobService(db).get_definition(definition_id)
-    if definition is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    definition = await resolve_or_deny(
+        principal, JobService(db).get_definition(definition_id), "job not found"
+    )
     await _require_job_access(db, principal, definition, response, need_edit=False)
     return job_to_dict(definition)
 
@@ -336,9 +321,9 @@ async def update_job(
     container=Depends(get_container),
 ):
     _validate_patch(body)
-    definition = await JobService(db).get_definition(definition_id)
-    if definition is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    definition = await resolve_or_deny(
+        principal, JobService(db).get_definition(definition_id), "job not found"
+    )
     await _require_job_access(db, principal, definition, response, need_edit=True)
     try:
         updated = await JobService(db, container.bus, container.cipher).update_definition(
@@ -377,9 +362,9 @@ async def execute_job(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    definition = await JobService(db).get_definition(definition_id)
-    if definition is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    definition = await resolve_or_deny(
+        principal, JobService(db).get_definition(definition_id), "job not found"
+    )
     await _require_job_access(db, principal, definition, response, need_edit=True)
     return await _execute_now(
         definition.id, definition.workspace_id, principal.user.id, db, container
@@ -394,9 +379,9 @@ async def list_job_runs(
     principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
 ):
-    definition = await JobService(db).get_definition(definition_id)
-    if definition is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    definition = await resolve_or_deny(
+        principal, JobService(db).get_definition(definition_id), "job not found"
+    )
     await _require_job_access(db, principal, definition, response, need_edit=False)
     return await _list_runs(request, response, definition_id, definition.workspace_id, db)
 
