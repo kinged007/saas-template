@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 
-import { oauthCodeConsumed } from "./oauthCallback";
+import { type ConsumedCode, oauthCodeConsumed } from "./oauthCallback";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { afterAuthRedirect, authProvider, seedWorkspace } from "@/providers/authProvider";
@@ -81,8 +81,10 @@ export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: str
 // Module scope, not the ref below: the workspace provider leaves its loading
 // gate as the identity settles, which unmounts and remounts this page with a
 // fresh ref while the URL still carries the code — the ref alone resets with
-// the instance and the code is exchanged twice.
-let consumedCode: string | null = null;
+// the instance and the code is exchanged twice. Stamped with the session the
+// exchange produced so it cannot outlive that session's identity: see
+// oauthCodeConsumed.
+let consumedCode: ConsumedCode | null = null;
 
 export function OAuthCallbackPage() {
   const [status, setStatus] = useState("Signing you in…");
@@ -104,34 +106,46 @@ export function OAuthCallbackPage() {
     // loading gate as the identity settles, and that remount can land after
     // navigate() has rewritten the URL — code is null but it was ours, so
     // stopping here keeps a succeeding sign-in from painting an error.
-    // Gated on the session: consumedCode is module state that no sign-out
-    // clears, and the access token the exchange stored is in-memory only, so
-    // logout and the 401 handler both drop it while the latch survives. Honoring
-    // a latch with no session left it on "Signing you in…" forever.
-    // ponytail: a signed-out repeat still lands on the terminal
+    // Gated on identity: consumedCode is module state that no sign-out clears,
+    // and the access token the exchange stored is in-memory only, so logout and
+    // the 401 handler both drop it while the latch survives. A presence check
+    // cannot tell that apart from a sign-out followed by a password sign-in —
+    // the token store is refilled under a different identity and the old latch
+    // speaks for it. The stamp is the token itself; a mismatch means the latch
+    // belongs to a session this tab no longer has.
+    // ponytail: a missing-code mount still lands on the terminal
     // "Missing sign-in code." — add a retry/link to /login, or replace the
     // module latch with per-code state, when /oauth/callback gets a client-side
     // entry point (e.g. lifting the public auth routes out of
     // <WorkspaceProvider>).
-    if (oauthCodeConsumed(code, consumedCode, tokenStore.getAccess() !== null)) return;
+    if (oauthCodeConsumed(code, consumedCode, tokenStore.getAccess())) return;
     if (!code) {
       setStatus("Missing sign-in code.");
       return;
     }
-    consumedCode = code;
+    consumedCode = { code, session: tokenStore.getAccess() };
     exchangeOAuthCode(code)
       .then((res) => {
         if (res.twoFactor) {
           window.location.assign(`/login?challenge=${encodeURIComponent(res.twoFactor)}`);
           return;
         }
+        // Re-stamp onto the session the exchange just created, so the latch
+        // still covers the remount below (the code is gone from the URL by then,
+        // and stamping it at exchange time would read as someone else's).
+        if (consumedCode) consumedCode.session = tokenStore.getAccess();
         // Client-side: the exchanged access token lives only in memory, so a
         // hard load would drop it and force a /auth/refresh round trip.
         // replace: this URL carries the now-consumed code — Back must not
         // return to it and re-fire the exchange.
         navigate(afterAuthRedirect(), { replace: true });
       })
-      .catch(() => setStatus("Sign-in failed. The code may have expired."));
+      .catch(() => {
+        // Nothing was exchanged, so the latch answers for nothing: drop it
+        // rather than leave it standing over a failed attempt.
+        consumedCode = null;
+        setStatus("Sign-in failed. The code may have expired.");
+      });
   }, [navigate]);
   void authProvider;
   return (
