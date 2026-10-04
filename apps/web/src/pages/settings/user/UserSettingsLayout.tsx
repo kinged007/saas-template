@@ -20,14 +20,23 @@ import { userSettings } from "./registry";
  */
 export function UserSettingsLayout() {
   const { id = "" } = useParams();
-  const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
+  const { data: identity, isLoading } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
+
+  // The guard reads permissions off identity, so it must not run before
+  // /auth/me resolves or a cold load flashes "Access denied" at a caller who
+  // is allowed in. Gate before the own-id redirect too: until identity lands
+  // `identity?.id` is undefined and the editor shell renders for a target it
+  // should be leaving.
+  if (isLoading || !identity) {
+    return <p className="text-muted-foreground p-4 text-sm">Loading…</p>;
+  }
 
   const perms = activeWorkspacePermissions(identity);
   const can = (permission?: string) =>
     !permission || perms.includes("*") || perms.includes(permission);
 
   const requested = useLocation().pathname.split("/").pop() ?? "";
-  if (id && id === identity?.id) {
+  if (id && id === identity.id) {
     const tab = userSettings.sections.some((s) => s.key === requested) ? requested : "general";
     return <Navigate to={`/settings/profile/${tab}`} replace />;
   }
@@ -40,7 +49,7 @@ export function UserSettingsLayout() {
       subtitle="Edit this member's profile, notifications and security. Workspace memberships are not editable here."
       can={can}
       guard={{
-        allowed: identity?.is_superuser === true || can("profile:update"),
+        allowed: identity.is_superuser === true || can("profile:update"),
         deniedTitle: "Access denied",
         deniedMessage: "Editing another member requires the profile:update permission.",
       }}

@@ -145,6 +145,9 @@ async def get_user_profile(
     return proj
 
 
+# A delegated PUT replaces `custom_data` wholesale, so a partial payload drops
+# every non-`_private*` key the caller did not re-send — correct for the
+# self-service and member-editor forms, which always send the full object.
 @router.patch("/users/{user_id}/profile")
 @router.put("/users/{user_id}/profile")
 async def update_user_profile(

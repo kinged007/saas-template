@@ -87,9 +87,7 @@ export function UsersSection() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() =>
-                                  go({ to: `/users/${m.id}/settings?from=/settings/workspace/users` })
-                                }
+                                onClick={() => go({ to: `/users/${m.id}/settings` })}
                               >
                                 Edit
                               </Button>

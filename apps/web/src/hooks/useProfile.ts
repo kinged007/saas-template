@@ -113,7 +113,7 @@ export function useUpdateProfile(userId?: string | null) {
         },
         errorNotification: false,
       } as never);
-    if (!userId) {
+      if (!userId) {
         queryClient.invalidateQueries({ queryKey: ["auth"] });
         queryClient.invalidateQueries({ queryKey: ["data"] });
       }

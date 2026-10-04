@@ -793,7 +793,8 @@ async def test_every_target_route_404s_for_a_user_that_does_not_exist(
     async with SessionFactory() as session:
         for model in (UserProfile, NotificationPreference):
             rows = await session.execute(select(model).where(model.user_id == missing))
-            assert rows.scalars().all() == (), f"{model.__name__} row written for a missing user"
+            written = list(rows.scalars().all())
+            assert written == [], f"{model.__name__} row written for a missing user"
 
 
 async def test_a_delegated_editor_cannot_read_or_overwrite_private_custom_data(app_client):
