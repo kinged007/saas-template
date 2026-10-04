@@ -33,15 +33,12 @@ ISO_PREFIX = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d")
 ISO_OFFSET = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$")
 
 # A receiver is fine when it already carries an offset. `p.date_of_birth` is a
-# `Date` column with none to give. `key.expires_at` is the `apikey.created`
-# payload, which #561 serializes on its own; that fix is on `main` and not yet
-# in this branch, so the site is exempted here until the merge lands.
+# `Date` column with none to give.
 OK_CALL = re.compile(r"^(?:ensure_utc\(|now_utc\(|datetime\.now\(UTC\))")
 # Pinned to (path, line, receiver) so an exemption applies to the site that
 # justified it and to nothing else — and the guard fails when one moves.
 OK_SITE = {
     ("services/serializers.py", 80, "p.date_of_birth"),
-    ("services/api_keys.py", 143, "key.expires_at"),
 }
 
 

@@ -12,7 +12,7 @@ from src.api.deps import (
     require_session_user,
     resolve_auth_principal,
 )
-from src.core.dates import ensure_utc, iso_or_none, now_utc
+from src.core.dates import ensure_utc, now_utc
 from src.core.security.cookies import (
     browser_flow,
     clear_refresh_cookie,
@@ -381,9 +381,9 @@ async def refresh(
 def _session_to_dict(row, *, current: bool) -> dict:
     return {
         "id": row.id,
-        "created_at": iso_or_none(row.created_at),
-        "expires_at": iso_or_none(row.expires_at),
-        "revoked_at": iso_or_none(row.revoked_at),
+        "created_at": row.created_at,
+        "expires_at": row.expires_at,
+        "revoked_at": row.revoked_at,
         "ip_address": row.ip_address,
         "user_agent": row.user_agent,
         "current": current,

@@ -19,6 +19,10 @@ as `api_version`.
   the wrong status for a documented caller keeps its route and payload, so no
   new prefix is required — but the correction is recorded here and in the
   release notes.
+- **Serialization corrections are not breaking changes**: a value a route
+  serialized in a form that misstates the instant (a naive datetime read as
+  local time) keeps its field and its type, so no new prefix is required — the
+  correction is recorded here and in the release notes.
 
 ## Recorded corrections
 
@@ -39,8 +43,7 @@ as `api_version`.
   `2026-01-01T00:00:00+00:00`, where it was `2026-01-01T00:00:00`. The instant
   is unchanged and a client that parses the value is unaffected; a client that
   compares timestamp strings byte-for-byte — including an importer matching an
-  exported bundle — sees the suffix. `/api/v1/auth/sessions` states the same
-  instant with `Z`, because Pydantic serializes that field itself.
+  exported bundle — sees the suffix.
 
 ## Response headers
 
