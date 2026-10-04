@@ -460,3 +460,71 @@ def test_transfer_eligibility_decides_every_member_status():
     from src.services.workspaces import _TRANSFER_ELIGIBLE
 
     assert set(_TRANSFER_ELIGIBLE) == {status.value for status in MemberStatus}
+
+
+async def test_suspend_and_reactivate_agree_with_every_legal_status(app_client):
+    """Both tables preserve today's behaviour for every status the CHECK allows.
+
+    A suspend of an already-suspended member stays an idempotent 200 no-op, a
+    reactivate of anything else stays a 409, and a suspend of an `invited`
+    member still succeeds. For every legal status the table and the comparison
+    agree by design, so this is the behaviour-preservation pin; the fail-closed
+    default is pinned at table level in
+    `test_suspend_and_reactivate_decide_every_member_status`.
+    """
+    client = app_client
+    owner = await register_user(client, "susp-owner@example.com")
+    ws = await create_workspace(client, owner)
+    token = await _invite(client, owner, ws, "susp-target@example.com", "editor")
+    target = await register_user(client, "susp-target@example.com")
+    accepted = await client.post(
+        f"/api/v1/invitations/accept?token={token}", headers=auth_headers(target)
+    )
+    assert accepted.status_code == 200, accepted.text
+    headers = ws_headers(owner, ws["id"])
+    members = await client.get("/api/v1/members", headers=headers)
+    target_id = next(
+        m["membership_id"] for m in members.json() if m["email"] == "susp-target@example.com"
+    )
+
+    for status in ("active", "invited"):
+        await _set_member_status(target_id, status)
+        refused = await client.post(f"/api/v1/members/{target_id}/reactivate", headers=headers)
+        assert refused.status_code == 409, status
+        assert refused.json()["detail"] == "member is not suspended"
+
+    await _set_member_status(target_id, "invited")
+    suspended = await client.post(f"/api/v1/members/{target_id}/suspend", headers=headers)
+    assert suspended.status_code == 200, suspended.text
+    assert suspended.json()["status"] == "suspended"
+
+    again = await client.post(f"/api/v1/members/{target_id}/suspend", headers=headers)
+    assert again.status_code == 200, again.text
+    assert again.json()["status"] == "suspended"
+
+
+def test_suspend_and_reactivate_decide_every_member_status():
+    """A status the domain gains is refused by both tables until they decide it."""
+    from src.models.workspace import MemberStatus
+    from src.services.workspaces import _REACTIVATE_ALLOWED, _SUSPEND_ALLOWED
+
+    every = {status.value for status in MemberStatus}
+    assert set(_SUSPEND_ALLOWED) == every
+    assert set(_REACTIVATE_ALLOWED) == every
+
+    assert _SUSPEND_ALLOWED == {
+        MemberStatus.ACTIVE.value: True,
+        MemberStatus.INVITED.value: True,
+        MemberStatus.SUSPENDED.value: False,
+    }
+    assert _REACTIVATE_ALLOWED == {
+        MemberStatus.ACTIVE.value: False,
+        MemberStatus.INVITED.value: False,
+        MemberStatus.SUSPENDED.value: True,
+    }
+
+    # A status outside the CHECK domain fails closed in both directions: no
+    # suspend write, no reactivate. `ck_workspace_members_status` is what makes
+    # it unreachable through SQL, so the default is pinned here at table level.
+    assert _SUSPEND_ALLOWED.get("archived", False) is False
+    assert _REACTIVATE_ALLOWED.get("archived", False) is False

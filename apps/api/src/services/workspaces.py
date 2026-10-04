@@ -51,6 +51,26 @@ _TRANSFER_ELIGIBLE: dict[str, bool] = {
     MemberStatus.SUSPENDED.value: False,
 }
 
+# Same shape for the two member-status actions, for the same reason: a
+# `== "suspended"` / `!= "suspended"` comparison compiles against any status
+# the domain gains later, and each status gets its own decision here instead.
+# `False` is the decision for `suspended` in `_SUSPEND_ALLOWED` because a
+# suspend of an already-suspended member is an idempotent no-op, not an error.
+# Mirrors `SUSPEND_ALLOWED` / `REACTIVATE_ALLOWED` in
+# `apps/web/src/pages/member-actions.ts`; pinned by
+# `test_suspend_and_reactivate_decide_every_member_status`.
+_SUSPEND_ALLOWED: dict[str, bool] = {
+    MemberStatus.ACTIVE.value: True,
+    MemberStatus.INVITED.value: True,
+    MemberStatus.SUSPENDED.value: False,
+}
+
+_REACTIVATE_ALLOWED: dict[str, bool] = {
+    MemberStatus.ACTIVE.value: False,
+    MemberStatus.INVITED.value: False,
+    MemberStatus.SUSPENDED.value: True,
+}
+
 
 def is_owner_role_name(name: str | None) -> bool:
     """Whether a role name is the owner role, ignoring case.
@@ -618,7 +638,7 @@ class WorkspaceService:
         role = await self._session.get(Role, member.role_id)
         if role is not None and is_owner_role_name(role.name):
             raise WorkspaceConflict("cannot suspend the workspace owner")
-        if member.status == "suspended":
+        if not _SUSPEND_ALLOWED.get(member.status, False):
             return member
         member.status = "suspended"
         await self._session.commit()
@@ -646,7 +666,7 @@ class WorkspaceService:
         member = await self._session.get(WorkspaceMember, member_id)
         if member is None or member.workspace_id != workspace_id:
             raise WorkspaceError("member not found in workspace")
-        if member.status != "suspended":
+        if not _REACTIVATE_ALLOWED.get(member.status, False):
             raise WorkspaceConflict("member is not suspended")
         member.status = "active"
         await self._session.commit()
