@@ -75,7 +75,7 @@ async def list_conversations(
         spec.validate_sort()
         # Validate sort fields
         for s in spec.sort_by:
-            if s not in _CONVERSATION_SORTABLE and s != "":
+            if s not in _CONVERSATION_SORTABLE:
                 raise InvalidQuery(f"sort on unknown field: {s}")
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
