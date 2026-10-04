@@ -93,8 +93,10 @@ async def test_login_refresh_logout_persist_audit_rows(app_client):
     assert resp.status_code == 200
     assert await _wait_for(lambda: _actions_contain("user.token_refresh"))
 
+    # the token the client holds after the rotation — the pre-refresh one is
+    # already rotated, and revoking a rotated row is a no-op by design
     resp = await app_client.post(
-        "/api/v1/auth/logout", json={"refresh_token": tokens["refresh_token"]}
+        "/api/v1/auth/logout", json={"refresh_token": resp.json()["refresh_token"]}
     )
     assert resp.status_code == 204
     assert await _wait_for(lambda: _actions_contain("user.logout"))
