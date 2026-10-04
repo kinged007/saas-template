@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { SsoButtons, fetchAuthConfig, type AuthConfig } from "@/components/AuthConfig";
 import { afterAuthRedirect, authProvider, seedWorkspace } from "@/providers/authProvider";
 import { API_URL, httpClient } from "@/providers/dataProvider";
-import { identityStore, tokenStore, workspaceStore } from "@/utils/storage";
+import { identityStore, resetSessionState, tokenStore } from "@/utils/storage";
 import { clearAllCaches, queryClient } from "@/providers/queryClient";
 
 export function LoginPage() {
@@ -48,8 +48,7 @@ export function LoginPage() {
   // workspace selected and the app mounts behind a blank gate.
   // Access token only — the refresh token lives in the HttpOnly cookie.
   const storeTokens = async (tokens: { access_token: string }) => {
-    workspaceStore.clear();
-    identityStore.set(null);
+    resetSessionState();
     clearAllCaches(queryClient);
     tokenStore.setTokens(tokens.access_token);
     try {

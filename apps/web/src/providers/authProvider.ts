@@ -5,6 +5,7 @@ import { API_URL, cancelPendingRefresh, ensureSession, httpClient } from "./data
 import {
   identityStore,
   pendingInvitationStore,
+  resetSessionState,
   tokenStore,
   workspaceStore,
   setActiveWorkspaceId,
@@ -94,9 +95,7 @@ export const authProvider: AuthProvider = {
       // without this the app would mount with the previous user's workspace
       // id and rows (dashboard empty / notifications from the old workspace).
       // Unconditional — a no-op when logout already cleared.
-      workspaceStore.clear();
-      setActiveWorkspaceId(null);
-      identityStore.set(null);
+      resetSessionState();
       clearAllCaches(queryClient);
       tokenStore.setTokens(tokens.access_token);
       try {
@@ -130,9 +129,7 @@ export const authProvider: AuthProvider = {
       if (display_name && !body.display_name) body.display_name = display_name;
       const tokens = await post("/auth/register", { ...body, use_cookies: true });
       // Same stale-session reset + workspace seed as login (see above).
-      workspaceStore.clear();
-      setActiveWorkspaceId(null);
-      identityStore.set(null);
+      resetSessionState();
       clearAllCaches(queryClient);
       tokenStore.setTokens(tokens.access_token);
       try {
