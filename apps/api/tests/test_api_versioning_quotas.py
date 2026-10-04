@@ -129,9 +129,25 @@ async def test_refused_quota_words_match_every_json_type(app_client):
     assert (await mint(True)).json()["usage_quota"] == 1
 
     # A value that is not a number is a type error, not a refused quota.
-    resp = await mint("many")
+    for bad in ("many", "-inf", "inf", "nan"):
+        resp = await mint(bad)
+        assert resp.status_code == 422, (bad, resp.text)
+    assert resp.json()["detail"][0]["type"] == "int_parsing", (bad, resp.text)
+
+    # A fraction wants an integer, not a range check: 0.5 keeps main's answer.
+    resp = await mint(0.5)
     assert resp.status_code == 422, resp.text
-    assert resp.json()["detail"][0]["type"] == "int_parsing", resp.text
+    assert resp.json()["detail"][0]["type"] == "int_from_float", resp.text
+
+
+def test_huge_json_integer_reaches_pydantic():
+    """A JSON integer is unbounded, so one wider than a float64 must not
+    overflow out of the validator: OverflowError is not a pydantic error, so
+    it would answer the request 500 with an empty body."""
+    from src.schemas.api import ApiKeyCreate
+
+    huge = 10**400
+    assert ApiKeyCreate(name="huge", usage_quota=huge).usage_quota == huge
 
 
 async def test_service_quota_guard_uses_the_same_words(app_client):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
@@ -42,8 +43,12 @@ def _quota_at_least_one(value: Any) -> Any:
         return value  # null, a datetime, ...: leave the type to pydantic
     try:
         number = float(value)
-    except ValueError:
-        return value  # not a number: pydantic reports its own parsing error
+    except (ValueError, OverflowError):
+        # Not a number, or a JSON integer wider than a float64: leave it to
+        # pydantic rather than raise something it does not turn into a 422.
+        return value
+    if not math.isfinite(number) or not number.is_integer():
+        return value  # inf/nan is not a quota; 0.5 wants an int, not a bound
     if number < 1:
         raise PydanticCustomError("greater_than_equal", QUOTA_MIN_MESSAGE)
     return value
