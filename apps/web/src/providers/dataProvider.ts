@@ -184,7 +184,7 @@ const baseDataProvider = dataProviderModule(API_URL, httpClient);
 // read from the superuser-only GET /admin/* endpoints, which speak the same
 // offset/limit + X-Total-Count dialect as every other list endpoint.
 // They are not real REST resources (detail/toggle use `custom`), so only
-// getList is overridden. (`admin-users` maps through RESOURCE_PATHS above.)
+// getList is overridden. (`admin-users` maps through `resourcePath()`.)
 function adminList(path: string): DataProvider["getList"] {
   return async ({ pagination, filters, sorters }) => {
     const { currentPage = 1, pageSize = 10 } = pagination ?? {};
@@ -213,8 +213,6 @@ const adminLists = {
   "admin-audit": adminList("/admin/audit"),
 } as const;
 
-
-
 /**
  * simple-rest's `custom` uses the url verbatim — it never prepends the API
  * base URL. Resolve relative custom urls against API_URL so useCustom /
@@ -230,8 +228,14 @@ export const dataProvider: DataProvider = {
   },
   getOne: async ({ resource, ...params }) => {
     if (!hasReadById(resource)) {
-      throw new Error(
-        `getOne("${resource}") has no backend route: the API serves no GET /${resourcePath(resource)}/{id}. Fetch the collection with custom (GET /${resourcePath(resource)}) and filter instead.`,
+      // `statusCode` is what queryClient.isClientError reads, so a 4xx stops
+      // react-query retrying a request that was never sent — the API would
+      // answer 405/404 for it anyway.
+      throw Object.assign(
+        new Error(
+          `getOne("${resource}") has no backend route: the API serves no GET /${resourcePath(resource)}/{id}. Fetch the collection with custom (GET /${resourcePath(resource)}) and filter instead.`,
+        ),
+        { statusCode: 405 },
       );
     }
     return baseDataProvider.getOne({ resource: resourcePath(resource), ...params });
