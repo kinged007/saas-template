@@ -30,6 +30,15 @@ function DeliveryLog({ subscriptionId }: { subscriptionId: string }) {
   if (query.isLoading) {
     return <p className="text-muted-foreground text-sm">Loading deliveries…</p>;
   }
+  /* refine hands back an empty object as `result.data` when the request
+     failed, so this branch also keeps the table from rendering. */
+  if (query.isError) {
+    return (
+      <p className="text-destructive text-sm">
+        Could not load deliveries: {query.error?.message ?? "Unknown error"}
+      </p>
+    );
+  }
   if (rows.length === 0) {
     return (
       <p className="text-muted-foreground text-sm">No deliveries yet.</p>
