@@ -1023,7 +1023,8 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     resp = await client.get(
         f"/api/v1/jobs/runs/{foreign}", headers=_key_headers(narrow["key"], foreign_ws["id"])
     )
-    assert resp.status_code == 404, resp.text
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == "deployment administration is not available to API keys"
 
     viewer = await _create_key(client, headers, "jobs-read", ["jobs:read"])
     viewer_headers = _key_headers(viewer["key"], ws["id"])
@@ -1032,15 +1033,18 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     logs = await client.get(f"/api/v1/jobs/runs/{runs['workspace']}/logs", headers=viewer_headers)
     assert logs.status_code == 200, logs.text
 
-    # ... but the same key never reaches a global run or another workspace.
+    # ... but the same key never reaches a global run or another workspace, and
+    # one refusal covers both.
     for url in [
         f"/api/v1/jobs/runs/{runs['global']}",
         f"/api/v1/jobs/runs/{runs['global']}/logs",
+        f"/api/v1/jobs/runs/{foreign}",
     ]:
         resp = await client.get(url, headers=viewer_headers)
         assert resp.status_code == 403, (url, resp.text)
-    resp = await client.get(f"/api/v1/jobs/runs/{foreign}", headers=viewer_headers)
-    assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == (
+            "deployment administration is not available to API keys"
+        ), url
 
     # usage_quota = 0 is refused at the counter: the conditional UPDATE's
     # `usage_count < usage_quota` would be `0 < 0`, so the key the mint would
@@ -1105,6 +1109,56 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     async with SessionFactory() as db:
         row = await db.get(ApiKey, capped["id"])
         assert row.usage_count == 1, "a refused request must not spend a unit"
+
+
+async def test_key_cannot_probe_global_run_existence(app_client):
+    """A run id that resolves to nothing must not answer differently for a key.
+
+    The run routes used to fetch the run first, so a key got 403 on an
+    existing global run and 404 on an id that matched none — a run-existence
+    oracle on a surface it can never read. Three states a key may not read
+    (global run, another workspace's run, no such run) must all be the one
+    deployment-admin refusal. Regression test for #856.
+    """
+    import uuid
+
+    client = app_client
+    owner = await register_user(client, "probe-owner@example.com")
+    ws = await create_workspace(client, owner, "Probe Inc")
+    runs = await _seed_runs(ws["id"])
+    other = await register_user(client, "probe-other@example.com")
+    foreign_ws = await create_workspace(client, other, "Probe Other Inc")
+    foreign = (await _seed_runs(foreign_ws["id"]))["workspace"]
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "prober", [JOB_READ])
+    kh = _key_headers(key["key"], ws["id"])
+
+    missing = str(uuid.uuid4())
+    for url in [
+        f"/api/v1/jobs/runs/{runs['global']}",
+        f"/api/v1/jobs/runs/{runs['global']}/logs",
+        f"/api/v1/jobs/runs/{foreign}",
+        f"/api/v1/jobs/runs/{foreign}/logs",
+        f"/api/v1/jobs/runs/{missing}",
+        f"/api/v1/jobs/runs/{missing}/logs",
+    ]:
+        resp = await client.get(url, headers=kh)
+        assert resp.status_code == 403, (url, resp.status_code, resp.text)
+        assert resp.json()["detail"] == (
+            "deployment administration is not available to API keys"
+        ), url
+
+    # The same key still reads the run it is entitled to, so the collapsed
+    # answer is not the route refusing everything.
+    ok = await client.get(f"/api/v1/jobs/runs/{runs['workspace']}", headers=kh)
+    assert ok.status_code == 200, ok.text
+
+    # A session caller is unaffected: a missing run is still a 404 for it.
+    missing_session = await client.get(f"/api/v1/jobs/runs/{missing}", headers=auth_headers(owner))
+    assert missing_session.status_code == 404, missing_session.text
+    global_session = await client.get(
+        f"/api/v1/jobs/runs/{runs['global']}", headers=auth_headers(owner)
+    )
+    assert global_session.status_code == 403, global_session.text
 
 
 async def test_one_quota_unit_cannot_be_spent_twice(app_client):
