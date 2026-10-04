@@ -184,35 +184,37 @@ export function AuditLogTable({
           </TableBody>
         </Table>
       </div>
-      <div className="flex items-center justify-between border-t px-4 py-3">
-        <span className="text-muted-foreground text-sm">
-          Showing {total === 0 ? 0 : (current - 1) * PAGE_SIZE + 1}–
-          {Math.min(current * PAGE_SIZE, total)} of {total}
-        </span>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={current <= 1}
-            onClick={() => setCurrent((c) => Math.max(1, c - 1))}
-          >
-            <ChevronLeft className="h-4 w-4" />
-            Previous
-          </Button>
-          <span className="text-muted-foreground px-2 text-sm">
-            Page {current} of {totalPages}
+      {!failed && (
+        <div className="flex items-center justify-between border-t px-4 py-3">
+          <span className="text-muted-foreground text-sm">
+            Showing {total === 0 ? 0 : (current - 1) * PAGE_SIZE + 1}–
+            {Math.min(current * PAGE_SIZE, total)} of {total}
           </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={current >= totalPages}
-            onClick={() => setCurrent((c) => Math.min(totalPages, c + 1))}
-          >
-            Next
-            <ChevronRight className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={current <= 1}
+              onClick={() => setCurrent((c) => Math.max(1, c - 1))}
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Previous
+            </Button>
+            <span className="text-muted-foreground px-2 text-sm">
+              Page {current} of {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={current >= totalPages}
+              onClick={() => setCurrent((c) => Math.min(totalPages, c + 1))}
+            >
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       <Dialog open={viewing !== null} onOpenChange={(open) => !open && setViewing(null)}>
         <DialogContent className="max-w-lg">
