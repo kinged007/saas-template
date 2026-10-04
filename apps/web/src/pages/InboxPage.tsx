@@ -650,7 +650,7 @@ export function InboxPage() {
                     title={leftCollapsed ? "Expand panel" : "Collapse panel"}
                     className="ml-auto hidden h-9 w-9 shrink-0 md:inline-flex"
                   >
-                    <PanelLeftClose className="h-4 w-4" />
+                    {leftCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
                   </Button>
                 </>
               )}
@@ -1107,7 +1107,7 @@ export function InboxPage() {
                   title={leftCollapsed ? "Expand panel" : "Collapse panel"}
                   className="hidden h-9 w-9 shrink-0 md:inline-flex"
                 >
-                  <PanelLeftClose className="h-4 w-4" />
+                  {leftCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
                 </Button>
               </div>
             </div>

@@ -87,6 +87,22 @@ async function expectButtonsNamed(scope: Locator) {
   }
 }
 
+/**
+ * The pane toggle names its own action — "Collapse panel" / "Expand panel" —
+ * so its glyph has to follow `leftCollapsed`: a collapsed pane that announces
+ * "Expand panel" while painting `PanelLeftClose` shows one action and says
+ * another. The collapsed pane is `md:hidden` at the viewport this spec runs at,
+ * so the toggle leaves the accessibility tree while staying mounted, and is
+ * read with `includeHidden` to reach that state. #897.
+ */
+async function expectToggleIconTracksName(scope: Locator) {
+  const toggle = scope.getByRole("button", { name: /^(Expand|Collapse) panel$/, includeHidden: true });
+  await expect(toggle.locator("svg")).toHaveClass(/\blucide-panel-left-close\b/);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-label", "Expand panel");
+  await expect(toggle.locator("svg")).toHaveClass(/\blucide-panel-left-open\b/);
+}
+
 test.describe("inbox icon buttons", () => {
   test("every icon-only button in the list pane is named", async ({ page }) => {
     await mockApi(page, { signedIn: true });
@@ -118,5 +134,21 @@ test.describe("inbox icon buttons", () => {
     await pageBody(page).getByRole("button", { name: "Notifications", exact: true }).click();
 
     await expectButtonsNamed(pageBody(page));
+  });
+
+  test("the messages pane toggle paints the icon it announces", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    await page.goto("/inbox");
+    await expect(page.getByRole("button", { name: "Compose", exact: true })).toBeVisible();
+
+    await expectToggleIconTracksName(pageBody(page));
+  });
+
+  test("the notifications pane toggle paints the icon it announces", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    await page.goto("/inbox");
+    await pageBody(page).getByRole("button", { name: "Notifications", exact: true }).click();
+
+    await expectToggleIconTracksName(pageBody(page));
   });
 });
