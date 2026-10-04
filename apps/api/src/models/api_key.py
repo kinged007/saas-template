@@ -7,6 +7,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.base import Base, StringUUID, TimestampMixin
 
+# A quota below 1 is refused with these words both over HTTP (the schema
+# validator) and by ApiKeyService (seed data, direct callers). It lives here so
+# neither copy can drift.
+QUOTA_MIN_MESSAGE = "usage quota must be at least 1 (omit it or send null for unlimited)"
+
 
 class ApiKey(Base, TimestampMixin):
     """Workspace-scoped API key. Only a hash of the secret is stored."""

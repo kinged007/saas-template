@@ -1,17 +1,21 @@
 """Issue #22: API versioning header + key usage counting/quotas."""
 
+import pytest
+
 from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
 
 # Pinned deliberately: the words an HTTP caller reads for a refused quota. The
 # schema validator and the service guard both raise this, and the assertions
 # below compare the 422 body against this literal, so neither copy can be
 # reworded on its own.
-QUOTA_MIN_MESSAGE = "usage quota must be at least 1 (leave it empty for unlimited)"
+QUOTA_MIN_MESSAGE = "usage quota must be at least 1 (omit it or send null for unlimited)"
 
 
 def _quota_msg(resp) -> str:
     detail = resp.json()["detail"]
-    assert isinstance(detail, list) and detail, resp.text
+    assert isinstance(detail, list) and len(detail) == 1, resp.text
+    # pydantic's own code, so only the wording differs from a plain ge=1 refusal.
+    assert detail[0]["type"] == "greater_than_equal", resp.text
     return detail[0]["msg"]
 
 
@@ -96,6 +100,70 @@ async def test_key_quota_enforced(app_client):
         headers=headers,
     )
     assert cleared.json()["usage_quota"] is None
+
+
+async def test_refused_quota_words_match_every_json_type(app_client):
+    """A BeforeValidator reads the raw value, before pydantic coerces it to
+    int, so int, float and str are all checked here. A client that sends "0"
+    from a form or a YAML config gets the same refusal as one sending 0."""
+    client = app_client
+    owner = await register_user(client, "quota-types@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    async def mint(quota):
+        return await client.post(
+            "/api/v1/api-keys",
+            json={"name": "typed", "permissions": [], "usage_quota": quota},
+            headers=headers,
+        )
+
+    for quota in (0, -1, -99, 0.0, -1.0, "0", "-5"):
+        resp = await mint(quota)
+        assert resp.status_code == 422, (quota, resp.text)
+        assert _quota_msg(resp) == QUOTA_MIN_MESSAGE, quota
+
+    # null is unlimited, and a bool is not a quota count: pydantic coerces
+    # true to 1, and false is refused above as 0.
+    assert (await mint(None)).status_code == 201
+    assert (await mint(True)).json()["usage_quota"] == 1
+
+    # A value that is not a number is a type error, not a refused quota.
+    resp = await mint("many")
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"][0]["type"] == "int_parsing", resp.text
+
+
+async def test_service_quota_guard_uses_the_same_words(app_client):
+    """The schema is not the only check: seed and internal callers reach the
+    service guard directly, and it carries the same message."""
+    from src.db.session import SessionFactory
+    from src.services.api_keys import ApiKeyError, ApiKeyService
+    from src.services.auth import AuthService
+
+    client = app_client
+    owner = await register_user(client, "quota-svc@example.com")
+    ws = await create_workspace(client, owner)
+
+    async with SessionFactory() as session:
+        service = ApiKeyService(session)
+        user = await AuthService(session).get_by_email("quota-svc@example.com")
+        with pytest.raises(ApiKeyError) as minted:
+            await service.create_api_key(
+                workspace_id=ws["id"],
+                name="zero",
+                permissions=[],
+                actor=user,
+                usage_quota=0,
+            )
+        assert str(minted.value) == QUOTA_MIN_MESSAGE
+
+        key, _ = await service.create_api_key(
+            workspace_id=ws["id"], name="capped", permissions=[], actor=user, usage_quota=5
+        )
+        with pytest.raises(ApiKeyError) as patched:
+            await service.set_quota(ws["id"], key.id, 0, actor=user)
+        assert str(patched.value) == QUOTA_MIN_MESSAGE
 
 
 async def test_quota_patch_scoped_to_owner(app_client):

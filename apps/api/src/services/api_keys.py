@@ -12,9 +12,8 @@ from src.core.permissions import ALL_PERMISSIONS_INCLUDING_KEY_ONLY, KEY_ONLY_PE
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
-from src.models.api_key import ApiKey
+from src.models.api_key import QUOTA_MIN_MESSAGE, ApiKey
 from src.models.workspace import User
-from src.schemas.api import QUOTA_MIN_MESSAGE
 from src.services.workspaces import WorkspaceService
 
 
