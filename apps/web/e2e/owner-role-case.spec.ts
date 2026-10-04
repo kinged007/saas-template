@@ -125,28 +125,40 @@ test.describe("owner role named in another case", () => {
   });
 
   test("an `Owner` identity is offered Transfer ownership", async ({ page }) => {
-    // transfer_ownership gates on the folded owner name, so the block renders
-    // for a workspace whose owner row is spelled `Owner`. The danger zone is the
-    // anchor: it renders for both identities, so a visibility check reads the
-    // gate and not a page that has not loaded.
+    // Two gates hide this control and only one is under test: isOwnerRoleName
+    // reads the viewer's own role, and transferEligibleMembers drops owner rows
+    // so the owner is not offered as a target. A fixture with no other member
+    // leaves the candidate list empty and the button absent for every identity,
+    // so the active admin row here is what makes the owner gate observable.
     await mockApi(page, {
       signedIn: true,
       identity: identity("Owner", { singleWorkspace: false }),
     });
-    await members(page, [member("owner@example.com", "1", "Owner")]);
+    await members(page, [
+      member("owner@example.com", "1", "Owner"),
+      member("admin@example.com", "2", "admin"),
+    ]);
     await page.goto("/settings/workspace");
 
     await expect(page.getByRole("heading", { name: "Danger zone" })).toBeVisible();
+    // The block renders for the folded owner name, and a candidate exists, so
+    // the select and the button that needs it are both on the page.
+    await expect(page.locator("#transfer-member")).toBeVisible();
     await expect(page.getByRole("button", { name: "Transfer ownership" })).toBeVisible();
   });
 
   test("an `admin` identity is offered no Transfer ownership", async ({ page }) => {
-    // The mirror of the case above on the same block: only the role name differs.
+    // The mirror of the case above on the same block: the same two member rows,
+    // so only the identity's role name differs. An empty candidate list would
+    // leave the button absent either way and hide the case the pair tests.
     await mockApi(page, {
       signedIn: true,
       identity: identity("admin", { singleWorkspace: false }),
     });
-    await members(page, [member("owner@example.com", "1", "Owner")]);
+    await members(page, [
+      member("owner@example.com", "1", "Owner"),
+      member("admin@example.com", "2", "admin"),
+    ]);
     await page.goto("/settings/workspace");
 
     await expect(page.getByRole("heading", { name: "Danger zone" })).toBeVisible();
