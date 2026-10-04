@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { SsoButtons, fetchAuthConfig, type AuthConfig } from "@/components/AuthConfig";
 import { afterAuthRedirect, authProvider, seedWorkspace } from "@/providers/authProvider";
 import { API_URL, httpClient } from "@/providers/dataProvider";
-import { identityStore, tokenStore, workspaceStore } from "@/utils/storage";
+import { identityStore, resetSessionState, tokenStore } from "@/utils/storage";
 import { clearAllCaches, queryClient } from "@/providers/queryClient";
 
 export function LoginPage() {
@@ -43,13 +43,12 @@ export function LoginPage() {
     if (challenge) codeRef.current?.focus();
   }, [challenge]);
 
-  // Same token + identity + workspace seeding as a normal login (see
-  // authProvider): without this the identity query settles with no
-  // workspace selected and the app mounts behind a blank gate.
+  // Same reset + workspace seed as authProvider.login, via resetSessionState():
+  // without this the identity query settles with no workspace selected and the
+  // app mounts behind a blank gate.
   // Access token only — the refresh token lives in the HttpOnly cookie.
   const storeTokens = async (tokens: { access_token: string }) => {
-    workspaceStore.clear();
-    identityStore.set(null);
+    resetSessionState();
     clearAllCaches(queryClient);
     tokenStore.setTokens(tokens.access_token);
     try {
