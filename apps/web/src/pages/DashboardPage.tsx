@@ -109,7 +109,7 @@ export function DashboardPage() {
   const steps = setupSteps({
     canInvite: canInvite?.can,
     invitationCount: invitations.length,
-    canCreateKey: canTrackKeyStep,
+    canTrackKeyStep,
     apiKeyCount: keys.length,
   });
   // Progress is read over the steps this user has, so an empty list (nothing
