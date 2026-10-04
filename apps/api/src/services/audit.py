@@ -20,6 +20,7 @@ from typing import Any
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.events.bus import SOURCE_EVENT_KEY
 from src.models.audit import AuditLogEntry
 
 logger = logging.getLogger(__name__)
@@ -51,12 +52,18 @@ class AuditService:
         `source_event_id` is the bus event this entry was derived from, kept
         in `details`. If an entry for the same (workspace, resource, action,
         source event) exists it is returned unchanged and nothing is written.
+        The key is reserved: a caller-supplied `details[source_event_id]` is
+        overwritten, and the API shape strips it (see `public_details`).
 
-        # ponytail: check-then-insert, so two concurrent deliveries of one
-        # envelope can both miss and both write (today's behaviour, one
-        # duplicate row). Ceiling: JetStream does not hand one message to a
-        # queue-group consumer concurrently, so this needs two near-simultaneous
-        # naks. Upgrade path: a unique index over the key below.
+        # ponytail: check-then-insert, so two deliveries of one envelope that
+        # overlap can both miss and both write (one duplicate row). The window
+        # is not simultaneity but redelivery: ACK_WAIT_SECONDS (30s) lets a
+        # queue group hand a nacked or ack-timed-out message to another replica
+        # while this handler is still running. The lookup filters on
+        # `workspace_id` alone (the only indexed column) and runs on every
+        # audit write, so it scans the workspace's audit history.
+        # Upgrade path: one migration adding a unique index over
+        # (workspace_id, resource_type, resource_id, action, source_event_id).
         """
         if source_event_id:
             duplicate = await self._find_by_source_event(
@@ -71,7 +78,7 @@ class AuditService:
                 return duplicate
         stored_details = dict(details or {})
         if source_event_id:
-            stored_details["source_event_id"] = source_event_id
+            stored_details[SOURCE_EVENT_KEY] = source_event_id
         entry = AuditLogEntry(
             workspace_id=workspace_id,
             actor_user_id=actor_user_id,
@@ -101,7 +108,7 @@ class AuditService:
                 AuditLogEntry.resource_type == resource_type,
                 AuditLogEntry.resource_id == resource_id,
                 AuditLogEntry.action == action,
-                AuditLogEntry.details["source_event_id"].as_string() == source_event_id,
+                AuditLogEntry.details[SOURCE_EVENT_KEY].as_string() == source_event_id,
             )
             .order_by(AuditLogEntry.created_at)
             .limit(1)
@@ -130,6 +137,15 @@ class AuditService:
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+
+def public_details(details: dict | None) -> dict[str, Any]:
+    """`details` without the internal `source_event_id` key.
+
+    The key drives the dedupe and means nothing to a reader of the audit log,
+    so it stays out of the API shape.
+    """
+    return {k: v for k, v in (details or {}).items() if k != SOURCE_EVENT_KEY}
 
 
 def audit_log_to_dict(entry: AuditLogEntry) -> dict[str, Any]:

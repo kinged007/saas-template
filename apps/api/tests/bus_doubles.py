@@ -11,8 +11,13 @@ envelope, which is how a test reproduces JetStream's at-least-once delivery.
 
 from __future__ import annotations
 
-from src.events.bus import EventBus, EventEnvelope, EventMetadata, SubscriberHandler
-from src.events.inprocess import _subject_matches
+from src.events.bus import (
+    EventBus,
+    EventEnvelope,
+    EventMetadata,
+    SubscriberHandler,
+    subject_matches,
+)
 
 
 class RecordingBus(EventBus):
@@ -69,7 +74,7 @@ class ReplayBus(EventBus):
     name = "replay"
 
     def __init__(self) -> None:
-        self._handlers: dict[str, SubscriberHandler] = {}
+        self._handlers: dict[str, list[SubscriberHandler]] = {}
         self._delivered: dict[str, EventEnvelope] = {}
 
     async def publish(
@@ -91,12 +96,13 @@ class ReplayBus(EventBus):
         await self._deliver(subject, self._delivered[subject])
 
     async def _deliver(self, subject: str, envelope: EventEnvelope) -> None:
-        for subscription, handler in list(self._handlers.items()):
-            if _subject_matches(subscription, subject):
-                await handler(envelope.payload, envelope.metadata)
+        for subscription, handlers in list(self._handlers.items()):
+            if subject_matches(subscription, subject):
+                for handler in list(handlers):
+                    await handler(envelope.payload, envelope.metadata)
 
     async def subscribe(self, subject: str, handler, *, fanout: bool = False) -> str:
-        self._handlers[subject] = handler
+        self._handlers.setdefault(subject, []).append(handler)
         return f"{subject}:sub"
 
     async def unsubscribe(self, subscription_id: str) -> None:

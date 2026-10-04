@@ -69,8 +69,9 @@ async def _audit_email_failure(
     """Log and audit one notification email that was not delivered.
 
     `reason` is `no_recipient`, `no_email` or `send_failed`. Published after
-    the attempt, so a failing publish nacks the message and the in-app
-    notification row is created again on redelivery.
+    the attempt, so a failing publish nacks the message and the handler runs
+    again — the notification row is then reused (see `_create_notification`),
+    so this still files one audit row for the source event.
     """
     logger.error(
         "notification email failed for %s (notification %s, reason=%s)",
@@ -105,6 +106,10 @@ async def _create_notification(
     row is kept and the failure logged and audited
     (`notification.email_failed`) when the recipient is missing, has no
     address, or sending fails).
+
+    `source_event_id` makes the insert idempotent, so a redelivered event
+    reuses the notification it created instead of a second row for the same
+    recipient.
     """
     service = NotificationService(session, bus)
     n_type = kwargs.get("type", "")
@@ -112,7 +117,9 @@ async def _create_notification(
     channel = await service.resolve_channel(n_user_id, n_type) if n_user_id else "in-app"
     if channel == "off":
         return
-    notification = await service.create(**kwargs, correlation_id=correlation_id)
+    notification = await service.create(
+        **kwargs, correlation_id=correlation_id, source_event_id=source_event_id
+    )
     if channel != "email":
         return
     from src.email.factory import send_email

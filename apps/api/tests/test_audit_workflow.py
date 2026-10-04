@@ -348,6 +348,14 @@ async def _publish_failed_invitation(bus, invitation_id: str | None = None) -> s
     return invitation_id
 
 
+class _NoopConnectionManager:
+    """Stand-in for the realtime manager: `_wired_replay_bus` passes None."""
+
+    async def push(self, *args, **kwargs) -> None: ...
+
+    async def push_many(self, *args, **kwargs) -> None: ...
+
+
 def _wired_replay_bus():
     from src.events.factory import WorkflowRegistry
     from src.workflows import build_workflows
@@ -355,7 +363,7 @@ def _wired_replay_bus():
 
     bus = ReplayBus()
     registry = WorkflowRegistry(bus)
-    build_workflows(registry, bus, None)
+    build_workflows(registry, bus, _NoopConnectionManager())
     return bus, registry
 
 
@@ -375,6 +383,102 @@ async def test_redelivered_event_writes_one_audit_row(monkeypatch):
 
     await bus.redeliver(Subjects.WORKSPACE_INVITATION_CREATED)
     assert len(await _email_failed_rows(invitation_id)) == 1
+
+
+async def test_redelivered_notification_event_writes_one_row_and_one_audit_row():
+    """A handler that creates a row per run must not multiply either row.
+
+    `notification.email_failed` is keyed on the notification id, so a
+    redelivery that inserted a second notification row would also file a
+    second audit row for the same source event.
+    """
+    from src.events.subjects import Subjects
+    from src.models.core import Notification
+    from src.services.notifications import NotificationService
+
+    user_id = str(uuid.uuid4())
+    async with SessionFactory() as session:
+        await NotificationService(session).upsert_channels(
+            user_id, {"workspace_invitation": "email"}
+        )
+
+    bus, registry = _wired_replay_bus()
+    await registry.wire()
+    await bus.publish(
+        Subjects.WORKSPACE_MEMBER_INVITED,
+        {
+            "user_id": user_id,  # no user row: the send fails as `no_recipient`
+            "workspace_id": str(uuid.uuid4()),
+            "workspace_name": "Acme Corp",
+            "invitation_id": str(uuid.uuid4()),
+            "invited_by": "Owner",
+        },
+    )
+
+    async def notifications() -> list[str]:
+        async with SessionFactory() as session:
+            result = await session.execute(
+                select(Notification.id).where(
+                    Notification.user_id == user_id,
+                    Notification.type == "workspace_invitation",
+                )
+            )
+            return list(result.scalars().all())
+
+    (notification_id,) = await notifications()
+
+    async def failed_rows() -> list[AuditLogEntry]:
+        async with SessionFactory() as session:
+            result = await session.execute(
+                select(AuditLogEntry).where(
+                    AuditLogEntry.action == "notification.email_failed",
+                    AuditLogEntry.resource_id == notification_id,
+                )
+            )
+            return list(result.scalars().all())
+
+    assert len(await failed_rows()) == 1
+
+    await bus.redeliver(Subjects.WORKSPACE_MEMBER_INVITED)
+    assert await notifications() == [notification_id]
+    assert len(await failed_rows()) == 1
+
+
+async def test_redelivered_conversation_event_writes_one_pointer_per_recipient():
+    """The bulk path is on the same path: a redelivery adds no second row."""
+    from src.events.subjects import Subjects
+    from src.models.core import Notification
+
+    workspace_id = str(uuid.uuid4())
+    participants = [str(uuid.uuid4()) for _ in range(3)]
+
+    async def pointers() -> int:
+        async with SessionFactory() as session:
+            result = await session.execute(
+                select(Notification.id).where(
+                    Notification.workspace_id == workspace_id,
+                    Notification.type == "conversation_message",
+                )
+            )
+            return len(list(result.scalars().all()))
+
+    bus, registry = _wired_replay_bus()
+    await registry.wire()
+    await bus.publish(
+        Subjects.CONVERSATION_MESSAGE_CREATED,
+        {
+            "workspace_id": workspace_id,
+            "conversation_id": str(uuid.uuid4()),
+            "sender_id": participants[0],
+            "sender_type": "user",
+            "participant_user_ids": participants,
+            "title": "Hi",
+        },
+    )
+    assert await pointers() == 2  # the sender gets no pointer
+
+    await bus.redeliver(Subjects.CONVERSATION_MESSAGE_CREATED)
+    assert await pointers() == 2
 
 
 async def test_two_publishes_still_write_two_audit_rows(monkeypatch):
@@ -441,8 +545,10 @@ def test_every_workflow_audit_publish_carries_a_source_event_id():
         node.lineno
         for node in ast.walk(ast.parse(WORKFLOWS.read_text()))
         if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "publish_audit"
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == "publish_audit")
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == "publish_audit")
+        )
         and not any(kw.arg == "source_event_id" for kw in node.keywords)
     ]
     assert not missing, f"publish_audit without source_event_id at lines {missing}"

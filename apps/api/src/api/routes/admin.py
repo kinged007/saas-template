@@ -26,6 +26,7 @@ from src.models.audit import AuditLogEntry
 from src.models.user_profile import UserProfile
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.schemas.api import AdminUserUpdate, AdminWorkspaceFlags
+from src.services.audit import public_details
 from src.services.profile_helpers import escape_like, format_display_name
 from src.services.serializers import user_to_dict, workspace_to_dict
 
@@ -289,7 +290,7 @@ async def list_all_audit_logs(
                 "resource_type": entry.resource_type,
                 "resource_id": entry.resource_id,
                 "action": entry.action,
-                "details": entry.details,
+                "details": public_details(entry.details),
                 "ip_address": entry.ip_address,
                 "created_at": entry.created_at.isoformat() if entry.created_at else None,
             }
