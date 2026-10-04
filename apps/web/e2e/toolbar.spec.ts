@@ -73,6 +73,132 @@ test.describe("composer toolbar", () => {
     await expect(bold).toHaveAttribute("aria-pressed", "false");
   });
 
+  test("Link is an action, not a toggle, so it reports no pressed state", async ({ page }) => {
+    const toolbar = await openToolbar(page);
+    const link = toolbar.getByRole("button", { name: "Link", exact: true });
+
+    // The seven toggles above all carry aria-pressed. Link opens an editor, so
+    // it must not claim a state it does not maintain.
+    await expect(link).not.toHaveAttribute("aria-pressed", /.+/);
+  });
+
+  test("Link edits the URL in a popover, not a native prompt", async ({ page }) => {
+    const toolbar = await openToolbar(page);
+    const editor = page.getByRole("dialog").locator('[contenteditable="true"]');
+
+    // A native prompt blocks the main thread and some screen readers drop it,
+    // so the editor has to be a surface in the page.
+    await page.evaluate(() => {
+      const w = window as unknown as { __prompted: boolean };
+      w.__prompted = false;
+      window.prompt = () => {
+        w.__prompted = true;
+        return "https://from-prompt.example.com";
+      };
+    });
+    await editor.click();
+    await page.keyboard.type("hello");
+    await page.keyboard.press("ControlOrMeta+a");
+    await toolbar.getByRole("button", { name: "Link", exact: true }).click();
+
+    const url = page.getByRole("textbox", { name: "Link URL" });
+    // Radix renders the popover as a role="dialog" with no name of its own, and
+    // it is the element a screen reader enters first.
+    const linkDialog = page.getByRole("dialog", { name: "Link URL" });
+    await expect(linkDialog).toBeVisible();
+    await expect(url).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as { __prompted: boolean }).__prompted)).toBe(false);
+
+    // The compose dialog has its own "Cancel", so every popover button is
+    // looked up inside the popover rather than by name across the page.
+    const apply = linkDialog.getByRole("button", { name: "Apply", exact: true });
+    const cancel = linkDialog.getByRole("button", { name: "Cancel", exact: true });
+    const remove = linkDialog.getByRole("button", { name: "Remove link", exact: true });
+
+    await url.fill("https://example.com/docs");
+    // Enter has to submit the form, the way the prompt's OK button did, so a
+    // keyboard user never has to reach for Apply. The click path is covered by
+    // the two steps below.
+    await url.press("Enter");
+    await expect(editor.locator('a[href="https://example.com/docs"]')).toHaveText("hello");
+    // Typing has to continue in the document, not in the dismissed form.
+    await expect(editor).toBeFocused();
+
+    await page.keyboard.press("ControlOrMeta+a");
+    await toolbar.getByRole("button", { name: "Link", exact: true }).click();
+    await expect(url).toHaveValue("https://example.com/docs");
+
+    // An emptied field is a no-op, not a malformed URL to complain about.
+    await url.fill("");
+    await apply.click();
+    await expect(linkDialog).toHaveCount(0);
+
+    // Anything that is not an absolute http(s) URL is refused, rather than
+    // reaching the document as an href.
+    await page.keyboard.press("ControlOrMeta+a");
+    await toolbar.getByRole("button", { name: "Link", exact: true }).click();
+    await url.fill("javascript:alert(1)");
+    await apply.click();
+    await expect(page.getByText("Enter an absolute http:// or https:// URL.")).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as { __prompted: boolean }).__prompted)).toBe(false);
+
+    // Backing out leaves the existing href alone and hands focus back.
+    await cancel.click();
+    await expect(linkDialog).toHaveCount(0);
+    await expect(editor.locator('a[href="https://example.com/docs"]')).toHaveCount(1);
+    await expect(editor).toBeFocused();
+
+    // The popover still holds the link, so the removal control is there.
+    await toolbar.getByRole("button", { name: "Link", exact: true }).click();
+    await remove.click();
+    await expect(editor.locator("a")).toHaveCount(0);
+  });
+
+  test("dismissing the popover leaves focus where the interaction ended", async ({ page }) => {
+    const toolbar = await openToolbar(page);
+    const editor = page.getByRole("dialog").locator('[contenteditable="true"]');
+    const link = toolbar.getByRole("button", { name: "Link", exact: true });
+    const linkDialog = page.getByRole("dialog", { name: "Link URL" });
+
+    await editor.click();
+    await page.keyboard.type("hello");
+    await link.click();
+    await expect(linkDialog).toBeVisible();
+
+    // The trigger toggles the popover shut, which is one of its own exits: the
+    // caret goes back to the document being edited.
+    await link.click();
+    await expect(linkDialog).toHaveCount(0);
+    await expect(editor).toBeFocused();
+
+    await link.click();
+    await expect(linkDialog).toBeVisible();
+
+    // A click elsewhere in the compose dialog dismisses the popover, and that
+    // click owns the focus afterwards: the caret must not jump back into the
+    // document the user clicked away from.
+    await page.getByRole("dialog", { name: "New conversation" }).getByRole("heading").click();
+    await expect(linkDialog).toHaveCount(0);
+    await expect(editor).not.toBeFocused();
+  });
+
+  test("a bare host typed in the text still autolinks", async ({ page }) => {
+    await openToolbar(page);
+    const editor = page.getByRole("dialog").locator('[contenteditable="true"]');
+
+    // The editor's href allow-list must not cost the composer autolinking:
+    // `www.example.com ` is stored as `http://www.example.com/`, never as the
+    // relative href the bare text would otherwise be.
+    await editor.click();
+    await page.keyboard.type("www.example.com ");
+    await expect(editor.locator('a[href^="http://www.example.com"]')).toHaveText("www.example.com");
+
+    // A protocol-relative value is not a host, so it is still refused.
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.type("//evil.example.com ");
+    await expect(editor.locator("a")).toHaveCount(0);
+  });
+
   test("the toolbar is a single tab stop with arrow-key navigation", async ({ page }) => {
     const toolbar = await openToolbar(page);
     const buttons = toolbar.getByRole("button");
