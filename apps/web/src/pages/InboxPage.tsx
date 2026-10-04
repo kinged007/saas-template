@@ -276,20 +276,21 @@ export function InboxPage() {
     if (raw && Array.isArray(raw)) return raw as Message[];
     return [];
   }, [messagesResult]);
-  const messagesState = messagesQuery as unknown as { isLoading?: boolean; isError?: boolean; error?: unknown };
-  const messagesLoading = messagesState?.isLoading ?? false;
-  const messagesError = messagesState?.isError ?? false;
+  const messagesLoading = messagesQuery.isLoading;
+  const messagesError = messagesQuery.isError;
   // A 4xx means the server answered and refused; only a transport failure or 5xx
   // leaves the cached list merely behind.
-  const messagesRefused = messagesError && isClientError(messagesState?.error);
+  const messagesRefused = messagesError && isClientError(messagesQuery.error);
   const hasCachedMessages = messages.length > 0;
+  const staleNote = messagesError && hasCachedMessages;
 
-  // Auto scroll to bottom when messages change
+  // Auto scroll to bottom when messages change; `messagesError` re-clamps when the
+  // header note shrinks the pane and would otherwise clip the newest message.
   useEffect(() => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages]);
+  }, [messages, messagesError]);
 
   // Mark read when conversation opened – also clears the grouped notification pointer for that conversation
   useEffect(() => {
@@ -817,18 +818,33 @@ export function InboxPage() {
               <div className="flex min-h-0 flex-1 flex-col">
                 {/* Thread header */}
                 <div className="flex flex-col gap-3 border-b p-4">
-                  {/* A failed refetch keeps the cached messages. The header is outside the
-                      message scroller, so this stays visible at any scroll position. */}
-                  {messagesError && hasCachedMessages && (
-                    <div className="flex items-center justify-between gap-2">
-                      <p role="status" className={cn("text-sm", messagesRefused ? "text-destructive" : "text-muted-foreground")}>
-                        {messagesRefused ? "Could not refresh messages." : "Showing the last messages loaded."}
-                      </p>
-                      <Button variant="ghost" size="sm" onClick={() => void messagesQuery.refetch()}>
+                  {/* A failed refetch keeps the cached messages, and this header sits outside
+                      the message scroller, so the note stays visible at any scroll position.
+                      Always mounted: a live region has to be in the accessibility tree before
+                      its text changes to be announced — `sr-only` keeps it out of the layout. */}
+                  <p
+                    role="status"
+                    className={cn(
+                      "flex items-center justify-between gap-2 text-sm",
+                      !staleNote && "sr-only",
+                      staleNote && (messagesRefused ? "text-destructive" : "text-muted-foreground"),
+                    )}
+                  >
+                    <span>
+                      {staleNote && (messagesRefused ? "Could not refresh messages." : "Showing the last messages loaded.")}
+                    </span>
+                    {staleNote && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void messagesQuery.refetch()}
+                        disabled={messagesQuery.isFetching}
+                        aria-label="Retry loading messages"
+                      >
                         Retry
                       </Button>
-                    </div>
-                  )}
+                    )}
+                  </p>
                   <div className="flex items-start gap-2">
                     <Button
                       variant="ghost"

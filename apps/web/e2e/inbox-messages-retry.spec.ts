@@ -88,7 +88,8 @@ test.describe("inbox message fetch", () => {
    * pane stays usable — but it has to say the list is not live, and it has to say
    * it where the user is looking. The pane holds more messages than fit and is
    * scrolled to the newest, so the note belongs in the header: rendered inside
-   * the scroller it lands ~2200px above the viewport.
+   * the scroller it lands ~2200px above the viewport. The containment assertion
+   * below is what keeps it there.
    */
   test("a failed refetch keeps the messages and marks them stale", async ({ page }) => {
     await mockApi(page, {
@@ -135,10 +136,20 @@ test.describe("inbox message fetch", () => {
 
     mode = "fail";
     await page.getByRole("button", { name: "Retry" }).click();
-    const staleNote = page.getByText("Showing the last messages loaded.");
+    // The live region is always mounted and only its text toggles, so locate the
+    // region itself rather than the text node.
+    const staleNote = page.locator('[role="status"]', { hasText: "Showing the last messages loaded." });
     await expect(staleNote).toBeVisible();
     await expect(staleNote).toHaveAttribute("role", "status");
-    // `toBeVisible` passes while the note is scrolled out of sight; this is the guard.
+    // The guard for the placement: `toBeVisible` and `toBeInViewport` both pass when the
+    // note is the first child of a pane that happens not to be scrolled. The page wrapper is
+    // itself `.overflow-y-auto`, so containment is measured against the scroller that holds
+    // the message rows — the one the note must not live in.
+    const noteSharesPaneWithMessages = await page
+      .getByText("shipping friday #25")
+      .first()
+      .evaluate((row, text) => Boolean(row.closest(".overflow-y-auto")?.textContent?.includes(text)), "Showing the last messages loaded.");
+    expect(noteSharesPaneWithMessages).toBe(false);
     await expect(staleNote).toBeInViewport();
     await expect(page.getByText("shipping friday").first()).toBeVisible();
     // `text-destructive` stays reserved for the empty list, where nothing loaded.
