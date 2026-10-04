@@ -236,8 +236,10 @@ export function SecuritySection() {
                     aria-label={copyLabel}
                     onClick={async () => {
                       if (!setupSecret) return;
-                      await navigator.clipboard.writeText(setupSecret);
+                      // Clear before the write so the previous window dies even if
+                      // this one never reaches the clipboard.
                       clearCopied();
+                      await navigator.clipboard.writeText(setupSecret);
                       setCopied(true);
                       copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
                     }}
