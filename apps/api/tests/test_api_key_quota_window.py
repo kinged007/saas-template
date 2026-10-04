@@ -24,7 +24,7 @@ from tests.conftest import create_workspace, register_user, ws_headers
 
 
 async def _mint_key(
-    client, headers: dict, *, name: str, permissions: list[str], quota: int
+    client, headers: dict, *, name: str, permissions: list[str], quota: int | None = None
 ) -> dict:
     resp = await client.post(
         "/api/v1/api-keys",
@@ -147,6 +147,29 @@ async def test_quota_headers_report_the_current_window(app_client):
     assert first.headers["X-API-Key-Remaining"] == "1"
     second = await client.get("/api/v1/members", headers=key_headers)
     assert second.headers["X-API-Key-Remaining"] == "0"
+
+
+async def test_unlimited_key_still_counts_but_emits_no_quota_headers(app_client):
+    """`usage_quota IS NULL` short-circuits the rewritten WHERE to always pass,
+    so an unlimited key is still charged, still counts in its window, and
+    reports no budget."""
+    client = app_client
+    owner = await register_user(client, "unlimited@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    created = await _mint_key(client, headers, name="free", permissions=["member:read"])
+    key_headers = {"Authorization": f"Bearer {created['key']}", "X-Workspace-ID": ws["id"]}
+
+    resp = await client.get("/api/v1/members", headers=key_headers)
+    assert resp.status_code == 200
+    assert "X-API-Key-Quota" not in resp.headers
+    assert "X-API-Key-Remaining" not in resp.headers
+    assert "X-API-Key-Window-Reset" not in resp.headers
+
+    item = await _listed_key(client, headers, created["id"])
+    assert item["usage_window_count"] == 1
+    assert item["usage_count"] == 1
 
 
 async def test_window_reset_header_points_at_the_next_month_boundary(app_client):
@@ -290,10 +313,16 @@ def test_migration_0019_seeds_the_window_start_too():
             conn.execute(
                 sa.text(
                     "CREATE TABLE api_keys"
-                    " (id VARCHAR(36) PRIMARY KEY, usage_count INTEGER NOT NULL DEFAULT 0)"
+                    " (id VARCHAR(36) PRIMARY KEY, usage_count INTEGER NOT NULL DEFAULT 0,"
+                    " usage_quota INTEGER)"
                 )
             )
-            conn.execute(sa.text("INSERT INTO api_keys VALUES ('exhausted', 50), ('fresh', 0)"))
+            conn.execute(
+                sa.text(
+                    "INSERT INTO api_keys VALUES ('exhausted', 50, 50), ('fresh', 0, 10),"
+                    " ('unlimited', 99, NULL)"
+                )
+            )
             _run_migration(module, conn)
             rows = {
                 row[0]: (row[1], row[2])
@@ -310,6 +339,10 @@ def test_migration_0019_seeds_the_window_start_too():
     assert (start.year, start.month, start.day) == (now.year, now.month, 1)
     assert rows["fresh"][0] == 0
     assert rows["fresh"][1] is not None
+    # An unlimited key had no lifetime cap to exhaust. Seeding it would show
+    # its lifetime total as this month's spend until the month rolls, so the
+    # backfill leaves its window empty for record_use to open on first use.
+    assert rows["unlimited"] == (0, None)
 
 
 SPENT_KEY_ID = "11111111-1111-1111-1111-111111111111"

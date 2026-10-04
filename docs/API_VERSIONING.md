@@ -33,6 +33,18 @@ client that has run out can still read its budget and when it recovers.
 `Remaining` counts the request being answered, so it reaches `0` on the last
 accepted call and the next call is rejected.
 
+### Changed meanings
+
+`usage_quota` and `X-API-Key-Remaining` were lifetime-scoped and are now per
+calendar month (UTC). The names are unchanged and both stay under `/api/v1`,
+so this is the one departure from the additive-only rule above. It is
+announced in the release notes for the release that carries it (issue #69),
+and no version bump was taken because the per-month cap is that issue's
+intent and the lifetime reading was the defect — not a stable contract that a
+client could have relied on. A client that tracked "remaining for the life of
+this key" must read the calendar month instead: the number climbs back on the
+1st.
+
 ## Why prefix strategy
 
 URL prefixes are visible in logs, trivially routable at the ingress, and need

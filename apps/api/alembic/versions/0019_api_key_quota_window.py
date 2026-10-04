@@ -37,12 +37,18 @@ def upgrade() -> None:
     # start reads as "no window has been opened yet", so the rollover zeroes
     # the counter on the key's first request and the seed above is discarded.
     #
+    # Capped keys only. An unlimited key had no cap to exhaust, so seeding it
+    # buys nothing and puts its lifetime total in the new "Usage (this month)"
+    # column until the month rolls; it keeps an empty window and record_use
+    # opens one on its first use.
+    #
     # op.execute() takes no bound parameters (the bind connection does), and
     # the typed bindparam is what lets sqlite3 bind a datetime at all.
     month_start = datetime.now(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     op.get_bind().execute(
         sa.text(
             "UPDATE api_keys SET usage_window_count = usage_count, usage_window_start = :start"
+            " WHERE usage_quota IS NOT NULL"
         ).bindparams(sa.bindparam("start", type_=sa.DateTime(timezone=True))),
         {"start": month_start},
     )

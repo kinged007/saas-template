@@ -262,7 +262,9 @@ class ApiKeyService:
 
         Returns False without committing, so the caller can report the
         untouched counters: a rejected request neither counts nor opens the
-        next window.
+        next window. Those counters are the ones `authenticate` loaded, which
+        is the committed value on a row-lock backend and at most one unit
+        behind on SQLite, where a concurrent writer can slip in between.
         """
         now = ensure_utc(now or now_utc())
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -287,6 +289,9 @@ class ApiKeyService:
         # The rollover is a case() on the stored month, which the ORM cannot
         # evaluate in place, so the row is re-read instead: the quota headers
         # the caller reports must come from the values the database now holds.
+        # ponytail: that costs a PK SELECT inside the lock authenticate already
+        # holds. Ceiling: one extra read per key-authenticated request.
+        # Upgrade path: UPDATE ... RETURNING.
         await self._session.refresh(key)
         await self._session.commit()
         return True
