@@ -15,7 +15,7 @@ CRUD = SRC / "api" / "crud.py"
 
 
 def test_no_uncalled_public_helpers_in_crud():
-    tree = ast.parse(CRUD.read_text())
+    tree = ast.parse(CRUD.read_text(encoding="utf-8"))
     defined = {
         node.name
         for node in tree.body
@@ -23,7 +23,7 @@ def test_no_uncalled_public_helpers_in_crud():
         and not node.name.startswith("_")
     }
     callers = "\n".join(
-        path.read_text()
+        path.read_text(encoding="utf-8")
         for path in SRC.rglob("*.py")
         if path != CRUD and "alembic" not in path.parts
     )

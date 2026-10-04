@@ -12,7 +12,7 @@ SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "db-squash.sh"
 
 
 def _ruff_invocations() -> list[str]:
-    lines = SCRIPT.read_text().splitlines()
+    lines = SCRIPT.read_text(encoding="utf-8").splitlines()
     return [line for line in lines if line.strip().startswith("uv run") and " ruff" in line]
 
 

@@ -293,7 +293,7 @@ def test_prod_compose_trusts_only_the_pinned_proxy_network():
     the compose file pins nginx to must be inside the trusted set, and
     --proxy-headers must be on or the allowlist never applies.
     """
-    compose = yaml.safe_load(COMPOSE.read_text())
+    compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
     command = compose["services"]["api"]["command"]
     default = re.search(r"--forwarded-allow-ips=\$\{FORWARDED_ALLOW_IPS:-([^}]+)\}", command)
     assert default, f"no --forwarded-allow-ips default in: {command}"
