@@ -37,7 +37,9 @@ test("apps/web/web-test.tap is gitignored", () => {
 test("a .tap file under apps/web stays out of git status", () => {
   writeFileSync(join(repoRoot, fixture), "");
   try {
-    const status = git(["status", "--porcelain", "--", fixture]);
+    // --untracked-files=all overrides a status.showUntrackedFiles=no gitconfig,
+    // which would otherwise make this pass with the ignore rule deleted.
+    const status = git(["status", "--porcelain", "--untracked-files=all", "--", fixture]);
     assert.equal(status.stdout.toString(), "", `${fixture} shows as untracked`);
   } finally {
     unlinkSync(join(repoRoot, fixture));
