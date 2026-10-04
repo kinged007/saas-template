@@ -62,6 +62,26 @@ def test_allowed_origins_pass_the_csrf_check(api_env, monkeypatch):
     assert all(cookies._origin_allowed(o) for o in origins if "*" not in o)
 
 
+def test_user_entries_are_whitespace_stripped(tmp_path, monkeypatch):
+    """`CORS_ORIGINS=a, b` must allowlist `b`; `" b"` matches no Origin header."""
+    from src.core.security import cookies
+
+    (tmp_path / "apps" / "api").mkdir(parents=True)
+    (tmp_path / "apps" / "api" / ".env").write_text(
+        "CORS_ORIGINS=http://a.example, http://b.example\n"
+    )
+    dev = _load_dev()
+    monkeypatch.setattr(dev, "ROOT", str(tmp_path))
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+    origins = dev.dev_allowed_origins("5318")
+    monkeypatch.setattr(cookies.settings, "cors_origins", ",".join(origins))
+    assert "http://a.example" in origins
+    assert "http://b.example" in origins
+    assert not any(o != o.strip() for o in origins)
+    # A `*` entry is a pattern for the CORS middleware, not a browser origin.
+    assert all(cookies._origin_allowed(o) for o in origins if "*" not in o)
+
+
 def test_shell_env_wins_over_file(tmp_path, monkeypatch):
     (tmp_path / "apps" / "api").mkdir(parents=True)
     (tmp_path / "apps" / "api" / ".env").write_text("CORS_ORIGINS=from-file\n")
