@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 
+import { oauthCodeConsumed } from "./oauthCallback";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { afterAuthRedirect, authProvider, seedWorkspace } from "@/providers/authProvider";
@@ -100,11 +101,15 @@ export function OAuthCallbackPage() {
       setStatus(error === "registration is disabled" ? "Registration is disabled." : "Sign-in failed.");
       return;
     }
+    // Ahead of the missing-code branch: the workspace provider leaves its
+    // loading gate as the identity settles, and that remount can land after
+    // navigate() has rewritten the URL — code is null but it was ours, so
+    // stopping here keeps a succeeding sign-in from painting an error.
+    if (oauthCodeConsumed(code, consumedCode)) return;
     if (!code) {
       setStatus("Missing sign-in code.");
       return;
     }
-    if (consumedCode === code) return;
     consumedCode = code;
     exchangeOAuthCode(code)
       .then((res) => {
