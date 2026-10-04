@@ -1,6 +1,6 @@
 import { useLayoutEffect, useReducer, useRef } from "react";
 import { useCan, useGetIdentity, useList } from "@refinedev/core";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { CheckCircle2, Circle, PlusCircle, X } from "lucide-react";
 import { Link } from "react-router";
 
@@ -73,7 +73,11 @@ export function DashboardPage() {
     return (
       <Card>
         <CardHeader>
-          <CardTitle>No workspace yet</CardTitle>
+          {/* CardTitle renders a div, so the title is spelled out as a heading
+              with the classes CardTitle applies; card-title-classes.test.ts
+              keeps the copy in step with the primitive. This branch returns
+              before the page title, so the card title is the page h1. */}
+          <h1 className="font-semibold leading-none tracking-tight">No workspace yet</h1>
           <CardDescription>
             Create a workspace to get started with managing your team.
           </CardDescription>
@@ -107,7 +111,7 @@ export function DashboardPage() {
     <div className="flex flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight">{workspace?.name ?? "Workspace"}</h2>
+          <h1 className="text-3xl font-bold tracking-tight">{workspace?.name ?? "Workspace"}</h1>
           <p className="text-muted-foreground mt-1">
             Manage your team and collaborate effectively.
           </p>
@@ -136,13 +140,13 @@ export function DashboardPage() {
           <CardHeader>
             <div className="flex items-start justify-between gap-2">
               <div>
-                {/* CardTitle renders a div, so each of the three card titles on this
-                    page is spelled out as an h3 with the classes CardTitle applies;
+                {/* CardTitle renders a div, so each card title on this
+                    page is spelled out as an h2 with the classes CardTitle applies;
                     card-title-classes.test.ts keeps the copies in step with the
                     primitive. Focus must stay on this one (it is what announces the card
                     is back), but the heading is not keyboard reachable, so the default
                     ring only reads as a full-width input. Ring off, focus on. */}
-                <h3 tabIndex={-1} ref={restoreHeading} className="font-semibold leading-none tracking-tight outline-none">Get set up</h3>
+                <h2 tabIndex={-1} ref={restoreHeading} className="font-semibold leading-none tracking-tight outline-none">Get set up</h2>
                 <CardDescription>
                   Finish these steps to get the most out of your workspace.
                 </CardDescription>
@@ -174,7 +178,7 @@ export function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <h3 className="font-semibold leading-none tracking-tight">Members</h3>
+            <h2 className="font-semibold leading-none tracking-tight">Members</h2>
             <CardDescription>Manage workspace members and their roles</CardDescription>
           </CardHeader>
           <CardContent>
@@ -186,7 +190,7 @@ export function DashboardPage() {
 
         <Card>
           <CardHeader>
-            <h3 className="font-semibold leading-none tracking-tight">Inbox</h3>
+            <h2 className="font-semibold leading-none tracking-tight">Inbox</h2>
             <CardDescription>View your notifications and updates</CardDescription>
           </CardHeader>
           <CardContent>
