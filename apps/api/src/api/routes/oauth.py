@@ -110,6 +110,8 @@ async def oauth_callback(
     db: AsyncSession = Depends(get_db),
 ):
     get_auth_limiter().check(f"oauth:{_client_ip(request) or 'unknown'}:{provider_id}")
+    # Checks a bucket this module never charges; see the rule in
+    # src/core/security/ratelimit.py.
     container = get_container(request)
     code = request.query_params.get("code")
     state = request.query_params.get("state")
@@ -164,9 +166,7 @@ async def oauth_callback(
         user = await _join_single_workspace_best_effort(db, container, user)
     except HTTPException:
         # The helper's "account no longer exists" guard: a browser mid-redirect
-        # needs the error redirect, not a JSON 401 body. This route checks the
-        # limiter but never charges it; see the rule in
-        # src/core/security/ratelimit.py.
+        # needs the error redirect, not a JSON 401 body.
         return _error_redirect("sign-in failed")
     if user.totp_enabled:
         # Passwordless SSO still honors 2FA: park the user id behind the
