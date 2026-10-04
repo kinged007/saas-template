@@ -70,7 +70,12 @@ function RequireWorkspace() {
     // "No workspace yet" card only explains it visually. sonner's <Toaster> is
     // the page's aria-live region, so this is what announces the move.
     if (hasNoWorkspace) {
-      toast("You need a workspace to open that page. Showing your dashboard instead.");
+      toast("You need a workspace to open that page. Showing your dashboard instead.", {
+        // sonner auto-increments an id per call and dedups only on a supplied
+        // one, so StrictMode's double-invoked mount effect needs this to land
+        // one announcement instead of two.
+        id: "workspace-guard-redirect",
+      });
     }
   }, [hasNoWorkspace]);
   if (hasNoWorkspace) return <Navigate to="/" replace />;
@@ -163,7 +168,10 @@ export function App() {
                   />
                 </Route>
                 {/* Legacy redirects — keep old URLs working. Inside the guard, so
-                    a user in zero workspaces is sent straight to the dashboard. */}
+                    a user in zero workspaces is sent straight to the dashboard.
+                    Declared after the settings/workspace subtree and its splat
+                    for that reason: react-router takes the first match, so a
+                    stub above would shadow the subtree's `*` catch-all. */}
                 <Route path="roles" element={<Navigate to="/settings/workspace/roles" replace />} />
                 <Route path="jobs" element={<Navigate to="/settings/workspace/jobs" replace />} />
               </Route>

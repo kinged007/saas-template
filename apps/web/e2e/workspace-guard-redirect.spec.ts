@@ -15,6 +15,11 @@ const path = (page: Page) => expect.poll(() => new URL(page.url()).pathname);
 /** Zero workspaces is a settled identity, so the guard's redirect is correct here. */
 const NO_WORKSPACES = { ...IDENTITY, workspaces: [], single_workspace: false };
 
+const ANNOUNCEMENT = "You need a workspace to open that page. Showing your dashboard instead.";
+
+/** sonner's <Toaster>: the only aria-live region on the page, one <li> per toast. */
+const liveRegion = (page: Page) => page.locator('section[aria-live="polite"]');
+
 const member = (email: string) => ({
   id: "user-2",
   email,
@@ -70,19 +75,34 @@ test.describe("workspace guard", () => {
       // Both orders end at "/", so only the trace tells them apart: declared
       // outside the guard, the legacy stub commits the workspace-scoped URL
       // first and the guard then rejects it, for two navigations instead of one.
+      // Non-empty first, so an empty trace fails instead of passing both sides.
+      expect(visited.length).toBeGreaterThan(0);
       expect(visited).not.toContain(`/settings/workspace/${legacy.slice(1)}`);
     });
   }
 
-  test("the redirect is announced inside a live region", async ({ page }) => {
+  test("a user with a workspace is neither redirected nor announced", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    await members(page, [member("member@example.com")]);
+    await page.goto("/members");
+    await path(page).toBe("/members");
+    // The row, not the URL alone: it also proves the page has rendered, so the
+    // empty toast list below cannot pass merely because nothing happened yet.
+    await expect(page.getByRole("row").filter({ hasText: "member@example.com" })).toBeVisible();
+    await expect(liveRegion(page).locator("li")).toHaveCount(0);
+  });
+
+  test("the redirect is announced once inside a live region", async ({ page }) => {
     await mockApi(page, { signedIn: true, identity: NO_WORKSPACES });
     await page.goto("/api-keys");
     await path(page).toBe("/");
     // sonner's <Toaster> is the only aria-live region on the page: text that is
-    // merely rendered on the page is not announced to a screen reader.
-    await expect(page.locator('section[aria-live="polite"]')).toContainText(
-      /workspace/i,
-      { timeout: 15_000 },
-    );
+    // merely rendered on the page is not announced to a screen reader. The whole
+    // sentence, so another workspace-flavoured toast cannot stand in for it.
+    const region = liveRegion(page);
+    await expect(region).toContainText(ANNOUNCEMENT, { timeout: 15_000 });
+    // One card, not two: StrictMode double-invokes the guard's mount effect, and
+    // sonner dedups on a supplied id, so a bare toast() would show two.
+    await expect(region.locator("li")).toHaveCount(1);
   });
 });
