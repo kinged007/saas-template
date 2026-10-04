@@ -62,13 +62,16 @@ export function DashboardPage() {
   const onboardingOffForWorkspace = workspace?.onboarding_enabled === false;
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
   const { data: canCreateKey } = useCan({ resource: "api-keys", action: "create" });
+  const { data: canReadKeys } = useCan({ resource: "api-keys", action: "list" });
+  // The key step needs both permissions: its progress is read from the key
+  // list, so a custom role holding `apikey:create` without `apikey:read` could
+  // never complete it and its count request would come back 403.
+  const canTrackKeyStep = canCreateKey?.can === true && canReadKeys?.can === true;
   const { result: keysResult } = useList<ApiKey>({
     resource: "api-keys",
     // The count only decides this card's key step, so it is fetched only when
-    // that step is one the user has. Listing keys needs `apikey:read`, which a
-    // role without `apikey:create` usually lacks as well, and the card would
-    // put a 403 on screen for it.
-    queryOptions: { enabled: !!workspace && !!canCreateKey?.can },
+    // that step is one the user has.
+    queryOptions: { enabled: !!workspace && canTrackKeyStep },
   });
   const { result: invitationsResult } = useList<Invitation>({
     resource: "invitations",
@@ -106,12 +109,19 @@ export function DashboardPage() {
   const steps = setupSteps({
     canInvite: canInvite?.can,
     invitationCount: invitations.length,
-    canCreateKey: canCreateKey?.can,
+    canCreateKey: canTrackKeyStep,
     apiKeyCount: keys.length,
   });
   // Progress is read over the steps this user has, so an empty list (nothing
   // they may do) completes the card as surely as every step being finished.
   const allDone = steps.every((s) => s.done);
+  // While a permission is still loading the step list is empty, which reads as
+  // "nothing to do" and would take the card and its restore button down for a
+  // render before either belongs there.
+  const setupResolved =
+    canInvite?.can !== undefined &&
+    canCreateKey?.can !== undefined &&
+    canReadKeys?.can !== undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -122,10 +132,11 @@ export function DashboardPage() {
             Manage your team and collaborate effectively.
           </p>
         </div>
-        {/* The card is hidden by three independent reasons (all steps done, the
-            caller's own dismissal, the workspace flag). Restore shows only
-            when the caller's dismissal is the sole reason it is gone. */}
-        {onboardingDismissed && !allDone && !onboardingOffForWorkspace && (
+        {/* The card is hidden by four independent reasons (its step list not
+            settled yet, all steps done, the caller's own dismissal, the
+            workspace flag). Restore shows only when the caller's dismissal is
+            the sole reason it is gone. */}
+        {onboardingDismissed && setupResolved && !allDone && !onboardingOffForWorkspace && (
           <Button
             variant="ghost"
             size="sm"
@@ -141,7 +152,7 @@ export function DashboardPage() {
         )}
       </div>
 
-      {!allDone && !onboardingDismissed && !onboardingOffForWorkspace && (
+      {setupResolved && !allDone && !onboardingDismissed && !onboardingOffForWorkspace && (
         <Card>
           <CardHeader>
             <div className="flex items-start justify-between gap-2">
