@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { afterAuthRedirect, authProvider, seedWorkspace } from "@/providers/authProvider";
 import { API_URL, httpClient } from "@/providers/dataProvider";
-import { identityStore, tokenStore, workspaceStore } from "@/utils/storage";
+import { identityStore, resetSessionState, tokenStore } from "@/utils/storage";
 import { clearAllCaches, queryClient } from "@/providers/queryClient";
 
 export type AuthConfig = {
@@ -64,8 +64,7 @@ export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: str
     use_cookies: true,
   });
   if (data.two_factor_required) return { twoFactor: data.challenge_token as string };
-  workspaceStore.clear();
-  identityStore.set(null);
+  resetSessionState();
   clearAllCaches(queryClient);
   // Refresh token is in the HttpOnly cookie; only the access token is stored.
   tokenStore.setTokens(data.access_token);

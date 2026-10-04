@@ -128,7 +128,7 @@ export const authProvider: AuthProvider = {
       if (last_name) body.last_name = last_name;
       if (display_name && !body.display_name) body.display_name = display_name;
       const tokens = await post("/auth/register", { ...body, use_cookies: true });
-      // Same stale-session reset + workspace seed as login (see above).
+      // Same stale-session reset + workspace seed as login, via resetSessionState().
       resetSessionState();
       clearAllCaches(queryClient);
       tokenStore.setTokens(tokens.access_token);

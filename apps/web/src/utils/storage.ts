@@ -182,9 +182,10 @@ export const workspaceStore = {
 
 /**
  * Reset the outgoing session's selection state before new tokens land.
- * Shared by every sign-in path (login, register, 2FA): the in-memory active
- * id is read synchronously by the header and the dataProvider, so a stale one
- * would scope the incoming user's first requests to the previous workspace.
+ * Shared by every sign-in path (login, register, 2FA, OAuth code exchange): the
+ * in-memory active id is read synchronously by the header and the dataProvider,
+ * so a stale one would scope the incoming user's first requests to the previous
+ * workspace.
  * Per-user entries stay — the incoming user gets their own selection back.
  */
 export function resetSessionState(): void {
