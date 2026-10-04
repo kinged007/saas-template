@@ -61,6 +61,10 @@ export function SecuritySection() {
   const [confirmPw, setConfirmPw] = useState("");
   const [changeCode, setChangeCode] = useState("");
 
+  // The copy icon flips to a check, so its accessible name follows; the pair the
+  // button keeps is `title` + `aria-label`, equal to each other (#332).
+  const copyLabel = copied ? "Copied" : "Copy setup key";
+
   const refresh = () => {
     sessions.query.refetch();
     status.query.refetch();
@@ -216,7 +220,8 @@ export function SecuritySection() {
                   <Button
                     variant="outline"
                     size="icon"
-                    aria-label="Copy setup key"
+                    title={copyLabel}
+                    aria-label={copyLabel}
                     onClick={async () => {
                       if (!setupSecret) return;
                       await navigator.clipboard.writeText(setupSecret);
