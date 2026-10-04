@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { assignableRoles, isManagerRoleName, roleCapNotice, roleCapNoticeText, rolePickerCapNotice } from "./role-picker-cap.ts";
+import { assignableRoles, roleCapNotice, roleCapNoticeText, rolePickerCapNotice } from "./role-picker-cap.ts";
+import { isManagerRoleName } from "./role-name.ts";
 import type { Role } from "../types.ts";
 
 const role = (id: string, name: string): Role => ({

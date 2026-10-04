@@ -32,8 +32,9 @@ import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceConte
 import { canResendInvitation, canRevokeInvitation, invitationStatus } from "./invitation-actions";
 import { resolveInviteRole } from "./invite-role";
 import { canReactivateMember, canSuspendMember } from "./member-actions";
-import { assignableRoles, isManagerRoleName, roleCapNoticeText, rolePickerCapNotice } from "./role-picker-cap";
+import { assignableRoles, roleCapNoticeText, rolePickerCapNotice } from "./role-picker-cap";
 import { isWorkspaceAdmin } from "./settings/workspace/WorkspaceSettingsLayout";
+import { isManagerRoleName, isOwnerRoleName } from "./role-name";
 import type { Identity, Invitation, Member, Role } from "../types";
 import { getMemberDisplayName } from "../types";
 
@@ -238,7 +239,7 @@ export function MembersPage() {
                   </TableCell>
                 <TableCell>{m.role}</TableCell>
                 <TableCell>
-                  {canManageRoles && m.role !== "owner" ? (
+                  {canManageRoles && !isOwnerRoleName(m.role) ? (
                     <Select
                       value={m.role_id}
                       onValueChange={(roleId) =>
@@ -273,7 +274,7 @@ export function MembersPage() {
                 <TableCell className="text-muted-foreground">{formatDate(m.joined_at)}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-1">
-                    {canManageRoles && m.role !== "owner" && canSuspendMember(m) && (
+                    {canManageRoles && !isOwnerRoleName(m.role) && canSuspendMember(m) && (
                       <Button variant="ghost" size="sm" onClick={() => suspend(m, true)}>
                         Suspend
                       </Button>
@@ -283,7 +284,7 @@ export function MembersPage() {
                         Reactivate
                       </Button>
                     )}
-                    {canDelete?.can && m.role !== "owner" && (
+                    {canDelete?.can && !isOwnerRoleName(m.role) && (
                       <DeleteButton
                         resource="members"
                         recordItemId={m.membership_id}

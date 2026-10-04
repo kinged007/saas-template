@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/table";
 import { EmptyRow, formatDate } from "@/components/ui";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { isOwnerRoleName } from "@/pages/role-name";
 import type { Identity, Workspace } from "@/types";
 
 export function WorkspacesSection() {
@@ -88,7 +89,7 @@ export function WorkspacesSection() {
                       {formatDate(w.joined_at)}
                     </TableCell>
                     <TableCell className="text-right">
-                      {w.role !== "owner" ? (
+                      {!isOwnerRoleName(w.role) ? (
                         <Button variant="outline" size="sm" onClick={() => setLeaving(w)}>
                           Leave
                         </Button>
