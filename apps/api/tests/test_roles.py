@@ -1151,3 +1151,47 @@ async def test_check_name_free_names_the_seeded_row(app_client):
     )
     assert renamed.status_code == 409, renamed.text
     assert renamed.json()["detail"] == "a role named 'admin' already exists"
+
+
+async def test_folded_role_lookups_resolve_the_same_row(app_client):
+    """The two folded lookups must not disagree about an indistinguishable pair.
+
+    `_check_name_free` and `_role_by_name` fold the same predicate, so a pair
+    they cannot tell apart has to resolve to the same row at both: the 409 that
+    names the row and the row `transfer_ownership` hands out. `_role_by_name`
+    ranked `Role.name != name`, so it picked the exact-case custom `admin` while
+    the 409 named the seeded `Admin` — the pair a pre-#328 workspace holds when
+    its seeded row was renamed to a case variant and a custom role then took the
+    exact name, both of which the name check allowed then.
+    """
+    client = app_client
+    owner = await register_user(client, "ci17@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    await _rename_seeded_role(ws["id"], "admin", "Admin")
+    await _seed_legacy_case_role(ws["id"], "admin")
+    heir = await _add_member(client, owner, ws, "ci17h@example.com", "editor")
+    target_id = await _membership_id(client, owner, ws, "ci17h@example.com")
+
+    created = await client.post(
+        "/api/v1/roles", json={"name": "ops", "permissions": []}, headers=headers
+    )
+    assert created.status_code == 201, created.text
+    conflict = await client.post(
+        "/api/v1/roles", json={"name": "admin", "permissions": []}, headers=headers
+    )
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["detail"] == "a role named 'Admin' already exists"
+
+    transfer = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/transfer",
+        json={"new_owner_membership_id": target_id},
+        headers=headers,
+    )
+    assert transfer.status_code == 200, transfer.text
+    # Read with the new owner's headers: the demoted owner's row is what the
+    # lookup picked, so they may not be able to list anything.
+    members = await client.get("/api/v1/members", headers=ws_headers(heir, ws["id"]))
+    assert members.status_code == 200, members.text
+    roles = {m["email"]: m["role"] for m in members.json()}
+    assert roles["ci17@example.com"] == "Admin"

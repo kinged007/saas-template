@@ -230,6 +230,37 @@ async def test_unknown_role_name_falls_back_to_viewer(app_client, single_workspa
         assert me.json()["workspaces"][0]["role"] == "viewer", value
 
 
+async def test_auto_join_resolves_the_configured_role_through_the_fold(
+    app_client, single_workspace_on, monkeypatch
+):
+    """The candidate chain and the owner filter have to fold alike.
+
+    `_single_workspace_role` drops owner rows through the folded
+    `is_owner_role_name` and then looked its candidates up by exact name, so a
+    workspace whose rows spell the role in another case missed the configured
+    one entirely and auto-joined the newcomer as `editor` instead.
+    """
+    from sqlalchemy import select
+
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    _, ws_id = await _first_workspace(app_client)
+    # A workspace created before the case-insensitive name check (#328).
+    async with SessionFactory() as session:
+        viewer = await session.scalar(
+            select(Role).where(Role.workspace_id == ws_id, Role.name == "viewer")
+        )
+        assert viewer is not None
+        viewer.name = "Viewer"
+        await session.commit()
+
+    monkeypatch.setattr(settings, "single_workspace_default_role", "viewer")
+    tokens = await register_user(app_client, "cased@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert [(w["id"], w["role"]) for w in me.json()["workspaces"]] == [(ws_id, "Viewer")]
+
+
 async def test_relogin_keeps_existing_member_role(app_client, single_workspace_on, monkeypatch):
     await _first_workspace(app_client)
     second = await register_user(app_client, "second@example.com")

@@ -120,6 +120,17 @@ def is_manager_role_name(name: str | None) -> bool:
     return lowered == "admin" or is_owner_role_name(lowered)
 
 
+# The order every folded role-name lookup resolves a match in, so an
+# indistinguishable pair — a workspace created before the case-insensitive name
+# check (#328) can hold a case-variant row beside the seeded one — names the
+# same row in the 409 and in the row handed to the caller. System row first,
+# then oldest, then `id`: `created_at` is `server_default=func.now()`, which ties
+# on SQLite's second granularity, so it cannot be the last key. System-first
+# deliberately inverts the "oldest first" preference in #592: the row a user
+# needs named is the seeded one, not whichever duplicate was written first.
+_ROLE_PICK_ORDER = (Role.system.desc(), Role.created_at, Role.id)
+
+
 class WorkspaceService:
     DEFAULT_ROLES = ["owner", "admin", "editor", "viewer"]
 
@@ -1063,8 +1074,8 @@ class WorkspaceService:
         """Auto-join role: SINGLE_WORKSPACE_DEFAULT_ROLE, else
         viewer/editor/admin/an arbitrary remaining non-owner role.
 
-        Each rung is matched by name over the workspace's non-owner roles, so a
-        custom role works too and an unknown, blank or "owner" value falls
+        Each rung is matched by folded name over the workspace's non-owner roles,
+        so a custom role works too and an unknown, blank or "owner" value falls
         through the chain. The wider chain keeps a later login working when the
         viewer role was renamed or removed, instead of bricking every later
         login.
@@ -1076,11 +1087,21 @@ class WorkspaceService:
         from the candidates."""
         from src.settings import settings
 
-        result = await self._session.execute(select(Role).where(Role.workspace_id == workspace_id))
-        roles = {role.name: role for role in result.scalars() if not is_owner_role_name(role.name)}
+        # `_ROLE_PICK_ORDER` so an indistinguishable pair resolves to the same
+        # row here as in `_role_by_name`, and keyed on the folded name so the
+        # candidates below resolve through the same fold as the
+        # `is_owner_role_name` filter. `str.lower()` on both sides, the Python
+        # fold `func.lower()` mirrors in the SQL lookups.
+        result = await self._session.execute(
+            select(Role).where(Role.workspace_id == workspace_id).order_by(*_ROLE_PICK_ORDER)
+        )
+        roles: dict[str, Role] = {}
+        for role in result.scalars():
+            if not is_owner_role_name(role.name):
+                roles.setdefault(role.name.lower(), role)
         names = (settings.single_workspace_default_role.strip(), self.SINGLE_WORKSPACE_ROLE)
         for name in (*names, "editor", "admin"):
-            if role := roles.get(name):
+            if role := roles.get(name.lower()):
                 return role
         if roles:
             return next(iter(roles.values()))
@@ -1089,13 +1110,19 @@ class WorkspaceService:
     async def _role_by_name(self, workspace_id: str, name: str) -> Role:
         # Folded like the predicates its callers guard on, so a workspace whose
         # role rows predate #328 resolve through the same rule as the gate that
-        # admits the caller. A legacy row can sit beside the seeded one, so an
-        # exact-case row wins and the limit keeps the second row from turning the
-        # lookup into a 500.
+        # admits the caller. `func.lower()` is the database's fold and
+        # `str.lower()` this file's, and they are not the same function on a
+        # collation-aware database; the pair is deliberate and role names are
+        # ASCII, so change one only together with the other and with
+        # `apps/web/src/pages/role-name.ts`, which folds the same way.
+        #
+        # `_ROLE_PICK_ORDER`, the order `_check_name_free` uses, so both folded
+        # lookups name the same row of an indistinguishable pair. The `limit`
+        # keeps the second row from turning the lookup into a 500.
         stmt = (
             select(Role)
             .where(Role.workspace_id == workspace_id, func.lower(Role.name) == name.lower())
-            .order_by(Role.name != name)
+            .order_by(*_ROLE_PICK_ORDER)
             .limit(1)
         )
         result = await self._session.execute(stmt)
@@ -1135,18 +1162,15 @@ class WorkspaceService:
         # indistinguishable row in listings and selects. `.first()`, not
         # `scalar_one_or_none()`: a workspace created before the case-insensitive
         # check can already hold such a pair, and the predicate then matches both.
-        # The order is what makes the message deterministic: the system row
-        # first, then oldest, then `id` — `created_at` is
-        # `server_default=func.now()`, which ties on SQLite's second granularity,
-        # so it cannot be the last key. System-first deliberately inverts the
-        # "oldest first" preference in #592: the row a user needs named is the
-        # seeded one, not whichever duplicate was written first.
+        # The order is what makes the message deterministic, and it is
+        # `_ROLE_PICK_ORDER`, the order `_role_by_name` resolves its own match
+        # in: both folded lookups name the same row of an indistinguishable pair.
         stmt = select(Role).where(
             Role.workspace_id == workspace_id, func.lower(Role.name) == name.lower()
         )
         if exclude_id is not None:
             stmt = stmt.where(Role.id != exclude_id)
-        stmt = stmt.order_by(Role.system.desc(), Role.created_at, Role.id).limit(1)
+        stmt = stmt.order_by(*_ROLE_PICK_ORDER).limit(1)
         existing = (await self._session.execute(stmt)).scalars().first()
         if existing is not None:
             raise WorkspaceConflict(f"a role named '{existing.name}' already exists")
