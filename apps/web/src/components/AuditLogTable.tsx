@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EmptyRow, formatDate } from "@/components/ui";
+import { errorMessage } from "@/utils/errorMessage";
 import type { AuditLogEntry } from "@/types";
 
 export type AuditEntry = AuditLogEntry & {
@@ -80,6 +81,14 @@ export function AuditLogTable({
   const total = result?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const isLoading = query.isPending;
+  // refine types the query result without `isError`; without it a refusal falls
+  // through to `rows.length === 0` and claims the log is empty. Gating on the
+  // row count keeps a failed background refetch from blanking loaded rows.
+  const { isError = false, error } = query as unknown as {
+    isError?: boolean;
+    error?: unknown;
+  };
+  const failed = isError && rows.length === 0;
   const colSpan = showWorkspace ? 6 : 5;
 
   return (
@@ -116,6 +125,12 @@ export function AuditLogTable({
           <TableBody>
             {isLoading ? (
               <EmptyRow colSpan={colSpan}>Loading…</EmptyRow>
+            ) : failed ? (
+              <EmptyRow colSpan={colSpan}>
+                Could not load audit entries. {errorMessage(error)}
+              </EmptyRow>
+            ) : rows.length === 0 ? (
+              <EmptyRow colSpan={colSpan}>No audit entries yet.</EmptyRow>
             ) : (
               rows.map((entry) => (
                 <TableRow
@@ -165,9 +180,6 @@ export function AuditLogTable({
                   </TableCell>
                 </TableRow>
               ))
-            )}
-            {!isLoading && rows.length === 0 && (
-              <EmptyRow colSpan={colSpan}>No audit entries yet.</EmptyRow>
             )}
           </TableBody>
         </Table>
