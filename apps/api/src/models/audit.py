@@ -14,7 +14,9 @@ class AuditLogEntry(Base, TimestampMixin):
     """Immutable audit trail entry.
 
     Rows are append-only: nothing in the application ever updates or deletes an
-    audit entry, which keeps the trail trustworthy for compliance.
+    audit entry, which keeps the trail trustworthy for compliance. At most one
+    entry per source event (see `AuditService.record`): the bus is
+    at-least-once, so a redelivered event is not filed a second time.
     """
 
     __tablename__ = "audit_log_entries"

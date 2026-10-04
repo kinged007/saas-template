@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.events.bus import SOURCE_EVENT_KEY
 from src.models.core import Notification
 from src.models.user_profile import UserProfile
 from src.models.workspace import User, Workspace
@@ -19,7 +20,7 @@ def notification_to_dict(n: Notification, *, workspace_name: str | None = None) 
         "type": n.type,
         "title": n.title,
         "body": n.body,
-        "payload": n.payload,
+        "payload": {k: v for k, v in (n.payload or {}).items() if k != SOURCE_EVENT_KEY},
         "acknowledged_at": _to_iso(n.acknowledged_at),
         "created_at": _to_iso(n.created_at),
     }

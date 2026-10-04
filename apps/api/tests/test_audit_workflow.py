@@ -3,14 +3,20 @@
 The app wires the full workflow registry into the in-process bus, so a
 published `audit.entry.created` event must end up as an AuditLogEntry row
 (after the background consumer task runs).
+
+The tail of the file covers the write path's idempotency: JetStream is
+at-least-once, so one redelivered event must leave exactly one audit row
+while two genuine failures still leave two.
 """
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import inspect
 import ipaddress
 import re
+import uuid
 from pathlib import Path
 
 import yaml
@@ -22,6 +28,7 @@ from src.db.session import SessionFactory
 from src.models.audit import AuditLogEntry
 
 COMPOSE = Path(__file__).resolve().parents[3] / "infra/docker/docker-compose.prod.yml"
+WORKFLOWS = Path(__file__).resolve().parents[1] / "src/workflows/__init__.py"
 
 
 async def _audit_rows():
@@ -308,3 +315,242 @@ def test_prod_compose_trusts_only_the_pinned_proxy_network():
         f"pinned subnet {subnet} outside FORWARDED_ALLOW_IPS default {trusted}"
     )
     assert "--proxy-headers" in command, f"--proxy-headers missing from: {command}"
+
+
+async def _email_failed_rows(resource_id: str) -> list[AuditLogEntry]:
+    async with SessionFactory() as session:
+        result = await session.execute(
+            select(AuditLogEntry).where(
+                AuditLogEntry.action == "invitation.email_failed",
+                AuditLogEntry.resource_id == resource_id,
+            )
+        )
+        return list(result.scalars().all())
+
+
+async def _publish_failed_invitation(bus, invitation_id: str | None = None) -> str:
+    """Drive the invitation workflow with a send that fails."""
+    from src.events.subjects import Subjects
+
+    invitation_id = invitation_id or str(uuid.uuid4())
+    await bus.publish(
+        Subjects.WORKSPACE_INVITATION_CREATED,
+        {
+            "workspace_id": str(uuid.uuid4()),
+            "workspace_name": "Acme Corp",
+            "email": "unreachable@example.com",
+            "invitation_id": invitation_id,
+            "invited_by_user_id": str(uuid.uuid4()),
+            "invited_by_name": "Owner",
+            "is_registered": False,
+        },
+    )
+    return invitation_id
+
+
+class _NoopConnectionManager:
+    """Stand-in for the realtime manager: `_wired_replay_bus` passes None."""
+
+    async def push(self, *args, **kwargs) -> None: ...
+
+    async def push_many(self, *args, **kwargs) -> None: ...
+
+
+def _wired_replay_bus():
+    from src.events.factory import WorkflowRegistry
+    from src.workflows import build_workflows
+    from tests.bus_doubles import ReplayBus
+
+    bus = ReplayBus()
+    registry = WorkflowRegistry(bus)
+    build_workflows(registry, bus, _NoopConnectionManager())
+    return bus, registry
+
+
+async def test_redelivered_event_writes_one_audit_row(monkeypatch):
+    """JetStream is at-least-once: a redelivered event must not file twice."""
+    from src.events.subjects import Subjects
+
+    async def failing_send(message):
+        return False
+
+    monkeypatch.setattr("src.email.factory.send_email", failing_send)
+    bus, registry = _wired_replay_bus()
+    await registry.wire()
+
+    invitation_id = await _publish_failed_invitation(bus)
+    assert len(await _email_failed_rows(invitation_id)) == 1
+
+    await bus.redeliver(Subjects.WORKSPACE_INVITATION_CREATED)
+    assert len(await _email_failed_rows(invitation_id)) == 1
+
+
+async def test_redelivered_notification_event_writes_one_row_and_one_audit_row():
+    """A handler that creates a row per run must not multiply either row.
+
+    `notification.email_failed` is keyed on the notification id, so a
+    redelivery that inserted a second notification row would also file a
+    second audit row for the same source event.
+    """
+    from src.events.subjects import Subjects
+    from src.models.core import Notification
+    from src.services.notifications import NotificationService
+
+    user_id = str(uuid.uuid4())
+    async with SessionFactory() as session:
+        await NotificationService(session).upsert_channels(
+            user_id, {"workspace_invitation": "email"}
+        )
+
+    bus, registry = _wired_replay_bus()
+    await registry.wire()
+    await bus.publish(
+        Subjects.WORKSPACE_MEMBER_INVITED,
+        {
+            "user_id": user_id,  # no user row: the send fails as `no_recipient`
+            "workspace_id": str(uuid.uuid4()),
+            "workspace_name": "Acme Corp",
+            "invitation_id": str(uuid.uuid4()),
+            "invited_by": "Owner",
+        },
+    )
+
+    async def notifications() -> list[str]:
+        async with SessionFactory() as session:
+            result = await session.execute(
+                select(Notification.id).where(
+                    Notification.user_id == user_id,
+                    Notification.type == "workspace_invitation",
+                )
+            )
+            return list(result.scalars().all())
+
+    (notification_id,) = await notifications()
+
+    async def failed_rows() -> list[AuditLogEntry]:
+        async with SessionFactory() as session:
+            result = await session.execute(
+                select(AuditLogEntry).where(
+                    AuditLogEntry.action == "notification.email_failed",
+                    AuditLogEntry.resource_id == notification_id,
+                )
+            )
+            return list(result.scalars().all())
+
+    assert len(await failed_rows()) == 1
+
+    await bus.redeliver(Subjects.WORKSPACE_MEMBER_INVITED)
+    assert await notifications() == [notification_id]
+    assert len(await failed_rows()) == 1
+
+
+async def test_redelivered_conversation_event_writes_one_pointer_per_recipient():
+    """The bulk path is on the same path: a redelivery adds no second row."""
+    from src.events.subjects import Subjects
+    from src.models.core import Notification
+
+    workspace_id = str(uuid.uuid4())
+    participants = [str(uuid.uuid4()) for _ in range(3)]
+
+    async def pointers() -> int:
+        async with SessionFactory() as session:
+            result = await session.execute(
+                select(Notification.id).where(
+                    Notification.workspace_id == workspace_id,
+                    Notification.type == "conversation_message",
+                )
+            )
+            return len(list(result.scalars().all()))
+
+    bus, registry = _wired_replay_bus()
+    await registry.wire()
+    await bus.publish(
+        Subjects.CONVERSATION_MESSAGE_CREATED,
+        {
+            "workspace_id": workspace_id,
+            "conversation_id": str(uuid.uuid4()),
+            "sender_id": participants[0],
+            "sender_type": "user",
+            "participant_user_ids": participants,
+            "title": "Hi",
+        },
+    )
+    assert await pointers() == 2  # the sender gets no pointer
+
+    await bus.redeliver(Subjects.CONVERSATION_MESSAGE_CREATED)
+    assert await pointers() == 2
+
+
+async def test_two_publishes_still_write_two_audit_rows(monkeypatch):
+    """The negative control: a second failure is a new event, not a redelivery."""
+
+    async def failing_send(message):
+        return False
+
+    monkeypatch.setattr("src.email.factory.send_email", failing_send)
+    bus, registry = _wired_replay_bus()
+    await registry.wire()
+
+    invitation_id = await _publish_failed_invitation(bus)
+    await _publish_failed_invitation(bus, invitation_id)
+
+    assert len(await _email_failed_rows(invitation_id)) == 2
+
+
+async def test_record_dedupes_on_source_event_without_touching_the_stored_row():
+    from src.services.audit import AuditService
+
+    fields = {
+        "workspace_id": str(uuid.uuid4()),
+        "resource_type": "invitation",
+        "resource_id": str(uuid.uuid4()),
+        "action": "invitation.email_failed",
+        "details": {"email": "unreachable@example.com"},
+    }
+    async with SessionFactory() as session:
+        first = await AuditService(session).record(source_event_id="evt-1", **fields)
+    async with SessionFactory() as session:
+        second = await AuditService(session).record(source_event_id="evt-1", **fields)
+    # The stored row comes back untouched: same id, same created_at, same details.
+    async with SessionFactory() as session:
+        stored = await session.get(AuditLogEntry, first.id)
+    assert second.id == first.id == stored.id
+    assert second.created_at == stored.created_at
+    assert stored.details == first.details
+    assert first.details["source_event_id"] == "evt-1"
+
+    async with SessionFactory() as session:
+        third = await AuditService(session).record(source_event_id="evt-2", **fields)
+    assert third.id != first.id
+
+    # Without a source event there is nothing to dedupe on: every call is a row.
+    for _ in range(2):
+        async with SessionFactory() as session:
+            await AuditService(session).record(**fields)
+    async with SessionFactory() as session:
+        result = await session.execute(select(AuditLogEntry))
+        assert len([r for r in result.scalars() if not r.details.get("source_event_id")]) == 2
+
+
+def test_every_workflow_audit_publish_carries_a_source_event_id():
+    """Pin the opt-in the dedupe depends on.
+
+    `on_audit_entry` falls back to the audit envelope's own event_id, which is
+    correct for a direct producer and useless for a subscriber: the duplicate
+    is created by the *handler* re-running, so the identity to keep is the
+    inbound event's id. Every `publish_audit(` in a workflow therefore has to
+    name it, and so does every `_create_notification(`: a notification
+    re-inserted on redelivery is what duplicates `notification.email_failed`.
+    """
+    pinned = {"publish_audit", "_create_notification"}
+    missing = [
+        node.lineno
+        for node in ast.walk(ast.parse(WORKFLOWS.read_text()))
+        if isinstance(node, ast.Call)
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id in pinned)
+            or (isinstance(node.func, ast.Attribute) and node.func.attr in pinned)
+        )
+        and not any(kw.arg == "source_event_id" for kw in node.keywords)
+    ]
+    assert not missing, f"{sorted(pinned)} without source_event_id at lines {missing}"
