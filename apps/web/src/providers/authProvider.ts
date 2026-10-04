@@ -5,6 +5,7 @@ import { API_URL, cancelPendingRefresh, ensureSession, httpClient } from "./data
 import {
   identityStore,
   pendingInvitationStore,
+  returnToStore,
   tokenStore,
   workspaceStore,
   setActiveWorkspaceId,
@@ -56,8 +57,13 @@ export async function seedWorkspace(identity: Identity): Promise<void> {
  * page when they arrived from an invite link, the dashboard otherwise.
  */
 export const afterAuthRedirect = () => {
+  // A pending invitation outranks the recorded destination: the invite is an
+  // explicit, expiring, one-shot action, and skipping it would leave its token
+  // stored to hijack the next sign-in.
   const token = pendingInvitationStore.get();
-  return token ? `/invitations/accept?token=${encodeURIComponent(token)}` : "/";
+  if (token) return `/invitations/accept?token=${encodeURIComponent(token)}`;
+  // take(), so the destination cannot be replayed by a later sign-in.
+  return returnToStore.take() ?? "/";
 };
 
 export const authProvider: AuthProvider = {

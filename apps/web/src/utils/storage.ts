@@ -4,6 +4,7 @@ const IDENTITY_KEY = "tf_identity";
 const WORKSPACE_PREFIX = "tf_workspace_id:";
 const LEGACY_WORKSPACE_KEY = "tf_workspace_id";
 const PENDING_INVITATION_KEY = "tf_pending_invitation";
+const RETURN_TO_KEY = "tf_return_to";
 
 /**
  * Storage wrapper resilient to blocked/partitioned storage (e.g. sandboxed
@@ -116,6 +117,9 @@ export const tokenStore = {
     storage.remove(IDENTITY_KEY);
     sessionHint.clear();
     storage.remove(PENDING_INVITATION_KEY);
+    // An explicit logout returns nowhere, so a destination recorded by an
+    // earlier guard redirect must not survive into the next sign-in.
+    storage.remove(RETURN_TO_KEY);
     workspaceStore.clear(userId);
     notifyTokensChanged();
   },
@@ -203,4 +207,21 @@ export const pendingInvitationStore = {
   get: () => storage.get(PENDING_INVITATION_KEY),
   set: (token: string) => storage.set(PENDING_INVITATION_KEY, token),
   clear: () => storage.remove(PENDING_INVITATION_KEY),
+};
+
+/**
+ * Where the auth guard denied a signed-out visitor, kept across the sign-in
+ * round trip. Storage rather than router state because the SSO hop leaves the
+ * page and comes back on a fresh URL.
+ */
+export const returnToStore = {
+  get: () => storage.get(RETURN_TO_KEY),
+  set: (path: string) => storage.set(RETURN_TO_KEY, path),
+  /** Read once and clear: the destination is spent the moment it is used. */
+  take: () => {
+    const path = storage.get(RETURN_TO_KEY);
+    storage.remove(RETURN_TO_KEY);
+    return path;
+  },
+  clear: () => storage.remove(RETURN_TO_KEY),
 };
