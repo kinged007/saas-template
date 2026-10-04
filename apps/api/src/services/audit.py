@@ -112,7 +112,7 @@ class AuditService:
                 AuditLogEntry.action == action,
                 AuditLogEntry.details[SOURCE_EVENT_KEY].as_string() == source_event_id,
             )
-            .order_by(AuditLogEntry.created_at)
+            .order_by(AuditLogEntry.created_at, AuditLogEntry.id)
             .limit(1)
         )
         return result.scalars().first()
