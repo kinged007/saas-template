@@ -3,8 +3,11 @@
 Flow: GET /auth/oauth/{provider}/authorize → provider → GET
 /auth/oauth/{provider}/callback?code&state → 302 to
 {FRONTEND_URL}/oauth/callback?code=<one-time> → POST /auth/oauth/token.
-Tokens never sit in URL logs; the one-time code is single-use, 5-minute TTL,
-stored in the shared container cache.
+The two legs are joined by the PKCE verifier kept in the server-side state
+entry. The verifier never leaves the server, so a captured authorization code
+is not redeemable with the client secret alone. Tokens never sit in URL logs;
+the one-time code is single-use, 5-minute TTL, stored in the shared
+container cache.
 """
 
 from __future__ import annotations
@@ -124,7 +127,13 @@ async def oauth_callback(
         from src.services.oauth import _discovery
 
         doc = await _discovery(provider, container.cache)
-        tokens = await exchange_code(provider, doc, code=code, redirect_uri=redirect_uri)
+        tokens = await exchange_code(
+            provider,
+            doc,
+            code=code,
+            redirect_uri=redirect_uri,
+            code_verifier=saved["code_verifier"],
+        )
         claims = None
         if tokens.get("id_token"):
             claims = claims_from_id_token(provider, doc, tokens["id_token"])

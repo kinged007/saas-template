@@ -290,7 +290,8 @@ async def test_oauth_token_cookie_flow_omits_json_refresh(app_client, monkeypatc
                 "userinfo_endpoint": provider.userinfo_url,
             }
 
-        async def fake_exchange(provider, doc, *, code, redirect_uri):
+        async def fake_exchange(provider, doc, *, code, redirect_uri, code_verifier):
+            assert code_verifier == "verifier-abc"
             return {"access_token": "at", "id_token": None}
 
         async def fake_userinfo(provider, doc, access_token):
@@ -302,7 +303,11 @@ async def test_oauth_token_cookie_flow_omits_json_refresh(app_client, monkeypatc
         monkeypatch.setattr(oauth_routes, "_redirect_uri", lambda req, pid: "http://test/cb")
         fastapi_app.state.container.cache.set(
             oauth_svc.STATE_TTL_HINT + "s-cookie",
-            {"provider": "testidp", "redirect_uri": "http://test/cb"},
+            {
+                "provider": "testidp",
+                "redirect_uri": "http://test/cb",
+                "code_verifier": "verifier-abc",
+            },
         )
         cb = await app_client.get(
             "/api/v1/auth/oauth/testidp/callback?code=authcode&state=s-cookie",
