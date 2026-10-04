@@ -164,7 +164,9 @@ async def oauth_callback(
         user = await _join_single_workspace_best_effort(db, container, user)
     except HTTPException:
         # The helper's "account no longer exists" guard: a browser mid-redirect
-        # needs the error redirect, not a JSON 401 body.
+        # needs the error redirect, not a JSON 401 body. This route checks the
+        # limiter but never charges it; see the rule in
+        # src/core/security/ratelimit.py.
         return _error_redirect("sign-in failed")
     if user.totp_enabled:
         # Passwordless SSO still honors 2FA: park the user id behind the

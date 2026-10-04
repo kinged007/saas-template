@@ -3,6 +3,12 @@
 Deliberately dependency-free (no slowapi/redis): a locked dict of per-key
 failure timestamps. Single-process only.
 # ponytail: ceiling is one replica; move to Redis when the API scales out.
+
+`fail(key)` marks a request that did not authenticate, so not every 401 on a
+throttled entry point calls it: a 401 that asks the caller for more — the 2FA
+challenge on POST /auth/login, the OAuth callback's error redirect for an
+account that is gone — means the credentials were accepted, and charging it
+would spend the caller's budget on a sign-in that has not failed yet.
 """
 
 from __future__ import annotations

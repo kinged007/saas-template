@@ -250,6 +250,33 @@ async def test_login_rate_limited(app_client, monkeypatch):
     assert "Retry-After" in resp.headers
 
 
+async def test_login_2fa_required_does_not_charge_rate_limiter(app_client, monkeypatch):
+    # The 2FA challenge is deliberately uncharged (see the rule in
+    # src/core/security/ratelimit.py): the password was right, so a challenge
+    # is not a failed attempt and must not spend this key's budget. Every
+    # sibling 401 on /auth/login does charge.
+    from src.settings import settings
+
+    monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 1)
+    client = app_client
+    tokens = await register_user(client, "totp-nocharge@example.com")
+    setup_token, code = await _totp_for(client, auth_headers(tokens))
+    enabled = await client.post(
+        "/api/v1/auth/2fa/enable",
+        json={"setup_token": setup_token, "code": code},
+        headers=auth_headers(tokens),
+    )
+    assert enabled.status_code == 200, enabled.text
+
+    for _ in range(2):
+        resp = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "totp-nocharge@example.com", "password": "Password123!"},
+        )
+        assert resp.status_code == 401, resp.text
+        assert resp.json()["detail"]["code"] == "2fa_required"
+
+
 async def test_refresh_rate_limit_does_not_block_other_sessions(app_client, monkeypatch):
     from src.settings import settings
 
