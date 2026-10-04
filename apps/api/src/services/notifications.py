@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, TypedDict
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.events.bus import SOURCE_EVENT_KEY, EventBus
@@ -468,19 +468,16 @@ class NotificationService:
         keys = {(s["user_id"], s["workspace_id"], s["type"]) for s in specs}
         if not keys:
             return []
+        user_ids, workspace_ids, types = zip(*keys, strict=True)
+        # One predicate, then match the exact triples in Python: an OR of
+        # per-spec ANDs grows with the recipient count and hits SQLite's
+        # expression depth limit on a large conversation fan-out.
         result = await self._session.execute(
             select(Notification).where(
-                or_(
-                    *(
-                        and_(
-                            Notification.user_id == user_id,
-                            Notification.workspace_id == workspace_id,
-                            Notification.type == n_type,
-                            Notification.payload[SOURCE_EVENT_KEY].as_string() == source_event_id,
-                        )
-                        for user_id, workspace_id, n_type in keys
-                    )
-                )
+                Notification.payload[SOURCE_EVENT_KEY].as_string() == source_event_id,
+                Notification.user_id.in_(user_ids),
+                Notification.workspace_id.in_(workspace_ids),
+                Notification.type.in_(types),
             )
         )
-        return list(result.scalars().all())
+        return [n for n in result.scalars() if (n.user_id, n.workspace_id, n.type) in keys]

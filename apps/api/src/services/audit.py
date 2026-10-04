@@ -61,7 +61,9 @@ class AuditService:
         # queue group hand a nacked or ack-timed-out message to another replica
         # while this handler is still running. The lookup filters on
         # `workspace_id` alone (the only indexed column) and runs on every
-        # audit write, so it scans the workspace's audit history.
+        # audit write, so it scans the workspace's audit history. The index
+        # that fixes that cost is the one that closes the race above, so it is
+        # a single migration to schedule.
         # Upgrade path: one migration adding a unique index over
         # (workspace_id, resource_type, resource_id, action, source_event_id).
         """
@@ -146,17 +148,3 @@ def public_details(details: dict | None) -> dict[str, Any]:
     so it stays out of the API shape.
     """
     return {k: v for k, v in (details or {}).items() if k != SOURCE_EVENT_KEY}
-
-
-def audit_log_to_dict(entry: AuditLogEntry) -> dict[str, Any]:
-    return {
-        "id": entry.id,
-        "workspace_id": entry.workspace_id,
-        "actor_user_id": entry.actor_user_id,
-        "resource_type": entry.resource_type,
-        "resource_id": entry.resource_id,
-        "action": entry.action,
-        "details": entry.details,
-        "ip_address": entry.ip_address,
-        "created_at": entry.created_at.isoformat() if entry.created_at else None,
-    }

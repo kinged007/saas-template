@@ -539,16 +539,18 @@ def test_every_workflow_audit_publish_carries_a_source_event_id():
     correct for a direct producer and useless for a subscriber: the duplicate
     is created by the *handler* re-running, so the identity to keep is the
     inbound event's id. Every `publish_audit(` in a workflow therefore has to
-    name it.
+    name it, and so does every `_create_notification(`: a notification
+    re-inserted on redelivery is what duplicates `notification.email_failed`.
     """
+    pinned = {"publish_audit", "_create_notification"}
     missing = [
         node.lineno
         for node in ast.walk(ast.parse(WORKFLOWS.read_text()))
         if isinstance(node, ast.Call)
         and (
-            (isinstance(node.func, ast.Name) and node.func.id == "publish_audit")
-            or (isinstance(node.func, ast.Attribute) and node.func.attr == "publish_audit")
+            (isinstance(node.func, ast.Name) and node.func.id in pinned)
+            or (isinstance(node.func, ast.Attribute) and node.func.attr in pinned)
         )
         and not any(kw.arg == "source_event_id" for kw in node.keywords)
     ]
-    assert not missing, f"publish_audit without source_event_id at lines {missing}"
+    assert not missing, f"{sorted(pinned)} without source_event_id at lines {missing}"

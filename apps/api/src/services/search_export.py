@@ -28,6 +28,7 @@ from src.models.jobs import JobDefinition
 from src.models.user_profile import UserProfile
 from src.models.webhook import WebhookSubscription
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
+from src.services.audit import public_details
 from src.services.jobs import _mask_params
 from src.services.profile_helpers import escape_like
 from src.services.serializers import (
@@ -530,9 +531,10 @@ class SearchExportService:
                     "resource_type": e.resource_type,
                     "resource_id": e.resource_id,
                     "action": e.action,
-                    # `details` is already readable through GET /audit by anyone
-                    # holding audit:read, which gates this export too.
-                    "details": e.details,
+                    # Same shape GET /audit returns: this is a downloadable
+                    # compliance artifact, so it drops the internal
+                    # `source_event_id` too.
+                    "details": public_details(e.details),
                     "ip_address": e.ip_address,
                     "created_at": e.created_at.isoformat() if e.created_at else None,
                 }

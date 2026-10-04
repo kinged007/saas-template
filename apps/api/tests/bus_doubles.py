@@ -76,6 +76,7 @@ class ReplayBus(EventBus):
     def __init__(self) -> None:
         self._handlers: dict[str, list[SubscriberHandler]] = {}
         self._delivered: dict[str, EventEnvelope] = {}
+        self._subjects_by_id: dict[str, str] = {}
 
     async def publish(
         self,
@@ -102,11 +103,15 @@ class ReplayBus(EventBus):
                     await handler(envelope.payload, envelope.metadata)
 
     async def subscribe(self, subject: str, handler, *, fanout: bool = False) -> str:
+        subscription_id = f"{subject}:sub{len(self._subjects_by_id)}"
+        self._subjects_by_id[subscription_id] = subject
         self._handlers.setdefault(subject, []).append(handler)
-        return f"{subject}:sub"
+        return subscription_id
 
     async def unsubscribe(self, subscription_id: str) -> None:
-        self._handlers.pop(subscription_id.rsplit(":", 1)[0], None)
+        subject = self._subjects_by_id.pop(subscription_id, None)
+        if subject is not None:
+            self._handlers.pop(subject, None)
 
     async def start(self) -> None:
         pass
