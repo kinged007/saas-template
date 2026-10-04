@@ -19,6 +19,18 @@ const CONVERSATION = {
 
 const MESSAGES = "**/api/v1/conversations/conv-1/messages**";
 
+const MESSAGE_ROWS = [
+  {
+    id: "msg-1",
+    conversation_id: "conv-1",
+    sender_type: "user",
+    sender_id: "user-1",
+    sender_name: "E2E User",
+    body: "shipping friday",
+    created_at: "2026-01-02T10:00:00Z",
+  },
+];
+
 /**
  * The message pane has no tripwire of its own — `queryClient.test.ts` pins that
  * the override exists, not that it still suppresses the storm. These are the
@@ -67,5 +79,38 @@ test.describe("inbox message fetch", () => {
     await expect(page.getByText("No messages yet.")).toHaveCount(0);
     await page.waitForTimeout(5_000);
     expect(attempts).toBe(1);
+  });
+
+  /**
+   * A refetch that fails keeps the last successful `data` in the cache, so the
+   * pane stays usable — but it has to say the list is not live. `refetchOnReconnect`
+   * is the trigger: offline mode is what react-query's onlineManager reports.
+   */
+  test("a failed refetch keeps the messages and marks them stale", async ({ page, context }) => {
+    await mockApi(page, { signedIn: true, lists: { conversations: [CONVERSATION] } });
+
+    let refetchesFail = false;
+    await page.route(MESSAGES, async (route) => {
+      if (refetchesFail) return route.abort("failed");
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(MESSAGE_ROWS),
+      });
+    });
+
+    await page.goto("/inbox");
+    await page.getByRole("button", { name: /Release plan/ }).click();
+    // `.first()` — the markdown body renders more than one node with the same text.
+    await expect(page.getByText("shipping friday").first()).toBeVisible();
+
+    refetchesFail = true;
+    await context.setOffline(true);
+    await context.setOffline(false);
+
+    await expect(page.getByText("Showing the last messages loaded.")).toBeVisible();
+    await expect(page.getByText("shipping friday").first()).toBeVisible();
+    // `text-destructive` stays reserved for the empty list, where nothing loaded.
+    await expect(page.getByText("Could not load messages.")).toHaveCount(0);
   });
 });

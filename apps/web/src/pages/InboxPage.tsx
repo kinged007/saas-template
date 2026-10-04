@@ -963,6 +963,11 @@ export function InboxPage() {
                 {/* Messages */}
                 <div className="flex-1 overflow-y-auto p-4">
                   <div className="flex flex-col gap-4">
+                    {messagesError && messages.length > 0 && (
+                      // A failed refetch keeps the cached messages, so caption the list
+                      // instead of blanking it. `text-destructive` stays on the empty-list case.
+                      <p className="text-muted-foreground text-sm">Showing the last messages loaded.</p>
+                    )}
                     {messagesLoading ? (
                       <p className="text-muted-foreground text-sm">Loading…</p>
                     ) : messagesError && messages.length === 0 ? (
