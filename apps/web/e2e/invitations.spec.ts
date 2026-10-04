@@ -34,22 +34,32 @@ const row = (page: Page, email: string) => page.getByRole("row").filter({ hasTex
 const deleteButton = (page: Page, email: string) => row(page, email).getByRole("button", { name: "Delete" });
 
 /**
- * A manager who may invite (member:create) but may not revoke
- * (member:delete). The owner/admin role name and member:update are what the
- * row actions require: `WorkspaceService.resend_invitation` refuses any other
- * actor with 403, and MembersPage gates both row controls on that same pair.
+ * A workspace actor claiming nothing itself. `IDENTITY` is superuser with a
+ * `"*"` wildcard, and either short-circuit every `useCan`, so an actor that
+ * inherits them passes a negative assertion for the wrong reason. Each actor
+ * below names the permissions its test needs and only those.
  */
-const inviter = {
+const actor = (permissions: string[], role = "admin") => ({
   ...IDENTITY,
-  workspaces: [
-    {
-      id: "ws-1",
-      name: "Acme Corp",
-      role: "admin",
-      permissions: ["member:read", "member:create", "member:update"],
-    },
-  ],
-};
+  is_superuser: false,
+  permissions: [],
+  workspaces: [{ id: "ws-1", name: "Acme Corp", role, permissions }],
+});
+
+// May invite (member:create) and re-send but not revoke: DELETE
+// /invitations/{id} requires member:delete. The owner/admin role name and
+// member:update are what the row actions require — `resend_invitation` refuses
+// any other actor with 403, and MembersPage gates both row controls on that
+// same pair.
+const manager = actor(["member:read", "member:create", "member:update"]);
+
+// The invite form's actor: member:create gates the section, and the roles
+// query behind the picker is ungated.
+const inviteFormActor = actor(["member:read", "member:create"]);
+
+// Every permission the manager holds, under a role name that is neither owner
+// nor admin.
+const customManager = actor(["member:read", "member:create", "member:update"], "custom");
 
 // A route registered after mockApi takes precedence over its catch-all.
 const invitations = (page: Page) =>
@@ -64,8 +74,23 @@ const invitations = (page: Page) =>
   );
 
 test.describe("invitations", () => {
+  test("the negative actor carries neither superuser nor a wildcard", async ({ page }) => {
+    await mockApi(page, { signedIn: true, identity: manager });
+    await page.goto("/members");
+
+    // A negative assertion in this file only means something if the actor it
+    // runs under holds nothing at the top level: superuser and `"*"` both
+    // short-circuit every `useCan`, so a gate would answer for a reason other
+    // than the one under test.
+    const identity = (await page.evaluate(() =>
+      fetch("/api/v1/auth/me").then((response) => response.json()),
+    )) as { is_superuser: boolean; permissions: string[] };
+    expect(identity.is_superuser).toBe(false);
+    expect(identity.permissions).toEqual([]);
+  });
+
   test("Delete is hidden, not disabled, without member:delete", async ({ page }) => {
-    await mockApi(page, { signedIn: true, identity: inviter });
+    await mockApi(page, { signedIn: true, identity: manager });
     await invitations(page);
     await page.goto("/members");
 
@@ -79,6 +104,21 @@ test.describe("invitations", () => {
     // than a button that can never fire.
     await expect(deleteButton(page, "live@example.com")).toHaveCount(0);
     await expect(deleteButton(page, "expired@example.com")).toHaveCount(0);
+  });
+
+  test("member:update under a non-manager role name gets no Re-send", async ({ page }) => {
+    await mockApi(page, { signedIn: true, identity: customManager });
+    await invitations(page);
+    await page.goto("/members");
+
+    // The section itself follows member:create, which this actor holds, so the
+    // row below is on the page and the absence is read off a rendered list.
+    await expect(row(page, "expired@example.com")).toBeVisible();
+    // canManageRoles is `useCan(members:edit) && isManagerRoleName(role)`:
+    // member:update satisfies the first half and the role name fails the
+    // second, which is the client mirror of the 403 `resend_invitation` returns
+    // for this actor.
+    await expect(row(page, "expired@example.com").getByRole("button", { name: "Re-send" })).toHaveCount(0);
   });
 
   test("a role with member:delete gets Delete on the pending rows", async ({ page }) => {
@@ -127,7 +167,7 @@ test.describe("invitations", () => {
     const ADMIN = { id: "r-admin", workspace_id: "ws-1", name: "Admin", permissions: [], system: true };
     const EDITOR = { id: "r-editor", workspace_id: "ws-1", name: "Editor", permissions: [], system: true };
     const sent: unknown[] = [];
-    await mockApi(page, { signedIn: true, identity: inviter, lists: { roles: [ADMIN, EDITOR] } });
+    await mockApi(page, { signedIn: true, identity: inviteFormActor, lists: { roles: [ADMIN, EDITOR] } });
     await page.route(
       (url) => url.pathname.endsWith("/api/v1/invitations"),
       async (route) => {
