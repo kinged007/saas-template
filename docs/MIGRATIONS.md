@@ -39,19 +39,23 @@ path:
 | --- | --- | --- |
 | `GET /notifications` rows and its `COUNT(*)` (`apps/api/src/api/routes/notifications.py:81`) | `user_id`, `workspace_id`, `ORDER BY created_at DESC, id DESC` | `ix_notifications_user_id` + `ix_notifications_workspace_id` (BitmapAnd) |
 | `GET /notifications/unread-count`, `PATCH /notifications/read-all` | `user_id`, `workspace_id`, `acknowledged_at IS NULL`, `type <>` | `ix_notifications_user_id` + `ix_notifications_workspace_id` (BitmapAnd) |
-| `acknowledge_for_conversation` (`apps/api/src/services/notifications.py:246`) | `user_id`, `workspace_id`, `type =`, `acknowledged_at IS NULL` | `ix_notifications_user_id` + `ix_notifications_workspace_id` (BitmapAnd) |
-| `PATCH /notifications/{id}`, `DELETE /notifications/{id}` (`apps/api/src/services/notifications.py:423`, `apps/api/src/api/routes/notifications.py:219`) | `id`, `user_id`, optional `workspace_id` | primary key |
-| global search (`apps/api/src/services/search_export.py:282`) | `workspace_id`, `user_id`, `title/body ILIKE` | `ix_notifications_user_id` + `ix_notifications_workspace_id` (BitmapAnd) |
-| digest (`apps/api/src/jobs/builtin.py:178`), GDPR count (`apps/api/src/services/profiles.py:282`) and delete (`profiles.py:354`, `profiles.py:423`) | `user_id` | `ix_notifications_user_id` |
-| workspace JSON export (`apps/api/src/services/search_export.py:419`) | `workspace_id` | `ix_notifications_workspace_id` |
-| workspace delete cascade (`apps/api/src/services/workspaces.py:323`) | `workspace_id` | `ix_notifications_workspace_id` |
+| `acknowledge_for_conversation` (`apps/api/src/services/notifications.py:279`) | `user_id`, `workspace_id`, `type =`, `acknowledged_at IS NULL` | `ix_notifications_user_id` + `ix_notifications_workspace_id` (BitmapAnd) |
+| `PATCH /notifications/{id}`, `DELETE /notifications/{id}` (`apps/api/src/services/notifications.py:456`, `apps/api/src/api/routes/notifications.py:219`) | `id`, `user_id`, optional `workspace_id` | primary key |
+| global search (`apps/api/src/services/search_export.py:288`) | `workspace_id`, `user_id`, `title/body ILIKE` | `ix_notifications_user_id` + `ix_notifications_workspace_id` (BitmapAnd) |
+| digest (`apps/api/src/jobs/builtin.py:178`), GDPR count (`apps/api/src/services/profiles.py:294`) and delete (`apps/api/src/services/profiles.py:366`, `apps/api/src/services/profiles.py:435`) | `user_id` | `ix_notifications_user_id` |
+| workspace JSON export (`apps/api/src/services/search_export.py:426`) | `workspace_id` | `ix_notifications_workspace_id` |
+| workspace delete, via the `WORKSPACE_CASCADE` registry (`apps/api/src/services/workspaces.py:351`, `apps/api/src/db/cascade.py:31`) | `workspace_id` | `ix_notifications_workspace_id` |
 | retention cleanup (`apps/api/src/jobs/builtin.py:244`) | `acknowledged_at IS NOT NULL`, `created_at <` cutoff | none, seq scan |
 
 Measured on embedded Postgres at 1M rows (50 workspaces × 100 users, each user
 with 200 notifications spread across two of those workspaces, 327 MB,
 `VACUUM ANALYZE`d, `EXPLAIN (ANALYZE, BUFFERS)`), for a typical user — 200
 rows, 100 of them in the queried workspace, so
-`ix_notifications_workspace_id` matches 10,000 of the 1M entries:
+`ix_notifications_workspace_id` matches 10,000 of the 1M entries. Ordering is
+`_NOTIFICATION_DEFAULT_ORDER` (`apps/api/src/api/routes/notifications.py:39`);
+the limit is the caller's (`spec.limit`,
+`apps/api/src/api/routes/notifications.py:92`, default 10, capped at 100) and
+the runs below asked for 50:
 
 | Query | Two single-column indexes | With composite |
 | --- | --- | --- |
@@ -72,8 +76,9 @@ rather than reads, but they find their rows through the same `BitmapAnd`, so
 they pay that ~10,200-entry scan on every call too.
 
 Decision: no composite. `ix_notifications_workspace_id` stays regardless —
-the workspace JSON export and the workspace delete cascade both filter on
-`workspace_id` alone and keep planning through it.
+the workspace JSON export filters on `workspace_id` alone, and so does the
+delete `delete_workspace` runs over the `WORKSPACE_CASCADE` registry for
+every model it lists (`Notification` included). Both keep planning through it.
 
 Revisit when a slow-query log or `EXPLAIN` shows one of those reads scanning
 more than ~1k index entries for a single request, one user passes ~10k rows,
@@ -89,7 +94,9 @@ Models are the source of truth, so the model moves first (`Notification`,
 flag is what produced `ix_notifications_user_id`
 (`apps/api/alembic/versions/0001_initial.py:128`) — and declare the composite
 in `__table_args__`, the shape `Message` already uses
-(`apps/api/src/models/conversation.py:55`):
+(`apps/api/src/models/conversation.py:55`), and add `Index` to the
+`sqlalchemy` import at `apps/api/src/models/core.py:6`, which does not have
+it yet:
 
 ```python
 class Notification(Base, TimestampMixin):
@@ -144,7 +151,7 @@ downgrade does not fail on an index that is already there.
 Two paths no index here fixes. The retention cleanup is a seq scan over the
 whole table; a partial index on `created_at WHERE acknowledged_at IS NOT
 NULL`, or a batched delete, is that fix. And
-`acknowledge_for_conversation` (`apps/api/src/services/notifications.py:246`)
+`acknowledge_for_conversation` (`apps/api/src/services/notifications.py:279`)
 selects every unread `conversation_message` row for the user and workspace,
 then filters `payload["conversation_id"]` in Python, so it materializes the
 whole unread backlog per call — a composite `(user_id, workspace_id)` returns
