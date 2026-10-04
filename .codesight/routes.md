@@ -15,22 +15,24 @@
 - `GET` `/audit` params() [db]
 - `GET` `/effective-permissions` params()
 - `GET` `/config` params() → out: TokenResponse [auth]
-- `POST` `/register` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/register` params() → in: RegisterRequest, out: TokenResponse [auth] ✓
 - `POST` `/forgot-password` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/reset-password` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/verify-email` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/resend-verification` params() → in: RegisterRequest, out: TokenResponse [auth, email]
-- `POST` `/login` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/login` params() → in: RegisterRequest, out: TokenResponse [auth] ✓
 - `POST` `/refresh` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/change-password` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `GET` `/2fa/status` params() → out: TokenResponse
-- `POST` `/2fa/setup` params() → in: RegisterRequest, out: TokenResponse
-- `POST` `/2fa/enable` params() → in: RegisterRequest, out: TokenResponse
+- `POST` `/2fa/setup` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/2fa/enable` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/2fa/disable` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/2fa/backup-codes` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/2fa/login` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/logout` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `GET` `/me` params() → out: TokenResponse
 - `GET` `/unread-count` params() → in: st
+- `PATCH` `/{conversation_id}/participants` params(conversation_id)
 - `PATCH` `/{conversation_id}/read` params(conversation_id)
 - `PATCH` `/{conversation_id}/unread` params(conversation_id)
 - `PATCH` `/{conversation_id}/archive` params(conversation_id)
@@ -38,13 +40,16 @@
 - `POST` `/{conversation_id}/messages` params(conversation_id) → in: ConversationCreate
 - `POST` `/accept` params() → in: InvitationCreate [auth, db]
 - `GET` `/mine` params()
+- `POST` `/{invitation_id}/resend` params(invitation_id) → in: InvitationCreate [email]
 - `POST` `/{invitation_id}/decline` params(invitation_id) → in: InvitationCreate
 - `POST` `/global/{definition_id}/execute` params(definition_id)
 - `GET` `/global/{definition_id}/runs` params(definition_id)
-- `GET` `/runs/{run_id}` params(run_id)
-- `GET` `/runs/{run_id}/logs` params(run_id)
+- `GET` `/runs/{run_id}` params(run_id) [auth]
+- `GET` `/runs/{run_id}/logs` params(run_id) [auth]
 - `POST` `/{definition_id}/execute` params(definition_id) [auth]
 - `GET` `/{definition_id}/runs` params(definition_id) [auth]
+- `POST` `/{membership_id}/suspend` params(membership_id)
+- `POST` `/{membership_id}/reactivate` params(membership_id)
 - `GET` `/healthz` params()
 - `GET` `/metrics` params()
 - `GET` `/readyz` params()
@@ -58,7 +63,7 @@
 - `GET` `/me/profile` params() → in: Use
 - `PUT` `/me/profile` params() → in: ProfileUpdate [db]
 - `PATCH` `/me/profile` params() → in: ProfileUpdate [db]
-- `GET` `/users/{user_id}/profile` params(user_id) → in: Use
+- `GET` `/users/{user_id}/profile` params(user_id) → in: Use [auth]
 - `GET` `/me/export` params() → in: Use
 - `GET` `/users/{user_id}/export` params(user_id) → in: Use
 - `DELETE` `/me` params() → in: DeleteMeRequest [db]
@@ -70,5 +75,8 @@
 - `GET` `/deliveries/{delivery_id}` params(delivery_id) [webhook]
 - `POST` `/deliveries/{delivery_id}/redeliver` params(delivery_id) → in: WebhookSubscriptionCreate [webhook]
 - `GET` `/search` params() → out: list
+- `GET` `/export/resources` params() → out: list
 - `GET` `/export` params() → out: list
+- `POST` `/{workspace_id}/transfer` params(workspace_id) → in: WorkspaceCreate, out: list
+- `DELETE` `/{workspace_id}/membership` params(workspace_id) → out: list [db]
 - `GET` `/` params() ✓

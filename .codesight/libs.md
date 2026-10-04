@@ -20,6 +20,9 @@
 - `apps/api/alembic/versions/0014_session_metadata.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0015_2fa_sessions.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0016_oauth_accounts.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0017_member_suspension.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0018_api_key_expiry.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0019_api_key_quota_window.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/src/api/crud.py`
   - function parse_query: (request, *, max_limit) -> QuerySpec
   - function apply_query: (stmt, model, spec, *, sortable, filterable) -> Select
@@ -44,6 +47,13 @@
   - function reset: () -> None
 - `apps/api/src/core/permissions.py` — function register_permission: (permission, *, resource, action) -> str, function permissions_for_role: (role_name) -> list[str]
 - `apps/api/src/core/request_id.py` — function get_request_id: () -> str, class RequestIdMiddleware
+- `apps/api/src/core/security/cookies.py`
+  - function cookie_secure_for: (request) -> bool
+  - function set_refresh_cookie: (response, token, request) -> None
+  - function clear_refresh_cookie: (response) -> None
+  - function get_refresh_token: (request) -> str | None
+  - function browser_flow: (request, body) -> bool
+  - function require_csrf: (request) -> None
 - `apps/api/src/core/security/crypto.py` — class SecretCipher
 - `apps/api/src/core/security/password.py` — class PasswordHasher
 - `apps/api/src/core/security/ratelimit.py` — function get_auth_limiter: () -> SlidingWindowLimiter, class SlidingWindowLimiter
@@ -108,6 +118,7 @@
   - function expire_stale_invitations: (ctx) -> None
   - function notifications_daily_digest: (ctx) -> None
   - function retention_cleanup: (ctx) -> None
+  - function api_key_cleanup: (ctx) -> None
   - function demo_global_daily_report: (ctx) -> None
 - `apps/api/src/jobs/capture.py`
   - function run_log_collector: () -> RunLogCollector | None
@@ -117,7 +128,7 @@
   - function uninstall_run_capture: () -> None
   - class CapturedEntry
   - _...3 more_
-- `apps/api/src/jobs/executor.py` — function execute_run: (run_id) -> None
+- `apps/api/src/jobs/executor.py` — function execute_run: (run_id, bus) -> None
 - `apps/api/src/jobs/registry.py`
   - function validate_cron_schedule: (expr) -> None
   - function next_cron_occurrence: (expr, after) -> datetime
@@ -172,7 +183,7 @@
   - class RefreshRequest
   - class ForgotPasswordRequest
   - class ResetPasswordRequest
-  - _...32 more_
+  - _...35 more_
 - `apps/api/src/secrets/base.py` — class SecretRecord, class SecretStore
 - `apps/api/src/secrets/db_store.py` — class DbSecretStore
 - `apps/api/src/secrets/factory.py` — function build_secret_store: () -> SecretStore
@@ -220,7 +231,7 @@
 - `apps/api/src/services/serializers.py`
   - function notification_to_dict: (n, *, workspace_name) -> dict
   - function user_to_dict: (u) -> dict
-  - function workspace_to_dict: (w, *, role, permissions) -> dict
+  - function workspace_to_dict: (w, *, role, permissions, joined_at) -> dict
   - function profile_to_dict: (p) -> dict
   - function public_projection: (p, user) -> dict
 - `apps/api/src/services/two_factor.py` — class TwoFactorError, class TwoFactorService
@@ -237,9 +248,14 @@
   - class WorkspaceError
   - class WorkspaceForbidden
   - class WorkspaceConflict
+  - class WorkspaceNotFound
   - class WorkspaceService
 - `apps/api/src/settings.py` — class Settings
 - `apps/api/src/workflows/__init__.py` — function build_workflows: (registry, bus, connection_manager, cipher) -> None
+- `apps/web/e2e/mock-api.ts`
+  - function mockApi: (page, {...}) => void
+  - const IDENTITY
+  - const ACCESS_TOKEN
 - `apps/web/src/hooks/useNotificationPreferences.ts`
   - function humanizeType: (type) => string
   - function useNotificationPreferences: (extraTypes, enabled) => void
@@ -259,10 +275,20 @@
   - function getAvatarSrc: (avatarUrl?) => string | undefined
   - function getAvatarData: (entity, fallbackEmailAsName) => void
   - const UserProfileAvatar
+- `apps/web/src/lib/mentions.ts`
+  - function rankMentionTargets: (targets, query) => MentionTarget[]
+  - function pickerIndex: (selectedId, items, query) => number
+  - function mentionUrlTransform: (url) => string
+  - function mentionRemarkPlugin: (names) => void
+  - type MentionTarget
+  - const MENTION_SCHEME
+  - _...1 more_
+- `apps/web/src/lib/notificationLink.ts` — function notificationLinkUrl: (n) => string | undefined
 - `apps/web/src/lib/utils.ts` — function cn: (...inputs) => void, function oktaAdminConsoleFix: (value?) => string | null
 - `apps/web/src/providers/authProvider.ts` — function seedWorkspace: (identity) => Promise<void>, const authProvider: AuthProvider
 - `apps/web/src/providers/dataProvider.ts`
   - function cancelPendingRefresh: () => void
+  - function ensureSession: () => Promise<boolean>
   - const API_URL
   - const httpClient
   - const dataProvider: DataProvider
@@ -271,6 +297,7 @@
   - function removeThreadMessage: (conversationId, messageId) => void
   - function applyMessageCreated: (frame) => void
   - function applyNotificationCreated: (frame) => void
+  - function invalidateUnreadCounts: () => void
   - function applyConversationRead: (conversationId) => void
 - `apps/web/src/providers/liveProvider.ts`
   - function subscribeLive: (channel, handler) => () => void
@@ -293,10 +320,13 @@
 - `apps/web/src/utils/storage.ts`
   - function getActiveWorkspaceId: () => string | null
   - function setActiveWorkspaceId: (id) => void
+  - const sessionHint
   - const tokenStore
   - const identityStore
   - const workspaceStore
+  - _...2 more_
 - `scripts/dev.py`
+  - function api_env_file: (key) -> str
   - function main: () -> int
   - function kill_all: (procs, sig) -> None
   - function wait_all: (procs, timeout) -> None

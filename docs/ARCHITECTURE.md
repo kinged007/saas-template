@@ -92,6 +92,15 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 | Password (non-browser) | `POST /auth/login` → access + refresh in JSON; `POST /auth/refresh` takes `{"refresh_token"}` as before |
 | 2FA / OAuth (browser) | `POST /auth/2fa/login` / `POST /auth/oauth/token` with `use_cookies: true` set the same cookie and omit the JSON refresh; the OAuth one-time code handoff carries only the access token for cookie callers |
 | API keys | `Authorization: Bearer <key>`; permissions resolved per workspace (untouched by the cookie flow) |
+| Identity | `GET /auth/me` → current user + workspaces + permissions + embedded `profile` (auto-created, same shape as `GET /me/profile`) |
+
+API key quota: a key with a `usage_quota` is capped per calendar month (UTC).
+`X-API-Key-Quota` / `X-API-Key-Remaining` report the month's limit and the uses
+left in it; the counter resets on the first request of a new month and
+`X-API-Key-Window-Reset` says when. `usage_count` stays the lifetime total.
+The rollover, the quota test and the increment are one `UPDATE` and
+`authenticate` takes the row lock, so concurrent requests on one key cannot
+over-grant the budget.
 
 Browser session storage model: the refresh token is never JS-readable (HttpOnly cookie, path `/api/v1/auth`); the 15-min access JWT lives in frontend memory only (nothing persists, so boot does one silent `POST /auth/refresh` — via the shared `ensureSession()` single-flight used by both `authProvider.check()` and the dataProvider 401 retry — to restore the session after reload, skipped entirely when the `tf_has_session` marker is absent). Cookie refresh/logout require the `X-Requested-With: XMLHttpRequest` header plus an allowlisted `Origin`/`Referer` (CSRF mitigation); non-browser JSON clients are unaffected. Future session endpoints (OAuth/2FA variants) must reuse `src/core/security/cookies.py` rather than reimplementing flags.
 
@@ -100,7 +109,13 @@ Session binding: every authenticated request costs one extra PK lookup
 use a short negative-cache on `(sid -> revoked)` with TTL, not a redesign.
 Pre-deploy access tokens without `sid` are grandfathered (valid until
 expiry, ≤15 min residual window).
-| Identity | `GET /auth/me` → current user + workspaces + permissions + embedded `profile` (auto-created, same shape as `GET /me/profile`) |
+
+Upgrading from a release without the quota window: migration `0019` seeds
+`usage_window_count` from the lifetime `usage_count` and `usage_window_start`
+from the start of the current month, so a key that had already exhausted its
+old lifetime quota stays rejected until the next month boundary.
+From that boundary on every key gets a fresh monthly budget, so a key that had
+*not* exhausted its old lifetime cap is now renewable rather than one-shot.
 
 ## 6. Events & pub/sub
 
