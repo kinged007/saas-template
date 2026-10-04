@@ -373,6 +373,75 @@ async def test_create_role_capped_by_creator_permissions(app_client):
     assert resp.status_code == 201, resp.text
 
 
+async def test_suspended_actor_is_capped_on_role_writes(app_client):
+    """A suspended actor is capped as if unauthenticated, not by its own role.
+
+    The role-capping sites resolve the actor's membership with
+    `active_only=True`; a suspended row therefore reads as "no actor cap" and
+    every requested permission is denied. The same actor, active, must still be
+    able to write — otherwise a refusal for everyone would satisfy the deny
+    half.
+    """
+    from src.db.session import SessionFactory
+    from src.models.workspace import WorkspaceMember
+    from src.services.auth import AuthService
+    from src.services.workspaces import WorkspaceForbidden, WorkspaceService
+
+    client = app_client
+    owner = await register_user(client, "cap-owner@example.com")
+    ws = await create_workspace(client, owner)
+    await register_user(client, "cap-admin@example.com")
+    owner_headers = ws_headers(owner, ws["id"])
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session)
+        admin_user = await AuthService(session).get_by_email("cap-admin@example.com")
+        assert admin_user is not None, "cap-admin@example.com was not registered"
+        role_ids = {
+            name: await _role_id(client, owner_headers, name) for name in ("admin", "editor")
+        }
+        member = WorkspaceMember(
+            workspace_id=ws["id"],
+            user_id=admin_user.id,
+            role_id=role_ids["admin"],
+            status="active",
+        )
+        session.add(member)
+        await session.commit()
+
+        # `member:read` is in the admin role's permission set, so the writes
+        # below only fail when something other than the suspension stops them.
+        created = await service.create_custom_role(
+            ws["id"], name="ops", description=None, permissions=["member:read"], actor=admin_user
+        )
+        assert created.name == "ops"
+        # A different payload than the suspended call: `update_role` returns
+        # early on an unchanged permission set, which would skip the check.
+        narrowed = await service.update_role(
+            ws["id"],
+            role_ids["editor"],
+            permissions=["member:read", "audit:read"],
+            actor=admin_user,
+        )
+        assert sorted(narrowed.permissions) == ["audit:read", "member:read"]
+
+        member.status = "suspended"
+        await session.commit()
+
+        with pytest.raises(WorkspaceForbidden):
+            await service.create_custom_role(
+                ws["id"],
+                name="ops",
+                description=None,
+                permissions=["member:read"],
+                actor=admin_user,
+            )
+        with pytest.raises(WorkspaceForbidden):
+            await service.update_role(
+                ws["id"], role_ids["editor"], permissions=["member:read"], actor=admin_user
+            )
+
+
 # ------------------------------------------------------------------ update
 
 
