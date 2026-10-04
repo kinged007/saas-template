@@ -419,8 +419,8 @@ async def test_service_rejects_blank_names(app_client):
 
     async with SessionFactory() as session:
         blank_workspaces = (
-            await session.execute(select(Workspace).where(Workspace.name == ""))
-        ).scalars().all()
+            (await session.execute(select(Workspace).where(Workspace.name == ""))).scalars().all()
+        )
         blank_roles = (await session.execute(select(Role).where(Role.name == ""))).scalars().all()
         assert blank_workspaces == []
         assert blank_roles == []

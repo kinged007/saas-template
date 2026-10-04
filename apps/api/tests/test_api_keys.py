@@ -557,7 +557,5 @@ async def test_create_api_key_rejects_blank_name(app_client):
         assert str(excinfo.value) == "api key name cannot be blank"
 
     async with SessionFactory() as session:
-        blank = (
-            await session.execute(select(ApiKey).where(ApiKey.name == ""))
-        ).scalars().all()
+        blank = (await session.execute(select(ApiKey).where(ApiKey.name == ""))).scalars().all()
         assert blank == []
