@@ -182,8 +182,8 @@ async def record_key_use(api_key: ApiKey, db: AsyncSession, response: Response) 
     Shared by both permission dependencies and the jobs routes, so no branch
     that authorizes a key can drift into charging differently. One clock read
     feeds the rollover, the counter and the reset header, so they cannot
-    disagree. The rejection carries the same
-    headers, which a client that has run out needs more than one that has not.
+    disagree. The rejection carries the same headers, which a client that has
+    run out needs more than one that has not.
     `response` is what makes the charge observable (the quota headers); a
     caller that omits it still charges, but cannot see the balance it just
     spent.
