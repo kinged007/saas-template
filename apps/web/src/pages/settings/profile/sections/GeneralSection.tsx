@@ -209,11 +209,9 @@ export function GeneralSection() {
     // rendered via dedicated inputs that map to getProfileField keys in forks.
     // For the base template we do not send custom_data at all.
 
+    // The mutation's own successNotification owns the "Profile updated" toast.
     mutate(payload, {
       isPut: false,
-      onSuccess: () => {
-        toast.success("Profile updated");
-      },
       onError: (err: unknown) => {
         const msg = (err as { message?: string })?.message || String(err);
         toast.error(msg);
