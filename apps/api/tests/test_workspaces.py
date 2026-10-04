@@ -466,11 +466,11 @@ async def test_suspend_and_reactivate_agree_with_every_legal_status(app_client):
     """Both tables preserve today's behaviour for every status the CHECK allows.
 
     A suspend of an already-suspended member stays an idempotent 200 no-op, a
-    reactivate of anything else stays a 409, and a suspend of an `invited`
-    member still succeeds. For every legal status the table and the comparison
-    agree by design, so this is the behaviour-preservation pin; the fail-closed
-    default is pinned at table level in
-    `test_suspend_and_reactivate_decide_every_member_status`.
+    reactivate of anything else stays a 409, a suspend of an `invited` member
+    still succeeds, and a reactivate of a `suspended` member still succeeds.
+    For every legal status the table and the comparison agree by design, so this
+    is the behaviour-preservation pin; the fail-closed default is pinned at table
+    level in `test_suspend_and_reactivate_decide_every_member_status`.
     """
     client = app_client
     owner = await register_user(client, "susp-owner@example.com")
@@ -501,6 +501,17 @@ async def test_suspend_and_reactivate_agree_with_every_legal_status(app_client):
     again = await client.post(f"/api/v1/members/{target_id}/suspend", headers=headers)
     assert again.status_code == 200, again.text
     assert again.json()["status"] == "suspended"
+
+    # Pins the `SUSPENDED: True` row of `_REACTIVATE_ALLOWED`; the only other
+    # successful reactivate lives in `test_workspace_lifecycle.py`, which does
+    # not assert the status it wrote.
+    reactivated = await client.post(f"/api/v1/members/{target_id}/reactivate", headers=headers)
+    assert reactivated.status_code == 200, reactivated.text
+    assert reactivated.json()["status"] == "active"
+
+    rows = await client.get("/api/v1/members", headers=headers)
+    row = next(m for m in rows.json() if m["membership_id"] == target_id)
+    assert row["status"] == "active"
 
 
 def test_suspend_and_reactivate_decide_every_member_status():
