@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   useCan,
   useCustom,
@@ -69,6 +69,10 @@ export function ApiKeyCreatePage() {
 
   const [created, setCreated] = useState<ApiKeyCreated | null>(null);
   const [copied, setCopied] = useState(false);
+  // One timer owns the 1.5 s confirmation: a second click restarts it instead of
+  // stacking one that ends it early, and it dies with the component.
+  const copyTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
   const {
     refineCore: { onFinish, formLoading },
@@ -119,7 +123,8 @@ export function ApiKeyCreatePage() {
     if (!created) return;
     await navigator.clipboard.writeText(created.key);
     setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
   };
 
   return (

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useCustom, useCustomMutation } from "@refinedev/core";
@@ -61,6 +61,16 @@ export function SecuritySection() {
   const [confirmPw, setConfirmPw] = useState("");
   const [changeCode, setChangeCode] = useState("");
 
+  // The copy confirmation is a 1.5 s window owned by one timer: a second click
+  // restarts it rather than stacking a second one that ends it early, and the
+  // pending timeout dies with the component instead of updating unmounted state.
+  const copyTimer = useRef<number | undefined>(undefined);
+  const clearCopied = () => {
+    window.clearTimeout(copyTimer.current);
+    setCopied(false);
+  };
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
+
   // The copy icon flips to a check, so its accessible name follows; the pair the
   // button keeps is `title` + `aria-label`, equal to each other (#332).
   const copyLabel = copied ? "Copied" : "Copy setup key";
@@ -101,6 +111,7 @@ export function SecuritySection() {
       setSetupSecret(data.secret);
       setSetupCode("");
       setBackupCodes(null);
+      clearCopied();
     } catch (e) {
       toast.error((e as Error)?.message ?? "Setup failed");
     }
@@ -116,6 +127,7 @@ export function SecuritySection() {
       setSetupUri(null);
       setSetupSecret(null);
       setSetupToken(null);
+      clearCopied();
       toast.success("Two-factor enabled");
       refresh();
     } catch (e) {
@@ -225,8 +237,9 @@ export function SecuritySection() {
                     onClick={async () => {
                       if (!setupSecret) return;
                       await navigator.clipboard.writeText(setupSecret);
+                      clearCopied();
                       setCopied(true);
-                      setTimeout(() => setCopied(false), 1500);
+                      copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
                     }}
                   >
                     {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
@@ -239,7 +252,7 @@ export function SecuritySection() {
               </div>
               <div className="flex gap-2">
                 <Button onClick={confirmSetup} disabled={!setupCode || mutation.isPending}>Enable</Button>
-                <Button variant="outline" onClick={() => { setSetupUri(null); setSetupSecret(null); setSetupToken(null); }}>Cancel</Button>
+                <Button variant="outline" onClick={() => { setSetupUri(null); setSetupSecret(null); setSetupToken(null); clearCopied(); }}>Cancel</Button>
               </div>
             </div>
           )}
