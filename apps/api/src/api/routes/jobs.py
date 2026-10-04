@@ -57,14 +57,17 @@ _RUN_DEFAULT_ORDER = (JobRun.scheduled_at.desc(), JobRun.id.desc())
 
 async def _get_definition_or_404(
     definition_id: str,
-    workspace_id: str | None,
     db: AsyncSession,
 ) -> JobDefinition:
+    """Fetch a definition by id, or the 404 on a miss.
+
+    No workspace filter: every caller is either `require_superuser` or a route
+    that has already resolved and authorized this same definition through
+    `resolve_or_deny` + `_require_job_access`. A caller that is neither must
+    do that authorization itself — this helper will not do it for them.
+    """
     definition = await JobService(db).get_definition(definition_id)
     if definition is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
-    if workspace_id is not None and definition.workspace_id != workspace_id:
-        # Do not leak cross-workspace existence.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
     return definition
 
@@ -96,7 +99,7 @@ async def get_global_job(
     _=Depends(require_superuser),
     db: AsyncSession = Depends(get_db),
 ):
-    return job_to_dict(await _get_definition_or_404(definition_id, None, db))
+    return job_to_dict(await _get_definition_or_404(definition_id, db))
 
 
 @router.patch("/global/{definition_id}")
@@ -109,7 +112,7 @@ async def update_global_job(
     container=Depends(get_container),
 ):
     _validate_patch(body)
-    definition = await _get_definition_or_404(definition_id, None, db)
+    definition = await _get_definition_or_404(definition_id, db)
     try:
         updated = await JobService(db, container.bus, container.cipher).update_definition(
             definition,
@@ -148,7 +151,8 @@ async def execute_global_job(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    return await _execute_now(definition_id, None, user.id, db, container)
+    definition = await _get_definition_or_404(definition_id, db)
+    return await _execute_now(definition, user.id, db, container)
 
 
 @router.get("/global/{definition_id}/runs")
@@ -254,10 +258,15 @@ async def _require_job_access(
 
     A key outside the definition's workspace gets the deployment-admin
     refusal, the same one the global branch and a miss give it; a session user
-    who is not a member gets 403. A key that passes spends one unit of its
-    usage quota through record_key_use, and `response` is what makes that
-    charge observable (the quota headers) — callers must thread their own
-    Response through, never drop it.
+    who is not a member gets 403. A key inside the workspace that lacks the
+    permission is told which one it lacks, and that is deliberately a
+    different answer from the deployment-admin refusal: it names the fix
+    (mint the key with the permission), it is what `require_permission`
+    returns on every other key route, and a key scoped to the workspace is
+    entitled to know what the workspace holds. A key that passes spends one
+    unit of its usage quota through record_key_use, and `response` is what
+    makes that charge observable (the quota headers) — callers must thread
+    their own Response through, never drop it.
     """
     required = JOB_UPDATE if need_edit else JOB_READ
     if definition.workspace_id is None:
@@ -366,9 +375,7 @@ async def execute_job(
         principal, JobService(db).get_definition(definition_id), "job not found"
     )
     await _require_job_access(db, principal, definition, response, need_edit=True)
-    return await _execute_now(
-        definition.id, definition.workspace_id, principal.user.id, db, container
-    )
+    return await _execute_now(definition, principal.user.id, db, container)
 
 
 @router.get("/{definition_id}/runs")
@@ -390,13 +397,11 @@ async def list_job_runs(
 
 
 async def _execute_now(
-    definition_id: str,
-    workspace_id: str | None,
+    definition: JobDefinition,
     actor_user_id: str,
     db: AsyncSession,
     container,
 ) -> dict:
-    definition = await _get_definition_or_404(definition_id, workspace_id, db)
     try:
         run = await JobService(db, container.bus).create_run(
             definition,
