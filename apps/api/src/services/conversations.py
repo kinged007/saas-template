@@ -12,7 +12,12 @@ from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
 from src.models.conversation import Conversation, ConversationParticipant, Message
 from src.models.user_profile import UserProfile
-from src.models.workspace import User, Workspace, WorkspaceMember
+from src.models.workspace import (
+    ACTIVE_MEMBERSHIP_STATUSES,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
 from src.services.notifications import NotificationService
 from src.services.profile_helpers import escape_like, format_display_name
 
@@ -96,7 +101,7 @@ class ConversationService:
             select(WorkspaceMember).where(
                 WorkspaceMember.workspace_id == workspace_id,
                 WorkspaceMember.user_id == user_id,
-                WorkspaceMember.status == "active",
+                WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
             )
         )
         if result.scalar_one_or_none() is None:
@@ -125,7 +130,7 @@ class ConversationService:
             select(WorkspaceMember.user_id).where(
                 WorkspaceMember.workspace_id == workspace_id,
                 WorkspaceMember.user_id.in_(user_ids),
-                WorkspaceMember.status == "active",
+                WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
             )
         )
         if set(user_ids) - {row[0] for row in result.all()}:

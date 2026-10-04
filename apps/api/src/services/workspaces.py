@@ -18,7 +18,14 @@ from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
 from src.models.core import Invitation
-from src.models.workspace import MemberStatus, Role, User, Workspace, WorkspaceMember
+from src.models.workspace import (
+    ACTIVE_MEMBERSHIP_STATUSES,
+    MemberStatus,
+    Role,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
 from src.services.auth import AuthService
 from src.services.serializers import ONBOARDING_ENABLED_FLAG
 
@@ -397,7 +404,10 @@ class WorkspaceService:
             select(Workspace, Role, WorkspaceMember)
             .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
             .join(Role, Role.id == WorkspaceMember.role_id)
-            .where(WorkspaceMember.user_id == user_id, WorkspaceMember.status == "active")
+            .where(
+                WorkspaceMember.user_id == user_id,
+                WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
+            )
             .order_by(Workspace.created_at.desc())
         )
         result = await self._session.execute(stmt)
@@ -424,7 +434,7 @@ class WorkspaceService:
             )
         )
         if active_only:
-            stmt = stmt.where(WorkspaceMember.status == "active")
+            stmt = stmt.where(WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES))
         result = await self._session.execute(stmt)
         return result.first()
 
@@ -557,7 +567,7 @@ class WorkspaceService:
         stmt = select(WorkspaceMember).where(
             WorkspaceMember.workspace_id == workspace_id,
             WorkspaceMember.user_id == actor.id,
-            WorkspaceMember.status == "active",
+            WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
         )
         member = (await self._session.execute(stmt)).scalar_one_or_none()
         if member is None:
