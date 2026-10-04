@@ -40,6 +40,8 @@ async def test_invitation_email_without_a_token_links_to_the_constant(monkeypatc
     container = Container()
     registry = WorkflowRegistry(container.bus)
     build_workflows(registry, container.bus, container.connection_manager)
+    # _entries is private, so a rename there would raise a bare KeyError here.
+    assert Subjects.WORKSPACE_INVITATION_CREATED in registry._entries
     handler = registry._entries[Subjects.WORKSPACE_INVITATION_CREATED][0]
 
     # The handler reads the module-global at call time, so this reaches the link.
