@@ -168,10 +168,7 @@ export function App() {
                   />
                 </Route>
                 {/* Legacy redirects — keep old URLs working. Inside the guard, so
-                    a user in zero workspaces is sent straight to the dashboard.
-                    Declared after the settings/workspace subtree and its splat
-                    for that reason: react-router takes the first match, so a
-                    stub above would shadow the subtree's `*` catch-all. */}
+                    a user in zero workspaces is sent straight to the dashboard. */}
                 <Route path="roles" element={<Navigate to="/settings/workspace/roles" replace />} />
                 <Route path="jobs" element={<Navigate to="/settings/workspace/jobs" replace />} />
               </Route>

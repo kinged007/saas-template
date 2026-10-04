@@ -87,9 +87,16 @@ test.describe("workspace guard", () => {
     await page.goto("/members");
     await path(page).toBe("/members");
     // The row, not the URL alone: it also proves the page has rendered, so the
-    // empty toast list below cannot pass merely because nothing happened yet.
+    // sampling below starts with the guard already mounted.
     await expect(page.getByRole("row").filter({ hasText: "member@example.com" })).toBeVisible();
-    await expect(liveRegion(page).locator("li")).toHaveCount(0);
+    // Sampled, not awaited: sonner auto-dismisses after 4s, so a polled
+    // toHaveCount(0) would wait the toast out and pass even if it fired. A count
+    // read at one instant cannot pass that way.
+    const cards = liveRegion(page).locator("li");
+    for (let i = 0; i < 10; i++) {
+      expect(await cards.count()).toBe(0);
+      await page.waitForTimeout(200);
+    }
   });
 
   test("the redirect is announced once inside a live region", async ({ page }) => {
@@ -100,9 +107,16 @@ test.describe("workspace guard", () => {
     // merely rendered on the page is not announced to a screen reader. The whole
     // sentence, so another workspace-flavoured toast cannot stand in for it.
     const region = liveRegion(page);
-    await expect(region).toContainText(ANNOUNCEMENT, { timeout: 15_000 });
-    // One card, not two: StrictMode double-invokes the guard's mount effect, and
-    // sonner dedups on a supplied id, so a bare toast() would show two.
-    await expect(region.locator("li")).toHaveCount(1);
+    // The count and the text in one poll, read in the same instant: sonner
+    // auto-dismisses after 4s, so two separate assertions can straddle it on a
+    // slow runner. One card, not two: StrictMode double-invokes the guard's
+    // mount effect, and sonner dedups on a supplied id, so a bare toast() would
+    // show two.
+    await expect
+      .poll(async () => ({
+        cards: await region.locator("li").count(),
+        text: (await region.textContent()) ?? "",
+      }))
+      .toEqual({ cards: 1, text: expect.stringContaining(ANNOUNCEMENT) });
   });
 });
