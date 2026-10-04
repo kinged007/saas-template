@@ -1,6 +1,9 @@
+import { useEffect } from "react";
+
 import { Refine, Authenticated } from "@refinedev/core";
 import routerProvider from "@refinedev/react-router";
 import { BrowserRouter, Navigate, Outlet, Route, Routes } from "react-router";
+import { toast } from "sonner";
 
 import { useNotificationProvider } from "./components/refine-ui/notification/use-notification-provider";
 import { Toaster } from "./components/refine-ui/notification/toaster";
@@ -54,10 +57,23 @@ import { AuditLogSection } from "./pages/settings/workspace/sections/AuditLogSec
  * card and the create CTA, so send them there. This lives in the router rather
  * than in WorkspaceProvider because the provider also wraps the workspace-free
  * routes (workspaces/create, settings/profile, admin, invitations).
+ *
+ * WorkspaceProvider renders nothing until the identity settles, so `workspaces`
+ * is empty only once the identity is known to hold none: the guard never fires
+ * on an identity that is still loading.
  */
 function RequireWorkspace() {
   const { workspaces } = useWorkspace();
-  if (workspaces.length === 0) return <Navigate to="/" replace />;
+  const hasNoWorkspace = workspaces.length === 0;
+  useEffect(() => {
+    // The redirect moves the user without changing the page, and the dashboard's
+    // "No workspace yet" card only explains it visually. sonner's <Toaster> is
+    // the page's aria-live region, so this is what announces the move.
+    if (hasNoWorkspace) {
+      toast("You need a workspace to open that page. Showing your dashboard instead.");
+    }
+  }, [hasNoWorkspace]);
+  if (hasNoWorkspace) return <Navigate to="/" replace />;
   return <Outlet />;
 }
 
@@ -146,6 +162,10 @@ export function App() {
                     element={<Navigate to="/settings/workspace/general" replace />}
                   />
                 </Route>
+                {/* Legacy redirects — keep old URLs working. Inside the guard, so
+                    a user in zero workspaces is sent straight to the dashboard. */}
+                <Route path="roles" element={<Navigate to="/settings/workspace/roles" replace />} />
+                <Route path="jobs" element={<Navigate to="/settings/workspace/jobs" replace />} />
               </Route>
               <Route path="settings/profile" element={<ProfileSettingsLayout />}>
                 <Route index element={<Navigate to="general" replace />} />
@@ -155,9 +175,6 @@ export function App() {
                 <Route path="workspaces" element={<WorkspacesSection />} />
                 <Route path="*" element={<Navigate to="/settings/profile/general" replace />} />
               </Route>
-              {/* Legacy redirects — keep old URLs working */}
-              <Route path="roles" element={<Navigate to="/settings/workspace/roles" replace />} />
-              <Route path="jobs" element={<Navigate to="/settings/workspace/jobs" replace />} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>
             <Route
