@@ -16,6 +16,9 @@ const noWorkspaces = { ...IDENTITY, single_workspace: false, workspaces: [] };
 /** Asserts on the pathname, so a redirect may add a query string. */
 const path = (page: Page) => expect.poll(() => new URL(page.url()).pathname);
 
+/** The copy the locked-out branch explains itself with. */
+const ASK_AN_ADMIN = /ask an administrator/i;
+
 test.describe("workspace create call to action", () => {
   test("single-workspace mode offers no way to create one", async ({ page }) => {
     await mockApi(page, { signedIn: true, identity: lockedOut });
@@ -24,6 +27,25 @@ test.describe("workspace create call to action", () => {
     await expect(page.getByText("You're not a member of any workspace yet.")).toBeVisible();
     // Sidebar empty state (button) and the dashboard "No workspace yet" card
     // (link wrapped around a button) are both affordances for the same route.
+    await expect(page.getByRole("button", { name: "Create workspace" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Create workspace" })).toHaveCount(0);
+    // Zero affordances must still say why, not just stay empty.
+    await expect(page.getByText(ASK_AN_ADMIN)).toBeVisible();
+  });
+
+  test("/settings/profile/workspaces offers the same create CTA", async ({ page }) => {
+    await mockApi(page, { signedIn: true, identity: noWorkspaces });
+    await page.goto("/settings/profile/workspaces");
+
+    await expect(page.getByRole("link", { name: "Create workspace" })).toBeVisible();
+    await expect(page.getByText("No workspaces yet.")).toHaveCount(0);
+  });
+
+  test("/settings/profile/workspaces explains a locked-out user", async ({ page }) => {
+    await mockApi(page, { signedIn: true, identity: lockedOut });
+    await page.goto("/settings/profile/workspaces");
+
+    await expect(page.getByText(ASK_AN_ADMIN)).toBeVisible();
     await expect(page.getByRole("button", { name: "Create workspace" })).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Create workspace" })).toHaveCount(0);
   });

@@ -22,6 +22,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { EmptyRow, formatDate } from "@/components/ui";
+import { NoWorkspaceCard } from "@/components/NoWorkspaceCard";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { isOwnerRoleName } from "@/pages/role-name";
 import type { Identity, Workspace } from "@/types";
@@ -37,6 +38,13 @@ export function WorkspacesSection() {
   const rows: Workspace[] = Array.isArray(list.result?.data)
     ? (list.result.data as Workspace[])
     : (identity?.workspaces ?? []);
+
+  // An empty table here would say "you are in none of these" about a membership
+  // list the user never asked about. Gated on the fetch settling so the pending
+  // state keeps the row instead of flashing a call to action.
+  if (!list.query.isPending && rows.length === 0) {
+    return <NoWorkspaceCard single={identity?.single_workspace === true} />;
+  }
 
   const leave = async () => {
     if (!leaving) return;
