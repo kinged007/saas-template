@@ -17,6 +17,7 @@ import inspect
 import ipaddress
 import re
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -530,6 +531,45 @@ async def test_record_dedupes_on_source_event_without_touching_the_stored_row():
     async with SessionFactory() as session:
         result = await session.execute(select(AuditLogEntry))
         assert len([r for r in result.scalars() if not r.details.get("source_event_id")]) == 2
+
+
+async def test_dedupe_lookup_orders_a_created_at_tie_on_id():
+    """The dedupe read must be a total order, like `list_for_resource` (#1130).
+
+    Two rows for one source event are the race `record`'s ponytail documents,
+    and they share a `created_at` whenever the redelivery wins the insert
+    fast. Ordering on `created_at` alone leaves which of them `record` returns
+    up to the planner. The tied rows are inserted high-id-first so rowid order
+    (the pre-fix read) disagrees with id order; only the `id` tiebreaker
+    returns the low id.
+    """
+    from src.events.bus import SOURCE_EVENT_KEY
+    from src.services.audit import AuditService
+
+    fields = {
+        "workspace_id": None,
+        "resource_type": "invitation",
+        "resource_id": str(uuid.uuid4()),
+        "action": "invitation.email_failed",
+    }
+    low, high = (f"00000000-0000-4000-8000-00000000000{i}" for i in (1, 2))
+    async with SessionFactory() as session:
+        session.add_all(
+            [
+                AuditLogEntry(
+                    id=id_,
+                    details={"email": "unreachable@example.com", SOURCE_EVENT_KEY: "evt-tie"},
+                    created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    **fields,
+                )
+                for id_ in (high, low)
+            ]
+        )
+        await session.commit()
+
+    async with SessionFactory() as session:
+        found = await AuditService(session).record(source_event_id="evt-tie", **fields)
+    assert found.id == low
 
 
 def test_every_workflow_audit_publish_carries_a_source_event_id():
