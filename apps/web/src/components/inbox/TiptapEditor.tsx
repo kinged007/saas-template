@@ -141,6 +141,7 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
   const [linkUrl, setLinkUrl] = useState("");
   const [linkError, setLinkError] = useState<string | null>(null);
   const linkInputRef = useRef<HTMLInputElement>(null);
+  const linkTriggerRef = useRef<HTMLButtonElement>(null);
   const linkDismissedOutside = useRef(false);
   const linkInputId = useId();
   const linkLabelId = useId();
@@ -447,6 +448,7 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
         <Popover open={linkOpen} onOpenChange={onLinkOpenChange}>
           <PopoverTrigger asChild>
             <Button
+              ref={linkTriggerRef}
               type="button"
               // Link is an action, not a toggle: it opens a URL editor rather than
               // flipping a state, so it carries no aria-pressed. The variant below
@@ -466,7 +468,11 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
             align="start"
             className="w-80 p-3"
             aria-labelledby={linkLabelId}
-            onInteractOutside={() => {
+            onInteractOutside={(e) => {
+              // Clicking the trigger is one of the popover's own exits, but
+              // Radix reports it here before it checks where the click landed,
+              // so it has to be excluded or the caret is dropped on close.
+              if (linkTriggerRef.current?.contains(e.target as Node)) return;
               linkDismissedOutside.current = true;
             }}
             // The trigger eats mousedown so the caret survives, which leaves

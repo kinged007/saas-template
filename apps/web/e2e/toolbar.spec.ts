@@ -154,20 +154,31 @@ test.describe("composer toolbar", () => {
     await expect(editor.locator("a")).toHaveCount(0);
   });
 
-  test("dismissing the popover from outside leaves focus where the click landed", async ({ page }) => {
+  test("dismissing the popover leaves focus where the interaction ended", async ({ page }) => {
     const toolbar = await openToolbar(page);
     const editor = page.getByRole("dialog").locator('[contenteditable="true"]');
+    const link = toolbar.getByRole("button", { name: "Link", exact: true });
+    const linkDialog = page.getByRole("dialog", { name: "Link URL" });
 
     await editor.click();
     await page.keyboard.type("hello");
-    await toolbar.getByRole("button", { name: "Link", exact: true }).click();
-    await expect(page.getByRole("dialog", { name: "Link URL" })).toBeVisible();
+    await link.click();
+    await expect(linkDialog).toBeVisible();
+
+    // The trigger toggles the popover shut, which is one of its own exits: the
+    // caret goes back to the document being edited.
+    await link.click();
+    await expect(linkDialog).toHaveCount(0);
+    await expect(editor).toBeFocused();
+
+    await link.click();
+    await expect(linkDialog).toBeVisible();
 
     // A click elsewhere in the compose dialog dismisses the popover, and that
     // click owns the focus afterwards: the caret must not jump back into the
     // document the user clicked away from.
     await page.getByRole("dialog", { name: "New conversation" }).getByRole("heading").click();
-    await expect(page.getByRole("dialog", { name: "Link URL" })).toHaveCount(0);
+    await expect(linkDialog).toHaveCount(0);
     await expect(editor).not.toBeFocused();
   });
 
