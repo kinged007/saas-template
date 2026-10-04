@@ -21,14 +21,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { EmptyRow, formatDate } from "@/components/ui";
+import { formatDate } from "@/components/ui";
 import { NoWorkspaceCard } from "@/components/NoWorkspaceCard";
-import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "@/contexts/WorkspaceContext";
 import { isOwnerRoleName } from "@/pages/role-name";
 import type { Identity, Workspace } from "@/types";
 
 export function WorkspacesSection() {
-  const { data: identity } = useGetIdentity<Identity>();
+  const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
   const { refresh } = useWorkspace();
   const invalidate = useInvalidate();
   const list = useCustom<Workspace[]>({ url: "workspaces", method: "get" });
@@ -40,9 +40,10 @@ export function WorkspacesSection() {
     : (identity?.workspaces ?? []);
 
   // An empty table here would say "you are in none of these" about a membership
-  // list the user never asked about. Gated on the fetch settling so the pending
-  // state keeps the row instead of flashing a call to action.
-  if (!list.query.isPending && rows.length === 0) {
+  // list the user never asked about. The fetch has to settle first: rendering
+  // either answer early flashes one of them before the list is known.
+  if (rows.length === 0) {
+    if (list.query.isPending) return null;
     return <NoWorkspaceCard single={identity?.single_workspace === true} />;
   }
 
@@ -107,7 +108,6 @@ export function WorkspacesSection() {
                     </TableCell>
                   </TableRow>
                 ))}
-                {rows.length === 0 && <EmptyRow colSpan={4}>No workspaces yet.</EmptyRow>}
               </TableBody>
             </Table>
           </div>
