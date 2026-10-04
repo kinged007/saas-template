@@ -44,7 +44,7 @@ def _referenced(tree):
 
 
 def uncalled(src, crud):
-    """Public names `crud` defines that no other module under `src` mentions."""
+    """Public names `crud` defines that no other module under `src` reaches by import."""
     defined = {
         node.name
         for node in ast.parse(_read(crud)).body
@@ -56,10 +56,10 @@ def uncalled(src, crud):
         if path != crud:
             callers |= _referenced(ast.parse(_read(path)))
     # ponytail: an import counts even when the module never calls it, because ruff's
-    # F401 fails such an import anyway, so a bare name that shadows a crud helper (a
-    # local or a parameter) is not a caller. Ceiling: a name reached only through a
-    # string, getattr, a star import (ruff's F403 fails those) or locals(). Upgrade
-    # path: resolve the imports and require an `ast.Call`.
+    # F401 fails an import the module never uses, so a bare name that shadows a crud
+    # helper (a local or a parameter) is not a caller. Ceiling: a name reached only
+    # through a string, getattr, a star import (ruff's F403 fails those) or locals().
+    # Upgrade path: resolve the imports and require an `ast.Call`.
     return {name for name in defined if name not in callers}
 
 
@@ -121,6 +121,7 @@ def test_bare_name_without_an_import_is_not_a_caller(tmp_path):
     routes = "def helper():\n    return 1\n\n\ndef route(helper):\n    return helper()\n"
     src = _tree(tmp_path, "def helper():\n    return 1\n", {"routes": routes})
     assert uncalled(src, src / "api" / "crud.py") == {"helper"}
+
 
 def test_reads_are_utf8_under_an_ascii_locale(tmp_path):
     """The guard must not fail on a non-ASCII source file before it reaches its verdict."""
