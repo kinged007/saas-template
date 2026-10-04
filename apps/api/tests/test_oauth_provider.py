@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import socket
 import threading
 import time
@@ -45,10 +46,13 @@ ROTATED_KID = "stub-key-2"
 REDIRECT_URI = "http://localhost:8000/api/v1/auth/oauth/stub/callback"
 
 
-def _jwk(key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey, kid: str, alg: str) -> dict[str, Any]:
+def _jwk(
+    key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey, kid: str | None, alg: str
+) -> dict[str, Any]:
     algo = {"RS256": jwt.algorithms.RSAAlgorithm, "ES256": jwt.algorithms.ECAlgorithm}[alg]
     pub = json.loads(algo.to_jwk(key.public_key()))
-    return {**pub, "kid": kid, "use": "sig", "alg": alg}
+    # A kid of None omits the member, as a provider that assigns no kid would.
+    return {**pub, **({"kid": kid} if kid else {}), "use": "sig", "alg": alg}
 
 
 class _StubIdP:
@@ -69,7 +73,7 @@ class _StubIdP:
         # Published key set, mutable so a test can rotate it mid-cache. Both key
         # families are published, so a kid match that ignores the key type is
         # rejected by the kid↔key-type binding rather than by an absent kid.
-        self.published: list[tuple[Any, str, str]] = [
+        self.published: list[tuple[Any, str | None, str]] = [
             (self.signing_key, KID, "RS256"),
             (self.ec_key, EC_KID, "ES256"),
         ]
@@ -103,12 +107,15 @@ class _StubIdP:
     def mint(
         self,
         *,
-        kid: str = KID,
+        kid: str | None = KID,
         key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey | None = None,
         alg: str = "RS256",
         **claims: Any,
     ) -> str:
-        """A signed id_token; every claim is overridable so tests can break one at a time."""
+        """A signed id_token; every claim is overridable so tests can break one at a time.
+
+        `kid=None` omits the JWT header.
+        """
         now = int(time.time())
         payload = {
             "iss": self.base,
@@ -119,9 +126,10 @@ class _StubIdP:
             "exp": now + 300,
             **claims,
         }
+        headers = {"kid": kid} if kid is not None else {}
         if alg == "none":
-            return jwt.encode(payload, key="", algorithm="none", headers={"kid": kid})
-        return jwt.encode(payload, key or self.signing_key, algorithm=alg, headers={"kid": kid})
+            return jwt.encode(payload, key="", algorithm="none", headers=headers)
+        return jwt.encode(payload, key or self.signing_key, algorithm=alg, headers=headers)
 
     def published_jwks(self) -> dict[str, Any]:
         return {"keys": [_jwk(*p) for p in self.published]}
@@ -149,6 +157,11 @@ class _StubIdP:
                     if stub.jwks_delay:
                         time.sleep(stub.jwks_delay)
                     self._send(200, stub.published_jwks())
+                elif self.path == "/jwks-redirect":
+                    self.send_response(302)
+                    self.send_header("Location", f"{stub.base}/jwks")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
                 elif self.path == "/jwks-broken":
                     # Answers with `broken_jwks` while a test holds one, so the IdP can
                     # be made to publish an unusable set and then repair itself.
@@ -346,6 +359,18 @@ async def test_claims_from_id_token_rejects_unknown_kid(provider, idp, cache):
     )
 
 
+async def test_claims_from_id_token_rejects_token_without_a_kid(provider, idp, cache):
+    """`PyJWKClient` matches on the token's kid and has no kid-less fallback, so a token
+    without one is refused rather than verified against the sole published key. Both halves
+    are asserted: no fallback for a kid-less token, and no candidate in a kid-less key."""
+    assert await claims_from_id_token(provider, idp.doc, idp.mint(kid=None), cache) is None
+    idp.published = [(idp.signing_key, None, "RS256")]
+    try:
+        assert await claims_from_id_token(provider, idp.doc, idp.mint(kid=None), cache) is None
+    finally:
+        idp.published = [(idp.signing_key, KID, "RS256"), (idp.ec_key, EC_KID, "ES256")]
+
+
 async def test_claims_from_id_token_rejects_token_signed_by_another_key(provider, idp, cache):
     """Same kid, different private key: only a real signature check catches this."""
     assert await claims_from_id_token(provider, idp.doc, idp.mint(key=idp.other_key), cache) is None
@@ -382,6 +407,13 @@ async def test_jwks_is_refetched_for_a_rotated_kid(provider, idp, cache):
         idp.published = [(idp.signing_key, KID, "RS256"), (idp.ec_key, EC_KID, "ES256")]
     assert claims is not None
     assert idp.hits.count("/jwks") == before + 1
+
+
+async def test_jwks_follows_a_redirect(provider, idp, cache):
+    """`PyJWKClient` fetched through urllib, which follows redirects; httpx does not
+    by default, so without the flag a redirecting `jwks_uri` fails every login."""
+    doc = dict(idp.doc, jwks_uri=f"{idp.base}/jwks-redirect")
+    assert await claims_from_id_token(provider, doc, idp.mint(), cache) is not None
 
 
 async def test_unusable_jwks_is_not_served_from_the_cache(provider, idp, cache):
@@ -438,9 +470,15 @@ async def test_claims_from_id_token_keeps_the_event_loop_responsive(provider, id
     assert ticks > 5, f"event loop stalled while the JWKS host was slow (ticks={ticks})"
 
 
-async def test_claims_from_id_token_returns_none_when_the_jwks_host_is_down(provider, idp, cache):
+async def test_claims_from_id_token_returns_none_when_the_jwks_host_is_down(
+    provider, idp, cache, caplog
+):
+    """None is what the caller handles, and the log has to say the key endpoint failed
+    rather than leaving an operator to read a bad token."""
     doc = dict(idp.doc, jwks_uri=f"http://127.0.0.1:{_closed_port()}/jwks")
-    assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+    assert "could not load signing keys" in caplog.text
 
 
 async def test_discovery_fetches_and_caches(provider, idp, cache):

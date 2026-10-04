@@ -188,7 +188,9 @@ async def _jwks(
     if cached is not None:
         return cached
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        # `PyJWKClient` fetched through urllib, which follows redirects; httpx does not
+        # follow them by default.
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
             resp = await client.get(uri)
             resp.raise_for_status()
             keys = resp.json()
@@ -202,15 +204,21 @@ async def _jwks(
 
 
 def _signing_key(jwks_doc: dict[str, Any], id_token: str) -> jwt.PyJWK | None:
-    """The signing key whose kid the token names, or None when the set has no match."""
+    """The signing key whose kid the token names, or None when the set has no match.
+
+    Mirrors `jwt.PyJWKClient.get_signing_key`: only keys published for signing that carry a
+    kid are candidates, and the token's kid has to match one, so a token without a kid is
+    refused rather than verified against the sole published key.
+    """
     kid = jwt.get_unverified_header(id_token).get("kid")
     signing = [
-        k for k in jwt.PyJWKSet.from_dict(jwks_doc).keys if k.public_key_use in (None, "sig")
+        k
+        for k in jwt.PyJWKSet.from_dict(jwks_doc).keys
+        if k.public_key_use in (None, "sig") and k.key_id
     ]
     for key in signing:
         if key.key_id == kid:
             return key
-    return signing[0] if kid is None and len(signing) == 1 else None
 
 
 async def claims_from_id_token(
@@ -238,10 +246,11 @@ async def claims_from_id_token(
             issuer=issuer,
             options={"require": ["exp", "iss", "sub"]},
         )
-    except Exception:
+    except Exception as exc:
         logger.warning(
-            "id_token verification failed for provider %s",
+            "id_token verification failed for provider %s: %s",
             provider.id,
+            exc,
             exc_info=logger.isEnabledFor(logging.DEBUG),
         )
         return None
