@@ -190,13 +190,13 @@ async def exchange_code(
     except Exception as exc:
         # The body names the cause the status cannot ("invalid_grant" vs. a
         # rejected code_verifier); log-only, the redirect detail stays
-        # allowlisted. Newlines are flattened so a provider cannot forge lines.
+        # allowlisted. CR and LF are flattened so a provider cannot forge lines.
         body = getattr(getattr(exc, "response", None), "text", "")
         if body:
             logger.warning(
                 "oauth token endpoint error body provider=%s: %s",
                 provider.id,
-                body[:200].replace("\n", " "),
+                body[:200].replace("\r", " ").replace("\n", " "),
             )
         raise OAuthError(f"code exchange failed: {_failure_detail(exc)}") from exc
 

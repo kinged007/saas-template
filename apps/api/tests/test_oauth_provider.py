@@ -89,6 +89,9 @@ class _StubIdP:
         # Set by a test to make the well-known document answer with `broken_doc`
         # instead of an object, which a provider should never publish.
         self.broken_doc: Any = UNSET
+        # Set by a test to answer the bad-code token request with raw text of its
+        # own, so it can carry bytes json.dumps would escape.
+        self.token_error_body: str | None = None
         self.jwks_delay = 0.0
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -151,8 +154,10 @@ class _StubIdP:
             def log_message(self, fmt: str, *args: Any) -> None:
                 pass  # keep the access log out of the test output
 
-            def _send(self, code: int, payload: dict[str, Any]) -> None:
-                body = json.dumps(payload).encode()
+            # `raw` sends bytes verbatim; without it the payload is JSON, so a bare
+            # str stays a JSON string rather than becoming an unparseable body.
+            def _send(self, code: int, payload: Any, raw: str | None = None) -> None:
+                body = (raw if raw is not None else json.dumps(payload)).encode()
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -197,7 +202,7 @@ class _StubIdP:
                 form = parse_qs(self.rfile.read(length).decode())
                 stub.token_forms.append(form)
                 if form.get("code", [""])[0] == "bad-code":
-                    self._send(400, {"error": "invalid_grant"})
+                    self._send(400, {"error": "invalid_grant"}, stub.token_error_body)
                 else:
                     self._send(
                         200,
@@ -617,6 +622,26 @@ async def test_exchange_code_raises_on_provider_error(provider, idp, caplog):
             )
     # The body is what separates a rejected code_verifier from an expired code.
     assert "invalid_grant" in caplog.text
+
+
+async def test_exchange_code_flattens_cr_in_the_logged_provider_body(provider, idp, caplog):
+    """A bare CR overwrites the line it lands on, so it is flattened like the LF."""
+    idp.token_error_body = '{"error": "invalid_grant\rforged: 500"}'
+    try:
+        with caplog.at_level("WARNING", logger="src.services.oauth"):
+            with pytest.raises(OAuthError, match="code exchange failed"):
+                await exchange_code(
+                    provider,
+                    idp.doc,
+                    code="bad-code",
+                    redirect_uri=REDIRECT_URI,
+                    code_verifier="verifier-abc",
+                )
+    finally:
+        idp.token_error_body = None
+
+    assert "invalid_grant forged: 500" in caplog.text
+    assert "\r" not in caplog.text
 
 
 async def test_fetch_userinfo_sends_bearer_token(provider, idp):
