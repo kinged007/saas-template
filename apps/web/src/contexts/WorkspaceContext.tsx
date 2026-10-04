@@ -39,6 +39,9 @@ const WorkspaceContext = createContext<WorkspaceContextValue>({
 
 export const useWorkspace = () => useContext(WorkspaceContext);
 
+/** refine's `useGetIdentity` query key — the cache entry this provider reads. */
+const IDENTITY_QUERY_KEY = ["auth", "identity"] as const;
+
 // refine's useGetIdentity defaults to retry: false; a transient /me failure
 // would otherwise settle with no identity and mount pages without a workspace.
 // Shared by every useGetIdentity observer so they don't override each other's
@@ -68,21 +71,36 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // useSyncExternalStore subscription re-renders this provider whenever the
   // identity cache entry changes, so hydration propagates without an
   // observer of our own.
+
+  // react-query emits a cache event for the identity query from every
+  // QueryObserver.updateResult(), including the `new QueryObserver` that a
+  // useGetIdentity() consumer builds inside its OWN render. React compares the
+  // store snapshot against the value it committed last, which lags a render
+  // behind, so those observer-churn events made React schedule this provider's
+  // re-render while another component was rendering. Only a changed identity
+  // entry is news for this provider.
   const subscribeToIdentity = useCallback(
-    (onChange: () => void) =>
-      queryClient.getQueryCache().subscribe((event) => {
+    (onChange: () => void) => {
+      let last = queryClient.getQueryData(IDENTITY_QUERY_KEY);
+      return queryClient.getQueryCache().subscribe((event) => {
         if (
-          event.query.queryKey[0] === "auth" &&
-          event.query.queryKey[1] === "identity"
+          event.query.queryKey[0] !== "auth" ||
+          event.query.queryKey[1] !== "identity"
         ) {
-          onChange();
+          return;
         }
-      }),
+        const next = queryClient.getQueryData(IDENTITY_QUERY_KEY);
+        if (next === last) return;
+        last = next;
+        onChange();
+      });
+    },
     [queryClient],
   );
   const cachedIdentity = useSyncExternalStore(
     subscribeToIdentity,
-    () => queryClient.getQueryData<Identity & { workspaces: Workspace[] }>(["auth", "identity"]),
+    () =>
+      queryClient.getQueryData<Identity & { workspaces: Workspace[] }>(IDENTITY_QUERY_KEY),
     () => undefined,
   );
   // The identity cache is written a round-trip after the token, so on its own
@@ -115,7 +133,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         `${API_URL}/auth/me`,
       );
       identityStore.set(data);
-      queryClient.setQueryData(["auth", "identity"], data);
+      queryClient.setQueryData(IDENTITY_QUERY_KEY, data);
     } catch (e) {
       // 401s are handled by the httpClient interceptor (refresh, else clear
       // tokens + redirect to /login) — only surface non-auth failures here.
