@@ -63,6 +63,18 @@ const storage = createSafeStorage();
 type TokensListener = () => void;
 const tokensListeners = new Set<TokensListener>();
 
+// A throwing listener would skip every later listener and propagate out of
+// setTokens, breaking the sign-in path that triggered it.
+function notifyTokensChanged(): void {
+  tokensListeners.forEach((listener) => {
+    try {
+      listener();
+    } catch {
+      /* one bad subscriber must not break the rest */
+    }
+  });
+}
+
 // Access token lives in module memory only: the refresh token is an HttpOnly
 // cookie (JS can never read it) and nothing persistent may hold either token.
 let accessToken: string | null = null;
@@ -85,7 +97,7 @@ export const tokenStore = {
   setTokens: (access: string) => {
     accessToken = access;
     sessionHint.set();
-    tokensListeners.forEach((listener) => listener());
+    notifyTokensChanged();
   },
   clear: () => {
     accessToken = null;
@@ -96,7 +108,7 @@ export const tokenStore = {
     storage.remove(WORKSPACE_PREFIX + "legacy");
     storage.remove(LEGACY_WORKSPACE_KEY);
     storage.remove(PENDING_INVITATION_KEY);
-    tokensListeners.forEach((listener) => listener());
+    notifyTokensChanged();
   },
   /** Logout variant: also drops the signing-out user's workspace selection. */
   clearForUser: (userId?: string | null) => {
@@ -105,7 +117,7 @@ export const tokenStore = {
     sessionHint.clear();
     storage.remove(PENDING_INVITATION_KEY);
     workspaceStore.clear(userId);
-    tokensListeners.forEach((listener) => listener());
+    notifyTokensChanged();
   },
   /**
    * Subscribe to token changes (login, refresh, logout). Returns an

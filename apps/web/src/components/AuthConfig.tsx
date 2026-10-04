@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { authProvider, seedWorkspace } from "@/providers/authProvider";
+import { afterAuthRedirect, authProvider, seedWorkspace } from "@/providers/authProvider";
 import { API_URL, httpClient } from "@/providers/dataProvider";
 import { identityStore, tokenStore, workspaceStore } from "@/utils/storage";
 import { clearAllCaches, queryClient } from "@/providers/queryClient";
@@ -77,9 +78,21 @@ export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: str
   return {};
 }
 
+// Module scope, not the ref below: the workspace provider leaves its loading
+// gate as the identity settles, which unmounts and remounts this page with a
+// fresh ref while the URL still carries the code — the ref alone resets with
+// the instance and the code is exchanged twice.
+let consumedCode: string | null = null;
+
 export function OAuthCallbackPage() {
   const [status, setStatus] = useState("Signing you in…");
+  const navigate = useNavigate();
+  // StrictMode runs this effect twice in dev and the code is single-use, so a
+  // second exchange would race the first and report an expired code.
+  const exchanged = useRef(false);
   useEffect(() => {
+    if (exchanged.current) return;
+    exchanged.current = true;
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
     const error = params.get("error");
@@ -91,16 +104,22 @@ export function OAuthCallbackPage() {
       setStatus("Missing sign-in code.");
       return;
     }
+    if (consumedCode === code) return;
+    consumedCode = code;
     exchangeOAuthCode(code)
       .then((res) => {
         if (res.twoFactor) {
           window.location.assign(`/login?challenge=${encodeURIComponent(res.twoFactor)}`);
           return;
         }
-        window.location.assign("/");
+        // Client-side: the exchanged access token lives only in memory, so a
+        // hard load would drop it and force a /auth/refresh round trip.
+        // replace: this URL carries the now-consumed code — Back must not
+        // return to it and re-fire the exchange.
+        navigate(afterAuthRedirect(), { replace: true });
       })
       .catch(() => setStatus("Sign-in failed. The code may have expired."));
-  }, []);
+  }, [navigate]);
   void authProvider;
   return (
     <div className="bg-background flex min-h-screen items-center justify-center p-4">
