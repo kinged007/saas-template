@@ -225,6 +225,24 @@ async def test_list_query_rejects_mismatched_sort_and_order_lengths(app_client):
         assert "same number of entries" in resp.json()["detail"]
 
 
+async def test_list_query_rejects_order_without_sort(app_client):
+    """An order with no sort is malformed in either dialect (#968).
+
+    `order[]=desc` alone reached the length guard while `_order=desc` alone
+    parsed to an empty spec, so the same request was 422 or 200 depending on
+    the parameter spelling. Both dialects, plus the mixed pair, are rejected.
+    """
+    client = app_client
+    tokens = await register_user(client, "logan@example.com")
+    for query in ("order[]=desc", "_order=desc", "sort[]=name&_order=asc"):
+        resp = await client.get(
+            f"/api/v1/workspaces?{query}",
+            headers=auth_headers(tokens),
+        )
+        assert resp.status_code == 422, (query, resp.text)
+        assert "same number of entries" in resp.json()["detail"]
+
+
 async def test_simple_rest_range_pagination_query(app_client):
     """simple-rest's default server pagination (`_start`/`_end`) and comma-
     joined `_sort`/`_order`, plus its `id=` getMany format, must all parse."""
