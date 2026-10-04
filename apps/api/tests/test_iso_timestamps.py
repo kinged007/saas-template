@@ -33,10 +33,16 @@ ISO_PREFIX = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d")
 ISO_OFFSET = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$")
 
 # A receiver is fine when it already carries an offset. `p.date_of_birth` is a
-# `Date` column with none to give, and `key.expires_at` is the apikey.created
-# payload, which the open PR #561 serializes on its own.
+# `Date` column with none to give. `key.expires_at` is the `apikey.created`
+# payload, which #561 serializes on its own; that fix is on `main` and not yet
+# in this branch, so the site is exempted here until the merge lands.
 OK_CALL = re.compile(r"^(?:ensure_utc\(|now_utc\(|datetime\.now\(UTC\))")
-OK_FIELD = {"p.date_of_birth", "key.expires_at"}
+# Pinned to (path, line, receiver) so an exemption applies to the site that
+# justified it and to nothing else — and the guard fails when one moves.
+OK_SITE = {
+    ("services/serializers.py", 80, "p.date_of_birth"),
+    ("services/api_keys.py", 143, "key.expires_at"),
+}
 
 
 def assert_offset_aware(payload, where="$") -> None:
@@ -72,9 +78,16 @@ def test_iso_or_none_passes_none_through():
 
 
 def test_no_bare_isoformat_on_a_datetime_remains():
-    """A `grep` count drifts as other PRs land; this fails the moment one is added."""
+    """A `grep` count drifts as other PRs land; this fails the moment one is added.
+
+    Covers the `.isoformat()` shape only. A Pydantic `response_model` serializes
+    a naive datetime with no call to inspect, so the HTTP tests below are what
+    catch that class.
+    """
     offenders = []
+    exempted = set()
     for path in sorted(SRC.rglob("*.py")):
+        rel = path.relative_to(SRC).as_posix()
         for node in ast.walk(ast.parse(path.read_text())):
             if (
                 not isinstance(node, ast.Call)
@@ -83,10 +96,15 @@ def test_no_bare_isoformat_on_a_datetime_remains():
             ):
                 continue
             receiver = ast.unparse(node.func.value)
-            if OK_CALL.match(receiver) or receiver in OK_FIELD:
+            if OK_CALL.match(receiver):
                 continue
-            offenders.append(f"{path.relative_to(SRC)}:{node.lineno} {receiver}")
+            site = (rel, node.lineno, receiver)
+            if site in OK_SITE:
+                exempted.add(site)
+                continue
+            offenders.append(f"{rel}:{node.lineno} {receiver}")
     assert offenders == []
+    assert exempted == OK_SITE, f"exemptions that match no site: {OK_SITE - exempted}"
 
 
 # --------------------------------------------------------------------- HTTP level
@@ -187,6 +205,9 @@ async def test_workspace_families_carry_an_offset(app_client):
     ):
         await _assert_endpoint(client, "get", url, headers)
 
+    # Session-scoped, so it takes a session token rather than workspace headers.
+    await _assert_endpoint(client, "get", "/api/v1/auth/sessions", auth_headers(owner))
+
 
 async def test_conversation_families_carry_an_offset(app_client):
     client = app_client
@@ -229,6 +250,8 @@ async def test_job_and_webhook_families_carry_an_offset(app_client):
         if any(j["key"] == "iso.probe" for j in jobs):
             break
         await asyncio.sleep(0.1)
+    else:
+        raise AssertionError("iso.probe was never provisioned into the workspace")
     job = next(j for j in jobs if j["key"] == "iso.probe")
 
     started = await client.post(f"/api/v1/jobs/{job['id']}/execute", json={}, headers=headers)
@@ -239,6 +262,8 @@ async def test_job_and_webhook_families_carry_an_offset(app_client):
         if run["status"] in ("success", "failed", "timed_out"):
             break
         await asyncio.sleep(0.05)
+    else:
+        raise AssertionError(f"run {run_id} never settled: {run.get('status')}")
 
     subscription = await client.post(
         "/api/v1/webhooks/subscriptions",
@@ -292,6 +317,7 @@ async def test_export_json_and_csv_carry_an_offset(app_client):
     resources = (await client.get("/api/v1/workspaces/export/resources", headers=headers)).json()[
         "resources"
     ]
+    populated = 0
     for resource in resources:
         resp = await client.get(
             "/api/v1/workspaces/export",
@@ -299,5 +325,7 @@ async def test_export_json_and_csv_carry_an_offset(app_client):
             headers=headers,
         )
         assert resp.status_code == 200, (resource, resp.text)
-        for row in csv.DictReader(io.StringIO(resp.text)):
-            assert_offset_aware(row, f"export.csv:{resource}")
+        rows = list(csv.DictReader(io.StringIO(resp.text)))
+        assert_offset_aware(rows, f"export.csv:{resource}")
+        populated += bool(rows)
+    assert populated, "no export resource had a row, so the CSV check was vacuous"

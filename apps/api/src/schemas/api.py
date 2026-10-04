@@ -98,6 +98,9 @@ class ChangePasswordRequest(BaseModel):
     code: str | None = Field(default=None, min_length=6, max_length=10)
 
 
+# A `datetime` field re-serializes whatever the route hands it, and Pydantic
+# emits a naive value with no offset, so the route passes `iso_or_none(...)`.
+# Pydantic then restates the UTC instant with a `Z`, the same contract.
 class SessionRead(BaseModel):
     id: str
     created_at: datetime | None = None

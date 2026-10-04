@@ -35,6 +35,12 @@ as `api_version`.
   key's workspace, and an id matching no run — one answer for all three, so no
   pair of them tells the key which state produced it. A session caller still
   gets `404 "run not found"` for an id matching no run.
+- Every serialized datetime carries an explicit UTC offset:
+  `2026-01-01T00:00:00+00:00`, where it was `2026-01-01T00:00:00`. The instant
+  is unchanged and a client that parses the value is unaffected; a client that
+  compares timestamp strings byte-for-byte — including an importer matching an
+  exported bundle — sees the suffix. `/api/v1/auth/sessions` states the same
+  instant with `Z`, because Pydantic serializes that field itself.
 
 ## Response headers
 
