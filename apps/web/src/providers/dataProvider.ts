@@ -1,4 +1,4 @@
-import type { DataProvider } from "@refinedev/core";
+import type { BaseKey, BaseRecord, DataProvider, DeleteManyResponse } from "@refinedev/core";
 import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import dataProviderModule from "@refinedev/simple-rest";
 
@@ -186,6 +186,20 @@ httpClient.interceptors.response.use(
 
 const baseDataProvider = dataProviderModule(API_URL, httpClient);
 
+// simple-rest v6 does not implement deleteMany at all (its return type is
+// `Omit<Required<DataProvider>, "createMany" | "updateMany" | "deleteMany">`),
+// so without this the verb is missing from the provider and useDeleteMany
+// throws. The API has no bulk delete endpoint, so fan out over deleteOne.
+async function bulkDelete<TData extends BaseRecord>(
+  resource: string,
+  ids: BaseKey[],
+): Promise<DeleteManyResponse<TData>> {
+  const results = await Promise.all(
+    ids.map((id) => baseDataProvider.deleteOne<TData>({ resource, id })),
+  );
+  return { data: results.map(({ data }) => data) };
+}
+
 // `admin-workspaces` / `admin-audit` are virtual resources: the list views
 // read from the superuser-only GET /admin/* endpoints, which speak the same
 // offset/limit + X-Total-Count dialect as every other list endpoint.
@@ -241,6 +255,7 @@ export const dataProvider: DataProvider = {
     baseDataProvider.create({ resource: resourcePath(resource), ...params }),
   deleteOne: ({ resource, ...params }) =>
     baseDataProvider.deleteOne({ resource: resourcePath(resource), ...params }),
+  deleteMany: ({ resource, ids }) => bulkDelete(resourcePath(resource), ids),
   custom: async ({ url, ...params }) => {
     const resolved =
       !url || /^https?:\/\//.test(url) || url.startsWith("/")
