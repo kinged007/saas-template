@@ -84,11 +84,15 @@ class _StubIdP:
             (self.signing_key, KID, "RS256"),
             (self.ec_key, EC_KID, "ES256"),
         ]
-        # Set by a test to make /jwks-broken answer with an unusable set.
-        self.broken_jwks: dict[str, Any] | None = None
+        # Set by a test to make /jwks-broken answer with an unusable set, and
+        # UNSET once the set is usable again, so a JSON `null` set is expressible.
+        self.broken_jwks: Any = UNSET
         # Set by a test to make the well-known document answer with `broken_doc`
         # instead of an object, which a provider should never publish.
         self.broken_doc: Any = UNSET
+        # Set by a test to answer the good-code token request with something other
+        # than a token object, which a provider should never publish.
+        self.broken_tokens: Any = UNSET
         # Set by a test to answer the bad-code token request with raw text of its
         # own, so it can carry bytes json.dumps would escape.
         self.token_error_body: str | None = None
@@ -182,7 +186,8 @@ class _StubIdP:
                 elif self.path == "/jwks-broken":
                     # Answers with `broken_jwks` while a test holds one, so the IdP can
                     # be made to publish an unusable set and then repair itself.
-                    self._send(200, stub.broken_jwks or stub.published_jwks())
+                    body = stub.published_jwks() if stub.broken_jwks is UNSET else stub.broken_jwks
+                    self._send(200, body)
                 elif self.path == "/userinfo":
                     stub.auth_headers.append(self.headers.get("Authorization", ""))
                     self._send(
@@ -210,7 +215,9 @@ class _StubIdP:
                             "access_token": "at-stub",
                             "token_type": "Bearer",
                             "id_token": stub.mint(),
-                        },
+                        }
+                        if stub.broken_tokens is UNSET
+                        else stub.broken_tokens,
                     )
 
         return Handler
@@ -440,16 +447,16 @@ async def test_unusable_jwks_is_not_served_from_the_cache(provider, idp, cache):
     try:
         assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
         before = idp.hits.count("/jwks-broken")
-        idp.broken_jwks = None
+        idp.broken_jwks = UNSET
         claims = await claims_from_id_token(provider, doc, idp.mint(), cache)
     finally:
-        idp.broken_jwks = None
+        idp.broken_jwks = UNSET
     assert claims is not None
     assert claims["sub"] == "sub-1"
     assert idp.hits.count("/jwks-broken") == before + 1, "the bad set was served from the cache"
 
 
-async def test_jwks_without_a_usable_signing_key_is_not_cached(provider, idp, cache):
+async def test_jwks_without_a_usable_signing_key_is_not_cached(provider, idp, cache, caplog):
     """#1024: `from_dict` parses an encryption-only set, but `_signing_key` can never
     select from it, so caching it costs every later login a kid-miss refetch."""
     doc = dict(idp.doc, jwks_uri=f"{idp.base}/jwks-broken")
@@ -457,7 +464,11 @@ async def test_jwks_without_a_usable_signing_key_is_not_cached(provider, idp, ca
     enc_key["use"] = "enc"
     idp.broken_jwks = {"keys": [enc_key]}
     try:
-        assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+        with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+            assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+        # #1113: `_failure_detail` reduces anything without a status to its type
+        # name, so a gate raised inside the fetch try reached the log as "ValueError".
+        assert "no key published for signing" in caplog.text
         assert cache.get(f"oauth:jwks:{provider.id}") is None, "an unusable set was cached"
         before = idp.hits.count("/jwks-broken")
         for _ in range(3):
@@ -466,7 +477,22 @@ async def test_jwks_without_a_usable_signing_key_is_not_cached(provider, idp, ca
             "the cached set saved nothing, so each login paid a refetch on top of the cache hit"
         )
     finally:
-        idp.broken_jwks = None
+        idp.broken_jwks = UNSET
+
+
+@pytest.mark.parametrize("broken", [["not", "a", "dict"], "str", 42, None])
+async def test_jwks_refuses_a_key_set_that_is_not_an_object(provider, idp, cache, broken, caplog):
+    """#1112: `_jwks` is annotated `-> dict[str, Any]` while `resp.json()` is `Any`, so
+    the annotation has to be enforced here instead of left to `PyJWKSet.from_dict`."""
+    idp.broken_jwks = broken
+    doc = dict(idp.doc, jwks_uri=f"{idp.base}/jwks-broken")
+    try:
+        with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+            assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+    finally:
+        idp.broken_jwks = UNSET
+    assert "is not an object" in caplog.text
+    assert cache.get(f"oauth:jwks:{provider.id}") is None, "the bad key set was cached"
 
 
 async def test_claims_from_id_token_survives_a_non_string_jwks_uri(provider, idp, cache):
@@ -642,6 +668,24 @@ async def test_exchange_code_flattens_cr_in_the_logged_provider_body(provider, i
 
     assert "invalid_grant forged: 500" in caplog.text
     assert "\r" not in caplog.text
+
+
+@pytest.mark.parametrize("broken", [["not", "a", "dict"], "str", 42, None])
+async def test_exchange_code_refuses_a_response_that_is_not_an_object(provider, idp, broken):
+    """#1112: the callback catches only `OAuthError` and then reads `tokens.get(...)`, so
+    a non-object body has to fail here or its `AttributeError` escapes as a 500."""
+    idp.broken_tokens = broken
+    try:
+        with pytest.raises(OAuthError, match="is not an object"):
+            await exchange_code(
+                provider,
+                idp.doc,
+                code="good-code",
+                redirect_uri=REDIRECT_URI,
+                code_verifier="verifier-abc",
+            )
+    finally:
+        idp.broken_tokens = UNSET
 
 
 async def test_fetch_userinfo_sends_bearer_token(provider, idp):
