@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import math
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import (
     AnyHttpUrl,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     EmailStr,
     Field,
@@ -14,14 +16,49 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
+from pydantic_core import PydanticCustomError
 
 from src.core.dates import iso_or_none
+from src.models.api_key import QUOTA_MIN_MESSAGE
 
 # strip_whitespace runs before the length check, so padding is normalized on
 # write (names are compared exactly on read, e.g. the auto-join lookup) and a
 # name that is blank after stripping fails min_length. Only what every name
 # field shares lives here; the bound is per-field in Field(max_length=...).
 StrippedName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+def _quota_at_least_one(value: Any) -> Any:
+    """Refuse a quota below 1 ahead of the ge=1 bound, in the service's words.
+
+    A BeforeValidator sees the raw value, before pydantic coerces it to int, so
+    int, float and str all have to be read here: a client that sends "0" from a
+    form or a YAML config must get the same refusal as one that sends 0.
+
+    ApiKeyService raises QUOTA_MIN_MESSAGE for callers that never reach this
+    schema (seed data, direct service calls). PydanticCustomError keeps the 422
+    free of the "Value error," prefix pydantic adds to a plain ValueError, and
+    reusing the ge=1 code keeps the rest of the body identical to main, so only
+    the wording changes for a client.
+    """
+    if not isinstance(value, (int, float, str)):
+        return value  # null, a datetime, ...: leave the type to pydantic
+    try:
+        number = float(value)
+    except (ValueError, OverflowError):
+        # Not a number, or a JSON integer wider than a float64: leave it to
+        # pydantic rather than raise something it does not turn into a 422.
+        return value
+    if not math.isfinite(number) or not number.is_integer():
+        return value  # inf/nan is not a quota; 0.5 wants an int, not a bound
+    if number < 1:
+        raise PydanticCustomError("greater_than_equal", QUOTA_MIN_MESSAGE)
+    return value
+
+
+# BeforeValidator runs before the ge=1 bound on the fields below, so the 422
+# carries QUOTA_MIN_MESSAGE. ge=1 stays on the fields so OpenAPI states the bound.
+QuotaAtLeastOne = Annotated[int | None, BeforeValidator(_quota_at_least_one)]
 
 
 class LoginRequest(BaseModel):
@@ -170,7 +207,7 @@ class RoleUpdate(BaseModel):
 class ApiKeyCreate(BaseModel):
     name: StrippedName = Field(max_length=150)
     permissions: list[str] = Field(default_factory=list)
-    usage_quota: int | None = Field(default=None, ge=1)
+    usage_quota: QuotaAtLeastOne = Field(default=None, ge=1)
     # Optional hard expiry. Naive input is rejected: without an offset the
     # instant is ambiguous, and the service compares against UTC.
     expires_at: datetime | None = Field(default=None, examples=["2027-01-01T00:00:00Z"])
@@ -184,7 +221,7 @@ class ApiKeyCreate(BaseModel):
 
 
 class ApiKeyQuotaUpdate(BaseModel):
-    usage_quota: int | None = Field(default=None, ge=1)
+    usage_quota: QuotaAtLeastOne = Field(default=None, ge=1)
 
 
 class NotificationAck(BaseModel):
