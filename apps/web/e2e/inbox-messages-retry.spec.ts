@@ -17,7 +17,21 @@ const CONVERSATION = {
   updated_at: "2026-01-02T10:00:00Z",
 };
 
+const OTHER_CONVERSATION = { ...CONVERSATION, id: "conv-2", title: "Design review", last_message_preview: "looks good" };
+
 const MESSAGES = "**/api/v1/conversations/conv-1/messages**";
+
+// Enough rows to overflow the message pane: the pane auto-scrolls to the newest
+// message, so a caption rendered inside the scroller would sit off-screen.
+const MESSAGE_ROWS = Array.from({ length: 25 }, (_, i) => ({
+  id: `msg-${i + 1}`,
+  conversation_id: "conv-1",
+  sender_type: "user",
+  sender_id: "user-1",
+  sender_name: "E2E User",
+  body: `shipping friday #${i + 1}`,
+  created_at: "2026-01-02T10:00:00Z",
+}));
 
 /**
  * The message pane has no tripwire of its own — `queryClient.test.ts` pins that
@@ -67,5 +81,82 @@ test.describe("inbox message fetch", () => {
     await expect(page.getByText("No messages yet.")).toHaveCount(0);
     await page.waitForTimeout(5_000);
     expect(attempts).toBe(1);
+  });
+
+  /**
+   * A refetch that fails keeps the last successful `data` in the cache, so the
+   * pane stays usable — but it has to say the list is not live, and it has to say
+   * it where the user is looking. The pane holds more messages than fit and is
+   * scrolled to the newest, so the note belongs in the header: rendered inside
+   * the scroller it lands ~2200px above the viewport. The containment assertion
+   * below is what keeps it there.
+   */
+  test("a failed refetch keeps the messages and marks them stale", async ({ page }) => {
+    await mockApi(page, {
+      signedIn: true,
+      lists: { conversations: [CONVERSATION, OTHER_CONVERSATION] },
+    });
+    // Reopening a conversation remounts its observer, which refetches over the
+    // cached rows. That is the refetch under test; `refetchOnReconnect` needs
+    // `context.setOffline`, which does not reach the browser here — the window
+    // events it emits schedule no refetch on this headless build.
+    await page.route("**/api/v1/conversations/conv-2/messages**", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
+    );
+
+    // "ok" | "forbid" (4xx) | "fail" (transport)
+    let mode: "ok" | "forbid" | "fail" = "ok";
+    await page.route(MESSAGES, async (route) => {
+      if (mode === "fail") return route.abort("failed");
+      if (mode === "forbid") {
+        return route.fulfill({
+          status: 403,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "You do not have permission to perform this action." }),
+        });
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(MESSAGE_ROWS),
+      });
+    });
+
+    await page.goto("/inbox");
+    await page.getByRole("button", { name: /Release plan/ }).click();
+    // `.first()` — the markdown body renders more than one node with the same text.
+    await expect(page.getByText("shipping friday").first()).toBeVisible();
+
+    // A refusal is not stale data, so it must not read as "the last messages loaded".
+    mode = "forbid";
+    await page.getByRole("button", { name: /Design review/ }).click();
+    await page.getByRole("button", { name: /Release plan/ }).click();
+    await expect(page.getByText("Could not refresh messages.")).toBeVisible();
+    await expect(page.getByText("Showing the last messages loaded.")).toHaveCount(0);
+
+    mode = "fail";
+    await page.getByRole("button", { name: "Retry" }).click();
+    // The live region is always mounted and only its text toggles, so locate the
+    // region itself rather than the text node.
+    const staleNote = page.locator('[role="status"]', { hasText: "Showing the last messages loaded." });
+    await expect(staleNote).toBeVisible();
+    await expect(staleNote).toHaveAttribute("role", "status");
+    // The guard for the placement: `toBeVisible` and `toBeInViewport` both pass when the
+    // note is the first child of a pane that happens not to be scrolled. The page wrapper is
+    // itself `.overflow-y-auto`, so containment is measured against the scroller that holds
+    // the message rows — the one the note must not live in.
+    const noteSharesPaneWithMessages = await page
+      .getByText("shipping friday #25")
+      .first()
+      .evaluate((row, text) => Boolean(row.closest(".overflow-y-auto")?.textContent?.includes(text)), "Showing the last messages loaded.");
+    expect(noteSharesPaneWithMessages).toBe(false);
+    await expect(staleNote).toBeInViewport();
+    await expect(page.getByText("shipping friday").first()).toBeVisible();
+    // `text-destructive` stays reserved for the empty list, where nothing loaded.
+    await expect(page.getByText("Could not load messages.")).toHaveCount(0);
+
+    mode = "ok";
+    await page.getByRole("button", { name: "Retry" }).click();
+    await expect(staleNote).toHaveCount(0);
   });
 });
