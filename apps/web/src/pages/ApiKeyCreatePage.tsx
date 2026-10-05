@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   useCan,
   useCustom,
@@ -69,6 +69,18 @@ export function ApiKeyCreatePage() {
 
   const [created, setCreated] = useState<ApiKeyCreated | null>(null);
   const [copied, setCopied] = useState(false);
+  // One timer owns the 1.5 s confirmation: a second click restarts it instead of
+  // stacking one that ends it early, and it dies with the component.
+  const copyTimer = useRef<number | undefined>(undefined);
+  const clearCopied = () => {
+    window.clearTimeout(copyTimer.current);
+    setCopied(false);
+  };
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
+
+  // The copy icon flips to a check, so its accessible name follows; the pair the
+  // button keeps is `title` + `aria-label`, equal to each other (#332).
+  const copyLabel = copied ? "Copied" : "Copy API key";
 
   const {
     refineCore: { onFinish, formLoading },
@@ -117,9 +129,12 @@ export function ApiKeyCreatePage() {
 
   const copyKey = async () => {
     if (!created) return;
+    // Clear before the write so the previous window dies even if this one never
+    // reaches the clipboard.
+    window.clearTimeout(copyTimer.current);
     await navigator.clipboard.writeText(created.key);
     setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
   };
 
   return (
@@ -250,7 +265,13 @@ export function ApiKeyCreatePage() {
 
       <Dialog
         open={created !== null}
-        onOpenChange={(open) => !open && setCreated(null)}
+        onOpenChange={(open) => {
+          if (open) return;
+          // The dialog goes away with the key it copies, so the confirmation
+          // must not outlive it and greet the next created key.
+          clearCopied();
+          setCreated(null);
+        }}
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -268,7 +289,13 @@ export function ApiKeyCreatePage() {
                 value={created?.key ?? ""}
                 className="font-mono"
               />
-              <Button type="button" onClick={copyKey} variant="outline">
+              <Button
+                type="button"
+                onClick={copyKey}
+                variant="outline"
+                title={copyLabel}
+                aria-label={copyLabel}
+              >
                 {copied ? (
                   <Check className="h-4 w-4" />
                 ) : (

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   useCan,
   useCustom,
@@ -59,6 +59,14 @@ export function WebhookCreatePage() {
 
   const [created, setCreated] = useState<WebhookSubscriptionCreated | null>(null);
   const [copied, setCopied] = useState(false);
+  // One timer owns the 1.5 s confirmation: a second click restarts it instead of
+  // stacking one that ends it early, and it dies with the component.
+  const copyTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
+
+  // The copy icon flips to a check, so its accessible name follows; the pair the
+  // button keeps is `title` + `aria-label`, equal to each other (#332).
+  const copyLabel = copied ? "Copied" : "Copy signing secret";
 
   const {
     refineCore: { onFinish, formLoading },
@@ -188,11 +196,16 @@ export function WebhookCreatePage() {
             <Button
               variant="outline"
               size="sm"
+              title={copyLabel}
+              aria-label={copyLabel}
               onClick={async () => {
                 if (!created) return;
+                // Clear before the write so the previous window dies even if this
+                // one never reaches the clipboard.
+                window.clearTimeout(copyTimer.current);
                 await navigator.clipboard.writeText(created.secret);
                 setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
+                copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
               }}
             >
               {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
