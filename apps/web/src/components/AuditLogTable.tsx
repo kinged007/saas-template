@@ -75,6 +75,9 @@ export function AuditLogTable({
     pagination: { currentPage: current, pageSize: PAGE_SIZE, mode: "server" },
     filters,
     sorters: [{ field: "created_at", order: "desc" }],
+    // The failure row below reports the reason itself, so refine's error
+    // notification would only repeat it in a toast.
+    errorNotification: false,
   });
 
   const rows = result?.data ?? [];
