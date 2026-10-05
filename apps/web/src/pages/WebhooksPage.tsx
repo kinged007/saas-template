@@ -24,15 +24,22 @@ import { useWebhookDeliveries, useWebhookRedeliver } from "./webhooks-hooks";
 
 function DeliveryLog({ subscriptionId }: { subscriptionId: string }) {
   const { result, query } = useWebhookDeliveries(subscriptionId);
-  const { mutate: redeliver, mutation } = useWebhookRedeliver();
-  const rows = result?.data ?? [];
+  // The delivery log is a `useCustom` query, so the redeliver has to refetch
+  // it directly — invalidating the `webhooks` list key leaves it untouched.
+  const { mutate: redeliver, mutation } = useWebhookRedeliver(() => {
+    void query.refetch();
+  });
+  /* refine hands back a frozen empty object as `result.data` whenever the
+     query has no data — a disabled query reports neither loading nor error —
+     so the shape is checked before anything reaches `rows.map`. */
+  const rows = Array.isArray(result?.data) ? result.data : [];
 
   if (query.isLoading) {
     return <p className="text-muted-foreground text-sm">Loading deliveries…</p>;
   }
-  /* refine hands back an empty object as `result.data` when the request
-     failed, so this branch also keeps the table from rendering. */
-  if (query.isError) {
+  /* A failed refetch keeps the rows react-query already had, and stale rows
+     beat an error message; only a load that produced no data at all is one. */
+  if (query.isError && !Array.isArray(result?.data)) {
     return (
       <p className="text-destructive text-sm">
         Could not load deliveries: {query.error?.message ?? "Unknown error"}

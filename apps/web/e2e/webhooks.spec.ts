@@ -23,6 +23,21 @@ const SUBSCRIPTION = {
   created_at: "2026-01-01T00:00:00Z",
 };
 
+const DELIVERIES = "/api/v1/webhooks/deliveries";
+
+const DELIVERY = {
+  id: "del-1",
+  subscription_id: "sub-1",
+  workspace_id: "ws-1",
+  event_type: "apikey.created",
+  subject: "apikey/ak-1",
+  status: "failed",
+  attempt_count: 3,
+  response_status: 500,
+  error: "Upstream returned 500",
+  created_at: "2026-01-02T00:00:00Z",
+};
+
 const COLLECTION = "/api/v1/webhooks/subscriptions";
 
 /**
@@ -124,6 +139,71 @@ test.describe("webhooks page", () => {
     await expect(row).toBeVisible();
     await expect(row).toContainText("Boom");
     await expect(page.getByText("No deliveries yet.")).toHaveCount(0);
+  });
+
+  test("a deliveries payload that is not an array renders the empty state", async ({ page }) => {
+    await webhooks(page);
+    await subscriptions(page, 200, [SUBSCRIPTION]);
+    // refine hands back a frozen empty object as `result.data` when the query
+    // has no data (a disabled query reports neither loading nor error), so a
+    // non-array has to survive the render instead of reaching `rows.map`.
+    await page.route(
+      (url) => url.pathname.startsWith(DELIVERIES),
+      (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ deliveries: [] }),
+        }),
+    );
+
+    await page.goto("/webhooks");
+    await page.getByRole("button", { name: "Delivery log" }).click();
+
+    await expect(page.getByText("No deliveries yet.")).toBeVisible();
+  });
+
+  test("a redeliver refetches the log, and a failed refetch keeps the rows", async ({ page }) => {
+    await webhooks(page);
+    await subscriptions(page, 200, [SUBSCRIPTION]);
+    let queued = false;
+    let readsAfterQueue = 0;
+    await page.route(
+      (url) => url.pathname.startsWith(DELIVERIES),
+      (route) => {
+        if (route.request().method() === "POST") {
+          queued = true;
+          return route.fulfill({ status: 202, contentType: "application/json", body: "{}" });
+        }
+        // The refetch fails while the rows it had are still good. A 403 is used
+        // over a 500 because a client error skips react-query's retry budget
+        // and lands in `isError` at once.
+        if (queued) readsAfterQueue += 1;
+        return route.fulfill({
+          status: queued ? 403 : 200,
+          contentType: "application/json",
+          body: queued
+            ? JSON.stringify({ detail: "Not allowed to read deliveries" })
+            : JSON.stringify([DELIVERY]),
+        });
+      },
+    );
+
+    await page.goto("/webhooks");
+    await page.getByRole("button", { name: "Delivery log" }).click();
+    // The delivery row carries its error text, which the subscription row has
+    // no cell for. `.last()` because the log renders inside the subscription
+    // row, so the filter also matches that outer row.
+    const row = page.getByRole("row").filter({ hasText: DELIVERY.error }).last();
+    await expect(row).toBeVisible();
+
+    await page.getByRole("button", { name: "Redeliver" }).click();
+
+    // The redeliver targets the deliveries query itself, so the log refetches…
+    await expect.poll(() => readsAfterQueue).toBeGreaterThan(0);
+    // …and the failed refetch leaves the rows it already had on screen.
+    await expect(row).toBeVisible();
+    await expect(page.getByText("Could not load deliveries")).toHaveCount(0);
   });
 
   test("create and delete target the same collection", async ({ page }) => {
