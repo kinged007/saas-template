@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-MAKE = shutil.which("make")
+MAKE = shutil.which("make") or pytest.skip("make not installed", allow_module_level=True)
 
 
 @pytest.fixture(autouse=True)
