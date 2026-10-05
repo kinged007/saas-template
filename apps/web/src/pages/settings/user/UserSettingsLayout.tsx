@@ -20,6 +20,9 @@ import { userSettings } from "./registry";
  */
 export function UserSettingsLayout() {
   const { id = "" } = useParams();
+  // Above the guard: a hook the loading render skips and the resolved render
+  // calls changes the hook list on the same fiber.
+  const { pathname } = useLocation();
   const { data: identity, isLoading } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
 
   // The guard reads permissions off identity, so it must not run before
@@ -35,7 +38,7 @@ export function UserSettingsLayout() {
   const can = (permission?: string) =>
     !permission || perms.includes("*") || perms.includes(permission);
 
-  const requested = useLocation().pathname.split("/").pop() ?? "";
+  const requested = pathname.split("/").pop() ?? "";
   if (id && id === identity.id) {
     const tab = userSettings.sections.some((s) => s.key === requested) ? requested : "general";
     return <Navigate to={`/settings/profile/${tab}`} replace />;
