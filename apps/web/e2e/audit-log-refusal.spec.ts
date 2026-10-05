@@ -26,9 +26,18 @@ test.describe("audit log fetch", () => {
 
     const failure = page.getByRole("row").filter({ hasText: "Could not load audit entries." });
     await expect(failure).toBeVisible();
-    // Scoped to the row: refine's error notification repeats the same message
-    // in a toast, so an unscoped getByText resolves to two elements.
-    await expect(failure).toContainText("You do not have permission to perform this action.");
+    // Unscoped: refine's error toast used to repeat the reason, which forced a
+    // row-scoped locator here. The row keeps the server's detail — it is the
+    // only thing that tells the user why the query failed.
+    await expect(
+      page.getByText(/Could not load audit entries\. You do not have permission/),
+    ).toHaveCount(1);
+    // And the toast must not repeat it. The wait covers the effect that raises
+    // the notification after the row paints, and the count is read once: the
+    // toast clears about a second later, and a retrying assertion would pass on
+    // the dismissed toast.
+    await page.waitForTimeout(500);
+    expect(await page.locator("[data-sonner-toast]").count()).toBe(0);
     await expect(page.getByText("No audit entries yet.")).toHaveCount(0);
     // The footer counts rows it never received, so a refused query drops it
     // rather than asserting "0 entries" under the failure row.
