@@ -10,9 +10,9 @@ import { ACCESS_TOKEN, mockApi } from "./mock-api";
  * outgoing selection reaches the wire even on a cold page load with no
  * in-memory session.
  *
- * Exercised through the 2FA verify POST because that is the credential request
- * sent through httpClient; login and register POST through raw fetch with a
- * fixed header set, and the OAuth exchange needs a configured provider.
+ * login and register POST through raw fetch with a fixed header set, so the two
+ * paths that go through httpClient are covered here: the 2FA verify POST and the
+ * OAuth code exchange.
  *
  * Every API call is mocked, so no backend (and no DATABASE_URL) is needed.
  */
@@ -21,29 +21,55 @@ const OUTGOING_WORKSPACE = "ws-outgoing";
 
 const path = (page: Page) => expect.poll(() => new URL(page.url()).pathname);
 
+/**
+ * A previous sign-in left its workspace selection in localStorage. Nothing has
+ * hydrated it into memory, which is exactly the cold-load shape the
+ * interceptor's store fallback exists for.
+ */
+function seedOutgoingSelection(page: Page) {
+  return page.addInitScript(
+    ({ userId, workspaceId }) => {
+      window.localStorage.setItem(
+        "tf_identity",
+        JSON.stringify({ id: userId, email: "outgoing@example.com", workspaces: [] }),
+      );
+      window.localStorage.setItem(`tf_workspace_id:${userId}`, workspaceId);
+    },
+    { userId: OUTGOING_USER, workspaceId: OUTGOING_WORKSPACE },
+  );
+}
+
+function recordAuthRequests(page: Page) {
+  const authRequests: { path: string; workspace: string | undefined }[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.startsWith("/api/v1/auth/")) {
+      authRequests.push({ path: url.pathname, workspace: request.headers()["x-workspace-id"] });
+    }
+  });
+  return authRequests;
+}
+
+/**
+ * The credential POST carries no workspace header, and neither does anything
+ * after it in the round trip. Boot traffic before the sign-in was requested is
+ * out of scope: nothing has signed out yet at that point.
+ */
+function expectNoOutgoingWorkspace(
+  authRequests: { path: string; workspace: string | undefined }[],
+  credentialPath: string,
+) {
+  const credentialPost = authRequests.findIndex((r) => r.path === credentialPath);
+  expect(credentialPost).toBeGreaterThanOrEqual(0);
+  expect(authRequests[credentialPost].workspace).toBeUndefined();
+  expect(authRequests.slice(credentialPost).filter((r) => r.workspace === OUTGOING_WORKSPACE)).toEqual([]);
+}
+
 test.describe("sign-in credential requests", () => {
   test("the 2FA verify POST carries no workspace header from the outgoing session", async ({ page }) => {
     const api = await mockApi(page, { signedIn: false });
-    // A previous sign-in left its workspace selection in localStorage. Nothing
-    // has hydrated it into memory, which is exactly the cold-load shape the
-    // interceptor's store fallback exists for.
-    await page.addInitScript(
-      ({ userId, workspaceId }) => {
-        window.localStorage.setItem(
-          "tf_identity",
-          JSON.stringify({ id: userId, email: "outgoing@example.com", workspaces: [] }),
-        );
-        window.localStorage.setItem(`tf_workspace_id:${userId}`, workspaceId);
-      },
-      { userId: OUTGOING_USER, workspaceId: OUTGOING_WORKSPACE },
-    );
-    const authRequests: { path: string; workspace: string | undefined }[] = [];
-    page.on("request", (request) => {
-      const url = new URL(request.url());
-      if (url.pathname.startsWith("/api/v1/auth/")) {
-        authRequests.push({ path: url.pathname, workspace: request.headers()["x-workspace-id"] });
-      }
-    });
+    await seedOutgoingSelection(page);
+    const authRequests = recordAuthRequests(page);
     // Registered after mockApi, so it takes precedence over its catch-all.
     await page.route("**/api/v1/auth/2fa/login", (route) =>
       route.fulfill({
@@ -61,13 +87,21 @@ test.describe("sign-in credential requests", () => {
     await page.getByRole("button", { name: "Verify" }).click();
 
     await path(page).not.toBe("/login");
-    // The credential POST and everything it is followed by — the outgoing
-    // workspace must not be back on the wire during the sign-in round trip.
-    // Boot traffic before the form was submitted is out of scope: nothing has
-    // signed out yet at that point.
-    const credentialPost = authRequests.findIndex((r) => r.path === "/api/v1/auth/2fa/login");
-    expect(credentialPost).toBeGreaterThanOrEqual(0);
-    expect(authRequests[credentialPost].workspace).toBeUndefined();
-    expect(authRequests.slice(credentialPost).filter((r) => r.workspace === OUTGOING_WORKSPACE)).toEqual([]);
+    expectNoOutgoingWorkspace(authRequests, "/api/v1/auth/2fa/login");
+  });
+
+  test("the OAuth code exchange carries no workspace header from the outgoing session", async ({
+    page,
+  }) => {
+    await mockApi(page, { signedIn: false });
+    await seedOutgoingSelection(page);
+    const authRequests = recordAuthRequests(page);
+
+    await page.goto("/oauth/callback?code=code-123");
+
+    // The exchange stores the access token and lands on the dashboard, so the
+    // code was redeemed.
+    await path(page).not.toBe("/oauth/callback");
+    expectNoOutgoingWorkspace(authRequests, "/api/v1/auth/oauth/token");
   });
 });
