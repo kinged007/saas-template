@@ -2,6 +2,21 @@
 
 Deliberately dependency-free (no slowapi/redis): a locked dict of per-key
 failure timestamps. Single-process only.
+
+`fail(key)` marks a request that did not authenticate, so a 401 on a throttled
+entry point is no proof that its key was charged. Branches leave the budget
+intact for two unrelated reasons:
+
+- On purpose, because the credentials were accepted and the caller is not
+  finished: the 2FA challenge on POST /auth/login, and the OAuth callback's
+  error redirect for an account that is gone.
+- Because that branch never charges: /auth/2fa/login's 401s raised before
+  `check` (challenge-token guessing is unthrottled by this limiter) and by
+  `verify_login_code`, where only a rejected code charges, on `ip:<user_id>`
+  rather than on login's `ip:<email>`. Every OAuth route likewise calls `check`
+  and no `fail`.
+
+Read the route, not this list, before adding a `fail`.
 # ponytail: ceiling is one replica; move to Redis when the API scales out.
 """
 

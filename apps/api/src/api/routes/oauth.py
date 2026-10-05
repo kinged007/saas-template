@@ -110,6 +110,8 @@ async def oauth_callback(
     db: AsyncSession = Depends(get_db),
 ):
     get_auth_limiter().check(f"oauth:{_client_ip(request) or 'unknown'}:{provider_id}")
+    # Checks a bucket this module never charges; see the rule in
+    # src/core/security/ratelimit.py.
     container = get_container(request)
     code = request.query_params.get("code")
     state = request.query_params.get("state")

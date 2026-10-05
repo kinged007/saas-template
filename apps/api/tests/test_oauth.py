@@ -362,9 +362,12 @@ async def test_oauth_2fa_user_is_joined(app_client, oauth_on, monkeypatch):
 
 async def test_oauth_callback_account_gone_redirects(app_client, oauth_on, monkeypatch):
     # The join's "account no longer exists" guard must leave the browser flow
-    # as a redirect, not a JSON 401 body mid-redirect.
+    # as a redirect, not a JSON 401 body mid-redirect. It is deliberately
+    # uncharged (see the rule in src/core/security/ratelimit.py), so even with
+    # a budget of one neither attempt may trip a 429.
     from src.services.auth import AuthService
 
+    monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 1)
     monkeypatch.setattr(settings, "single_workspace", True)
     await break_single_workspace_join(app_client)
     _mock_oauth(monkeypatch)
@@ -373,9 +376,10 @@ async def test_oauth_callback_account_gone_redirects(app_client, oauth_on, monke
         return None
 
     monkeypatch.setattr(AuthService, "get_user", gone)
-    _, resp = await _callback(app_client, monkeypatch)
-    assert resp.status_code == 302
-    assert resp.headers["location"] == "http://localhost:5173/login?error=sign-in%20failed"
+    for _ in range(2):
+        _, resp = await _callback(app_client, monkeypatch)
+        assert resp.status_code == 302, resp.text
+        assert resp.headers["location"] == "http://localhost:5173/login?error=sign-in%20failed"
 
 
 async def test_oauth_new_user_blocked_when_registration_disabled(app_client, oauth_on, monkeypatch):

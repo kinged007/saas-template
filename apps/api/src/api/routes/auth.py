@@ -301,6 +301,10 @@ async def login(
         raise
     get_auth_limiter().reset(key)
     if user.totp_enabled:
+        # Deliberately uncharged, unlike the 401s above: the password was
+        # right and the caller still owes the second factor. The guesses that
+        # do matter are a rejected code, charged on ip:<user_id> rather than
+        # this key. See the rule in src/core/security/ratelimit.py.
         challenge = TwoFactorService(db, container.cipher, container.bus).issue_challenge(user.id)
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
