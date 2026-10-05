@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { afterAuthRedirect, authProvider, seedWorkspace } from "@/providers/authProvider";
 import { API_URL, httpClient } from "@/providers/dataProvider";
-import { identityStore, resetSessionState, tokenStore } from "@/utils/storage";
+import { identityStore, tokenStore } from "@/utils/storage";
+import { postCredentials } from "@/utils/credentialPost";
 import { clearAllCaches, queryClient } from "@/providers/queryClient";
 
 export type AuthConfig = {
@@ -60,12 +61,13 @@ export function SsoButtons({ providers, disabled }: { providers: AuthConfig["pro
 
 /** Exchange the one-time OAuth code for tokens, then seed identity/workspace like login. */
 export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: string }> {
-  const { data } = await httpClient.post(`${API_URL}/auth/oauth/token`, {
-    code,
-    use_cookies: true,
-  });
+  const { data } = await postCredentials(() =>
+    httpClient.post(`${API_URL}/auth/oauth/token`, {
+      code,
+      use_cookies: true,
+    }),
+  );
   if (data.two_factor_required) return { twoFactor: data.challenge_token as string };
-  resetSessionState();
   clearAllCaches(queryClient);
   // Refresh token is in the HttpOnly cookie; only the access token is stored.
   tokenStore.setTokens(data.access_token);

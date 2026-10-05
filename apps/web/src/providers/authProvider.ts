@@ -5,12 +5,12 @@ import { API_URL, cancelPendingRefresh, ensureSession, httpClient } from "./data
 import {
   identityStore,
   pendingInvitationStore,
-  resetSessionState,
   returnToStore,
   tokenStore,
   workspaceStore,
   setActiveWorkspaceId,
 } from "../utils/storage";
+import { postCredentials } from "../utils/credentialPost";
 import { clearAllCaches, queryClient } from "./queryClient";
 import type { Identity } from "../types";
 
@@ -79,7 +79,9 @@ export const afterAuthRedirect = () => {
 export const authProvider: AuthProvider = {
   login: async ({ email, password }) => {
     try {
-      const tokens = await post("/auth/login", { email, password, use_cookies: true }).catch((err: unknown) => {
+      const tokens = await postCredentials(() =>
+        post("/auth/login", { email, password, use_cookies: true }),
+      ).catch((err: unknown) => {
         // 2FA challenge: raw fetch stringifies an object detail — recover the
         // payload from the message when it parses as the challenge shape.
         const msg = (err as Error)?.message ?? "";
@@ -104,13 +106,12 @@ export const authProvider: AuthProvider = {
           error: new Error("2fa_required:" + (tokens as { __challenge: string }).__challenge),
         };
       }
-      // Drop the previous session's caches, workspace selection, and cached
-      // identity before storing the new tokens: refine navigates to "/"
+      // The identity reset already ran, ahead of the POST (postCredentials).
+      // Caches go now, before the new tokens land: refine navigates to "/"
       // immediately and only invalidates the identity query ~32ms later, so
-      // without this the app would mount with the previous user's workspace
-      // id and rows (dashboard empty / notifications from the old workspace).
+      // without this the app would mount with the previous user's rows
+      // (dashboard empty / notifications from the old workspace).
       // Unconditional — a no-op when logout already cleared.
-      resetSessionState();
       clearAllCaches(queryClient);
       tokenStore.setTokens(tokens.access_token);
       try {
@@ -142,9 +143,10 @@ export const authProvider: AuthProvider = {
       if (first_name) body.first_name = first_name;
       if (last_name) body.last_name = last_name;
       if (display_name && !body.display_name) body.display_name = display_name;
-      const tokens = await post("/auth/register", { ...body, use_cookies: true });
-      // Same stale-session reset + workspace seed as login, via resetSessionState().
-      resetSessionState();
+      const tokens = await postCredentials(() =>
+        post("/auth/register", { ...body, use_cookies: true }),
+      );
+      // Same cache reset + workspace seed as login.
       clearAllCaches(queryClient);
       tokenStore.setTokens(tokens.access_token);
       try {

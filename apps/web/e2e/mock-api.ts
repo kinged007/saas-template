@@ -53,6 +53,12 @@ export async function mockApi(
       if (!session.signedIn) return reply(401, { detail: "Not authenticated" });
       return reply(200, identity);
     }
+    if (pathname.endsWith("/auth/oauth/token")) {
+      // The exchange is what establishes the session, so the /auth/me the
+      // callback page sends next is already authenticated.
+      session.signedIn = true;
+      return reply(200, { access_token: ACCESS_TOKEN, token_type: "bearer" });
+    }
     if (pathname.endsWith("/auth/config")) {
       return reply(200, {
         registration_enabled: true,
