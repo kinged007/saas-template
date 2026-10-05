@@ -32,7 +32,7 @@ import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceConte
 import { canResendInvitation, canRevokeInvitation, invitationStatus } from "./invitation-actions";
 import { resolveInviteRole } from "./invite-role";
 import { canReactivateMember, canSuspendMember } from "./member-actions";
-import { assignableRoles, roleCapNoticeText, rolePickerCapNotice } from "./role-picker-cap";
+import { assignableRoles, rolePickerCapNotice } from "./role-picker-cap";
 import { isWorkspaceAdmin } from "./settings/workspace/WorkspaceSettingsLayout";
 import { isManagerRoleName, isOwnerRoleName } from "./role-name";
 import type { Identity, Invitation, Member, Role } from "../types";
@@ -136,7 +136,7 @@ export function MembersPage() {
   // The pickers and the notice count this one list, so the notice can never
   // claim a role the dropdown does not offer.
   const assignable = assignableRoles(roleOptions);
-  const roleCapNotice = roleCapNoticeText(rolePickerCapNotice(rolesResult?.total ?? 0, roleOptions));
+  const roleCapNotice = rolePickerCapNotice(rolesResult?.total ?? 0, roleOptions);
 
   useEffect(() => {
     if (membersPage > membersTotalPages) setMembersPage(membersTotalPages);
