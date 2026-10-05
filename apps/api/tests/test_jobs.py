@@ -163,6 +163,36 @@ async def test_global_jobs_require_superuser(app_client):
     assert denied.status_code == 403
 
 
+async def test_global_execute_of_a_workspace_definition_is_unaffected(app_client):
+    """The /jobs/global execute route resolves its definition with no
+    workspace filter, so a superuser may run a workspace-owned definition
+    through it; an id that matches nothing is still the 404. Pins the
+    behaviour of `_admin_definition_or_404` once its cross-workspace branch
+    was dead code and removed. Regression test for #1121.
+    """
+    import uuid
+
+    client = app_client
+    owner, _, headers, _ = await setup_workspace(client, "globalrun-owner@example.com")
+    job = _by_key((await client.get("/api/v1/jobs", headers=headers)).json(), "test.echo")
+
+    tokens = await register_user(client, "root@example.com")  # SUPERADMIN_EMAIL account
+    gh = auth_headers(tokens)
+
+    resp = await client.post(f"/api/v1/jobs/global/{job['id']}/execute", json={}, headers=gh)
+    assert resp.status_code == 201, resp.text
+    run = resp.json()
+    assert run["definition_id"] == job["id"], run
+    # The run belongs to the definition's workspace, so the superuser cannot
+    # read it back — the workspace owner can, and it really executed.
+    finished = await wait_for_terminal(client, auth_headers(owner), run["id"])
+    assert finished["status"] == "success", finished
+
+    missing = await client.post(f"/api/v1/jobs/global/{uuid.uuid4()}/execute", json={}, headers=gh)
+    assert missing.status_code == 404, missing.text
+    assert missing.json()["detail"] == "job not found"
+
+
 async def test_registration_grants_superuser_only_to_configured_email(app_client):
     client = app_client
     tokens = await register_user(client, "root@example.com")
