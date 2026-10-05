@@ -65,13 +65,17 @@ type TokensListener = () => void;
 const tokensListeners = new Set<TokensListener>();
 
 // A throwing listener would skip every later listener and propagate out of
-// setTokens, breaking the sign-in path that triggered it.
+// setTokens, breaking the sign-in path that triggered it. So the error is
+// swallowed, but never silently: dev logs the subscriber and its error
+// (process.env.NODE_ENV is inlined by Vite, so this drops out of a build).
 function notifyTokensChanged(): void {
   tokensListeners.forEach((listener) => {
     try {
       listener();
-    } catch {
-      /* one bad subscriber must not break the rest */
+    } catch (e) {
+      if (process.env.NODE_ENV !== "production") {
+        console.error("[tokenStore] listener threw", listener, e);
+      }
     }
   });
 }
