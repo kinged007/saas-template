@@ -7,6 +7,7 @@ import { adminListQuery } from "./adminListQuery";
 import { clearAllCaches, queryClient } from "./queryClient";
 import { hasReadById, resourcePath } from "./resourcePaths";
 import { withRefreshLock } from "./refreshLock";
+import { normalizeSorters } from "./sorters.ts";
 
 // Same-origin API path: the vite dev proxy (and nginx in production) forwards
 // /api → backend, so no CORS/absolute-URL issues regardless of how the app is
@@ -231,7 +232,14 @@ export const dataProvider: DataProvider = {
   getList: ({ resource, ...params }) => {
     const admin = (adminLists as Record<string, DataProvider["getList"]>)[resource];
     if (admin) return admin({ resource, ...params });
-    return baseDataProvider.getList({ resource: resourcePath(resource), ...params });
+    // simple-rest's `generateSort` pushes `item.order` unconditionally, so
+    // a directionless sorter would serialise `_order=undefined` and the API
+    // answers 422. Fill the API default (`asc`) before delegating.
+    return baseDataProvider.getList({
+      resource: resourcePath(resource),
+      ...params,
+      sorters: normalizeSorters(params.sorters),
+    });
   },
   getOne: async ({ resource, ...params }) => {
     if (!hasReadById(resource)) {
