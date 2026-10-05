@@ -329,29 +329,35 @@ async def test_role_changed_body_never_names_an_unknown_role():
         "Test U. changed your role from a previous role to owner."
     )
     # A null to_role names no destination, so the clause is dropped rather
-    # than filled with a placeholder that reads like a role.
-    assert await _emit(from_role="editor", to_role=None) == "Test U. changed your role."
+    # than filled with a placeholder that reads like a role. The known
+    # from_role still has a name to print, so it stays in the sentence.
+    assert await _emit(from_role="editor", to_role=None) == (
+        "Test U. changed your role from editor."
+    )
+    # Neither role name is known, so there is nothing to print but the fact.
+    assert await _emit(from_role=None, to_role=None) == "Test U. changed your role."
     # The member is the actor: nobody is named, and the two preserved
     # wordings and the null-to_role wording are locked together.
     assert await _emit(self_change=True, from_role="editor", to_role="viewer") == (
         "Your role is now viewer."
     )
-    assert await _emit(self_change=True, from_role="owner", to_role="admin") == (
-        "You transferred ownership. Your role is now admin."
-    )
-    assert await _emit(self_change=True, from_role="owner", to_role=None) == (
-        "You transferred ownership."
-    )
+    assert await _emit(
+        self_change=True, reason="ownership_transfer", from_role="owner", to_role="admin"
+    ) == ("You transferred ownership. Your role is now admin.")
+    assert await _emit(
+        self_change=True, reason="ownership_transfer", from_role="owner", to_role=None
+    ) == ("You transferred ownership.")
     assert await _emit(self_change=True, from_role="editor", to_role=None) == (
         "Your role was changed."
     )
 
 
-async def test_role_changed_from_legacy_owner_names_the_transfer():
-    """A self-change from the case-variant `Owner` row is still a transfer (#593).
+async def test_role_changed_transfer_comes_from_the_reason_not_the_role_name():
+    """The transfer wording needs the event reason, whatever the role is named (#544).
 
-    `set_member_role` refuses to touch the owner role, so a self-change from a
-    role named `Owner` is a transfer the same way a self-change from `owner` is.
+    The wording used to be derived from `from_role` being the owner role, which
+    reads a workspace that renames or omits the `owner` row as a transfer. The
+    publisher says so instead, and the handler takes its word for it.
     """
     from src.events.bus import EventMetadata
     from src.events.subjects import Subjects
@@ -366,22 +372,30 @@ async def test_role_changed_from_legacy_owner_names_the_transfer():
 
     registry = _CaptureRegistry()
     build_workflows(registry, None, None)
-    user_id = str(uuid.uuid4())
-    await registry.handlers[Subjects.WORKSPACE_MEMBER_ROLE_CHANGED](
-        {
-            "workspace_id": str(uuid.uuid4()),
-            "workspace_name": "Acme Corp",
-            "user_id": user_id,
-            "from_role": "Owner",
-            "to_role": "admin",
-            "changed_by_user_id": user_id,
-            "changed_by_name": "Test U.",
-        },
-        EventMetadata(subject=Subjects.WORKSPACE_MEMBER_ROLE_CHANGED),
-    )
+    handler = registry.handlers[Subjects.WORKSPACE_MEMBER_ROLE_CHANGED]
 
-    row = await _latest_role_change(user_id)
-    assert row.body == "You transferred ownership. Your role is now admin."
+    async def _emit(**roles) -> str:
+        user_id = str(uuid.uuid4())
+        await handler(
+            {
+                "workspace_id": str(uuid.uuid4()),
+                "workspace_name": "Acme Corp",
+                "user_id": user_id,
+                "changed_by_user_id": user_id,
+                "changed_by_name": "Test U.",
+                **roles,
+            },
+            EventMetadata(subject=Subjects.WORKSPACE_MEMBER_ROLE_CHANGED),
+        )
+        return (await _latest_role_change(user_id)).body
+
+    # A workspace whose owner row is named `Owner` transfers like any other:
+    # the reason decides, the name does not.
+    assert await _emit(reason="ownership_transfer", from_role="Owner", to_role="admin") == (
+        "You transferred ownership. Your role is now admin."
+    )
+    # Without the reason, a role named like an owner is an ordinary self-change.
+    assert await _emit(from_role="owner", to_role="admin") == "Your role is now admin."
 
 
 async def test_member_removed_notifies_the_removed_member(app_client):
