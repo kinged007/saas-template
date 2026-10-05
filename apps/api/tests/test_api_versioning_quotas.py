@@ -19,6 +19,19 @@ def _quota_msg(resp) -> str:
     return detail[0]["msg"]
 
 
+# Pinned deliberately, like QUOTA_MIN_MESSAGE above: the words an HTTP caller
+# reads for a quota the storage column cannot hold (sa.Integer is int32 on the
+# default PostgreSQL, so anything above 2**31-1 never reaches the column).
+QUOTA_MAX_MESSAGE = "usage quota must be at most 2147483647 (omit it or send null for unlimited)"
+
+
+def _quota_max_msg(resp) -> str:
+    detail = resp.json()["detail"]
+    assert isinstance(detail, list) and len(detail) == 1, resp.text
+    assert detail[0]["type"] == "less_than_equal", resp.text
+    return detail[0]["msg"]
+
+
 async def test_api_version_header_on_api_responses(app_client):
     resp = await app_client.get("/")
     assert resp.status_code == 200
@@ -140,14 +153,94 @@ async def test_refused_quota_words_match_every_json_type(app_client):
     assert resp.json()["detail"][0]["type"] == "int_from_float", resp.text
 
 
-def test_huge_json_integer_reaches_pydantic():
+def test_huge_json_integer_is_refused_by_the_schema():
     """A JSON integer is unbounded, so one wider than a float64 must not
-    overflow out of the validator: OverflowError is not a pydantic error, so
-    it would answer the request 500 with an empty body."""
+    overflow out of the validator: it is refused with a 422-shaped error,
+    never a 500. This pins the schema's answer only, not what the database
+    would store for the value."""
+    from pydantic import ValidationError
+
     from src.schemas.api import ApiKeyCreate
 
-    huge = 10**400
-    assert ApiKeyCreate(name="huge", usage_quota=huge).usage_quota == huge
+    with pytest.raises(ValidationError) as exc:
+        ApiKeyCreate(name="huge", usage_quota=10**400)
+    assert exc.value.errors()[0]["type"] == "less_than_equal", exc.value.errors()
+    assert exc.value.errors()[0]["msg"] == QUOTA_MAX_MESSAGE, exc.value.errors()
+
+
+async def test_quota_above_the_column_bound_is_refused_over_http(app_client):
+    """An out-of-range quota is a 422, never a silently unlimited key: the
+    value never reaches the column, so the read-back cannot be null."""
+    from src.models.api_key import MAX_QUOTA
+
+    client = app_client
+    owner = await register_user(client, "quota-huge@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    json_headers = {**headers, "Content-Type": "application/json"}
+
+    # Raw string body: a client serialiser may round the integer to Infinity.
+    resp = await client.post(
+        "/api/v1/api-keys",
+        content='{"name": "huge", "permissions": [], "usage_quota": ' + str(10**400) + "}",
+        headers=json_headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert _quota_max_msg(resp) == QUOTA_MAX_MESSAGE
+    assert (await client.get("/api/v1/api-keys", headers=headers)).json() == []
+
+    created = (
+        await client.post(
+            "/api/v1/api-keys",
+            json={"name": "capped", "permissions": [], "usage_quota": 5},
+            headers=headers,
+        )
+    ).json()
+    resp = await client.patch(
+        f"/api/v1/api-keys/{created['id']}",
+        content='{"usage_quota": ' + str(MAX_QUOTA + 1) + "}",
+        headers=json_headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert _quota_max_msg(resp) == QUOTA_MAX_MESSAGE
+    keys = (await client.get("/api/v1/api-keys", headers=headers)).json()
+    assert keys[0]["usage_quota"] == 5, keys
+
+
+async def test_quota_bound_edges(app_client):
+    """MAX_QUOTA round-trips through the column; one more is a 422."""
+    from src.models.api_key import MAX_QUOTA
+
+    client = app_client
+    owner = await register_user(client, "quota-edge@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    created = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "edge", "permissions": [], "usage_quota": MAX_QUOTA},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    listed = (await client.get("/api/v1/api-keys", headers=headers)).json()
+    assert listed[0]["usage_quota"] == MAX_QUOTA, listed
+
+    resp = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "over", "permissions": [], "usage_quota": MAX_QUOTA + 1},
+        headers=headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert _quota_max_msg(resp) == QUOTA_MAX_MESSAGE
+
+    # Null is still unlimited.
+    unlimited = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "open", "permissions": [], "usage_quota": None},
+        headers=headers,
+    )
+    assert unlimited.status_code == 201, unlimited.text
+    assert unlimited.json()["usage_quota"] is None
 
 
 async def test_service_quota_guard_uses_the_same_words(app_client):
@@ -180,6 +273,22 @@ async def test_service_quota_guard_uses_the_same_words(app_client):
         with pytest.raises(ApiKeyError) as patched:
             await service.set_quota(ws["id"], key.id, 0, actor=user)
         assert str(patched.value) == QUOTA_MIN_MESSAGE
+
+        # The upper edge, same words over the path that bypasses the schema.
+        from src.models.api_key import MAX_QUOTA, QUOTA_MAX_MESSAGE
+
+        with pytest.raises(ApiKeyError) as over_mint:
+            await service.create_api_key(
+                workspace_id=ws["id"],
+                name="over",
+                permissions=[],
+                actor=user,
+                usage_quota=MAX_QUOTA + 1,
+            )
+        assert str(over_mint.value) == QUOTA_MAX_MESSAGE
+        with pytest.raises(ApiKeyError) as over_patch:
+            await service.set_quota(ws["id"], key.id, MAX_QUOTA + 1, actor=user)
+        assert str(over_patch.value) == QUOTA_MAX_MESSAGE
 
 
 async def test_quota_patch_scoped_to_owner(app_client):
