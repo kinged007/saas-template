@@ -2,12 +2,13 @@
 // (superuser-only GET /admin/*): offset/limit plus one parameter per filter and
 // per sorter. Free of runtime imports so `node --test` can assert the serialised
 // request itself instead of scanning `dataProvider.ts` for source text.
+import { normalizeSorters, type SorterInput } from "./sorters.ts";
 
 export type AdminListQueryInput = {
   currentPage?: number;
   pageSize?: number;
   filters?: readonly Record<string, unknown>[];
-  sorters?: readonly { field?: string; order?: string }[];
+  sorters?: readonly SorterInput[];
 };
 
 export const adminListQuery = ({
@@ -25,15 +26,13 @@ export const adminListQuery = ({
     // `q` is the cross-field search term (backend `?q=`), not a column.
     params.append(f.field === "q" ? "q" : `${f.field}_like`, String(f.value));
   }
-  for (const s of sorters ?? []) {
+  // Normalised up front (see sorters.ts): a missing direction is the API
+  // default (`asc`), never a dropped entry that would shift every later
+  // direction onto the wrong column.
+  for (const s of normalizeSorters(sorters)) {
     if (!s.field) continue;
     params.append("sort[]", s.field);
-    // `parse_query` pairs `sort[]` with `order[]` by position and pads only at
-    // the end, so dropping a direction would shift every later direction onto
-    // the wrong column. Send the API default (`asc`) instead — and `||`, not
-    // `??`, because the parser drops an empty direction the same way it drops
-    // an omitted one.
-    params.append("order[]", s.order || "asc");
+    params.append("order[]", s.order);
   }
   return params;
 };
