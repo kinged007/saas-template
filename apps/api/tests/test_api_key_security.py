@@ -1376,7 +1376,13 @@ async def test_permission_refusal_stays_distinct_from_the_deployment_admin_refus
         for method, url, body, key_headers, required in [
             ("get", f"/api/v1/jobs/{definition_id}", None, wh, JOB_READ),
             ("get", f"/api/v1/jobs/{definition_id}/runs", None, wh, JOB_READ),
-            ("patch", f"/api/v1/jobs/{definition_id}", {"cron_schedule": "30 4 * * *"}, rh, JOB_UPDATE),
+            (
+                "patch",
+                f"/api/v1/jobs/{definition_id}",
+                {"cron_schedule": "30 4 * * *"},
+                rh,
+                JOB_UPDATE,
+            ),
             ("post", f"/api/v1/jobs/{definition_id}/execute", {}, rh, JOB_UPDATE),
         ]:
             resp = await client.request(method, url, json=body, headers=key_headers)

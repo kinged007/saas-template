@@ -188,9 +188,7 @@ async def test_global_execute_of_a_workspace_definition_is_unaffected(app_client
     finished = await wait_for_terminal(client, auth_headers(owner), run["id"])
     assert finished["status"] == "success", finished
 
-    missing = await client.post(
-        f"/api/v1/jobs/global/{uuid.uuid4()}/execute", json={}, headers=gh
-    )
+    missing = await client.post(f"/api/v1/jobs/global/{uuid.uuid4()}/execute", json={}, headers=gh)
     assert missing.status_code == 404, missing.text
     assert missing.json()["detail"] == "job not found"
 
