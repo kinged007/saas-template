@@ -301,6 +301,9 @@ async def test_role_change_emits_event_and_audit(bus, owner):
     assert payload["from_role"] == "editor"
     assert payload["to_role"] == "viewer"
     assert payload["changed_by_user_id"] == owner.id
+    # Only transfer_ownership says the change is a transfer; an ordinary role
+    # change carries no reason, so the workflow cannot read one into it.
+    assert "reason" not in payload
 
     assert bus.actions() == ["member.role_changed"]
     audit = bus.audit()[0][0]
@@ -333,6 +336,7 @@ async def test_transfer_ownership_emits_event_for_both_members(bus, owner):
     assert by_user[heir.id]["to_role"] == "owner"
     assert by_user[owner.id]["from_role"] == "owner"
     assert by_user[owner.id]["to_role"] == "admin"
+    assert all(p["reason"] == "ownership_transfer" for p, _, _ in changed)
     assert all(p["changed_by_user_id"] == owner.id for p, _, _ in changed)
 
     assert bus.actions() == ["workspace.ownership_transferred"]

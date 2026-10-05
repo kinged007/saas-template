@@ -741,6 +741,9 @@ class WorkspaceService:
             "workspace_name": workspace_name,
             "changed_by_user_id": actor.id,
             "changed_by_name": actor.display_name,
+            # Both role changes are the transfer, said so on the event rather
+            # than left for the subscriber to infer from the role names.
+            "reason": "ownership_transfer",
         }
         # The actor is the current owner (checked above), so both role changes
         # belong to a user: the promotion and the owner's own demotion.

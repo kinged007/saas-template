@@ -46,7 +46,6 @@ from src.realtime.manager import ConnectionManager
 from src.services.audit import AuditService
 from src.services.jobs import JobService
 from src.services.notifications import NotificationService
-from src.services.workspaces import is_owner_role_name
 
 logger = logging.getLogger(__name__)
 
@@ -265,11 +264,11 @@ def build_workflows(
         to_role = payload.get("to_role")
         changed_by = payload.get("changed_by_name") or "A member"
         # The member is the actor (a self-demotion, or an ownership transfer):
-        # naming them in their own notification reads as "you changed your
-        # own role". set_member_role refuses to touch the owner's role, so a
-        # self-change from owner is always a transfer.
+        # naming them in their own notification reads as "you changed your own
+        # role". A transfer says so on the event; the role names carry no such
+        # claim, since a workspace may rename or omit its owner role.
         if user_id == payload.get("changed_by_user_id"):
-            if is_owner_role_name(from_role):
+            if payload.get("reason") == "ownership_transfer":
                 # A null to_role names no new role, so the clause is dropped
                 # and the transfer itself is still reported.
                 body = (
@@ -281,13 +280,15 @@ def build_workflows(
                 body = "Your role was changed."
             else:
                 body = f"Your role is now {to_role}."
-        elif not to_role:
-            body = f"{changed_by} changed your role."
-        else:
+        elif to_role:
             # A null from_role has no name to print, so the sentence says there
             # was one instead of substituting a placeholder that reads like a role.
             previous = from_role or "a previous role"
             body = f"{changed_by} changed your role from {previous} to {to_role}."
+        elif from_role:
+            body = f"{changed_by} changed your role from {from_role}."
+        else:
+            body = f"{changed_by} changed your role."
         async with SessionFactory() as session:
             await _create_notification(
                 session,
