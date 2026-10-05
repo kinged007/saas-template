@@ -12,7 +12,7 @@ from src.core.permissions import ALL_PERMISSIONS_INCLUDING_KEY_ONLY, KEY_ONLY_PE
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
-from src.models.api_key import QUOTA_MIN_MESSAGE, ApiKey
+from src.models.api_key import MAX_QUOTA, QUOTA_MAX_MESSAGE, QUOTA_MIN_MESSAGE, ApiKey
 from src.models.workspace import User
 from src.services.workspaces import WorkspaceService
 
@@ -121,6 +121,8 @@ class ApiKeyService:
 
         if usage_quota is not None and usage_quota < 1:
             raise ApiKeyError(QUOTA_MIN_MESSAGE)
+        if usage_quota is not None and usage_quota > MAX_QUOTA:
+            raise ApiKeyError(QUOTA_MAX_MESSAGE)
         if expires_at is not None and ensure_utc(expires_at) <= now_utc():
             raise ApiKeyError("expiry must be in the future")
 
@@ -348,6 +350,8 @@ class ApiKeyService:
             raise ApiKeyNotFound("api key not found")
         if usage_quota is not None and usage_quota < 1:
             raise ApiKeyError(QUOTA_MIN_MESSAGE)
+        if usage_quota is not None and usage_quota > MAX_QUOTA:
+            raise ApiKeyError(QUOTA_MAX_MESSAGE)
         key.usage_quota = usage_quota
         await self._session.commit()
         await publish_event(
