@@ -513,6 +513,43 @@ async def test_redelivered_conversation_event_writes_one_pointer_per_recipient()
     assert await pointers() == 2
 
 
+async def test_repeated_participant_id_writes_one_pointer():
+    """A publisher that repeats a participant id still yields one pointer."""
+    from src.events.subjects import Subjects
+    from src.models.core import Notification
+
+    workspace_id = str(uuid.uuid4())
+    participants = [str(uuid.uuid4()) for _ in range(2)]
+
+    async def pointers() -> int:
+        async with SessionFactory() as session:
+            result = await session.execute(
+                select(Notification.id).where(
+                    Notification.workspace_id == workspace_id,
+                    Notification.type == "conversation_message",
+                )
+            )
+            return len(list(result.scalars().all()))
+
+    bus, registry = _wired_replay_bus()
+    await registry.wire()
+    await bus.publish(
+        Subjects.CONVERSATION_MESSAGE_CREATED,
+        {
+            "workspace_id": workspace_id,
+            "conversation_id": str(uuid.uuid4()),
+            "sender_id": participants[0],
+            "sender_type": "user",
+            "participant_user_ids": [participants[0], participants[1], participants[1]],
+            "title": "Hi",
+        },
+    )
+    assert await pointers() == 1  # the sender gets no pointer, the repeat none
+
+    await bus.redeliver(Subjects.CONVERSATION_MESSAGE_CREATED)
+    assert await pointers() == 1
+
+
 async def test_create_many_logs_the_recipients_a_redelivery_drops(caplog):
     """The bulk return value counts created rows only, so a drop is silent
     unless the service says so. Its only caller discards the return value,
