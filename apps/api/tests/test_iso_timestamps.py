@@ -38,7 +38,7 @@ OK_CALL = re.compile(r"^(?:ensure_utc\(|now_utc\(|datetime\.now\(UTC\))")
 # Pinned to (path, line, receiver) so an exemption applies to the site that
 # justified it and to nothing else — and the guard fails when one moves.
 OK_SITE = {
-    ("services/serializers.py", 81, "p.date_of_birth"),
+    ("services/serializers.py", 82, "p.date_of_birth"),
 }
 
 

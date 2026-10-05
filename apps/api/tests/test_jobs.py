@@ -167,8 +167,8 @@ async def test_global_execute_of_a_workspace_definition_is_unaffected(app_client
     """The /jobs/global execute route resolves its definition with no
     workspace filter, so a superuser may run a workspace-owned definition
     through it; an id that matches nothing is still the 404. Pins the
-    behaviour of `_get_definition_or_404` once its cross-workspace branch was
-    dead code and removed. Regression test for #1121.
+    behaviour of `_admin_definition_or_404` once its cross-workspace branch
+    was dead code and removed. Regression test for #1121.
     """
     import uuid
 

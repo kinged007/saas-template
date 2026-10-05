@@ -80,7 +80,7 @@ async def _user_id(client, tokens) -> str:
 
 
 async def _seed_runs(workspace_id: str) -> dict[str, str]:
-    """A global run plus a workspace run, inserted directly so the tests do
+    """A global run plus two workspace runs, inserted directly so the tests do
     not depend on job provisioning."""
     import uuid
 
@@ -101,6 +101,9 @@ async def _seed_runs(workspace_id: str) -> dict[str, str]:
         for name, ws_id, definition_id in (
             ("global", None, str(uuid.uuid4())),
             ("workspace", workspace_id, definition.id),
+            # A second own-workspace run, under its own definition_id so the
+            # runs route of `definition` still counts exactly one.
+            ("workspace_2", workspace_id, str(uuid.uuid4())),
         ):
             run = JobRun(
                 id=str(uuid.uuid4()),
@@ -1011,13 +1014,16 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     foreign = (await _seed_runs(foreign_ws["id"]))["workspace"]
 
     # A key without jobs:read is refused even though its creator holds the
-    # permission through the workspace owner role.
+    # permission through the workspace owner role, and the refusal is the same
+    # for both of the key's own runs — the answer must not depend on which
+    # own-workspace id was asked for.
     narrow = await _create_key(client, headers, "no-jobs", ["member:read"])
-    resp = await client.get(
-        f"/api/v1/jobs/runs/{runs['workspace']}", headers=_key_headers(narrow["key"], ws["id"])
-    )
-    assert resp.status_code == 403, resp.text
-    assert JOB_READ in resp.json()["detail"]
+    narrow_headers = _key_headers(narrow["key"], ws["id"])
+    own_refusals = set()
+    for run_id in (runs["workspace"], runs["workspace_2"]):
+        resp = await client.get(f"/api/v1/jobs/runs/{run_id}", headers=narrow_headers)
+        own_refusals.add((resp.status_code, resp.json().get("detail")))
+    assert own_refusals == {(403, f"missing permission: {JOB_READ}")}, own_refusals
 
     # A foreign X-Workspace-ID header does not widen the key's own scope.
     resp = await client.get(
@@ -1288,9 +1294,14 @@ async def test_key_cannot_probe_definition_existence(app_client):
         ]:
             resp = await client.request(method, url, json=body, headers=kh)
             answers.add((resp.status_code, resp.json().get("detail")))
-            # A refusal says nothing about the key's budget either: the quota
-            # headers and the list route's X-Total-Count are set only on an
-            # authorizing branch, so a refusal carries no second signal.
+            # A refusal carries no second signal: the quota headers and the
+            # list route's X-Total-Count are set only on an authorizing branch.
+            # These four asserts cannot fail today — Starlette builds a fresh
+            # response when a route raises, so what was written to the
+            # injected Response is discarded. They document the contract and
+            # would catch a future route that raises after setting them; the
+            # `usage_count` asserts below are the ones that detect a charge on
+            # the refusal path.
             for header in (
                 "X-API-Key-Quota",
                 "X-API-Key-Remaining",
@@ -1345,10 +1356,10 @@ async def test_permission_refusal_stays_distinct_from_the_deployment_admin_refus
     deliberately different: `403 "missing permission: jobs:read"` (or
     `jobs:update`), the string `require_permission` returns on every other key
     route, naming the actionable fix. A key scoped to the workspace is
-    entitled to know what the workspace contains, so the residual existence
-    channel inside it is the accepted consequence, not a gap to close; what
-    must not happen is that either branch changes unnoticed. Regression test
-    for #1118.
+    entitled to the existence of a definition id inside its own workspace, not
+    to the definition's contents, so the residual existence channel inside it
+    is the accepted consequence, not a gap to close; what must not happen is
+    that either branch changes unnoticed. Regression test for #1118.
     """
     import uuid
 
