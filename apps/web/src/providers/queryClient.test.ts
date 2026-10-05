@@ -4,7 +4,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
-import { isClientError, queryClient } from "./queryClient.ts";
+import { isClientError, isNoResponseError, queryClient } from "./queryClient.ts";
 
 const srcDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -28,16 +28,22 @@ test("a 4xx is never retried", () => {
   }
 });
 
-test("a 5xx, an absent response and an unknown error stay retryable", () => {
-  // statusCode 0 is dataProvider's "no HTTP response" sentinel (offline,
-  // DNS, CORS, abort) — the response may exist on the next attempt.
-  for (const error of [{ statusCode: 500 }, { statusCode: 503 }, { statusCode: 0 }, {}, null, undefined]) {
+test("a request with no response is never retried", () => {
+  assert.equal(retry(0, { statusCode: 0 }), false);
+  assert.equal(isNoResponseError({ statusCode: 0 }), true);
+  assert.equal(isNoResponseError({ statusCode: 500 }), false);
+  assert.equal(isNoResponseError({}), false);
+});
+
+test("a 5xx and an unknown error stay retryable", () => {
+  for (const error of [{ statusCode: 500 }, { statusCode: 503 }, {}, null, undefined]) {
     assert.equal(retry(0, error), true, JSON.stringify(error));
     assert.equal(isClientError(error), false, JSON.stringify(error));
   }
 });
 
 test("the retry budget is 3 retries for 5xx, and the refusal is what costs a retry", () => {
+  assert.equal(retry(0, { statusCode: 500 }), true);
   assert.equal(retry(2, { statusCode: 500 }), true);
   assert.equal(retry(3, { statusCode: 500 }), false);
   // react-query's default retryDelay ramps 1s -> 2s -> 4s; retrying a 4xx is
