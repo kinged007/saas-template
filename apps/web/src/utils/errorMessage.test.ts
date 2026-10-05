@@ -28,11 +28,12 @@ test("errorMessage renders the interceptor's message instead of [object Object]"
 });
 
 const srcRoot = fileURLToPath(new URL("..", import.meta.url));
-const sourceFiles = readdirSync(srcRoot, { recursive: true, withFileTypes: true })
-  .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name))
-  .map((entry) => join(entry.parentPath, entry.name));
 
-test("no call site casts a message and prints String() of the whole value", () => {
+test("no call site renders String((err as { message?: string })?.message ?? err)", () => {
+  const sourceFiles = readdirSync(srcRoot, { recursive: true, withFileTypes: true })
+    // Test files carry the pattern as a literal, including this one.
+    .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name) && !entry.name.endsWith(".test.ts"))
+    .map((entry) => join(entry.parentPath, entry.name));
   const hits: string[] = [];
   for (const file of sourceFiles) {
     readFileSync(file, "utf8")
