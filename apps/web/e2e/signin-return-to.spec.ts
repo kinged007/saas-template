@@ -59,9 +59,8 @@ test.describe("sign-in return-to", () => {
   });
 
   // Each destination a crafted link can record that the guard must refuse; why
-  // it refuses them is documented once, on sameOriginPath. The browser clamps
-  // the off-origin spellings back onto this origin when it navigates, so the
-  // origin assertion below is the one that pins the invariant.
+  // it refuses them is documented once, on sameOriginPath. This table samples
+  // the class for the browser path; sameOriginPath.test.ts pins the full list.
   for (const dest of [
     "//evil.example/x",
     "/\\evil.example/x",
@@ -80,8 +79,8 @@ test.describe("sign-in return-to", () => {
       api.signIn();
       await signIn(page);
 
-      await path(page).toBe("/");
-      await expect.poll(() => origin(page)).toBe(appOrigin);
+      // One assertion on the full href pins origin and pathname together.
+      await expect.poll(() => page.url()).toBe(`${appOrigin}/`);
       expect(await returnTo(page)).toBeNull();
     });
   }

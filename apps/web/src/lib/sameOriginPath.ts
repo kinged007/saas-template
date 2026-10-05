@@ -19,6 +19,9 @@ const BASE = "https://same-origin.invalid";
  *
  * `%5C` needs no clause: the parser does not decode it before path parsing, so
  * it stays a path segment.
+ *
+ * The returned value is the parser's normalisation (dot segments resolved,
+ * `\` as separator), not the input echoed back; same-origin either way.
  */
 export function sameOriginPath(raw: string): string | null {
   // Stripped rather than merely resolved: the parser silently rewrites such a
@@ -30,7 +33,9 @@ export function sameOriginPath(raw: string): string | null {
   } catch {
     return null;
   }
-  return parsed.origin === BASE
-    ? `${parsed.pathname}${parsed.search}${parsed.hash}`
-    : null;
+  if (parsed.origin !== BASE) return null;
+  const out = `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  // Dot segments resolve after the origin check, so `/..//evil.example`
+  // normalises to a protocol-relative value: not a plain in-app path.
+  return out.startsWith("//") ? null : out;
 }
