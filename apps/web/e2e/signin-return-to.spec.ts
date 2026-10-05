@@ -72,6 +72,21 @@ test.describe("sign-in return-to", () => {
     expect(await returnTo(page)).toBeNull();
   });
 
+  test("a backslash-spelled off-origin destination is dropped", async ({ page }) => {
+    const api = await mockApi(page, { signedIn: false });
+    await page.goto("/api-keys?page=2");
+    await path(page).toBe("/login");
+    // The browser normalises "\" to "/", so "/\evil.example/x" resolves as
+    // "//evil.example/x" — off-origin, reached with the destination spent.
+    await page.evaluate(() => window.localStorage.setItem("tf_return_to", "/\\evil.example/x"));
+
+    api.signIn();
+    await signIn(page);
+
+    await path(page).toBe("/");
+    expect(await returnTo(page)).toBeNull();
+  });
+
   test("signing in converges on the destination instead of looping", async ({ page }) => {
     const api = await mockApi(page, { signedIn: false });
     const navs: string[] = [];
