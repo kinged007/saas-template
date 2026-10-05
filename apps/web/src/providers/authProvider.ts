@@ -12,6 +12,7 @@ import {
   setActiveWorkspaceId,
 } from "../utils/storage";
 import { clearAllCaches, queryClient } from "./queryClient";
+import { sameOriginPath } from "../lib/sameOriginPath.ts";
 import type { Identity } from "../types";
 
 const post = async (path: string, body: unknown) => {
@@ -69,15 +70,10 @@ export const afterAuthRedirect = () => {
     returnToStore.clear();
     return `/invitations/accept?token=${encodeURIComponent(token)}`;
   }
-  // take(), so the destination cannot be replayed by a later sign-in. Only a
-  // single-slash relative path is honoured: a protocol-relative value survives
-  // the guard, in either spelling — `//host/path` and `/\host/path`, which the
-  // browser normalises into one — and lands off-origin with the destination
-  // already spent.
+  // take() consumes the destination, so one this guard rejects cannot be
+  // replayed by a later sign-in either.
   const dest = returnToStore.take();
-  return dest && dest.startsWith("/") && !dest.startsWith("//") && !dest.includes("\\")
-    ? dest
-    : "/";
+  return (dest && sameOriginPath(dest)) || "/";
 };
 
 export const authProvider: AuthProvider = {

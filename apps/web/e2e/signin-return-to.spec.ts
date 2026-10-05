@@ -11,6 +11,7 @@ import { mockApi } from "./mock-api";
  * Every API call is mocked, so no backend (and no DATABASE_URL) is needed.
  */
 const path = (page: Page) => expect.poll(() => new URL(page.url()).pathname);
+const origin = (page: Page) => new URL(page.url()).origin;
 const returnTo = (page: Page) => page.evaluate(() => window.localStorage.getItem("tf_return_to"));
 
 const signIn = async (page: Page) => {
@@ -57,35 +58,33 @@ test.describe("sign-in return-to", () => {
     expect(await returnTo(page)).toBeNull();
   });
 
-  test("a destination that is not a plain relative path is dropped", async ({ page }) => {
-    const api = await mockApi(page, { signedIn: false });
-    await page.goto("/api-keys?page=2");
-    await path(page).toBe("/login");
-    // A crafted same-origin link records "//host/path" verbatim; react-router
-    // would normalise it into a dead local route with the destination spent.
-    await page.evaluate(() => window.localStorage.setItem("tf_return_to", "//evil.example/x"));
+  // Each destination a crafted link can record that the guard must refuse; why
+  // it refuses them is documented once, on sameOriginPath. The browser clamps
+  // the off-origin spellings back onto this origin when it navigates, so the
+  // origin assertion below is the one that pins the invariant.
+  for (const dest of [
+    "//evil.example/x",
+    "/\\evil.example/x",
+    "/\tevil.example/x",
+    "/\t/evil.example/x",
+    "/\nevil.example/x",
+    "/\revil.example/x",
+  ]) {
+    test(`a destination that only looks relative is dropped: ${JSON.stringify(dest)}`, async ({ page }) => {
+      const api = await mockApi(page, { signedIn: false });
+      await page.goto("/api-keys?page=2");
+      await path(page).toBe("/login");
+      const appOrigin = origin(page);
+      await page.evaluate((d) => window.localStorage.setItem("tf_return_to", d), dest);
 
-    api.signIn();
-    await signIn(page);
+      api.signIn();
+      await signIn(page);
 
-    await path(page).toBe("/");
-    expect(await returnTo(page)).toBeNull();
-  });
-
-  test("a backslash-spelled off-origin destination is dropped", async ({ page }) => {
-    const api = await mockApi(page, { signedIn: false });
-    await page.goto("/api-keys?page=2");
-    await path(page).toBe("/login");
-    // The browser normalises "\" to "/", so "/\evil.example/x" resolves as
-    // "//evil.example/x" — off-origin, reached with the destination spent.
-    await page.evaluate(() => window.localStorage.setItem("tf_return_to", "/\\evil.example/x"));
-
-    api.signIn();
-    await signIn(page);
-
-    await path(page).toBe("/");
-    expect(await returnTo(page)).toBeNull();
-  });
+      await path(page).toBe("/");
+      await expect.poll(() => origin(page)).toBe(appOrigin);
+      expect(await returnTo(page)).toBeNull();
+    });
+  }
 
   test("signing in converges on the destination instead of looping", async ({ page }) => {
     const api = await mockApi(page, { signedIn: false });
