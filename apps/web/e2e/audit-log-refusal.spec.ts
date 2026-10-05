@@ -26,6 +26,12 @@ test.describe("audit log fetch", () => {
 
     const failure = page.getByRole("row").filter({ hasText: "Could not load audit entries." });
     await expect(failure).toBeVisible();
+    // The row swaps from "Loading…" to the failure text without a page load,
+    // so the cell is a `status` live region: without it the transition is
+    // never announced.
+    await expect(
+      page.getByRole("status").filter({ hasText: "Could not load audit entries." }),
+    ).toBeVisible();
     // Unscoped: refine's error toast used to repeat the reason, which forced a
     // row-scoped locator here. The row keeps the server's detail — it is the
     // only thing that tells the user why the query failed.
