@@ -21,7 +21,7 @@ import {
   getActiveWorkspaceId,
   setActiveWorkspaceId,
 } from "../utils/storage";
-import { clearAllCaches, clearWorkspaceCaches, isClientError } from "../providers/queryClient";
+import { clearAllCaches, clearWorkspaceCaches, isClientError, isNoResponseError } from "../providers/queryClient";
 import { API_URL, httpClient } from "../providers/dataProvider";
 
 type WorkspaceContextValue = {
@@ -53,7 +53,8 @@ const IDENTITY_QUERY_KEY = ["auth", "identity"] as const;
 // forceLogout() in the response interceptor, and its retries raced the redirect.
 export const IDENTITY_QUERY_OPTIONS = {
   staleTime: 30_000,
-  retry: (failureCount: number, error: unknown) => failureCount < 2 && !isClientError(error),
+  retry: (failureCount: number, error: unknown) =>
+    failureCount < 2 && !isClientError(error) && !isNoResponseError(error),
   retryDelay: (attempt: number) => Math.min(500 * 2 ** attempt, 4000),
 };
 

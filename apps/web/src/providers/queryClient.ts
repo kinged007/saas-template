@@ -11,6 +11,16 @@ export function isClientError(error: unknown): boolean {
 }
 
 /**
+ * True when no HTTP response arrived. `normalizeError` (dataProvider)
+ * stamps `statusCode: 0` for an abort, a cancel and a dropped connection
+ * alike. None of them can succeed on a retry of the same observer, so
+ * retrying one only delays the failure the error branch exists to report.
+ */
+export function isNoResponseError(error: unknown): boolean {
+  return (error as { statusCode?: number } | null | undefined)?.statusCode === 0;
+}
+
+/**
  * Singleton QueryClient for the app.
  *
  * Providing an explicit instance to <Refine> lets non-React code
@@ -30,14 +40,17 @@ export function isClientError(error: unknown): boolean {
  * `retry` is react-query's own default budget (3 retries — 4 requests —
  * 1s + 2s + 4s) unless it is set here. Retrying a 4xx cannot succeed and
  * spent ~7s of "Loading…" in front of every refusal, so 4xx now fails on
- * the first attempt. 5xx and network failures keep the 3-retry budget.
+ * the first attempt. A request that produced no HTTP response fails on the
+ * first attempt too — it cannot succeed on a retry of the same observer.
+ * 5xx keeps the 3-retry budget: it may still succeed.
  */
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
       placeholderData: undefined,
-      retry: (failureCount, error) => failureCount < 3 && !isClientError(error),
+      retry: (failureCount, error) =>
+        failureCount < 3 && !isClientError(error) && !isNoResponseError(error),
     },
   },
 });

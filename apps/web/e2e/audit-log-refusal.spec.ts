@@ -55,6 +55,28 @@ test.describe("audit log fetch", () => {
     expect(calls).toBe(2);
   });
 
+  test("a request with no response fails on the first attempt", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    let calls = 0;
+    await page.route(AUDIT, (route) => {
+      calls += 1;
+      return route.abort("failed");
+    });
+
+    await page.goto("/settings/workspace/audit");
+
+    await expect(
+      page.getByRole("row").filter({ hasText: "Could not load audit entries." }),
+    ).toBeVisible();
+    await expect(page.getByText("No audit entries yet.")).toHaveCount(0);
+    await expect(page.getByText(/^Showing 0/)).toHaveCount(0);
+    await expect(page.getByText("Page 1 of 1")).toHaveCount(0);
+    // The shared client does not retry a request that produced no response,
+    // so this is the StrictMode baseline and not the tail of a retry budget.
+    await page.waitForTimeout(1_500);
+    expect(calls).toBe(2);
+  });
+
   test("a genuinely empty log still says it is empty", async ({ page }) => {
     await mockApi(page, { signedIn: true });
 
