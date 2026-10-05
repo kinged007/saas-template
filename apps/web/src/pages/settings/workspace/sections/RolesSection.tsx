@@ -27,13 +27,13 @@ import {
 } from "@/components/ui/table";
 import { Check, ChevronDown, Pencil, Plus } from "lucide-react";
 import type { Role } from "@/types";
-import { roleCapNotice } from "@/pages/role-picker-cap";
+import { ListPager } from "@/components/ListPager";
 import { isOwnerRoleName } from "@/pages/role-name";
 
 type CatalogResponse = { catalog: string[]; permissions: string[] };
 
-// parse_query's max_limit: ask for one full page so the server order is
-// complete. A workspace past this is reported as truncated below the list.
+// parse_query's max_limit: the largest page the roles endpoint serves. A
+// workspace past this pages through the rest below the list.
 const ROLES_PAGE_SIZE = 100;
 
 function splitPermission(p: string): [string, string] {
@@ -156,9 +156,10 @@ function PermissionPicker({
 }
 
 export function RolesSection() {
+  const [page, setPage] = useState(1);
   const { result } = useWorkspaceList<Role>({
     resource: "roles",
-    pagination: { currentPage: 1, pageSize: ROLES_PAGE_SIZE },
+    pagination: { currentPage: page, pageSize: ROLES_PAGE_SIZE },
   });
   const { result: catalogResult } = useWorkspaceCustom<CatalogResponse>({
     url: "roles/permission-catalog",
@@ -175,7 +176,6 @@ export function RolesSection() {
   // Ordered by the endpoint (system roles first), so no client sort.
   const rows = result?.data ?? [];
   const total = result?.total ?? rows.length;
-  const capNotice = roleCapNotice(rows.length, total);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
@@ -319,7 +319,6 @@ export function RolesSection() {
           </Dialog>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          {capNotice && <p className="text-muted-foreground text-sm">{capNotice}</p>}
           {rows.map((role) => {
             const isOpen = expanded.has(role.id);
             const granted = new Set(role.permissions.includes("*") ? catalog : role.permissions);
@@ -370,6 +369,7 @@ export function RolesSection() {
           {rows.length === 0 && (
             <p className="text-muted-foreground py-4 text-center text-sm">No roles yet.</p>
           )}
+          <ListPager page={page} pageSize={ROLES_PAGE_SIZE} total={total} onPageChange={setPage} />
         </CardContent>
       </Card>
 

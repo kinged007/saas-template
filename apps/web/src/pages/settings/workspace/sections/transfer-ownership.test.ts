@@ -87,6 +87,21 @@ test("transferCandidateMessage never contradicts a truncated list with an invite
   assert.doesNotMatch(message, /invite one first/);
 });
 
+// members.py orders by created_at desc, so page 1 holds the newest rows and the
+// members the copy omits are the oldest ones. A count alone reads as an
+// arbitrary subset, which is the wrong model for someone looking for a founding
+// member who drops out of the picker every time someone joins.
+test("transferCandidateMessage names which end of the list was dropped", () => {
+  const message = transferCandidateMessage({
+    isPending: false,
+    isError: false,
+    loaded: 100,
+    total: 124,
+  });
+  assert.match(message, /newest/);
+  assert.match(message, /oldest/);
+});
+
 test("transferCandidateMessage invites only when the whole list was loaded and empty", () => {
   const empty = { isPending: false, isError: false };
   assert.match(transferCandidateMessage({ ...empty, loaded: 3, total: 3 }), /invite one first/);
