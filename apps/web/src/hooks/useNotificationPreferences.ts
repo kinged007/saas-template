@@ -2,6 +2,8 @@ import { useMemo } from "react";
 import { useCustom, useCustomMutation } from "@refinedev/core";
 import { toast } from "sonner";
 
+import { errorMessage } from "@/utils/errorMessage";
+
 import type { NotificationChannel, NotificationPreferences } from "../types";
 
 export const KNOWN_NOTIFICATION_TYPES = [
@@ -83,7 +85,7 @@ export function useNotificationPreferences(
         { onSuccess: () => prefsQuery.refetch() },
       );
     } catch (e) {
-      toast.error(String((e as { message?: string })?.message ?? e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -103,7 +105,7 @@ export function useNotificationPreferences(
         { onSuccess: () => prefsQuery.refetch() },
       );
     } catch (e) {
-      toast.error(String((e as { message?: string })?.message ?? e));
+      toast.error(errorMessage(e));
     }
   };
 

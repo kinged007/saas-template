@@ -15,6 +15,7 @@ import { ListView, ListViewHeader } from "../components/refine-ui/views/list-vie
 import { EmptyRow, StatusBadge, formatDate } from "../components/ui";
 import { invitationStatus } from "./invitation-actions";
 import { useWorkspace } from "../contexts/WorkspaceContext";
+import { errorMessage } from "@/utils/errorMessage";
 import type { Invitation } from "../types";
 
 export function ReceivedInvitationsPage() {
@@ -54,7 +55,7 @@ export function ReceivedInvitationsPage() {
         onError: (err) => {
           setBusyId(null);
           toast.error("Could not accept invitation", {
-            description: String((err as { message?: string })?.message ?? err),
+            description: errorMessage(err),
           });
           void query.refetch();
         },
@@ -81,7 +82,7 @@ export function ReceivedInvitationsPage() {
         onError: (err) => {
           setBusyId(null);
           toast.error("Could not decline invitation", {
-            description: String((err as { message?: string })?.message ?? err),
+            description: errorMessage(err),
           });
           void query.refetch();
         },
