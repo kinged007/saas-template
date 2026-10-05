@@ -317,7 +317,6 @@ async def set_user_password(
 
 @router.get("/me/export")
 async def export_my_data(
-    request: Request,
     user: User = Depends(require_session_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
