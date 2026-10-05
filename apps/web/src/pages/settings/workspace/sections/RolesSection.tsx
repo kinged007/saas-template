@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/table";
 import { Check, ChevronDown, Pencil, Plus } from "lucide-react";
 import type { Role } from "@/types";
-import { roleCapNotice } from "@/pages/role-picker-cap";
+import { roleCapNotice } from "@/lib/role-cap";
 import { isOwnerRoleName } from "@/pages/role-name";
 
 type CatalogResponse = { catalog: string[]; permissions: string[] };
