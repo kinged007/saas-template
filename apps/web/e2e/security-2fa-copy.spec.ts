@@ -86,6 +86,52 @@ test("a second click restarts the 1.5 s window", async ({ page }) => {
   await expect(copy).toHaveAccessibleName("Copy setup key");
 });
 
+test("a denied write toasts instead of claiming success", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window.navigator, "clipboard", {
+      value: { writeText: () => Promise.reject(new Error("Denied")) },
+      configurable: true,
+    });
+  });
+  await openSetupPanel(page);
+
+  // Unchanged name: `copied` stays false, so the button never claims success;
+  // the fixture fails the test on the unhandled rejection itself.
+  const copy = page.getByRole("button", { name: "Copy setup key", exact: true });
+  await copy.click();
+  await expect(copy).toHaveAccessibleName("Copy setup key");
+  await expect
+    .poll(async () => (await page.locator('section[aria-live="polite"]').textContent()) ?? "")
+    .toMatch(/could not copy/i);
+});
+
+test("a denied second write clears the pending confirmation", async ({ page }) => {
+  await page.addInitScript(() => {
+    let calls = 0;
+    Object.defineProperty(window.navigator, "clipboard", {
+      value: {
+        writeText: () => {
+          calls += 1;
+          return calls === 1 ? Promise.resolve() : Promise.reject(new Error("Denied"));
+        },
+      },
+      configurable: true,
+    });
+  });
+  await openSetupPanel(page);
+
+  const copy = copyButton(page);
+  await copy.click();
+  await expect(copy).toHaveAccessibleName("Copied");
+  await copy.click();
+  // Without a `setCopied(false)` in the catch the button stays "Copied"
+  // forever: the second-click handler cleared the pending timer first.
+  await expect(copy).toHaveAccessibleName("Copy setup key");
+  await expect
+    .poll(async () => (await page.locator('section[aria-live="polite"]').textContent()) ?? "")
+    .toMatch(/could not copy/i);
+});
+
 test("cancel drops the copy confirmation", async ({ page }) => {
   await openSetupPanel(page);
   // Frozen, or the pending reset runs on its own and a stale confirmation is

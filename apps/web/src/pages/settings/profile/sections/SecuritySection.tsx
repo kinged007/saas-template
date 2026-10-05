@@ -239,9 +239,18 @@ export function SecuritySection() {
                       // Clear before the write so the previous window dies even if
                       // this one never reaches the clipboard.
                       clearCopied();
-                      await navigator.clipboard.writeText(setupSecret);
-                      setCopied(true);
-                      copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
+                      try {
+                        await navigator.clipboard.writeText(setupSecret);
+                        setCopied(true);
+                        copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
+                      } catch (e) {
+                        // A denied write must not leave a stale confirmation:
+                        // `clearCopied` above already reset `copied`, so only
+                        // the toast is left to show.
+                        toast.error("Could not copy setup key", {
+                          description: (e as Error)?.message ?? "Copy failed",
+                        });
+                      }
                     }}
                   >
                     {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}

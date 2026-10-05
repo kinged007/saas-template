@@ -129,9 +129,18 @@ export function ApiKeyCreatePage() {
     // Clear before the write so the previous window dies even if this one never
     // reaches the clipboard.
     window.clearTimeout(copyTimer.current);
-    await navigator.clipboard.writeText(created.key);
-    setCopied(true);
-    copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
+    try {
+      await navigator.clipboard.writeText(created.key);
+      setCopied(true);
+      copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      // A denied write must not leave a stale confirmation: the timer above
+      // was already cleared, so nothing would reset `copied` (#1216).
+      setCopied(false);
+      toast.error("Could not copy API key", {
+        description: errorMessage(err),
+      });
+    }
   };
 
   return (
