@@ -16,6 +16,7 @@ from tests.conftest import (
     create_workspace,
     login,
     register_user,
+    ws_headers,
 )
 
 
@@ -566,3 +567,33 @@ async def test_oldest_workspace_wins(app_client, single_workspace_on, monkeypatc
     newcomer = await register_user(app_client, "newcomer@example.com")
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(newcomer))
     assert [w["id"] for w in me.json()["workspaces"]] == [ws1["id"]]
+
+
+async def test_auth_me_gives_a_key_its_own_workspace_in_single_mode(
+    app_client, single_workspace_on, monkeypatch
+):
+    """The single-workspace filter collapses the session user's UI; a key is
+    already pinned to one workspace, and its gate never reads the flag, so the
+    key keeps its own workspace instead of being filtered to the oldest one.
+    """
+    monkeypatch.setattr(settings, "single_workspace", False)
+    tokens = await register_user(app_client, "key-scope@example.com")
+    await create_workspace(app_client, tokens, "Key One")
+    ws2 = await create_workspace(app_client, tokens, "Key Two")
+    monkeypatch.setattr(settings, "single_workspace", True)
+
+    resp = await app_client.post(
+        "/api/v1/api-keys",
+        json={"name": "scoped", "permissions": ["member:read"]},
+        headers=ws_headers(tokens, ws2["id"]),
+    )
+    assert resp.status_code == 201, resp.text
+    key = resp.json()
+
+    me = await app_client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {key['key']}", "X-Workspace-ID": ws2["id"]},
+    )
+    assert me.status_code == 200, me.text
+    assert [w["id"] for w in me.json()["workspaces"]] == [ws2["id"]]
+    assert me.json()["permissions"] == sorted(key["permissions"])
