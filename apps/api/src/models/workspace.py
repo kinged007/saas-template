@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.base import Base, StrEnum, StringUUID, TimestampMixin
+
+# Why a refresh token row died. Only "rotated" means "was exchanged, so a later
+# presentation of it is a replay" — the reuse signal keys off it. Shared by every
+# writer, and spelled out again in the ck_refresh_tokens_revoke_reason check
+# constraint below: no type checker runs on this package, so the database is what
+# rejects a reason outside this set.
+RevokeReason = Literal["rotated", "user", "logout", "password", "reuse"]
 
 
 class User(Base, TimestampMixin):
@@ -61,6 +69,16 @@ class AuthToken(Base, TimestampMixin):
 class RefreshToken(Base, TimestampMixin):
     __tablename__ = "refresh_tokens"
 
+    # Same constraint 0019 creates; kept on the model so `create_all` (tests,
+    # fresh installs) and the ORM agree on the domain.
+    __table_args__ = (
+        CheckConstraint(
+            "revoke_reason IS NULL OR revoke_reason IN "
+            "('rotated', 'user', 'logout', 'password', 'reuse')",
+            name="ck_refresh_tokens_revoke_reason",
+        ),
+    )
+
     id: Mapped[str] = mapped_column(
         StringUUID(), primary_key=True, default=lambda: str(uuid.uuid4())
     )
@@ -68,6 +86,7 @@ class RefreshToken(Base, TimestampMixin):
     token_hash: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     expires_at: Mapped[object] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoke_reason: Mapped[RevokeReason | None] = mapped_column(String(20), nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
 

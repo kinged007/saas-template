@@ -243,6 +243,7 @@ async def revoke_all_user_sessions(
         target_id,
         current_session_id=None,
         ip_address=_client_ip(request),
+        revoke_reason="user",
         actor_user_id=principal.user.id,
         workspace_id=workspace_id,
     )
