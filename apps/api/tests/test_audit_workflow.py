@@ -109,8 +109,10 @@ async def test_login_refresh_logout_persist_audit_rows(app_client):
     assert resp.status_code == 200
     assert await _wait_for(lambda: _actions_contain("user.token_refresh"))
 
+    # the token the client holds after the rotation — the pre-refresh one is
+    # already rotated, and revoking a rotated row is a no-op by design
     resp = await app_client.post(
-        "/api/v1/auth/logout", json={"refresh_token": tokens["refresh_token"]}
+        "/api/v1/auth/logout", json={"refresh_token": resp.json()["refresh_token"]}
     )
     assert resp.status_code == 204
     assert await _wait_for(lambda: _actions_contain("user.logout"))
@@ -199,6 +201,35 @@ async def test_session_revoke_persists_audit_rows(app_client):
     for row in rows:
         assert row.workspace_id is None
         assert row.resource_type == "user"
+
+
+async def test_refresh_token_reuse_audit_blames_nobody(app_client):
+    """The reuse action must not name the user as the actor who did it.
+
+    The replay proves a token escaped, not who sent it, and two tabs of one
+    browser can trigger it by racing. This row is what a responder reads to
+    decide whether the account owner needs to be told.
+    """
+    from tests.conftest import login, register_user
+
+    client = app_client
+    await register_user(client, "audit-reuse@example.com")
+    t2 = await login(client, "audit-reuse@example.com")
+    assert await _wait_for(lambda: _actions_contain("user.login"))
+
+    assert (
+        await client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]})
+    ).status_code == 200
+    assert (
+        await client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]})
+    ).status_code == 401
+    assert await _wait_for(lambda: _actions_contain("user.refresh_token_reuse"))
+
+    [row] = [r for r in await _audit_rows() if r.action == "user.refresh_token_reuse"]
+    assert row.actor_user_id is None
+    assert row.resource_type == "user"
+    assert row.details["revoked_count"] >= 1
+    assert row.details["session_id"]
 
 
 async def test_audit_rows_carry_ip_address(app_client):
