@@ -321,10 +321,10 @@ class AuthService:
         user_agent: str | None = None,
     ) -> TokenPair:
         """Rotate a refresh token: revoke the presented one, issue a new pair."""
-        stmt = (
-            select(RefreshToken)
-            .where(RefreshToken.token_hash == OpaqueToken.hash(refresh_token))
-            .with_for_update()
+        # Snapshot only: the claim below is one statement, so no row lock is
+        # needed — with_for_update() is a no-op on sqlite.
+        stmt = select(RefreshToken).where(
+            RefreshToken.token_hash == OpaqueToken.hash(refresh_token)
         )
         result = await self._session.execute(stmt)
         row = result.scalar_one_or_none()
@@ -334,52 +334,66 @@ class AuthService:
         # compromise, and must not take the user's live sessions down with it.
         if ensure_utc(row.expires_at) < now_utc():
             raise AuthError("refresh token expired")
-        if row.revoked_at is not None:
-            if row.revoke_reason != "rotated":
-                # Revoked by a user action (logout, "revoke other sessions",
-                # password change). Replaying it is a stale cookie, not theft.
-                raise AuthError("invalid refresh token")
-            # Already rotated: presenting it again is a compromise signal. A
-            # refresh whose response never reached the client re-presents this
-            # row benignly and takes the same branch — see #924.
-            logger.warning("refresh token reuse user=%s session=%s", row.user_id, row.id)
-            revoked = await self.revoke_other_sessions(
-                row.user_id,
-                current_session_id=None,
-                ip_address=ip_address,
-                action="user.refresh_token_reuse",
-                revoke_reason="reuse",
-                # The replay proves a token escaped, not who sent it, and one
-                # rotation can be two tabs of a browser racing. The attacker
-                # holds a token older than every session still live.
-                actor_user_id=None,
-                details={"session_id": row.id, "revoked_at": row.revoked_at.isoformat()},
+        if row.revoked_at is None:
+            user = await self._session.get(User, row.user_id)
+            if user is None or not user.is_active:
+                raise AuthError("account is disabled")
+            # Claim the row: one UPDATE whose rowcount elects exactly one
+            # winner when two rotations race, on both engines. The default
+            # "evaluate" sync would mark this session's copy rotated even
+            # when the database changed zero rows, so it stays off and the
+            # loser re-reads below.
+            claimed = await self._session.execute(
+                update(RefreshToken)
+                .where(RefreshToken.id == row.id, RefreshToken.revoked_at.is_(None))
+                .values(revoked_at=now_utc(), revoke_reason="rotated")
+                .execution_options(synchronize_session=False)
             )
-            if revoked:
-                logger.warning(
-                    "sessions revoked after refresh token reuse user=%s count=%d",
-                    row.user_id,
-                    revoked,
+            await self._session.commit()
+            if claimed.rowcount == 1:
+                pair = await self.issue_tokens(user, ip_address=ip_address, user_agent=user_agent)
+                await publish_audit(
+                    self._bus,
+                    workspace_id=None,
+                    resource_type="user",
+                    resource_id=user.id,
+                    action="user.token_refresh",
+                    actor_user_id=user.id,
+                    details={"email": user.email},
+                    ip_address=ip_address,
                 )
+                return pair
+            # Lost the race after the snapshot: re-read so the reuse branch
+            # below classifies on the winner's committed revocation, not the
+            # stale live copy.
+            await self._session.refresh(row)
+        if row.revoke_reason != "rotated":
+            # Revoked by a user action (logout, "revoke other sessions",
+            # password change). Replaying it is a stale cookie, not theft.
             raise AuthError("invalid refresh token")
-        user = await self._session.get(User, row.user_id)
-        if user is None or not user.is_active:
-            raise AuthError("account is disabled")
-        row.revoked_at = now_utc()
-        row.revoke_reason = "rotated"
-        await self._session.commit()
-        pair = await self.issue_tokens(user, ip_address=ip_address, user_agent=user_agent)
-        await publish_audit(
-            self._bus,
-            workspace_id=None,
-            resource_type="user",
-            resource_id=user.id,
-            action="user.token_refresh",
-            actor_user_id=user.id,
-            details={"email": user.email},
+        # Already rotated: presenting it again is a compromise signal. A
+        # refresh whose response never reached the client re-presents this
+        # row benignly and takes the same branch — see #924.
+        logger.warning("refresh token reuse user=%s session=%s", row.user_id, row.id)
+        revoked = await self.revoke_other_sessions(
+            row.user_id,
+            current_session_id=None,
             ip_address=ip_address,
+            action="user.refresh_token_reuse",
+            revoke_reason="reuse",
+            # The replay proves a token escaped, not who sent it, and one
+            # rotation can be two tabs of a browser racing. The attacker
+            # holds a token older than every session still live.
+            actor_user_id=None,
+            details={"session_id": row.id, "revoked_at": row.revoked_at.isoformat()},
         )
-        return pair
+        if revoked:
+            logger.warning(
+                "sessions revoked after refresh token reuse user=%s count=%d",
+                row.user_id,
+                revoked,
+            )
+        raise AuthError("invalid refresh token")
 
     async def revoke_session(
         self,
