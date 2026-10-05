@@ -13,7 +13,8 @@ intact for two unrelated reasons:
 - Because that branch never charges: /auth/2fa/login's 401s raised before
   `check` (challenge-token guessing is unthrottled by this limiter) and by
   `verify_login_code`, where only a rejected code charges, on `ip:<user_id>`
-  rather than on login's `ip:<email>`. Every OAuth route likewise calls `check`
+  rather than on login's `ip:<email>`, and `auth.py`'s account-disabled 401
+  after `check`. Every OAuth route likewise calls `check`
   and no `fail`.
 
 Read the route, not this list, before adding a `fail`.
