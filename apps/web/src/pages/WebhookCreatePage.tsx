@@ -9,10 +9,10 @@ import {
 import { useForm } from "@refinedev/react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Check, Copy } from "lucide-react";
 import { Navigate } from "react-router";
 import { toast } from "sonner";
 
+import { CopyButton } from "@/components/CopyButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -63,10 +63,6 @@ export function WebhookCreatePage() {
   // stacking one that ends it early, and it dies with the component.
   const copyTimer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(copyTimer.current), []);
-
-  // The copy icon flips to a check, so its accessible name follows; the pair the
-  // button keeps is `title` + `aria-label`, equal to each other (#332).
-  const copyLabel = copied ? "Copied" : "Copy signing secret";
 
   const {
     refineCore: { onFinish, formLoading },
@@ -193,11 +189,10 @@ export function WebhookCreatePage() {
             <Badge variant="outline" className="font-mono text-xs break-all">
               {created?.secret}
             </Badge>
-            <Button
-              variant="outline"
+            <CopyButton
+              copied={copied}
+              label="Copy signing secret"
               size="sm"
-              title={copyLabel}
-              aria-label={copyLabel}
               onClick={async () => {
                 if (!created) return;
                 // Clear before the write so the previous window dies even if this
@@ -207,9 +202,7 @@ export function WebhookCreatePage() {
                 setCopied(true);
                 copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
               }}
-            >
-              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            </Button>
+            />
           </div>
           <DialogFooter>
             <Button onClick={() => list("webhooks")}>Done</Button>

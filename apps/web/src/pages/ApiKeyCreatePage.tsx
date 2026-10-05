@@ -9,10 +9,10 @@ import {
 import { useForm } from "@refinedev/react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Check, Copy } from "lucide-react";
 import { Navigate } from "react-router";
 import { toast } from "sonner";
 
+import { CopyButton } from "@/components/CopyButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -77,10 +77,6 @@ export function ApiKeyCreatePage() {
     setCopied(false);
   };
   useEffect(() => () => window.clearTimeout(copyTimer.current), []);
-
-  // The copy icon flips to a check, so its accessible name follows; the pair the
-  // button keeps is `title` + `aria-label`, equal to each other (#332).
-  const copyLabel = copied ? "Copied" : "Copy API key";
 
   const {
     refineCore: { onFinish, formLoading },
@@ -289,19 +285,12 @@ export function ApiKeyCreatePage() {
                 value={created?.key ?? ""}
                 className="font-mono"
               />
-              <Button
+              <CopyButton
                 type="button"
+                copied={copied}
+                label="Copy API key"
                 onClick={copyKey}
-                variant="outline"
-                title={copyLabel}
-                aria-label={copyLabel}
-              >
-                {copied ? (
-                  <Check className="h-4 w-4" />
-                ) : (
-                  <Copy className="h-4 w-4" />
-                )}
-              </Button>
+              />
             </div>
             {created && created.permissions.length > 0 && (
               <div className="flex flex-wrap gap-1">
