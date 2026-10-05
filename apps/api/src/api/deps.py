@@ -137,7 +137,9 @@ async def require_session_user(
     knows. It is also neither rate-limited (login, forgot and reset call
     `get_auth_limiter()`) nor quota-charged — it never reaches
     `record_key_use` — so a key can trigger a mail per call without spending
-    key quota. See the route's own comment.
+    key quota.
+    ponytail: that mail path is unmetered by design today; put
+    `get_auth_limiter()` on the route when the ceiling has to be closed.
     """
     if principal.api_key is not None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "api keys cannot perform this action")

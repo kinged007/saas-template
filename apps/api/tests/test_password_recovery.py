@@ -191,7 +191,8 @@ async def test_login_not_blocked_when_unverified(app_client):
 
 
 async def test_resend_verification_stays_key_reachable_and_unmetered(app_client, monkeypatch):
-    """`require_session_user` is not the whole story, and this is the exception.
+    """`require_session_user` is not the whole story; this is the exception for
+    outbound mail.
 
     The route authorizes through `get_current_user`, not the session-only gate,
     so a key reaches it. It also calls neither the auth limiter (login, forgot
@@ -228,4 +229,5 @@ async def test_resend_verification_stays_key_reachable_and_unmetered(app_client,
     assert len(sent) == 2  # every call mails: no limiter trips between them
 
     keys = await app_client.get("/api/v1/api-keys", headers=owner_headers)
-    assert keys.json()[0]["usage_count"] == 0  # and none of it is charged
+    mine = next(k for k in keys.json() if k["id"] == key["id"])
+    assert mine["usage_count"] == 0  # and none of it is charged

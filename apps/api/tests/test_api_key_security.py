@@ -1030,6 +1030,34 @@ async def test_auth_me_reports_the_keys_own_grant_not_the_owners_role(app_client
     assert me_key.json()["permissions"] != me_owner.json()["permissions"]
 
 
+async def test_auth_me_drops_a_keys_grant_when_its_membership_is_suspended(app_client):
+    """`permissions` is what the gate authorizes on, and the gate also checks
+    the membership: a key whose creator's membership is not active gets no
+    workspaces, so it must get no permissions either."""
+    client = app_client
+    owner = await register_user(client, "susp-owner@example.com")
+    ws = await create_workspace(client, owner, "Susp Grant Inc")
+    owner_headers = ws_headers(owner, ws["id"])
+    # The key's creator is the admin, not the owner: the owner cannot be
+    # suspended (nor suspend themselves), and a key belongs to whoever minted
+    # it, so the membership under test has to be the second one.
+    admin = await _add_member(client, owner_headers, ws["id"], "susp-admin@example.com", "admin")
+    key = await _create_key(client, ws_headers(admin, ws["id"]), "granted", ["member:read"])
+
+    membership_id = next(
+        m["membership_id"]
+        for m in (await client.get("/api/v1/members", headers=owner_headers)).json()
+        if m["email"] == "susp-admin@example.com"
+    )
+    suspended = await client.post(f"/api/v1/members/{membership_id}/suspend", headers=owner_headers)
+    assert suspended.status_code == 200, suspended.text
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    assert me_key.json()["workspaces"] == []
+    assert me_key.json()["permissions"] == []
+
+
 async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     """A run is authorized against the key's own permission list and its own
     workspace — never the creator's role, and never deployment-wide."""

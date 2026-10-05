@@ -573,15 +573,12 @@ async def test_auth_me_gives_a_key_its_own_workspace_in_single_mode(
     app_client, single_workspace_on, monkeypatch
 ):
     """The single-workspace filter collapses the session user's UI; a key is
-    already pinned to one workspace, and its gate never reads the flag.
-
-    Filtering a key a second time against the oldest workspace emptied the
-    payload: the key was told `workspaces: []` and `permissions: []` while
-    `require_permission` still authorized it in full where it belongs.
+    already pinned to one workspace, and its gate never reads the flag, so the
+    key keeps its own workspace instead of being filtered to the oldest one.
     """
     monkeypatch.setattr(settings, "single_workspace", False)
     tokens = await register_user(app_client, "key-scope@example.com")
-    ws1 = await create_workspace(app_client, tokens, "Key One")
+    await create_workspace(app_client, tokens, "Key One")
     ws2 = await create_workspace(app_client, tokens, "Key Two")
     monkeypatch.setattr(settings, "single_workspace", True)
 
