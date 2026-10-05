@@ -34,19 +34,52 @@ test("only a resource with no GET-by-id route is refused by getOne", () => {
   }
 });
 
-test("every read verb in dataProvider maps the resource through resourcePath()", () => {
+// The verbs that take a `resource` and must send it through resourcePath().
+// `getMany` and `deleteMany` are the ones that regressed: they were left to the
+// ...baseDataProvider spread, which builds `${apiUrl}/${resource}` itself and
+// 404s for every renamed resource (simple-rest v6 does not implement
+// `deleteMany` at all, so that verb was not even a function).
+const ROUTED_VERBS = [
+  "getList",
+  "getOne",
+  "getMany",
+  "create",
+  "update",
+  "deleteOne",
+  "deleteMany",
+];
+
+// Verbs whose url does not come from `resource`.
+const UNSCOPED_VERBS = ["custom", "getApiUrl"];
+
+test("every resource-scoped verb in dataProvider maps the resource through resourcePath()", () => {
   const source = readFileSync(join(srcDir, "providers", "dataProvider.ts"), "utf8");
-  // `getMany` is the one that silently regressed: it was left to the
-  // ...baseDataProvider spread, which builds `${apiUrl}/${resource}` itself and
-  // 404s for every renamed resource. The lookahead stops the scan at the next
-  // `  verb:` property, so an override that is present but passes the raw
-  // resource through still fails — that is the mutation the previous bounded
-  // window let through.
-  for (const verb of ["getList", "getOne", "getMany", "update", "create", "deleteOne"]) {
+  const start = source.indexOf("export const dataProvider");
+  const literal = source.slice(start, source.indexOf("\n};", start));
+  const declared = [...literal.matchAll(/^ {2}([a-zA-Z]+):/gm)].map((m) => m[1]);
+
+  // The lookahead stops the scan at the next `  verb:` property, so an override
+  // that is present but passes the raw resource through still fails.
+  for (const verb of ROUTED_VERBS) {
     assert.match(
-      source,
+      literal,
       new RegExp(`${verb}:\\s*(?:async\\s*)?\\(\\{(?:(?!\\n  [a-zA-Z]+:)[\\s\\S])*?resourcePath\\(`),
       `dataProvider.${verb} does not route through resourcePath()`,
     );
   }
+
+  // A verb absent by accident (left to the spread) is indistinguishable from one
+  // absent by design when the check is only the loop above, so the declared set
+  // is closed: anything new must be routed or explicitly listed as unscoped.
+  const routed = new Set([...ROUTED_VERBS, ...UNSCOPED_VERBS]);
+  assert.deepEqual(
+    declared.filter((verb) => !routed.has(verb)),
+    [],
+    "dataProvider declares a verb with no entry in ROUTED_VERBS or UNSCOPED_VERBS",
+  );
+  assert.deepEqual(
+    ROUTED_VERBS.filter((verb) => !declared.includes(verb)),
+    [],
+    "dataProvider is missing an override listed in ROUTED_VERBS",
+  );
 });
