@@ -499,6 +499,7 @@ def build_workflows(
         sender_id = payload.get("sender_id")
         sender_type = payload.get("sender_type", "user")
         participant_ids: list[str] = payload.get("participant_user_ids") or []
+        participant_ids = list(dict.fromkeys(participant_ids))
 
         if not workspace_id or not conversation_id or not participant_ids:
             return
