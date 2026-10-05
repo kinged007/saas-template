@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
+from typing import NamedTuple
 
 from sqlalchemy import select
 
@@ -45,35 +46,69 @@ WORKSPACES = [
     },
 ]
 
-# (workspace slug, user email, role) — the owner is added by create_workspace.
+
+# Every fixture row is a NamedTuple with slug and email in the same leading
+# order, built by keyword in the fixture constants below. `_check_fixtures`
+# reads `row.slug` / `row.email` by name, so a row whose two strings are
+# transposed is reported against the field it actually carries, with the row
+# itself in the message.
+class MembershipRow(NamedTuple):
+    slug: str
+    email: str
+    role: str
+
+
+class InvitationRow(NamedTuple):
+    slug: str
+    email: str
+    role: str
+
+
+class ApiKeyRow(NamedTuple):
+    slug: str
+    email: str
+    name: str
+    permissions: list[str]
+
+
+class NotificationRow(NamedTuple):
+    slug: str
+    email: str
+    type: str
+    title: str
+    body: str
+    acknowledged: bool
+    age_hours: int
+
+
+# The workspace owner is added by create_workspace.
 MEMBERSHIPS = [
-    ("acme-corp", "user1@example.com", "editor"),
-    ("globex", "user1@example.com", "viewer"),
+    MembershipRow(slug="acme-corp", email="user1@example.com", role="editor"),
+    MembershipRow(slug="globex", email="user1@example.com", role="viewer"),
 ]
 
-# (workspace slug, email, role) — pending invitations shown in the members page.
+# Pending invitations shown in the members page.
 INVITATIONS = [
-    ("acme-corp", "user2@example.com", "viewer"),
-    ("globex", "user2@example.com", "editor"),
+    InvitationRow(slug="acme-corp", email="user2@example.com", role="viewer"),
+    InvitationRow(slug="globex", email="user2@example.com", role="editor"),
 ]
 
-# (workspace slug, creator email, name, permissions).
 # Permissions are validated against the creator's role by ApiKeyService —
 # they must be a subset of what the creator can do, except key-only scopes
 # (notification:*) which any member may hold on a key. Raw secrets are printed
 # once, at creation time; re-running the seed keeps existing keys untouched.
 API_KEYS = [
-    (
-        "acme-corp",
-        "admin@example.com",
-        "ci-deploy",
-        ["member:read", "role:read"],
+    ApiKeyRow(
+        slug="acme-corp",
+        email="admin@example.com",
+        name="ci-deploy",
+        permissions=["member:read", "role:read"],
     ),
-    (
-        "acme-corp",
-        "admin@example.com",
-        "automation",
-        [
+    ApiKeyRow(
+        slug="acme-corp",
+        email="admin@example.com",
+        name="automation",
+        permissions=[
             "workspace:read",
             "workspace:update",
             "member:read",
@@ -88,81 +123,80 @@ API_KEYS = [
             "notification:update",
         ],
     ),
-    (
-        "acme-corp",
-        "user1@example.com",
-        "editor-script",
-        ["member:read", "role:read", "notification:read"],
+    ApiKeyRow(
+        slug="acme-corp",
+        email="user1@example.com",
+        name="editor-script",
+        permissions=["member:read", "role:read", "notification:read"],
     ),
-    (
-        "globex",
-        "user1@example.com",
-        "viewer-read",
-        ["member:read"],
+    ApiKeyRow(
+        slug="globex",
+        email="user1@example.com",
+        name="viewer-read",
+        permissions=["member:read"],
     ),
 ]
 
 
-def _notifications() -> list[tuple[str, str, str, str, str, bool, int]]:
-    """(user email, workspace slug, type, title, body, acknowledged, age_hours)."""
+def _notifications() -> list[NotificationRow]:
     return [
         # ---- admin — Acme Corp ----
-        (
-            "admin@example.com",
-            "acme-corp",
-            "workspace_invitation",
-            "New invitation sent",
-            "You invited user2@example.com to Acme Corp as a viewer.",
-            False,
-            2,
+        NotificationRow(
+            slug="acme-corp",
+            email="admin@example.com",
+            type="workspace_invitation",
+            title="New invitation sent",
+            body="You invited user2@example.com to Acme Corp as a viewer.",
+            acknowledged=False,
+            age_hours=2,
         ),
         # ---- admin — Globex ----
-        (
-            "admin@example.com",
-            "globex",
-            "workspace_invitation",
-            "New invitation sent",
-            "You invited user2@example.com to Globex as an editor.",
-            False,
-            1,
+        NotificationRow(
+            slug="globex",
+            email="admin@example.com",
+            type="workspace_invitation",
+            title="New invitation sent",
+            body="You invited user2@example.com to Globex as an editor.",
+            acknowledged=False,
+            age_hours=1,
         ),
         # ---- user1 — Acme Corp + Globex ----
-        (
-            "user1@example.com",
-            "acme-corp",
-            "workspace_invitation",
-            "You were invited to Acme Corp",
-            "Admin User invited you to the Acme Corp workspace.",
-            False,
-            6,
+        NotificationRow(
+            slug="acme-corp",
+            email="user1@example.com",
+            type="workspace_invitation",
+            title="You were invited to Acme Corp",
+            body="Admin User invited you to the Acme Corp workspace.",
+            acknowledged=False,
+            age_hours=6,
         ),
-        (
-            "user1@example.com",
-            "globex",
-            "workspace_invitation",
-            "You were invited to Globex",
-            "Admin User invited you to the Globex workspace.",
-            False,
-            3,
+        NotificationRow(
+            slug="globex",
+            email="user1@example.com",
+            type="workspace_invitation",
+            title="You were invited to Globex",
+            body="Admin User invited you to the Globex workspace.",
+            acknowledged=False,
+            age_hours=3,
         ),
         # ---- user2 — invited to both workspaces ----
-        (
-            "user2@example.com",
-            "acme-corp",
-            "workspace_invitation",
-            "You were invited to Acme Corp",
-            "Admin User invited you to the Acme Corp workspace.",
-            False,
-            2,
+        NotificationRow(
+            slug="acme-corp",
+            email="user2@example.com",
+            type="workspace_invitation",
+            title="You were invited to Acme Corp",
+            body="Admin User invited you to the Acme Corp workspace.",
+            acknowledged=False,
+            age_hours=2,
         ),
-        (
-            "user2@example.com",
-            "globex",
-            "workspace_invitation",
-            "You were invited to Globex",
-            "Admin User invited you to the Globex workspace.",
-            False,
-            1,
+        NotificationRow(
+            slug="globex",
+            email="user2@example.com",
+            type="workspace_invitation",
+            title="You were invited to Globex",
+            body="Admin User invited you to the Globex workspace.",
+            acknowledged=False,
+            age_hours=1,
         ),
     ]
 
@@ -175,30 +209,32 @@ def _check_fixtures() -> None:
     from a run. A slug that is in no fixture at all is a typo, and skipping it
     ships a demo quietly missing rows.
 
-    The email check applies only where the loop reads `users[email]` (members,
-    api keys, notifications), where an unknown email is a bare KeyError.
-    `INVITATIONS` invites an address that need not be registered yet — that is
-    the accept-invitation flow — so only its slug is checked.
+    The email check applies only where the loop reads `users[row.email]`
+    (members, api keys, notifications), where an unknown email is a bare
+    KeyError. `INVITATIONS` invites an address that need not be registered yet —
+    that is the accept-invitation flow — so only its slug is checked.
     """
     slugs = {spec["slug"] for spec in WORKSPACES}
     emails = {email for email, _, _ in DEMO_USERS}
-    # (fixture name, slug, email to check or None) — notification rows are
-    # (email, slug, ...).
-    rows = [
-        (name, slug, email if checks_email else None)
-        for name, fixture, checks_email in (
-            ("memberships", MEMBERSHIPS, True),
-            ("invitations", INVITATIONS, False),
-            ("api keys", API_KEYS, True),
-        )
-        for slug, email, *_ in fixture
-    ]
-    rows += [("notifications", slug, email) for email, slug, *_ in _notifications()]
-    for name, slug, email in rows:
-        if slug not in slugs:
-            raise RuntimeError(f"{name} fixture names unknown workspace slug {slug!r}")
-        if email is not None and email not in emails:
-            raise RuntimeError(f"{name} fixture names unknown user email {email!r}")
+    # `checks_email` mirrors which loop reads `users[row.email]`;
+    # test_email_check_covers_exactly_the_loops_that_read_users asserts it.
+    for name, fixture, checks_email in (
+        ("memberships", MEMBERSHIPS, True),
+        ("invitations", INVITATIONS, False),
+        ("api keys", API_KEYS, True),
+        ("notifications", _notifications(), True),
+    ):
+        for row in fixture:
+            # The row is in the message because a wrong slug and a transposed
+            # slug/email row look identical from the offending value alone.
+            if row.slug not in slugs:
+                raise RuntimeError(
+                    f"{name} fixture names unknown workspace slug {row.slug!r} in row {row!r}"
+                )
+            if checks_email and row.email not in emails:
+                raise RuntimeError(
+                    f"{name} fixture names unknown user email {row.email!r} in row {row!r}"
+                )
 
 
 async def main() -> None:
@@ -353,7 +389,7 @@ async def main() -> None:
             invitations[(slug, email)] = invite
 
         now = now_utc()
-        for email, slug, type_, title, body, acknowledged, age_hours in _notifications():
+        for slug, email, type_, title, body, acknowledged, age_hours in _notifications():
             if slug not in workspaces:
                 continue
             user = users[email]
