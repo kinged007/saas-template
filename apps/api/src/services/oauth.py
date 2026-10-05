@@ -186,7 +186,7 @@ async def exchange_code(
                 headers={"Accept": "application/json"},
             )
             resp.raise_for_status()
-            return resp.json()
+            tokens = resp.json()
     except Exception as exc:
         # The body names the cause the status cannot ("invalid_grant" vs. a
         # rejected code_verifier); log-only, the redirect detail stays
@@ -199,6 +199,12 @@ async def exchange_code(
                 body[:200].replace("\r", " ").replace("\n", " "),
             )
         raise OAuthError(f"code exchange failed: {_failure_detail(exc)}") from exc
+    # The callback reads id_token and access_token off the result and catches
+    # only OAuthError, so a list, string or null body has to fail here: its
+    # AttributeError would escape as a 500.
+    if not isinstance(tokens, dict):
+        raise OAuthError(f"token response for '{provider.id}' is not an object")
+    return tokens
 
 
 async def _jwks(
@@ -232,11 +238,17 @@ async def _jwks(
             resp = await client.get(uri)
             resp.raise_for_status()
             keys = resp.json()
-        # Parsed before it is cached: a set with no key a token could verify against
-        # would otherwise sit in the cache for its whole TTL and cost a refetch on every
-        # login that meets it.
+        # Parsed and checked before it is cached: a body with no `keys` member, or a
+        # set with no key a token could verify against, would otherwise sit in the cache
+        # for its whole TTL and cost a refetch on every login that meets it. Raised as
+        # OAuthError rather than a ValueError from inside the try, which
+        # `_failure_detail` would reduce to the literal string "ValueError".
+        if not isinstance(keys, dict):
+            raise OAuthError(f"key set for '{provider.id}' is not an object")
         if not _signing_candidates(keys):
-            raise ValueError("no key published for signing")
+            raise OAuthError(f"no key published for signing by '{provider.id}'")
+    except OAuthError:
+        raise
     except Exception as exc:
         raise OAuthError(f"could not load signing keys: {_failure_detail(exc)}") from exc
     cache.set(key, keys)
@@ -246,9 +258,8 @@ async def _jwks(
 def _signing_candidates(jwks_doc: dict[str, Any]) -> list[jwt.PyJWK]:
     """The published keys a token could be verified against.
 
-    Mirrors `jwt.PyJWKClient.get_signing_key`: only keys published for signing that carry a
-    kid are candidates, and the token's kid has to match one, so a token without a kid is
-    refused rather than verified against the sole published key.
+    Mirrors `jwt.PyJWKClient.get_signing_key`: only keys published for signing that
+    carry a kid are candidates.
     """
     return [
         k
@@ -258,7 +269,10 @@ def _signing_candidates(jwks_doc: dict[str, Any]) -> list[jwt.PyJWK]:
 
 
 def _signing_key(jwks_doc: dict[str, Any], id_token: str) -> jwt.PyJWK | None:
-    """The signing key whose kid the token names, or None when the set has no match."""
+    """The signing key whose kid the token names, or None when the set has no match.
+
+    A token without a kid is refused rather than verified against the sole published key.
+    """
     kid = jwt.get_unverified_header(id_token).get("kid")
     return next((k for k in _signing_candidates(jwks_doc) if k.key_id == kid), None)
 
