@@ -161,4 +161,41 @@ test.describe("webhooks page", () => {
       .poll(() => calls.filter((call) => call.startsWith("DELETE")))
       .toEqual([`DELETE ${COLLECTION}/sub-1`]);
   });
+
+  test("a bulk delete targets the collection, not the router prefix", async ({ page }) => {
+    await webhooks(page);
+    await subscriptions(page, 200, [SUBSCRIPTION]);
+    await page.route(
+      (url) => url.pathname.startsWith(`${COLLECTION}/sub-`),
+      (route) => route.fulfill({ status: 204, contentType: "application/json", body: "" }),
+    );
+    const calls: string[] = [];
+    await recordWebhookCalls(page, calls);
+
+    await page.goto("/webhooks");
+    // No page has a bulk-delete affordance, so the verb is driven through the
+    // provider the app itself uses. The specifier is assembled at run time
+    // because tsc would try to resolve the dev-server URL statically; vite
+    // serves this exact path, so it is the module instance already in memory —
+    // which matters, the access token lives in that module's memory only.
+    const deleted = await page.evaluate(async () => {
+      const specifier = ["/src/providers", "dataProvider.ts"].join("/");
+      const { dataProvider } = (await import(/* @vite-ignore */ specifier)) as {
+        dataProvider: {
+          deleteMany: (params: { resource: string; ids: string[] }) => Promise<{ data: unknown[] }>;
+        };
+      };
+      const { data } = await dataProvider.deleteMany({
+        resource: "webhooks",
+        ids: ["sub-1", "sub-2"],
+      });
+      return data;
+    });
+
+    expect(deleted).toHaveLength(2);
+    // The fan-out is concurrent, so the order is not fixed.
+    expect([...calls].filter((call) => call.startsWith("DELETE")).sort()).toEqual(
+      [`DELETE ${COLLECTION}/sub-1`, `DELETE ${COLLECTION}/sub-2`].sort(),
+    );
+  });
 });
