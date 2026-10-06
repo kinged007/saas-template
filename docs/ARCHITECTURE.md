@@ -94,7 +94,7 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 | Password (non-browser) | `POST /auth/login` → access + refresh in JSON; `POST /auth/refresh` takes `{"refresh_token"}` as before |
 | 2FA / OAuth (browser) | `POST /auth/2fa/login` / `POST /auth/oauth/token` with `use_cookies: true` set the same cookie and omit the JSON refresh; the OAuth one-time code handoff carries only the access token for cookie callers |
 | API keys | `Authorization: Bearer <key>`; permissions resolved per workspace (untouched by the cookie flow) |
-| Identity | `GET /auth/me` → current user + workspaces + permissions + embedded `profile` (auto-created, same shape as `GET /me/profile`). `permissions` is principal-dependent: a session user gets the union of the roles it holds in the listed workspaces, an API key only its own grant |
+| Identity | `GET /auth/me` → current user + workspaces + permissions + embedded `profile` (auto-created, same shape as `GET /me/profile`). `permissions` is principal-dependent: a session user gets the union of the roles it holds in the listed workspaces, an API key only its own grant — in the top-level field and in each `workspaces[]` entry alike (the nested entries still name the creator's membership role) |
 
 API key quota: a key with a `usage_quota` is capped per calendar month (UTC).
 `X-API-Key-Quota` / `X-API-Key-Remaining` report the month's limit and the uses

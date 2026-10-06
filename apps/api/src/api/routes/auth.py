@@ -681,26 +681,29 @@ async def me(
         single = await service.get_single_workspace()
         if single is not None:
             memberships = [m for m in memberships if m[0].id == single.id]
-    # Each entry is a *membership* row: the creator's role in that workspace,
-    # which is the fact `require_session_user` already relies on ("an API key
-    # carries its creator's role into the service layer"). For a key this is
-    # not the key's authority — see `permissions` below.
-    data["workspaces"] = [
-        workspace_to_dict(
-            w, role=role.name, permissions=role.permissions, joined_at=member.created_at
-        )
-        for w, role, member in memberships
-    ]
-    # A key's authority is its own grant, never the creator's role: this is the
-    # same list `require_permission` authorizes it on, so `/me` must not report
-    # a wildcard beside `is_superuser: false`. Branch on `is not None`, never on
-    # truthiness — an empty grant is a real grant, not a missing one. Empty too
-    # when the creator's membership in the key's workspace is not active:
-    # `list_workspaces` drops those rows and the gate refuses them, so the two
-    # must not disagree.
+    # `permissions` always means what this principal can do here: a session
+    # user gets the union of the roles it holds in the listed workspaces, an
+    # API key only its own grant — in the top-level field and in each nested
+    # entry alike. Each entry still names the creator's membership role (the
+    # fact `require_session_user` relies on); only the permission lists are
+    # the key's own. Branch on `is not None`, never on truthiness — an empty
+    # grant is a real grant, not a missing one. Empty too when the creator's
+    # membership in the key's workspace is not active: `list_workspaces`
+    # drops those rows and the gate refuses them, so the two must not disagree.
     if principal.api_key is not None:
-        data["permissions"] = sorted(principal.api_key.permissions) if memberships else []
+        key_grant = sorted(principal.api_key.permissions) if memberships else []
+        data["workspaces"] = [
+            workspace_to_dict(w, role=role.name, permissions=key_grant, joined_at=member.created_at)
+            for w, role, member in memberships
+        ]
+        data["permissions"] = key_grant
     else:
+        data["workspaces"] = [
+            workspace_to_dict(
+                w, role=role.name, permissions=role.permissions, joined_at=member.created_at
+            )
+            for w, role, member in memberships
+        ]
         data["permissions"] = sorted({p for _, role, _ in memberships for p in role.permissions})
     data["single_workspace"] = settings.single_workspace
     # Embed profile (lazy create)

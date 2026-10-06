@@ -1033,6 +1033,33 @@ async def test_auth_me_reports_the_keys_own_grant_not_the_owners_role(app_client
     assert me_key.json()["permissions"] != me_owner.json()["permissions"]
 
 
+@pytest.mark.parametrize("grant", [[], ["member:read"]])
+async def test_auth_me_narrows_workspace_permissions_to_the_keys_grant(app_client, grant):
+    """For a key principal, `workspaces[].permissions` is the key's own grant.
+
+    The nested field used to carry the creator's role set, so a client
+    reading it (like the web's `active?.permissions ?? identity?.permissions`)
+    got a capability the key does not have. `[]` pins the same truthiness
+    trap as the top-level fix: an empty grant stays `[]`, not the role.
+    """
+    client = app_client
+    owner = await register_user(client, "narrow@example.com")
+    ws = await create_workspace(client, owner, "Narrow Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "narrowed", grant)
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    body = me_key.json()
+    assert len(body["workspaces"]) == 1
+    assert body["workspaces"][0]["permissions"] == sorted(grant)
+    assert body["workspaces"][0]["permissions"] == body["permissions"]
+
+    me_owner = await client.get("/api/v1/auth/me", headers=auth_headers(owner))
+    assert me_owner.status_code == 200, me_owner.text
+    assert "*" in me_owner.json()["workspaces"][0]["permissions"]
+    assert body["workspaces"][0]["permissions"] != me_owner.json()["workspaces"][0]["permissions"]
+
+
 async def test_auth_me_drops_a_keys_grant_when_its_membership_is_suspended(app_client):
     """`permissions` is what the gate authorizes on, and the gate also checks
     the membership: a key whose creator's membership is not active gets no
