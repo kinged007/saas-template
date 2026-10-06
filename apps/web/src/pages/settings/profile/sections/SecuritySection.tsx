@@ -27,6 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { EmptyRow, formatDate } from "@/components/ui";
+import { errorMessage } from "@/utils/errorMessage";
 
 export type AuthSession = {
   id: string;
@@ -41,9 +42,19 @@ export type AuthSession = {
 export function SecuritySection() {
   const sessions = useCustom<AuthSession[]>({ url: "auth/sessions", method: "get" });
   const status = useCustom<{ enabled: boolean }>({ url: "auth/2fa/status", method: "get" });
-  const { mutateAsync, mutation } = useCustomMutation();
-  const call = (url: string, method: "post" | "delete", values?: unknown) =>
-    mutateAsync({ url, method, values, errorNotification: false } as never) as Promise<{ data: unknown }>;
+  const { mutateAsync: changePasswordMutate, mutation: changePasswordMutation } = useCustomMutation();
+  const { mutateAsync: setupMutate, mutation: setupMutation } = useCustomMutation();
+  const { mutateAsync: enableMutate, mutation: enableMutation } = useCustomMutation();
+  const { mutateAsync: disableMutate, mutation: disableMutation } = useCustomMutation();
+  const { mutateAsync: revokeOneMutate, mutation: revokeOneMutation } = useCustomMutation();
+  const { mutateAsync: revokeAllMutate, mutation: revokeAllMutation } = useCustomMutation();
+  const call = (
+    mutate: typeof changePasswordMutate,
+    url: string,
+    method: "post" | "delete",
+    values?: unknown,
+  ) =>
+    mutate({ url, method, values, errorNotification: false } as never) as Promise<{ data: unknown }>;
 
   const list: AuthSession[] = Array.isArray(sessions.result?.data) ? (sessions.result.data as AuthSession[]) : [];
   const enabled = (status.result?.data as { enabled?: boolean } | undefined)?.enabled ?? false;
@@ -82,7 +93,7 @@ export function SecuritySection() {
 
   const revokeOne = async (id: string) => {
     try {
-      await call(`auth/sessions/${id}`, "delete");
+      await call(revokeOneMutate, `auth/sessions/${id}`, "delete");
       toast.success("Session revoked");
       refresh();
     } catch (e) {
@@ -92,7 +103,7 @@ export function SecuritySection() {
 
   const revokeAll = async () => {
     try {
-      await call("auth/sessions", "delete");
+      await call(revokeAllMutate, "auth/sessions", "delete");
       toast.success("All other sessions revoked");
       refresh();
     } catch (e) {
@@ -102,7 +113,7 @@ export function SecuritySection() {
 
   const startSetup = async () => {
     try {
-      const r = (await call("auth/2fa/setup", "post")) as unknown as {
+      const r = (await call(setupMutate, "auth/2fa/setup", "post")) as unknown as {
         data: { setup_token: string; otpauth_uri: string; secret: string };
       };
       const data = r.data;
@@ -120,7 +131,7 @@ export function SecuritySection() {
   const confirmSetup = async () => {
     if (!setupToken) return;
     try {
-      const r = (await call("auth/2fa/enable", "post", { setup_token: setupToken, code: setupCode })) as unknown as {
+      const r = (await call(enableMutate, "auth/2fa/enable", "post", { setup_token: setupToken, code: setupCode })) as unknown as {
         data: { backup_codes: string[] };
       };
       setBackupCodes(r.data.backup_codes ?? []);
@@ -137,7 +148,7 @@ export function SecuritySection() {
 
   const disable = async () => {
     try {
-      await call("auth/2fa/disable", "post", { password });
+      await call(disableMutate, "auth/2fa/disable", "post", { password });
       setDisableOpen(false);
       setPassword("");
       toast.success("Two-factor disabled");
@@ -149,7 +160,7 @@ export function SecuritySection() {
 
   const changePassword = async () => {
     try {
-      await call("auth/change-password", "post", {
+      await call(changePasswordMutate, "auth/change-password", "post", {
         current_password: currentPw,
         new_password: newPw,
         ...(enabled && changeCode ? { code: changeCode } : {}),
@@ -200,7 +211,7 @@ export function SecuritySection() {
             </div>
           )}
           <div>
-            <Button onClick={changePassword} disabled={!changeValid || mutation.isPending}>
+            <Button onClick={changePassword} disabled={!changeValid || changePasswordMutation.isPending}>
               Change password
             </Button>
           </div>
@@ -216,7 +227,7 @@ export function SecuritySection() {
         <CardContent className="flex flex-col gap-4">
           {!enabled && !setupUri && (
             <div>
-              <Button variant="outline" onClick={startSetup} disabled={mutation.isPending}>
+              <Button variant="outline" onClick={startSetup} disabled={setupMutation.isPending}>
                 Set up authenticator
               </Button>
             </div>
@@ -248,7 +259,7 @@ export function SecuritySection() {
                         // `clearCopied` above already reset `copied`, so only
                         // the toast is left to show.
                         toast.error("Could not copy setup key", {
-                          description: (e as Error)?.message ?? "Copy failed",
+                          description: errorMessage(e),
                         });
                       }
                     }}
@@ -262,7 +273,7 @@ export function SecuritySection() {
                 <Input id="totp-code" inputMode="numeric" maxLength={8} value={setupCode} onChange={(e) => setSetupCode(e.target.value)} placeholder="123456" />
               </div>
               <div className="flex gap-2">
-                <Button onClick={confirmSetup} disabled={!setupCode || mutation.isPending}>Enable</Button>
+                <Button onClick={confirmSetup} disabled={!setupCode || enableMutation.isPending}>Enable</Button>
                 <Button variant="outline" onClick={() => { setSetupUri(null); setSetupSecret(null); setSetupToken(null); clearCopied(); }}>Cancel</Button>
               </div>
             </div>
@@ -313,7 +324,7 @@ export function SecuritySection() {
                     </TableCell>
                     <TableCell className="text-right">
                       {!s.current && (
-                        <Button variant="outline" size="sm" onClick={() => revokeOne(s.id)}>
+                        <Button variant="outline" size="sm" onClick={() => revokeOne(s.id)} disabled={revokeOneMutation.isPending}>
                           Revoke
                         </Button>
                       )}
@@ -326,7 +337,7 @@ export function SecuritySection() {
           </div>
           {list.some((s) => !s.current) && (
             <div className="flex justify-end pt-4">
-              <Button variant="destructive" size="sm" onClick={revokeAll} disabled={mutation.isPending}>
+              <Button variant="destructive" size="sm" onClick={revokeAll} disabled={revokeAllMutation.isPending}>
                 Revoke other sessions
               </Button>
             </div>
@@ -346,7 +357,7 @@ export function SecuritySection() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDisableOpen(false)}>Cancel</Button>
-            <Button variant="destructive" onClick={disable} disabled={!password || mutation.isPending}>Disable</Button>
+            <Button variant="destructive" onClick={disable} disabled={!password || disableMutation.isPending}>Disable</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
