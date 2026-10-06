@@ -39,10 +39,10 @@ test.describe("dashboard card headings", () => {
 
     // By role, not by text: a text query matches the div CardTitle renders.
     await expect(
-      page.getByRole("heading", { name: "Members", level: 3 }),
+      pageBody(page).getByRole("heading", { name: "Members", level: 3 }),
     ).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "Inbox", level: 3 }),
+      pageBody(page).getByRole("heading", { name: "Inbox", level: 3 }),
     ).toBeVisible();
   });
 });
