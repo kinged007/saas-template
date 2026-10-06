@@ -49,6 +49,10 @@ def _is_https_request(request: Request | None) -> bool:
 def cookie_secure_for(request: Request | None = None) -> bool:
     """Secure flag for the refresh cookie.
 
+    `request=None` means "no request context": the pre-#155 ENVIRONMENT-based
+    flag is returned unchanged. Callers must pass a live request so the https
+    detection above applies; set_refresh_cookie already enforces this.
+
     Explicit REFRESH_COOKIE_SECURE wins; otherwise https requests get Secure
     even when ENVIRONMENT says development (e.g. prod misconfig serving TLS
     behind a plain-http app server), and plain-http requests skip it so the
