@@ -385,6 +385,13 @@ async def test_refresh_refuses_pair_when_account_deleted_mid_rotation(app_client
 
 
 async def test_refresh_fails_closed_when_the_owner_re_read_raises(app_client, monkeypatch):
+    """A raising owner re-read surfaces as a 500, not a 401, and that is deliberate.
+
+    The RuntimeError escapes to Starlette's ServerErrorMiddleware: the re-read
+    is a security precondition, so the raise must fail closed instead of
+    falling through to set_refresh_cookie. Any refresh failure logs the client
+    out (dataProvider treats it as logged-out).
+    """
     # The existence check is a precondition for issuing a pair, so it cannot sit
     # under the join's best-effort handler: a re-read that raises used to be
     # logged and the caller still got 200 with a live pair.
