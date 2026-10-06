@@ -167,7 +167,7 @@ Durable subjects (persisted, one workflow per subject, load-balanced):
 | --- | --- |
 | `workspaces.member.invited` | persist a Notification row for the invitee |
 | `workspaces.member.joined` | notify the inviter + other active members |
-| `workspaces.member.role_changed` | notify the member whose role changed |
+| `workspaces.member.role_changed` | notify the member whose role changed; an ownership transfer emits one event per user whose role actually changed (new owner promotion + previous owner demotion), against a single `workspace.ownership_transferred` audit record (see `docs/WEBHOOKS.md`) |
 | `workspaces.member.removed` | notify the removed member |
 | `workspaces.invitation.created` | email unregistered invitees; a failed send is audited (`invitation.email_failed`) |
 | `workspaces.created` | provisioning/analytics hook (TODO) |

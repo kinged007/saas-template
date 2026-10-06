@@ -14,7 +14,9 @@ backoff until success or exhaustion, and the log is visible in the UI.
 
 `GET /api/v1/webhooks/events` lists subscribable event names
 (`workspace.created`, `invitation.created`, `member.invited`,
-`member.joined`, `member.role_changed`, `member.removed`,
+`member.joined`, `member.role_changed` (an ownership transfer emits one
+`member.role_changed` event per user whose role actually changed, against a
+single `workspace.ownership_transferred` audit record), `member.removed`,
 `apikey.created`, `apikey.revoked`, `audit.entry.created`,
 `conversation.message.created`). An empty `events` list means all events.
 
@@ -43,8 +45,9 @@ Body envelope:
 ```
 
 `correlation_id` groups deliveries from one operation: an ownership transfer
-publishes two `member.role_changed` events (promotion + demotion) sharing one
-id. It is `null` for standalone events.
+publishes one `member.role_changed` event per user whose role actually changed
+(promotion + demotion), sharing one id against a single
+`workspace.ownership_transferred` audit record. It is `null` for standalone events.
 
 Delivery is **at-least-once and unordered** across retries — dedupe on
 `X-Webhook-Delivery` / `event_id` before acting on the payload. Pair related
