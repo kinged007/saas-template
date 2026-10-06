@@ -196,7 +196,7 @@ async def exchange_code(
             logger.warning(
                 "oauth token endpoint error body provider=%s: %s",
                 provider.id,
-                body[:200].replace("\r", " ").replace("\n", " "),
+                _single_line(body),
             )
         raise OAuthError(f"code exchange failed: {_failure_detail(exc)}") from exc
     # The callback reads id_token and access_token off the result and catches
@@ -303,10 +303,12 @@ async def claims_from_id_token(
             options={"require": ["exp", "iss", "sub"]},
         )
     except Exception as exc:
+        # The message can echo token-supplied header data (an unknown `crit`
+        # extension echoes its name), so it is flattened like the body above.
         logger.warning(
             "id_token verification failed for provider %s: %s",
             provider.id,
-            exc,
+            _single_line(exc),
             exc_info=logger.isEnabledFor(logging.DEBUG),
         )
         return None
@@ -331,6 +333,11 @@ async def _verified_email(client: httpx.AsyncClient, url: str, headers: dict[str
     # is deterministic only while that ordering is stable.
     chosen = next((e for e in entries if e.get("primary")), None) or next(iter(entries), None)
     return str(chosen["email"]) if chosen else ""
+
+
+def _single_line(text: object, limit: int = 200) -> str:
+    """Truncate, then flatten CR/LF so untrusted text cannot forge log lines."""
+    return str(text)[:limit].replace("\r", " ").replace("\n", " ")
 
 
 def _failure_detail(exc: Exception) -> str:
