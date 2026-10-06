@@ -382,6 +382,23 @@ async def test_oauth_callback_account_gone_redirects(app_client, oauth_on, monke
         assert resp.headers["location"] == "http://localhost:5173/login?error=sign-in%20failed"
 
 
+async def test_oauth_callback_non_401_join_error_propagates(app_client, oauth_on, monkeypatch):
+    # Only the helper's 401 account-gone guard may become a login redirect;
+    # any other HTTPException (e.g. a 503 from the join) must propagate.
+    from fastapi import HTTPException, status
+
+    import src.api.routes.oauth as oauth_routes
+
+    _mock_oauth(monkeypatch)
+
+    async def boom(db, container, user):
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "join down")
+
+    monkeypatch.setattr(oauth_routes, "_join_single_workspace_best_effort", boom)
+    _, resp = await _callback(app_client, monkeypatch)
+    assert resp.status_code == 503, resp.text
+
+
 async def test_oauth_new_user_blocked_when_registration_disabled(app_client, oauth_on, monkeypatch):
     _mock_oauth(monkeypatch, email="newblocked@example.com")
     monkeypatch.setattr(settings, "auth_allow_registration", False)
