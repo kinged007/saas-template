@@ -7,7 +7,7 @@ from src.core.dates import now_utc
 from src.db.session import SessionFactory
 from src.models.api_key import ApiKey
 from src.models.core import Invitation, Notification
-from src.models.workspace import Role, Workspace, WorkspaceMember
+from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.seed import DEMO_PASSWORD
 from src.seed import main as seed_main
 from src.services.auth import AuthService
@@ -113,8 +113,13 @@ async def test_seed_registers_fixture_when_canonical_workspace_has_no_owner_memb
     owner, and roles cannot be deleted — so the branch is defensive. The test
     reaches it the only way the seed could see it in production: an
     out-of-band write of `role_id`. The demo admin is not a member here, so the
-    fixture attaches on registration and the seed creates API keys,
-    invitations and notifications for the workspace.
+    fixture attaches on registration. Only rows keyed to the admitted
+    acme-corp fixture are created — the admin-keyed ones are gated on
+    membership — and the assertions pin the exact set: one API key
+    (`editor-script`), one invitation (`user2@example.com`) and three
+    notifications (admin/user1/user2). A fifth API_KEYS entry or an extra
+    fixture row for the canonical workspace therefore fails here, instead of
+    only invalidating this docstring's enumeration.
     """
     monkeypatch.setattr(settings, "single_workspace", False)
     async with SessionFactory() as session:
@@ -146,11 +151,37 @@ async def test_seed_registers_fixture_when_canonical_workspace_has_no_owner_memb
 
     assert await _workspaces() == {workspace_id: "first"}
     async with SessionFactory() as session:
-        for model in (ApiKey, Invitation, Notification):
-            result = await session.execute(
-                select(model.id).where(model.workspace_id == workspace_id)
+        api_keys = (
+            (await session.execute(select(ApiKey.name).where(ApiKey.workspace_id == workspace_id)))
+            .scalars()
+            .all()
+        )
+        invites = (
+            (
+                await session.execute(
+                    select(Invitation.email).where(Invitation.workspace_id == workspace_id)
+                )
             )
-            assert result.scalars().all() != [], f"no {model.__name__} rows in {workspace_id}"
+            .scalars()
+            .all()
+        )
+        notifications = (
+            await session.execute(
+                select(User.email, Notification.title)
+                .join(User, User.id == Notification.user_id)
+                .where(Notification.workspace_id == workspace_id)
+            )
+        ).all()
+
+        assert api_keys == ["editor-script"], f"api keys in {workspace_id}: {api_keys}"
+        assert invites == ["user2@example.com"], f"invitations in {workspace_id}: {invites}"
+        # A set, not a list: the fixture rows carry offsets that tie at the
+        # same created_at, so select order is not pinned.
+        assert set(notifications) == {
+            ("admin@example.com", "New invitation sent"),
+            ("user1@example.com", "You were invited to Acme Corp"),
+            ("user2@example.com", "You were invited to Acme Corp"),
+        }, f"notifications in {workspace_id}: {notifications}"
 
 
 async def test_seed_fails_with_a_clear_error_when_owner_role_is_missing(single_workspace_on):
