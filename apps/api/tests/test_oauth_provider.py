@@ -253,6 +253,10 @@ async def _clean_db():
     These tests never touch the database, and each default unlink/recreate cycle
     churns the SQLite file the whole suite shares (#319). Skipping it here keeps
     26 pointless teardowns out of every full run.
+
+    This is a workaround for #319, not a fix — skipping the churn is also what
+    keeps tests/test_jobs_atomicity_battle.py green. Delete this override when
+    the first DB-touching test lands in this file; the real fix is #319.
     """
     yield
 
