@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { oauthCodeConsumed } from "./oauthCallback.ts";
+import { oauthCallbackLoginHref, oauthCodeConsumed } from "./oauthCallback.ts";
 
 test("a remount after navigate() stripped the code is a repeat, not a missing code", () => {
   // navigate() rewrites the URL before the remount commits, so the code is
@@ -19,6 +19,21 @@ test("a first visit is never a repeat", () => {
   assert.equal(oauthCodeConsumed(null, null, false), false, "no code, none consumed, signed out");
   assert.equal(oauthCodeConsumed("abc123", null, true), false, "nothing consumed yet");
   assert.equal(oauthCodeConsumed("other", "abc123", true), false, "a different code");
+});
+
+test("the escape link carries the backend error through to /login", () => {
+  assert.equal(oauthCallbackLoginHref("?error=sign-in%20failed"), "/login?error=sign-in%20failed");
+  assert.equal(
+    oauthCallbackLoginHref("?error=registration%20is%20disabled"),
+    "/login?error=registration%20is%20disabled",
+  );
+  assert.equal(oauthCallbackLoginHref("?error=a%26b"), "/login?error=a%26b");
+});
+
+test("the escape link is bare /login without an error to carry", () => {
+  assert.equal(oauthCallbackLoginHref("?code=abc123"), "/login");
+  assert.equal(oauthCallbackLoginHref(""), "/login");
+  assert.equal(oauthCallbackLoginHref("?error="), "/login");
 });
 
 test("a stale latch dies with the session it was stored for", () => {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 
-import { oauthCodeConsumed } from "./oauthCallback";
+import { OAUTH_CALLBACK_TIMEOUT_MS, oauthCallbackLoginHref, oauthCodeConsumed } from "./oauthCallback";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { afterAuthRedirect, authProvider, seedWorkspace } from "@/providers/authProvider";
@@ -86,8 +86,12 @@ export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: str
 // the instance and the code is exchanged twice.
 let consumedCode: string | null = null;
 
+const PENDING_STATUS = "Signing you in…";
+
 export function OAuthCallbackPage() {
-  const [status, setStatus] = useState("Signing you in…");
+  const [status, setStatus] = useState(PENDING_STATUS);
+  const [timedOut, setTimedOut] = useState(false);
+  const pending = status === PENDING_STATUS;
   const navigate = useNavigate();
   // StrictMode runs this effect twice in dev and the code is single-use, so a
   // second exchange would race the first and report an expired code.
@@ -110,11 +114,9 @@ export function OAuthCallbackPage() {
     // clears, and the access token the exchange stored is in-memory only, so
     // logout and the 401 handler both drop it while the latch survives. Honoring
     // a latch with no session left it on "Signing you in…" forever.
-    // ponytail: a signed-out repeat still lands on the terminal
-    // "Missing sign-in code." — add a retry/link to /login, or replace the
-    // module latch with per-code state, when /oauth/callback gets a client-side
-    // entry point (e.g. lifting the public auth routes out of
-    // <WorkspaceProvider>).
+    // Every terminal branch below links back to /login. The retry runs a
+    // fresh authorize, so it carries a fresh single-use code and the latch
+    // above stays correct.
     if (oauthCodeConsumed(code, consumedCode, tokenStore.getAccess() !== null)) return;
     if (!code) {
       setStatus("Missing sign-in code.");
@@ -135,11 +137,25 @@ export function OAuthCallbackPage() {
       })
       .catch(() => setStatus("Sign-in failed. The code may have expired."));
   }, [navigate]);
+  // Bound the pending state: past this the page offers the escape instead of
+  // hanging on "Signing you in…", which is otherwise indistinguishable from
+  // the sessionAlive repeat path. Terminal states render the escape at once.
+  useEffect(() => {
+    const timer = window.setTimeout(() => setTimedOut(true), OAUTH_CALLBACK_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
   void authProvider;
   return (
     <div className="bg-background flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
-        <CardContent className="pt-6 text-center text-sm">{status}</CardContent>
+        <CardContent className="flex flex-col items-center gap-4 pt-6 text-center text-sm">
+          <p>{timedOut && pending ? "Sign-in is taking longer than expected." : status}</p>
+          {(timedOut || !pending) && (
+            <Button asChild>
+              <Link to={oauthCallbackLoginHref(window.location.search)}>Back to sign-in</Link>
+            </Button>
+          )}
+        </CardContent>
       </Card>
     </div>
   );
