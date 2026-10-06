@@ -252,11 +252,15 @@ async def verify_email(
 
 @router.post("/resend-verification", status_code=202)
 async def resend_verification(
-    # Key-reachable by design; see `require_session_user`'s docstring.
+    request: Request,
+    # Key-reachable by design; rate-limited per (IP, email) — see #1289 and
+    # `require_session_user`'s docstring.
     user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> dict:
+    key = _limit_key(request, user.email)
+    get_auth_limiter().check(key)
     if getattr(user, "email_verified_at", None) is not None:
         return {"detail": "email already verified"}
     service = AuthService(db, container.bus)
@@ -265,6 +269,10 @@ async def resend_verification(
         await _send_verification(service, fresh or user)
     except Exception:
         logger.exception("failed to resend verification email for user %s", user.id)
+    # Every send spends one unit of the auth-limiter budget, which the window
+    # caps: unlike login there is no success reset, because the send itself
+    # is the metered event, not a failure.
+    get_auth_limiter().fail(key)
     return {"detail": "if unverified, a verification link was sent"}
 
 
