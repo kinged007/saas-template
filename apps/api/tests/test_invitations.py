@@ -273,6 +273,51 @@ async def test_expired_invitation_shows_expired_and_rejects_accept(app_client):
     assert resp.status_code == 409
 
 
+async def test_revoke_expired_pending_invitation_returns_204(app_client):
+    """The Members-page Delete gate shows for `status == "pending"`, and an
+    expired invitation is still pending server-side — so DELETE must return
+    204 and flip the row to revoked."""
+    client = app_client
+    owner = await register_user(client, "zach@example.com")
+    ws = await create_workspace(client, owner)
+    roles = await client.get("/api/v1/roles", headers=ws_headers(owner, ws["id"]))
+    viewer = next(r for r in roles.json() if r["name"] == "viewer")
+
+    invite = (
+        await client.post(
+            "/api/v1/invitations",
+            json={"email": "zed@example.com", "role_id": viewer["id"]},
+            headers=ws_headers(owner, ws["id"]),
+        )
+    ).json()
+
+    # Backdate the expiry.
+    from datetime import timedelta
+
+    from src.core.dates import now_utc
+    from src.db.session import SessionFactory
+    from src.models.core import Invitation
+
+    async with SessionFactory() as session:
+        row = await session.get(Invitation, invite["id"])
+        row.expires_at = now_utc() - timedelta(minutes=5)
+        await session.commit()
+
+    listed = await client.get("/api/v1/invitations", headers=ws_headers(owner, ws["id"]))
+    item = next(i for i in listed.json() if i["id"] == invite["id"])
+    assert item["status"] == "pending"
+    assert item["expired"] is True
+
+    resp = await client.delete(
+        f"/api/v1/invitations/{invite['id']}", headers=ws_headers(owner, ws["id"])
+    )
+    assert resp.status_code == 204, resp.text
+
+    listed = await client.get("/api/v1/invitations", headers=ws_headers(owner, ws["id"]))
+    item = next(i for i in listed.json() if i["id"] == invite["id"])
+    assert item["status"] == "revoked"
+
+
 async def test_notification_read_all(app_client):
     client = app_client
     owner = await register_user(client, "tess@example.com")
