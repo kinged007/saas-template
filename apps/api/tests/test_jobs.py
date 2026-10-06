@@ -676,6 +676,85 @@ async def test_runs_history_pagination(app_client):
     assert len(resp.json()) == 2
 
 
+async def test_runs_list_masks_params_from_the_definition_schema(app_client):
+    """Run rows on the history endpoints are serialized with the
+    params_schema of the definition the caller already resolved —
+    `_list_runs` itself does no definition read (#1310). Pins the row-level
+    passthrough on both call sites: the workspace route, and the superuser
+    /global route over a workspace-owned definition (a `/global*` id may
+    name a workspace-owned definition by design)."""
+    import uuid
+
+    from sqlalchemy import select
+
+    from src.core.dates import now_utc
+    from src.db.session import SessionFactory
+    from src.jobs.registry import PASSWORD_MASK
+    from src.models.jobs import JobDefinition, JobRun, JobRunStatus, JobTrigger
+
+    client = app_client
+    _, ws, headers, _ = await setup_workspace(client, "runs-mask-owner@example.com")
+    job = _by_key((await client.get("/api/v1/jobs", headers=headers)).json(), "test.echo")
+
+    # Insert runs directly: test.echo has enabled=False, and the row-level
+    # serialization — not the execution path — is what is under test.
+    async with SessionFactory() as session:
+        definition = (
+            await session.execute(select(JobDefinition).where(JobDefinition.id == job["id"]))
+        ).scalar_one()
+        params = {"greeting": "hi", "retries": 3, "secret": "plaintext-secret"}
+        stamp = now_utc()
+        for _ in range(2):
+            session.add(
+                JobRun(
+                    id=str(uuid.uuid4()),
+                    definition_id=definition.id,
+                    workspace_id=definition.workspace_id,
+                    status=JobRunStatus.SUCCESS.value,
+                    trigger=JobTrigger.MANUAL.value,
+                    params=params,
+                    scheduled_at=stamp,
+                    created_at=stamp,
+                    updated_at=stamp,
+                )
+            )
+        await session.commit()
+
+    resp = await client.get(f"/api/v1/jobs/{definition.id}/runs", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["X-Total-Count"] == "2"
+    for row in resp.json():
+        # The schema rides on the definition the route resolved — a
+        # password-typed field must come back masked, non-password fields
+        # in the clear.
+        assert row["params"]["secret"] == PASSWORD_MASK
+        assert row["params"]["greeting"] == "hi"
+        assert row["params"]["retries"] == 3
+
+    tokens = await register_user(client, "root@example.com")  # SUPERADMIN_EMAIL account
+    resp = await client.get(
+        f"/api/v1/jobs/global/{definition.id}/runs",
+        headers=auth_headers(tokens),
+    )
+    assert resp.status_code == 200, resp.text
+    assert [r["params"]["secret"] for r in resp.json()] == [PASSWORD_MASK] * 2
+
+
+async def test_global_runs_of_a_missing_definition_404(app_client):
+    """The /global runs route resolves the definition up front, like its
+    execute/get/patch siblings, so an id that matches nothing is a 404 —
+    not a 200 with an empty list (#1310)."""
+    import uuid
+
+    client = app_client
+    tokens = await register_user(client, "root@example.com")  # SUPERADMIN_EMAIL account
+    resp = await client.get(
+        f"/api/v1/jobs/global/{uuid.uuid4()}/runs",
+        headers=auth_headers(tokens),
+    )
+    assert resp.status_code == 404
+
+
 async def test_scheduled_tick_with_bus_executes_via_worker(app_client):
     """Regression: scheduler tick must publish jobs.execute so the worker picks it up.
 
