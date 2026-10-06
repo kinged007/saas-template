@@ -4,11 +4,12 @@ import { test } from "./fixtures";
 import { mockApi } from "./mock-api";
 
 // The refusal behavior — a failure row, no duplicate toast — must hold on both
-// consumers of the shared AuditLogTable. The route globs do not overlap:
-// `**/api/v1/audit**` does not match `/api/v1/admin-audit`.
+// consumers of the shared AuditLogTable. The admin route is a virtual
+// resource: its list reads GET /api/v1/admin/audit. The route globs do not
+// overlap: `**/api/v1/audit**` does not match `/api/v1/admin/audit`.
 const AUDIT_ROUTES = [
   { path: "/settings/workspace/audit", url: "**/api/v1/audit**" },
-  { path: "/admin/audit", url: "**/api/v1/admin-audit**" },
+  { path: "/admin/audit", url: "**/api/v1/admin/audit**" },
 ] as const;
 
 /**
