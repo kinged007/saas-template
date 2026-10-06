@@ -341,3 +341,222 @@ async def test_forgot_password_budget_is_per_email(app_client, monkeypatch):
         "/api/v1/auth/forgot-password", json={"email": "forgot-b@example.com"}
     )
     assert resp.status_code == 202, resp.text
+
+
+# --- #1346: coarse per-IP cap on total auth mail volume ---
+
+
+async def test_ip_mail_cap_bounds_total_mail_per_ip(app_client, monkeypatch):
+    """#1346: each distinct known address has its own per-(IP, email) budget,
+    but the IP-wide mail cap still gets 429 (all three calls share one IP,
+    and unknown addresses never send mail, so the cap is pinned with
+    registered recipients)."""
+    import src.email.factory as factory
+    from src.settings import settings
+
+    sent = []
+
+    async def _send(message):
+        sent.append(message)
+        return True
+
+    monkeypatch.setattr(factory, "send_email", _send)
+    monkeypatch.setattr(settings, "auth_ip_mail_max_attempts", 4)
+    await register_user(app_client, "ipmail-a@example.com")  # charge 1
+    await register_user(app_client, "ipmail-b@example.com")  # charge 2
+    sent.clear()
+    resp = await app_client.post(
+        "/api/v1/auth/forgot-password", json={"email": "ipmail-a@example.com"}
+    )
+    assert resp.status_code == 202, resp.text  # charge 3, send
+    resp = await app_client.post(
+        "/api/v1/auth/forgot-password", json={"email": "ipmail-b@example.com"}
+    )
+    assert resp.status_code == 202, resp.text  # charge 4, send
+    assert len(sent) == 2
+    resp = await app_client.post(
+        "/api/v1/auth/forgot-password", json={"email": "ghost@example.com"}
+    )
+    assert resp.status_code == 429, resp.text
+    assert "Retry-After" in resp.headers
+    assert len(sent) == 2  # throttled call sends nothing
+
+
+async def test_ip_mail_cap_counts_register(app_client, monkeypatch):
+    """#1346: register's verification mail spends IP-mail budget, and no
+    account row exists when the cap 429s (check runs before the DB write)."""
+    import src.email.factory as factory
+    from src.settings import settings
+
+    sent = []
+
+    async def _send(message):
+        sent.append(message)
+        return True
+
+    monkeypatch.setattr(factory, "send_email", _send)
+    monkeypatch.setattr(settings, "auth_ip_mail_max_attempts", 1)
+    tokens = await register_user(app_client, "capreg-a@example.com")
+    assert tokens["access_token"]
+    assert len(sent) == 1
+    resp = await app_client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "capreg-b@example.com",
+            "password": "Password123!",
+            "first_name": "C",
+            "last_name": "B",
+        },
+    )
+    assert resp.status_code == 429, resp.text
+    assert len(sent) == 1
+    # no account row exists: the 429 was raised before any DB write
+    from sqlalchemy import select
+    from src.db.session import SessionFactory
+    from src.models.workspace import User
+
+    async with SessionFactory() as session:
+        uid = (
+            await session.execute(
+                select(User.id).where(User.email == "capreg-b@example.com")
+            )
+        ).scalar_one_or_none()
+    assert uid is None
+
+
+async def test_ip_mail_cap_aggregates_across_routes(app_client, monkeypatch):
+    """#1346: register, forgot-password and resend-verification draw down one
+    shared per-IP budget; the next call 429s."""
+    import src.email.factory as factory
+    from src.settings import settings
+
+    sent = []
+
+    async def _send(message):
+        sent.append(message)
+        return True
+
+    monkeypatch.setattr(factory, "send_email", _send)
+    monkeypatch.setattr(settings, "auth_ip_mail_max_attempts", 3)
+    tokens = await register_user(app_client, "agg-a@example.com")  # charge 1, send
+    resp = await app_client.post(
+        "/api/v1/auth/forgot-password", json={"email": "agg-a@example.com"}
+    )  # charge 2, send
+    assert resp.status_code == 202, resp.text
+    resp = await app_client.post(
+        "/api/v1/auth/resend-verification", headers=auth_headers(tokens)
+    )  # charge 3, send
+    assert resp.status_code == 202, resp.text
+    resp = await app_client.post(
+        "/api/v1/auth/forgot-password", json={"email": "agg-ghost@example.com"}
+    )
+    assert resp.status_code == 429, resp.text
+    assert len(sent) == 3  # register + forgot + resend all send; unknown ghost sends none
+
+
+async def test_ip_mail_cap_is_per_ip(app, monkeypatch):
+    """#1346: two client IPs each keep their own mail budget under one app."""
+    import src.email.factory as factory
+    from src.settings import settings
+
+    sent = []
+
+    async def _send(message):
+        sent.append(message)
+        return True
+
+    monkeypatch.setattr(factory, "send_email", _send)
+    monkeypatch.setattr(settings, "auth_ip_mail_max_attempts", 1)
+
+    # one app instance, two transports with distinct client IPs
+    from httpx import ASGITransport, AsyncClient
+
+    one = AsyncClient(transport=ASGITransport(app=app, client=("10.0.0.1", 0)), base_url="http://test")
+    two = AsyncClient(transport=ASGITransport(app=app, client=("10.0.0.2", 0)), base_url="http://test")
+    try:
+        resp = await one.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "ipea@example.com",
+                "password": "Password123!",
+                "first_name": "I",
+                "last_name": "A",
+            },
+        )
+        assert resp.status_code == 201, resp.text
+        resp = await two.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "ipeb@example.com",
+                "password": "Password123!",
+                "first_name": "I",
+                "last_name": "B",
+            },
+        )
+        assert resp.status_code == 201, resp.text
+        assert len(sent) == 2
+    finally:
+        await one.aclose()
+        await two.aclose()
+
+
+async def test_ip_mail_cap_skipped_on_register_conflict(app_client, monkeypatch):
+    """#1346: a 409 duplicate registers no mail charge — only a send (or its
+    attempt) is money."""
+    import src.email.factory as factory
+    from src.settings import settings
+
+    sent = []
+
+    async def _send(message):
+        sent.append(message)
+        return True
+
+    monkeypatch.setattr(factory, "send_email", _send)
+    monkeypatch.setattr(settings, "auth_ip_mail_max_attempts", 2)
+    body = {
+        "email": "dup@example.com",
+        "password": "Password123!",
+        "first_name": "D",
+        "last_name": "U",
+    }
+    resp = await app_client.post("/api/v1/auth/register", json=body)
+    assert resp.status_code == 201
+    resp = await app_client.post("/api/v1/auth/register", json=body)
+    assert resp.status_code == 409, resp.text
+    resp = await app_client.post(
+        "/api/v1/auth/register",
+        json={**body, "email": "dup-b@example.com"},
+    )
+    assert resp.status_code == 201, resp.text  # fits because 409 charged nothing
+    resp = await app_client.post(
+        "/api/v1/auth/register",
+        json={**body, "email": "dup-c@example.com"},
+    )
+    assert resp.status_code == 429, resp.text
+    assert len(sent) == 2
+
+
+async def test_login_does_not_spend_ip_mail_budget(app_client, monkeypatch):
+    """#1346: login sends no mail, so failed logins leave the IP-mail budget
+    untouched for register."""
+    import src.email.factory as factory
+    from src.settings import settings
+
+    sent = []
+
+    async def _send(message):
+        sent.append(message)
+        return True
+
+    monkeypatch.setattr(factory, "send_email", _send)
+    monkeypatch.setattr(settings, "auth_ip_mail_max_attempts", 1)
+    for _ in range(3):
+        resp = await app_client.post(
+            "/api/v1/auth/login",
+            json={"email": "ghost@example.com", "password": "WrongPass123!"},
+        )
+        assert resp.status_code in (401, 400), resp.text
+    tokens = await register_user(app_client, "nomail@example.com")  # budget unspent
+    assert tokens["access_token"]
+    assert len(sent) == 1
