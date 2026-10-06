@@ -201,6 +201,8 @@ async def forgot_password(
     # Always 202 — never reveal whether the email is registered.
     if not settings.auth_password_enabled:
         return {"detail": "if an account exists for this email, a reset link was sent"}
+    key = _limit_key(request, str(body.email))
+    get_auth_limiter().check(key)
     raw = await AuthService(db, container.bus).request_password_reset(
         str(body.email), ip_address=_client_ip(request)
     )
@@ -213,6 +215,11 @@ async def forgot_password(
             )
         except Exception:
             logger.exception("failed to send password-reset email for %s", body.email)
+    # Every call spends one unit of the auth-limiter budget — known and
+    # unknown addresses alike, so a 429 never reveals whether the email is
+    # registered. Like resend-verification there is no success reset: the
+    # send (or its attempt) is the metered event, not a failure.
+    get_auth_limiter().fail(key)
     return {"detail": "if an account exists for this email, a reset link was sent"}
 
 
