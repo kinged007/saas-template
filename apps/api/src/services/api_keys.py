@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy import Select, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.dates import ensure_utc, now_utc
+from src.core.dates import ensure_utc, iso_or_none, now_utc
 from src.core.permissions import ALL_PERMISSIONS_INCLUDING_KEY_ONLY, KEY_ONLY_PERMISSIONS
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
@@ -27,16 +27,6 @@ class ApiKeyForbidden(ApiKeyError):
 
 class ApiKeyNotFound(ApiKeyError):
     pass
-
-
-def _payload_iso(value: datetime | None) -> str | None:
-    """Serialize an ORM datetime for a publish payload.
-
-    Normalized at the emission edge instead of read off the attribute: SQLite
-    hands `DateTime(timezone=True)` back without an offset, and a consumer's
-    `new Date(...)` reads a naive ISO string as local time.
-    """
-    return ensure_utc(value).isoformat() if value is not None else None
 
 
 class ApiKeyService:
@@ -153,7 +143,7 @@ class ApiKeyService:
                 "permissions": key.permissions,
                 "created_by_user_id": actor.id,
                 "created_by_name": actor.display_name,
-                "expires_at": _payload_iso(key.expires_at),
+                "expires_at": iso_or_none(key.expires_at),
             },
         )
         await publish_audit(

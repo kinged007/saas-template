@@ -11,9 +11,10 @@ from datetime import UTC, datetime
 
 import pytest
 
+from src.core.dates import iso_or_none
 from src.db.session import SessionFactory
 from src.events.subjects import Subjects
-from src.services.api_keys import ApiKeyService, _payload_iso
+from src.services.api_keys import ApiKeyService
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
 from tests.bus_doubles import RecordingBus
@@ -445,8 +446,8 @@ async def test_api_key_created_event_expiry_is_offset_aware(bus, owner):
 def test_api_key_expiry_payload_normalizes_a_naive_attribute():
     """A naive expiry — what SQLite returns for `DateTime(timezone=True)` —
     must not reach a consumer as a local-time ISO string."""
-    assert _payload_iso(datetime(2027, 1, 1)) == "2027-01-01T00:00:00+00:00"
-    assert _payload_iso(None) is None
+    assert iso_or_none(datetime(2027, 1, 1)) == "2027-01-01T00:00:00+00:00"
+    assert iso_or_none(None) is None
 
 
 # ------------------------------------------------------------------- roles
