@@ -18,3 +18,17 @@ export function oauthCodeConsumed(
   if (code === null) return sessionAlive;
   return code === consumed;
 }
+
+/**
+ * Escape target for the callback page's terminal states. The deep-link
+ * destination survives in `returnToStore` untouched by this page, so only the
+ * current `?error=` needs carrying through — LoginPage renders it back into
+ * the same message it shows here.
+ */
+export function oauthCallbackLoginHref(search: string): string {
+  const error = new URLSearchParams(search).get("error");
+  return error ? `/login?error=${encodeURIComponent(error)}` : "/login";
+}
+
+/** Pending-state budget: past this the page offers the escape instead of hanging. */
+export const OAUTH_CALLBACK_TIMEOUT_MS = 15_000;
