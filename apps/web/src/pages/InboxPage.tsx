@@ -285,13 +285,12 @@ export function InboxPage() {
   const hasCachedMessages = messages.length > 0;
   const staleNote = messagesError && hasCachedMessages;
 
-  // Auto scroll to bottom when messages change; `messagesError` re-clamps when the
-  // header note shrinks the pane and would otherwise clip the newest message.
+  // Auto scroll to bottom when messages change.
   useEffect(() => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages, messagesError]);
+  }, [messages]);
 
   // Mark read when conversation opened – also clears the grouped notification pointer for that conversation
   useEffect(() => {
@@ -819,33 +818,6 @@ export function InboxPage() {
               <div className="flex min-h-0 flex-1 flex-col">
                 {/* Thread header */}
                 <div className="flex flex-col gap-3 border-b p-4">
-                  {/* A failed refetch keeps the cached messages, and this header sits outside
-                      the message scroller, so the note stays visible at any scroll position.
-                      Always mounted: a live region has to be in the accessibility tree before
-                      its text changes to be announced — `sr-only` keeps it out of the layout. */}
-                  <p
-                    role="status"
-                    className={cn(
-                      "flex items-center justify-between gap-2 text-sm",
-                      !staleNote && "sr-only",
-                      staleNote && (messagesRefused ? "text-destructive" : "text-muted-foreground"),
-                    )}
-                  >
-                    <span>
-                      {staleNote && (messagesRefused ? "Could not refresh messages." : "Showing the last messages loaded.")}
-                    </span>
-                    {staleNote && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void messagesQuery.refetch()}
-                        disabled={messagesQuery.isFetching}
-                        aria-label="Retry loading messages"
-                      >
-                        Retry
-                      </Button>
-                    )}
-                  </p>
                   <div className="flex items-start gap-2">
                     <Button
                       variant="ghost"
@@ -996,7 +968,40 @@ export function InboxPage() {
                 </div>
 
                 {/* Messages */}
-                <div className="flex-1 overflow-y-auto p-4">
+                <div className="relative flex-1 overflow-y-auto p-4">
+                  {/* A failed refetch keeps the cached messages. The note is pinned to the
+                      top edge of the scroller as a non-layout overlay, so appearing it
+                      neither shifts the thread header nor the rows or the scroll position —
+                      reading history is not interrupted. `pointer-events-none` keeps the
+                      overlay from blocking clicks on the messages it covers. Always mounted:
+                      a live region has to be in the accessibility tree before its text
+                      changes to be announced — `sr-only` keeps it out of the layout. */}
+                  <p
+                    role="status"
+                    className={cn(
+                      "flex items-center justify-between gap-2 text-sm",
+                      !staleNote && "sr-only",
+                      staleNote &&
+                        "pointer-events-none absolute inset-x-0 top-0 z-10 bg-background px-4 pb-2 pt-3",
+                      staleNote && (messagesRefused ? "text-destructive" : "text-muted-foreground"),
+                    )}
+                  >
+                    <span>
+                      {staleNote && (messagesRefused ? "Could not refresh messages." : "Showing the last messages loaded.")}
+                    </span>
+                    {staleNote && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="pointer-events-auto"
+                        onClick={() => void messagesQuery.refetch()}
+                        disabled={messagesQuery.isFetching}
+                        aria-label="Retry loading messages"
+                      >
+                        Retry
+                      </Button>
+                    )}
+                  </p>
                   <div className="flex flex-col gap-4">
                     {messagesLoading ? (
                       <p className="text-muted-foreground text-sm">Loading…</p>

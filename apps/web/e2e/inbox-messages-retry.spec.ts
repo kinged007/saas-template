@@ -87,9 +87,10 @@ test.describe("inbox message fetch", () => {
    * A refetch that fails keeps the last successful `data` in the cache, so the
    * pane stays usable — but it has to say the list is not live, and it has to say
    * it where the user is looking. The pane holds more messages than fit and is
-   * scrolled to the newest, so the note belongs in the header: rendered inside
-   * the scroller it lands ~2200px above the viewport. The containment assertion
-   * below is what keeps it there.
+   * scrolled to the newest, so the note is pinned to the top edge of the message
+   * scroller as a non-layout overlay: it stays visible at any scroll position
+   * without shifting the thread header, the rows, or the scroll position. The
+   * containment assertions below are what keep it there.
    */
   test("a failed refetch keeps the messages and marks them stale", async ({ page }) => {
     await mockApi(page, {
@@ -142,14 +143,14 @@ test.describe("inbox message fetch", () => {
     await expect(staleNote).toBeVisible();
     await expect(staleNote).toHaveAttribute("role", "status");
     // The guard for the placement: `toBeVisible` and `toBeInViewport` both pass when the
-    // note is the first child of a pane that happens not to be scrolled. The page wrapper is
-    // itself `.overflow-y-auto`, so containment is measured against the scroller that holds
-    // the message rows — the one the note must not live in.
-    const noteSharesPaneWithMessages = await page
-      .getByText("shipping friday #25")
-      .first()
-      .evaluate((row, text) => Boolean(row.closest(".overflow-y-auto")?.textContent?.includes(text)), "Showing the last messages loaded.");
-    expect(noteSharesPaneWithMessages).toBe(false);
+    // note is the first child of the header above the scroller. The note has to live in
+    // the scroller itself, as its direct child — pinned to the scroller's top edge, above
+    // the rows container, so it is a sibling of that container and never of the rows.
+    const notePinnedToScroller = await staleNote.evaluate((note) => {
+      const scroller = note.closest(".overflow-y-auto");
+      return scroller !== null && note.parentElement === scroller;
+    });
+    expect(notePinnedToScroller).toBe(true);
     await expect(staleNote).toBeInViewport();
     await expect(page.getByText("shipping friday").first()).toBeVisible();
     // `text-destructive` stays reserved for the empty list, where nothing loaded.
