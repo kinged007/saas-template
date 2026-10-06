@@ -39,6 +39,42 @@ export type AuthSession = {
   current?: boolean;
 };
 
+/**
+ * One row's Revoke button. It owns the request itself (hooks cannot live in
+ * the .map loop), so a pending revoke disables only its own row instead of
+ * every other row's — the per-row pending fix #1354 shipped in the member
+ * editor.
+ */
+function SessionRevokeButton({
+  base,
+  sessionId,
+  onRevoked,
+}: {
+  base: string;
+  sessionId: string;
+  onRevoked: () => void;
+}) {
+  const { mutateAsync, mutation } = useCustomMutation();
+  const revoke = async () => {
+    try {
+      await (mutateAsync({
+        url: `${base}/sessions/${sessionId}`,
+        method: "delete",
+        errorNotification: false,
+      } as never) as Promise<{ data: unknown }>);
+      toast.success("Session revoked");
+      onRevoked();
+    } catch (e) {
+      toast.error((e as Error)?.message ?? "Revoke failed");
+    }
+  };
+  return (
+    <Button variant="outline" size="sm" onClick={revoke} disabled={mutation.isPending}>
+      Revoke
+    </Button>
+  );
+}
+
 export function SecuritySection() {
   const sessions = useCustom<AuthSession[]>({ url: "auth/sessions", method: "get" });
   const status = useCustom<{ enabled: boolean }>({ url: "auth/2fa/status", method: "get" });
@@ -46,7 +82,6 @@ export function SecuritySection() {
   const { mutateAsync: setupMutate, mutation: setupMutation } = useCustomMutation();
   const { mutateAsync: enableMutate, mutation: enableMutation } = useCustomMutation();
   const { mutateAsync: disableMutate, mutation: disableMutation } = useCustomMutation();
-  const { mutateAsync: revokeOneMutate, mutation: revokeOneMutation } = useCustomMutation();
   const { mutateAsync: revokeAllMutate, mutation: revokeAllMutation } = useCustomMutation();
   const call = (
     mutate: typeof changePasswordMutate,
@@ -89,16 +124,6 @@ export function SecuritySection() {
   const refresh = () => {
     sessions.query.refetch();
     status.query.refetch();
-  };
-
-  const revokeOne = async (id: string) => {
-    try {
-      await call(revokeOneMutate, `auth/sessions/${id}`, "delete");
-      toast.success("Session revoked");
-      refresh();
-    } catch (e) {
-      toast.error((e as Error)?.message ?? "Revoke failed");
-    }
   };
 
   const revokeAll = async () => {
@@ -324,9 +349,7 @@ export function SecuritySection() {
                     </TableCell>
                     <TableCell className="text-right">
                       {!s.current && (
-                        <Button variant="outline" size="sm" onClick={() => revokeOne(s.id)} disabled={revokeOneMutation.isPending}>
-                          Revoke
-                        </Button>
+                        <SessionRevokeButton base="auth" sessionId={s.id} onRevoked={refresh} />
                       )}
                     </TableCell>
                   </TableRow>
