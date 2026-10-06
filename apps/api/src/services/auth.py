@@ -8,7 +8,7 @@ from typing import Literal
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.dates import ensure_utc, now_utc
+from src.core.dates import ensure_utc, iso_or_none, now_utc
 from src.core.security.password import PasswordHasher
 from src.core.security.tokens import OpaqueToken, create_access_token
 from src.events.bus import EventBus
@@ -385,7 +385,7 @@ class AuthService:
             # rotation can be two tabs of a browser racing. The attacker
             # holds a token older than every session still live.
             actor_user_id=None,
-            details={"session_id": row.id, "revoked_at": row.revoked_at.isoformat()},
+            details={"session_id": row.id, "revoked_at": iso_or_none(row.revoked_at)},
         )
         if revoked:
             logger.warning(
