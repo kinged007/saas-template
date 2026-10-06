@@ -198,9 +198,10 @@ class _StubIdP:
                     self._send(200, body)
                 elif self.path == "/userinfo" or self.path.startswith("/userinfo?"):
                     stub.auth_headers.append(self.headers.get("Authorization", ""))
-                    if "mode=500" in self.path:
+                    mode = parse_qs(urlsplit(self.path).query).get("mode")
+                    if mode == ["500"]:
                         self._send(500, {"error": "idp_down"})
-                    elif "mode=array" in self.path:
+                    elif mode == ["array"]:
                         self._send(200, ["not", "a", "dict"])
                     else:
                         self._send(
@@ -603,12 +604,14 @@ async def test_discovery_raises_oauth_error_on_a_500_response(provider, idp, cac
     bad = replace(provider, discovery_url=f"{idp.base}/.well-known/openid-configuration-500")
     with pytest.raises(OAuthError, match="could not load discovery document"):
         await _discovery(bad, cache)
+    assert cache.get(f"oauth:discovery:{provider.id}") is None, "the failed document was cached"
 
 
 async def test_discovery_raises_oauth_error_on_a_non_json_body(provider, idp, cache):
     bad = replace(provider, discovery_url=f"{idp.base}/.well-known/openid-configuration-text")
     with pytest.raises(OAuthError, match="could not load discovery document"):
         await _discovery(bad, cache)
+    assert cache.get(f"oauth:discovery:{provider.id}") is None, "the failed document was cached"
 
 
 @pytest.mark.parametrize("broken", [["not", "a", "dict"], "str", 42, None])
