@@ -61,7 +61,7 @@ async def _admin_definition_or_404(
 ) -> JobDefinition:
     """Fetch a definition by id, or the 404 on a miss.
 
-    No workspace filter, and it applies none. All three callers are `/global*`
+    No workspace filter, and it applies none. All four callers are `/global*`
     routes behind `Depends(require_superuser)`. This helper authorizes nothing:
     a caller that is not superuser-gated has to authorize the definition it
     gets from here itself.
