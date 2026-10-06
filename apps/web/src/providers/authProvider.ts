@@ -118,7 +118,7 @@ export const authProvider: AuthProvider = {
         const { data: identity } = await httpClient.get<Identity>(`${API_URL}/auth/me`);
         await seedWorkspace(identity);
       } catch {
-        identityStore.set(null);
+        identityStore.clear();
       }
       return { success: true, redirectTo: afterAuthRedirect() };
     } catch (error) {
@@ -153,7 +153,7 @@ export const authProvider: AuthProvider = {
         const { data: identity } = await httpClient.get<Identity>(`${API_URL}/auth/me`);
         await seedWorkspace(identity);
       } catch {
-        identityStore.set(null);
+        identityStore.clear();
       }
       return { success: true, redirectTo: afterAuthRedirect() };
     } catch (error) {

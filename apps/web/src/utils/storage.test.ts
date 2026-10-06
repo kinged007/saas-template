@@ -38,6 +38,36 @@ test("resetSessionState() drops the outgoing user's active workspace and identit
   assert.equal(workspaceStore.get("u2"), "w2");
 });
 
+test("resetSessionState() removes the identity key instead of storing \"null\"", () => {
+  const backing = new Map<string, string>();
+  const fake = {
+    getItem: (k: string) => (backing.has(k) ? (backing.get(k) as string) : null),
+    setItem: (k: string, v: string) => {
+      backing.set(k, v);
+    },
+    removeItem: (k: string) => {
+      backing.delete(k);
+    },
+  };
+  const real = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", {
+    value: { localStorage: fake },
+    configurable: true,
+  });
+  try {
+    identityStore.set({ id: "u1" });
+    assert.equal(backing.get("tf_identity"), JSON.stringify({ id: "u1" }));
+
+    resetSessionState();
+
+    assert.equal(backing.has("tf_identity"), false, "key must be removed, not \"null\"");
+    assert.equal(identityStore.get(), null);
+  } finally {
+    if (real) Object.defineProperty(globalThis, "window", real);
+    else delete (globalThis as Record<string, unknown>)["window"];
+  }
+});
+
 test("returnToStore.take() returns the stored path and clears it", () => {
   returnToStore.set("/api-keys?page=2");
 

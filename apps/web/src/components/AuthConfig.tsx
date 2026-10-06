@@ -75,7 +75,7 @@ export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: str
     const { data: identity } = await httpClient.get(`${API_URL}/auth/me`);
     await seedWorkspace(identity);
   } catch {
-    identityStore.set(null);
+    identityStore.clear();
   }
   return {};
 }
