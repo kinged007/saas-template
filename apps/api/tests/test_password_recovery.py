@@ -412,14 +412,13 @@ async def test_ip_mail_cap_counts_register(app_client, monkeypatch):
     assert len(sent) == 1
     # no account row exists: the 429 was raised before any DB write
     from sqlalchemy import select
+
     from src.db.session import SessionFactory
     from src.models.workspace import User
 
     async with SessionFactory() as session:
         uid = (
-            await session.execute(
-                select(User.id).where(User.email == "capreg-b@example.com")
-            )
+            await session.execute(select(User.id).where(User.email == "capreg-b@example.com"))
         ).scalar_one_or_none()
     assert uid is None
 
@@ -471,8 +470,12 @@ async def test_ip_mail_cap_is_per_ip(app, monkeypatch):
     # one app instance, two transports with distinct client IPs
     from httpx import ASGITransport, AsyncClient
 
-    one = AsyncClient(transport=ASGITransport(app=app, client=("10.0.0.1", 0)), base_url="http://test")
-    two = AsyncClient(transport=ASGITransport(app=app, client=("10.0.0.2", 0)), base_url="http://test")
+    one = AsyncClient(
+        transport=ASGITransport(app=app, client=("10.0.0.1", 0)), base_url="http://test"
+    )
+    two = AsyncClient(
+        transport=ASGITransport(app=app, client=("10.0.0.2", 0)), base_url="http://test"
+    )
     try:
         resp = await one.post(
             "/api/v1/auth/register",

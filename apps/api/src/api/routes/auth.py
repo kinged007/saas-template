@@ -90,6 +90,7 @@ def _limit_key(request: Request, email: str | None = None) -> str:
     ip = _client_ip(request) or "unknown"
     return f"{ip}:{(email or '').lower()}"
 
+
 def _mail_limit_key(request: Request) -> str:
     """IP-only key for the coarse mail-volume backstop (#1346)."""
     return f"mailip:{_client_ip(request) or 'unknown'}"
