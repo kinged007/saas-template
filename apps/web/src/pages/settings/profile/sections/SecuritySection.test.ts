@@ -40,3 +40,18 @@ test("the 2FA setup-key clipboard catch renders through the shared errorMessage 
   assert.ok(source.includes("description: errorMessage("), "clipboard catch skips errorMessage");
   assert.ok(!source.includes('"Copy failed"'), "stale clipboard fallback still present");
 });
+
+test("the setup-key copy button goes through the shared CopyButton", () => {
+  assert.ok(
+    source.includes('<CopyButton'),
+    "inline copy button still hand-rolled in SecuritySection",
+  );
+  assert.ok(
+    source.includes('label="Copy setup key"'),
+    "CopyButton not given the setup-key label",
+  );
+  assert.ok(
+    !source.includes("const copyLabel"),
+    "local copyLabel still deriving the name CopyButton already derives",
+  );
+});
