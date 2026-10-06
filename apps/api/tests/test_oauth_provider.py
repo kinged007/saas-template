@@ -128,6 +128,7 @@ class _StubIdP:
         key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey | None = None,
         alg: str = "RS256",
         drop: tuple[str, ...] = (),
+        extra_headers: dict[str, Any] | None = None,
         **claims: Any,
     ) -> str:
         """A signed id_token; every claim is overridable so tests can break one at a time.
@@ -148,6 +149,7 @@ class _StubIdP:
         for name in drop:
             payload.pop(name, None)
         headers = {"kid": kid} if kid is not None else {}
+        headers.update(extra_headers or {})
         if alg == "none":
             return jwt.encode(payload, key="", algorithm="none", headers=headers)
         return jwt.encode(payload, key or self.signing_key, algorithm=alg, headers=headers)
@@ -706,6 +708,21 @@ async def test_exchange_code_flattens_cr_in_the_logged_provider_body(provider, i
 
     assert "invalid_grant forged: 500" in caplog.text
     assert "\r" not in caplog.text
+
+
+async def test_claims_from_id_token_flattens_cr_in_the_logged_failure(provider, idp, cache, caplog):
+    """Mirror of the exchange_code test: the logged exception can embed token-supplied
+    header data, so CR and LF are flattened. `crit` is the vehicle because PyJWT echoes
+    only it into the message; an unknown `kid` raises fixed strings."""
+    evil = "x\rforged:\n500"
+    token = idp.mint(kid=evil, extra_headers={"crit": [evil], evil: True})
+    with caplog.at_level("WARNING", logger="src.services.oauth"):
+        assert await claims_from_id_token(provider, idp.doc, token, cache) is None
+    assert "x forged: 500" in caplog.text
+    assert "\r" not in caplog.text
+    record = next(r for r in caplog.records if "id_token verification failed" in r.getMessage())
+    assert "\r" not in record.getMessage()
+    assert "\n" not in record.getMessage()
 
 
 @pytest.mark.parametrize("broken", [["not", "a", "dict"], "str", 42, None])
