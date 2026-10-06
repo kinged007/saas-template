@@ -34,6 +34,7 @@ from src.services.oauth import (
     OAuthError,
     ProviderConfig,
     _discovery,
+    _single_line,
     build_authorize_url,
     claims_from_id_token,
     consume_state,
@@ -763,3 +764,13 @@ async def test_fetch_userinfo_raises_on_provider_error(provider, idp):
 async def test_fetch_userinfo_returns_empty_for_a_response_that_is_not_an_object(provider, idp):
     doc = dict(idp.doc, userinfo_endpoint=f"{idp.base}/userinfo?mode=array")
     assert await fetch_userinfo(provider, doc, "at-stub") == {}
+
+
+def test_single_line_replaces_every_cc_control_with_a_space():
+    # C0 (CR/LF/ESC), DEL, C1 (NEL): the ESC is defused so "[31m" that follows
+    # is inert text, and no control can forge a log line.
+    assert _single_line("a\rb\nc\x1b[31md\x7fe\x85") == "a b c [31md e "
+
+
+def test_single_line_truncates_to_the_cap():
+    assert _single_line("x" * 300) == "x" * 200

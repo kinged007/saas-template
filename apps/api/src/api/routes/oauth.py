@@ -33,6 +33,7 @@ from src.services.auth import AuthError, AuthService
 from src.services.oauth import (
     CODE_TTL_HINT,
     OAuthError,
+    _single_line,
     build_authorize_url,
     claims_from_id_token,
     consume_state,
@@ -144,7 +145,13 @@ async def oauth_callback(
             userinfo = await fetch_userinfo(provider, doc, tokens["access_token"])
         identity = normalize_identity(provider_id=provider_id, claims=claims, userinfo=userinfo)
     except OAuthError as exc:
-        logger.warning("oauth callback failed provider=%s: %s", provider_id, exc)
+        # provider_id is the percent-decoded path param and exc can embed it,
+        # so both get the same control-char flattening as the service logs.
+        logger.warning(
+            "oauth callback failed provider=%s: %s",
+            _single_line(provider_id),
+            _single_line(exc),
+        )
         return _error_redirect("sign-in failed")
     service = AuthService(db, container.bus)
     try:
