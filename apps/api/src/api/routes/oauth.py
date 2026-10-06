@@ -164,9 +164,11 @@ async def oauth_callback(
     # helper can hand back a re-read instance, so bind it and read from that.
     try:
         user = await _join_single_workspace_best_effort(db, container, user)
-    except HTTPException:
-        # The helper's "account no longer exists" guard: a browser mid-redirect
-        # needs the error redirect, not a JSON 401 body.
+    except HTTPException as exc:
+        # The helper's "account no longer exists" guard (auth.py) is the
+        # only HTTPException it raises; anything else must not be masked.
+        if exc.status_code != status.HTTP_401_UNAUTHORIZED:
+            raise
         return _error_redirect("sign-in failed")
     if user.totp_enabled:
         # Passwordless SSO still honors 2FA: park the user id behind the
