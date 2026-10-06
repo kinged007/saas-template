@@ -91,6 +91,11 @@ export function getMemberDisplayName(member: { display_name: string; first_name?
   return member.display_name;
 }
 
+/** One shared `${name} (${email})` label for member pickers (trigger + options). */
+export function memberOptionLabel(member: { display_name: string; first_name?: string | null; last_name?: string | null; email: string }): string {
+  return `${getMemberDisplayName(member)} (${member.email})`;
+}
+
 export function getParticipantDisplayName(participant: { display_name: string; first_name?: string | null; last_name?: string | null }): string {
   if (participant.first_name || participant.last_name) return formatDisplayName(participant.first_name, participant.last_name, participant.display_name);
   if (participant.display_name) {
