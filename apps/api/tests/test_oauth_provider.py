@@ -127,11 +127,13 @@ class _StubIdP:
         kid: str | None = KID,
         key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey | None = None,
         alg: str = "RS256",
+        drop: tuple[str, ...] = (),
         **claims: Any,
     ) -> str:
         """A signed id_token; every claim is overridable so tests can break one at a time.
 
-        `kid=None` omits the JWT header.
+        `kid=None` omits the JWT header. `drop` pops claims outright: `**claims`
+        can only override, never remove, so `sub=None` would still satisfy presence.
         """
         now = int(time.time())
         payload = {
@@ -143,6 +145,8 @@ class _StubIdP:
             "exp": now + 300,
             **claims,
         }
+        for name in drop:
+            payload.pop(name, None)
         headers = {"kid": kid} if kid is not None else {}
         if alg == "none":
             return jwt.encode(payload, key="", algorithm="none", headers=headers)
@@ -172,6 +176,10 @@ class _StubIdP:
                 stub.hits.append(self.path)
                 if self.path.startswith("/.well-known/openid-configuration-broken"):
                     self._send(200, stub.doc if stub.broken_doc is UNSET else stub.broken_doc)
+                elif self.path.startswith("/.well-known/openid-configuration-500"):
+                    self._send(500, {"error": "idp_down"})
+                elif self.path.startswith("/.well-known/openid-configuration-text"):
+                    self._send(200, None, raw="this is not json")
                 elif self.path.startswith("/.well-known/openid-configuration"):
                     self._send(200, stub.doc)
                 elif self.path == "/jwks":
@@ -188,16 +196,21 @@ class _StubIdP:
                     # be made to publish an unusable set and then repair itself.
                     body = stub.published_jwks() if stub.broken_jwks is UNSET else stub.broken_jwks
                     self._send(200, body)
-                elif self.path == "/userinfo":
+                elif self.path == "/userinfo" or self.path.startswith("/userinfo?"):
                     stub.auth_headers.append(self.headers.get("Authorization", ""))
-                    self._send(
-                        200,
-                        {
-                            "sub": "sub-1",
-                            "email": "user@example.com",
-                            "name": "Stub User",
-                        },
-                    )
+                    if "mode=500" in self.path:
+                        self._send(500, {"error": "idp_down"})
+                    elif "mode=array" in self.path:
+                        self._send(200, ["not", "a", "dict"])
+                    else:
+                        self._send(
+                            200,
+                            {
+                                "sub": "sub-1",
+                                "email": "user@example.com",
+                                "name": "Stub User",
+                            },
+                        )
                 else:
                     self._send(404, {"error": "not_found"})
 
@@ -374,6 +387,16 @@ async def test_claims_from_id_token_rejects_wrong_audience(provider, idp, cache)
 
 async def test_claims_from_id_token_rejects_expired_token(provider, idp, cache):
     token = idp.mint(exp=int(time.time()) - 10)
+    assert await claims_from_id_token(provider, idp.doc, token, cache) is None
+
+
+@pytest.mark.parametrize("claim", ["exp", "iss", "sub"])
+async def test_claims_from_id_token_rejects_token_missing_a_required_claim(
+    provider, idp, cache, claim
+):
+    """`options["require"]` enforces presence, `iss`/`aud` enforce value: a token
+    missing a required claim must fail even though every present claim is valid."""
+    token = idp.mint(drop=(claim,))
     assert await claims_from_id_token(provider, idp.doc, token, cache) is None
 
 
@@ -576,6 +599,18 @@ async def test_discovery_raises_oauth_error_when_unreachable():
         await _discovery(dead, TtlCache(ttl_seconds=60))
 
 
+async def test_discovery_raises_oauth_error_on_a_500_response(provider, idp, cache):
+    bad = replace(provider, discovery_url=f"{idp.base}/.well-known/openid-configuration-500")
+    with pytest.raises(OAuthError, match="could not load discovery document"):
+        await _discovery(bad, cache)
+
+
+async def test_discovery_raises_oauth_error_on_a_non_json_body(provider, idp, cache):
+    bad = replace(provider, discovery_url=f"{idp.base}/.well-known/openid-configuration-text")
+    with pytest.raises(OAuthError, match="could not load discovery document"):
+        await _discovery(bad, cache)
+
+
 @pytest.mark.parametrize("broken", [["not", "a", "dict"], "str", 42, None])
 async def test_discovery_refuses_a_document_that_is_not_an_object(provider, idp, cache, broken):
     """#1020: the callback catches only `OAuthError`, so a non-object document has to
@@ -693,3 +728,14 @@ async def test_fetch_userinfo_sends_bearer_token(provider, idp):
 
     assert idp.auth_headers[-1] == "Bearer at-stub"
     assert info["email"] == "user@example.com"
+
+
+async def test_fetch_userinfo_raises_on_provider_error(provider, idp):
+    doc = dict(idp.doc, userinfo_endpoint=f"{idp.base}/userinfo?mode=500")
+    with pytest.raises(OAuthError, match="could not fetch user info"):
+        await fetch_userinfo(provider, doc, "at-stub")
+
+
+async def test_fetch_userinfo_returns_empty_for_a_response_that_is_not_an_object(provider, idp):
+    doc = dict(idp.doc, userinfo_endpoint=f"{idp.base}/userinfo?mode=array")
+    assert await fetch_userinfo(provider, doc, "at-stub") == {}
