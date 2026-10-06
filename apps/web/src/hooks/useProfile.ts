@@ -163,7 +163,7 @@ export function useDeleteAccount() {
         {
           onSuccess: () => {
             tokenStore.clear();
-            identityStore.set(null);
+            identityStore.clear();
             clearAllCaches(queryClient);
             opts?.onSuccess?.();
           },
@@ -184,7 +184,7 @@ export function useDeleteAccount() {
         errorNotification: false,
       } as never);
       tokenStore.clear();
-      identityStore.set(null);
+      identityStore.clear();
       clearAllCaches(queryClient);
       return res;
     },

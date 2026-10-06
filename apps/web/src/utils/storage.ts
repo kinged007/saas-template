@@ -147,6 +147,7 @@ export const identityStore = {
     return raw ? JSON.parse(raw) : null;
   },
   set: (identity: unknown) => storage.set(IDENTITY_KEY, JSON.stringify(identity)),
+  clear: () => storage.remove(IDENTITY_KEY),
 };
 
 /**
@@ -202,7 +203,7 @@ export const workspaceStore = {
 export function resetSessionState(): void {
   workspaceStore.clear();
   setActiveWorkspaceId(null);
-  identityStore.set(null);
+  identityStore.clear();
 }
 
 const ONBOARDING_PREFIX = "tf_onboarding_dismissed:";
