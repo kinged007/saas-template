@@ -37,12 +37,18 @@ Body envelope:
   "event_id": "01J…",
   "occurred_at": "2026-09-14T12:00:00+00:00",
   "workspace_id": "3fa…",
+  "correlation_id": "9c2…",
   "data": { "workspace_id": "3fa…", "user_id": "9c2…", "...": "original event payload" }
 }
 ```
 
+`correlation_id` groups deliveries from one operation: an ownership transfer
+publishes two `member.role_changed` events (promotion + demotion) sharing one
+id. It is `null` for standalone events.
+
 Delivery is **at-least-once and unordered** across retries — dedupe on
-`X-Webhook-Delivery` / `event_id` before acting on the payload.
+`X-Webhook-Delivery` / `event_id` before acting on the payload. Pair related
+deliveries on `correlation_id`, not `occurred_at` proximity.
 
 ## Verifying signatures
 

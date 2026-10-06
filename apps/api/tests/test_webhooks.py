@@ -105,6 +105,129 @@ async def test_enqueue_filters_by_event(app):
         await session.close()
 
 
+async def test_fan_out_carries_correlation_id_into_payload(app):
+    session, service = await _service(app)
+    try:
+        await service.create_subscription(
+            WS1, url="https://example.com/hook", events=["member.role_changed"]
+        )
+        n = await fan_out_event(
+            session,
+            subject=Subjects.WORKSPACE_MEMBER_ROLE_CHANGED,
+            payload={"workspace_id": WS1, "user_id": "u"},
+            event_id="corr-e1",
+            correlation_id="corr-1",
+            occurred_at="2026-01-01T00:00:00+00:00",
+        )
+        assert n == 1
+        deliveries = await _deliveries(session, WS1)
+        assert len(deliveries) == 1
+        row = deliveries[0]
+        assert row is not None
+        assert row.correlation_id == "corr-1"
+        assert row.payload["correlation_id"] == "corr-1"
+        assert row.payload["event_id"] == "corr-e1"
+        # Uncorrelated publishes fan out without one (empty string bus
+        # default normalizes to None), not as an empty body field.
+        n = await fan_out_event(
+            session,
+            subject=Subjects.WORKSPACE_MEMBER_ROLE_CHANGED,
+            payload={"workspace_id": WS1, "user_id": "u"},
+            event_id="corr-e2",
+            correlation_id="",
+            occurred_at="2026-01-01T00:00:00+00:00",
+        )
+        assert n == 1
+        deliveries = await _deliveries(session, WS1)
+        assert len(deliveries) == 2
+        unmatched = next(d for d in deliveries if d.event_id == "corr-e2")
+        assert unmatched is not None
+        assert unmatched.correlation_id is None
+        assert unmatched.payload["correlation_id"] is None
+    finally:
+        await session.close()
+
+
+async def test_transfer_produces_two_paired_role_changed_deliveries(app_client):
+    import asyncio
+
+    from tests.conftest import create_workspace, login, register_user, ws_headers
+
+    await register_user(app_client, email="wh-owner@example.com")
+    await register_user(app_client, email="wh-heir@example.com")
+    owner = await login(app_client, email="wh-owner@example.com")
+    heir = await login(app_client, email="wh-heir@example.com")
+
+    async def _user_id(tokens) -> str:
+        resp = await app_client.get(
+            "/api/v1/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"}
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()["id"]
+
+    owner_id, heir_id = await _user_id(owner), await _user_id(heir)
+    ws = await create_workspace(app_client, owner, name="WH Transfer")
+    wid = ws["id"]
+
+    resp = await app_client.post(
+        "/api/v1/webhooks/subscriptions",
+        json={"url": "https://example.com/hook", "events": ["member.role_changed"]},
+        headers=ws_headers(owner, wid),
+    )
+    assert resp.status_code == 201, resp.text
+
+    resp = await app_client.get("/api/v1/roles", headers=ws_headers(owner, wid))
+    assert resp.status_code == 200, resp.text
+    roles = {r["name"]: r["id"] for r in resp.json()}
+    resp = await app_client.post(
+        "/api/v1/invitations",
+        json={"email": "wh-heir@example.com", "role_id": roles["admin"]},
+        headers=ws_headers(owner, wid),
+    )
+    assert resp.status_code == 201, resp.text
+    resp = await app_client.post(
+        f"/api/v1/invitations/accept?token={resp.json()['token']}",
+        headers={"Authorization": f"Bearer {heir['access_token']}"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = await app_client.get("/api/v1/members", headers=ws_headers(owner, wid))
+    assert resp.status_code == 200, resp.text
+    heir_row = next(m for m in resp.json() if m["email"] == "wh-heir@example.com")
+    assert heir_row is not None
+    resp = await app_client.post(
+        f"/api/v1/workspaces/{wid}/transfer",
+        json={"new_owner_membership_id": heir_row["membership_id"]},
+        headers=ws_headers(owner, wid),
+    )
+    assert resp.status_code == 200, resp.text
+
+    async def _role_changed_deliveries():
+        resp = await app_client.get(
+            "/api/v1/webhooks/deliveries",
+            headers=ws_headers(owner, wid),
+        )
+        assert resp.status_code == 200, resp.text
+        return [d for d in resp.json() if d["event_type"] == "member.role_changed"]
+
+    deliveries = []
+    for _ in range(150):
+        deliveries = await _role_changed_deliveries()
+        if len(deliveries) == 2:
+            break
+        await asyncio.sleep(0.02)
+    assert len(deliveries) == 2
+    # One delivery per affected user: the promoted heir and the demoted owner.
+    by_user = {d["payload"]["data"]["user_id"]: d for d in deliveries}
+    assert set(by_user) == {heir_id, owner_id}
+    assert by_user[heir_id]["payload"]["data"]["to_role"] == "owner"
+    correlation_ids = {d["correlation_id"] for d in deliveries}
+    assert len(correlation_ids) == 1
+    correlation_id = next(iter(correlation_ids))
+    assert correlation_id
+    assert all(d["payload"]["correlation_id"] == correlation_id for d in deliveries)
+
+
 async def test_dispatch_success_with_mock_transport(app):
     seen: dict = {}
 

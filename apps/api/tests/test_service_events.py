@@ -338,6 +338,11 @@ async def test_transfer_ownership_emits_event_for_both_members(bus, owner):
     assert by_user[owner.id]["to_role"] == "admin"
     assert all(p["reason"] == "ownership_transfer" for p, _, _ in changed)
     assert all(p["changed_by_user_id"] == owner.id for p, _, _ in changed)
+    # Both halves of the transfer share one correlation id so a subscriber
+    # receiving two member.role_changed events can pair them.
+    correlation_ids = {c for _, c, _ in changed}
+    assert len(correlation_ids) == 1
+    assert next(iter(correlation_ids))
 
     assert bus.actions() == ["workspace.ownership_transferred"]
 

@@ -284,12 +284,14 @@ def build_envelope(
     occurred_at: str,
     workspace_id: str | None,
     data: dict,
+    correlation_id: str | None = None,
 ) -> dict:
     return {
         "event": event_type,
         "event_id": event_id,
         "occurred_at": occurred_at,
         "workspace_id": workspace_id,
+        "correlation_id": correlation_id,
         "data": data,
     }
 
@@ -327,6 +329,9 @@ async def fan_out_event(
         .scalars()
         .all()
     )
+    # The bus defaults uncorrelated publishes to "", which normalizes to
+    # NULL on the row and in the body (not an empty-string field).
+    correlation_id = correlation_id or None
     count = 0
     for sub in rows:
         if sub.events and event_type not in (sub.events or []):
@@ -343,6 +348,7 @@ async def fan_out_event(
                     occurred_at=occurred_at,
                     workspace_id=workspace_id,
                     data=payload,
+                    correlation_id=correlation_id,
                 ),
                 status=WebhookDeliveryStatus.PENDING,
                 next_retry_at=now_utc(),
