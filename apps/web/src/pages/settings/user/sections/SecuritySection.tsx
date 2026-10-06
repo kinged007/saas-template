@@ -26,6 +26,36 @@ import { sessionsEmptyMessage } from "./sessions-empty";
  * password and revoking sessions are delegated actions, while 2FA setup and
  * "change my password" require a credential only the account holder has.
  */
+function SessionRevokeButton({
+  base,
+  sessionId,
+  onRevoked,
+}: {
+  base: string;
+  sessionId: string;
+  onRevoked: () => void;
+}) {
+  const { mutateAsync, mutation } = useCustomMutation();
+  const revoke = async () => {
+    try {
+      await (mutateAsync({
+        url: `${base}/sessions/${sessionId}`,
+        method: "delete",
+        errorNotification: false,
+      } as never) as Promise<{ data: unknown }>);
+      toast.success("Session revoked");
+      onRevoked();
+    } catch (e) {
+      toast.error((e as Error)?.message ?? "Revoke failed");
+    }
+  };
+  return (
+    <Button variant="outline" size="sm" onClick={revoke} disabled={mutation.isPending}>
+      Revoke
+    </Button>
+  );
+}
+
 export function SecuritySection() {
   const userId = useTargetUserId();
   const base = `users/${userId}`;
@@ -37,7 +67,6 @@ export function SecuritySection() {
     queryOptions: { enabled: Boolean(userId) },
   });
   const { mutateAsync: setPasswordMutate, mutation: setPasswordMutation } = useCustomMutation();
-  const { mutateAsync: revokeOneMutate, mutation: revokeOneMutation } = useCustomMutation();
   const { mutateAsync: revokeAllMutate, mutation: revokeAllMutation } = useCustomMutation();
 
   const [password, setPassword] = useState("");
@@ -73,16 +102,6 @@ export function SecuritySection() {
       toast.success("Password set. All of that member's sessions were revoked.");
     } catch (e) {
       toast.error((e as Error)?.message ?? "Could not set the password");
-    }
-  };
-
-  const revokeOne = async (id: string) => {
-    try {
-      await call(revokeOneMutate, `${base}/sessions/${id}`, "delete");
-      toast.success("Session revoked");
-      sessions.query.refetch();
-    } catch (e) {
-      toast.error((e as Error)?.message ?? "Revoke failed");
     }
   };
 
@@ -174,14 +193,11 @@ export function SecuritySection() {
                       {s.user_agent ?? "—"}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => revokeOne(s.id)}
-                        disabled={revokeOneMutation.isPending}
-                      >
-                        Revoke
-                      </Button>
+                      <SessionRevokeButton
+                        base={base}
+                        sessionId={s.id}
+                        onRevoked={() => sessions.query.refetch()}
+                      />
                     </TableCell>
                   </TableRow>
                 ))}
