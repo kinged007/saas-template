@@ -1,8 +1,12 @@
 import asyncio  # noqa: E402
+from datetime import timedelta
 
 import pytest
 
 import src.core.permissions as perms
+from src.core.dates import now_utc
+from src.db.session import SessionFactory
+from src.models.core import Invitation
 from tests.conftest import (
     auth_headers,
     create_workspace,
@@ -238,12 +242,6 @@ async def test_expired_invitation_shows_expired_and_rejects_accept(app_client):
     ).json()
 
     # Backdate the expiry.
-    from datetime import timedelta
-
-    from src.core.dates import now_utc
-    from src.db.session import SessionFactory
-    from src.models.core import Invitation
-
     async with SessionFactory() as session:
         row = await session.get(Invitation, invite["id"])
         row.expires_at = now_utc() - timedelta(minutes=5)
@@ -292,12 +290,6 @@ async def test_revoke_expired_pending_invitation_returns_204(app_client):
     ).json()
 
     # Backdate the expiry.
-    from datetime import timedelta
-
-    from src.core.dates import now_utc
-    from src.db.session import SessionFactory
-    from src.models.core import Invitation
-
     async with SessionFactory() as session:
         row = await session.get(Invitation, invite["id"])
         row.expires_at = now_utc() - timedelta(minutes=5)
