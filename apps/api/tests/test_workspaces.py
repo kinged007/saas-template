@@ -373,6 +373,27 @@ async def test_simple_rest_range_pagination_query(app_client):
     assert len(resp.json()) == 2
 
 
+async def test_role_writers_require_an_actor(app_client):
+    """A direct writer call names its actor: omission is not the system path.
+
+    With an optional `actor`, leaving it off skipped the membership gate —
+    that path could still flip a seeded role's `system` flag. The argument is
+    required, so an omitted actor fails loudly instead of acting unbounded.
+    """
+    import pytest
+
+    from src.db.session import SessionFactory
+    from src.services.workspaces import WorkspaceService
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session)
+        with pytest.raises(TypeError):
+            await service.create_custom_role(
+                "ws-x", name="ops", description=None, permissions=[]
+            )
+        with pytest.raises(TypeError):
+            await service.update_role("ws-x", "role-x", name="ops")
+
 async def test_service_stores_trimmed_names(app_client):
     """The service trims even when no schema validated the input.
 
@@ -402,7 +423,9 @@ async def test_service_stores_trimmed_names(app_client):
             actor=user,
         )
         await service.update_workspace(workspace.id, name="  Acme Renamed  ")
-        await service.update_role(workspace.id, role.id, name="  operators  ")
+        # The owner is an explicit actor: the writers have no opt-out-by-omission
+        # system path, so a direct caller names who acts.
+        await service.update_role(workspace.id, role.id, name="  operators  ", actor=user)
 
     # Re-read so the assertion is on the stored row, not the in-memory object.
     async with SessionFactory() as session:
