@@ -120,9 +120,11 @@ function normalizeError(error: AxiosError): AxiosError {
   // refine reads `statusCode` for its generic error notification and
   // authProvider.onError reads it to detect a 401; axios errors carry no such
   // field, so without this every notification says "status code: undefined".
-  // 0 is the "no HTTP response" sentinel (offline, DNS, CORS, abort) — refine
-  // always renders a status code, so the notification strips the parenthetical
-  // for anything that is not a real HTTP status.
+  // 0 is the "no HTTP response" sentinel (offline, DNS, CORS, abort). The
+  // notification helper (error-title.ts) is coupled to this value only by
+  // "not three digits": it drops the parenthetical unless the code is 100-599.
+  // Note 0 is a synthetic value, not absent — `err.statusCode ?? fallback`
+  // does not fall through on it.
   Object.assign(error, { statusCode: error.response?.status ?? 0 });
   const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail;
   // 2FA challenge responses carry an object detail ({code: "2fa_required",
