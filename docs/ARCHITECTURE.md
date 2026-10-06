@@ -96,6 +96,8 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 | API keys | `Authorization: Bearer <key>`; permissions resolved per workspace (untouched by the cookie flow) |
 | Identity | `GET /auth/me` → current user + workspaces + permissions + embedded `profile` (auto-created, same shape as `GET /me/profile`). `permissions` is principal-dependent: a session user gets the union of the roles it holds in the listed workspaces, an API key only its own grant — in the top-level field and in each `workspaces[]` entry alike (the nested entries still name the creator's membership role) |
 
+SSO provider config is the `OAUTH_PROVIDERS` JSON list (shapes in `apps/api/.env.example`): OIDC providers come from discovery, non-OIDC (GitHub) lists explicit endpoint URLs; the optional `emails_url` key adds the private-email second lookup — pointed at `https://<host>/api/v3/user/emails` it covers GitHub Enterprise Server with no code.
+
 API key quota: a key with a `usage_quota` is capped per calendar month (UTC).
 `X-API-Key-Quota` / `X-API-Key-Remaining` report the month's limit and the uses
 left in it; the counter resets on the first request of a new month and
