@@ -349,6 +349,9 @@ class AuthService:
                 .values(revoked_at=now_utc(), revoke_reason="rotated")
                 .execution_options(synchronize_session=False)
             )
+            # Intentional split commit: the claim above must commit before
+            # issue_tokens below. Merging them into one transaction re-opens
+            # the sqlite rotation race.
             await self._session.commit()
             if claimed.rowcount == 1:
                 pair = await self.issue_tokens(user, ip_address=ip_address, user_agent=user_agent)
