@@ -160,8 +160,9 @@ async def oauth_callback(
         logger.info("oauth signup rejected provider=%s: %s", provider_id, exc)
         return _error_redirect("registration is disabled")
     # Join before the 2FA branch and before issue_tokens, as POST /auth/login
-    # does. A failed join stays log-only and the 302 happens either way; the
-    # helper can hand back a re-read instance, so bind it and read from that.
+    # does; see the helper docstring (#936). A failed join stays log-only and
+    # the 302 happens either way; the helper can hand back a re-read instance,
+    # so bind it and read from that.
     try:
         user = await _join_single_workspace_best_effort(db, container, user)
     except HTTPException:

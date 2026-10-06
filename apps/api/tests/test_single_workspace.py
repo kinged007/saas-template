@@ -569,6 +569,118 @@ async def test_oldest_workspace_wins(app_client, single_workspace_on, monkeypatc
     assert [w["id"] for w in me.json()["workspaces"]] == [ws1["id"]]
 
 
+async def _totp_user_outside_single_mode(app_client, monkeypatch, email: str) -> list[str]:
+    """Register + enrol TOTP while single-workspace is off, then turn it on.
+
+    The login/callback under test is the first call that can join, so a
+    membership row afterwards proves the join ran before the 2FA challenge.
+    Returns the enrolment backup codes for completing the challenge.
+    """
+    from tests.test_auth_2fa_sessions import _totp_for
+
+    monkeypatch.setattr(settings, "single_workspace", False)
+    tokens = await register_user(app_client, email)
+    headers = auth_headers(tokens)
+    setup_token, code = await _totp_for(app_client, headers)
+    enabled = await app_client.post(
+        "/api/v1/auth/2fa/enable",
+        json={"setup_token": setup_token, "code": code},
+        headers=headers,
+    )
+    assert enabled.status_code == 200, enabled.text
+    monkeypatch.setattr(settings, "single_workspace", True)
+    return enabled.json()["backup_codes"]
+
+
+async def _member_for(email: str):
+    from sqlalchemy import select
+
+    from src.db.session import SessionFactory
+    from src.models.workspace import User, WorkspaceMember
+
+    async with SessionFactory() as session:
+        user_id = (await session.execute(select(User.id).where(User.email == email))).scalar_one()
+        return (
+            await session.execute(select(WorkspaceMember).where(WorkspaceMember.user_id == user_id))
+        ).scalar_one_or_none()
+
+
+async def test_login_2fa_joins_before_challenge(app_client, single_workspace_on, monkeypatch):
+    # Join-before-2FA (#936): POST /auth/login joins before issuing the
+    # challenge, so the row below exists while the user holds no session.
+    await _totp_user_outside_single_mode(app_client, monkeypatch, "pre2fa@example.com")
+    resp = await app_client.post(
+        "/api/v1/auth/login",
+        json={"email": "pre2fa@example.com", "password": "Password123!"},
+    )
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["detail"]["code"] == "2fa_required"
+    assert await _member_for("pre2fa@example.com") is not None
+
+
+async def test_challenge_alone_grants_no_capability(app_client, single_workspace_on, monkeypatch):
+    # The safe half of the invariant: the 2fa_required answer carries no
+    # session, so the pre-challenge membership row is unreadable.
+    await _totp_user_outside_single_mode(app_client, monkeypatch, "nochal@example.com")
+    resp = await app_client.post(
+        "/api/v1/auth/login",
+        json={"email": "nochal@example.com", "password": "Password123!"},
+    )
+    assert resp.status_code == 401, resp.text
+    detail = resp.json()["detail"]
+    assert detail["code"] == "2fa_required"
+    assert "access_token" not in resp.json()
+    denied = await app_client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {detail['challenge_token']}"}
+    )
+    assert denied.status_code == 401, denied.text
+
+
+async def test_oauth_callback_2fa_joins_before_challenge(
+    app_client, single_workspace_on, monkeypatch
+):
+    # The SSO callback joins before parking the 2FA user, like /auth/login.
+    import json
+
+    from tests.test_oauth import PROVIDERS, _callback, _mock_oauth
+
+    monkeypatch.setattr(settings, "oauth_providers", json.dumps(PROVIDERS))
+    await _totp_user_outside_single_mode(app_client, monkeypatch, "sso-pre2fa@example.com")
+
+    _mock_oauth(monkeypatch, email="sso-pre2fa@example.com")
+    _, resp = await _callback(app_client, monkeypatch)
+    assert resp.status_code == 302, resp.text
+    assert "/oauth/callback?code=" in resp.headers["location"]
+    token = await app_client.post(
+        "/api/v1/auth/oauth/token", json={"code": resp.headers["location"].split("code=")[1]}
+    )
+    assert token.json()["two_factor_required"] is True
+    assert await _member_for("sso-pre2fa@example.com") is not None
+
+
+async def test_2fa_completion_keeps_membership(app_client, single_workspace_on, monkeypatch):
+    # Clearing the challenge lands on the pre-challenge membership.
+    backup_codes = await _totp_user_outside_single_mode(
+        app_client, monkeypatch, "keep2fa@example.com"
+    )
+    resp = await app_client.post(
+        "/api/v1/auth/login",
+        json={"email": "keep2fa@example.com", "password": "Password123!"},
+    )
+    assert resp.json()["detail"]["code"] == "2fa_required"
+    done = await app_client.post(
+        "/api/v1/auth/2fa/login",
+        json={
+            "challenge_token": resp.json()["detail"]["challenge_token"],
+            "code": backup_codes[0],
+        },
+    )
+    assert done.status_code == 200, done.text
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(done.json()))
+    assert me.status_code == 200, me.text
+    assert len(me.json()["workspaces"]) == 1
+
+
 async def test_auth_me_gives_a_key_its_own_workspace_in_single_mode(
     app_client, single_workspace_on, monkeypatch
 ):
