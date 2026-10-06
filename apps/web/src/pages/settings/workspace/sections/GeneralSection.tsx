@@ -315,7 +315,7 @@ export function GeneralSection() {
             <div>
               <h4 className="font-semibold text-destructive">Danger zone</h4>
               <p className="text-muted-foreground mt-1 text-sm">
-                The actions below are permanent and cannot be undone.
+                Deleting a workspace is permanent and irreversible.
               </p>
             </div>
 
