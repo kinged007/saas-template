@@ -746,7 +746,9 @@ class WorkspaceService:
             "reason": "ownership_transfer",
         }
         # The actor is the current owner (checked above), so both role changes
-        # belong to a user: the promotion and the owner's own demotion.
+        # belong to a user: the promotion and the owner's own demotion. One
+        # correlation id pairs the two deliveries (delivery is unordered).
+        correlation_id = str(uuid.uuid4())
         for user_id, from_role, to_role in (
             (target.user_id, target_previous_role, owner_role.name),
             (actor_member.user_id, owner_role.name, admin_role.name),
@@ -755,6 +757,7 @@ class WorkspaceService:
                 self._bus,
                 Subjects.WORKSPACE_MEMBER_ROLE_CHANGED,
                 {**base, "user_id": user_id, "from_role": from_role, "to_role": to_role},
+                correlation_id=correlation_id,
             )
         await publish_audit(
             self._bus,
