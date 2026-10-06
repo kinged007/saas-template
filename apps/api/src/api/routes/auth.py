@@ -545,6 +545,9 @@ async def totp_login(
     container=Depends(get_container),
 ) -> TokenResponse:
     svc = TwoFactorService(db, container.cipher, container.bus)
+    # ponytail: challenge-token guessing is unthrottled (401 raised before check);
+    # tokens are token_urlsafe(32) with a TTL, not attacker-chosen — charge on its own
+    # key, or move check above consume_challenge, if a caller shape makes them predictable.
     try:
         user_id = svc.consume_challenge(body.challenge_token)
     except TwoFactorError as exc:
