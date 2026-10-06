@@ -383,6 +383,54 @@ async def test_api_permission_isolation(app_client):
     assert "member.joined" in resp.json()["events"]
 
 
+async def test_get_subscription_by_id(app_client):
+    from tests.conftest import create_workspace, login, register_user, ws_headers
+
+    await register_user(app_client, email="whget1@example.com")
+    tokens = await login(app_client, email="whget1@example.com")
+    ws = await create_workspace(app_client, tokens, name="WH Get One")
+    wid = ws["id"]
+
+    await register_user(app_client, email="whget2@example.com")
+    tokens2 = await login(app_client, email="whget2@example.com")
+    ws2 = await create_workspace(app_client, tokens2, name="WH Get Two")
+
+    resp = await app_client.post(
+        "/api/v1/webhooks/subscriptions",
+        json={"url": "https://example.com/hook", "events": ["member.joined"]},
+        headers=ws_headers(tokens, wid),
+    )
+    assert resp.status_code == 201, resp.text
+    sub_id = resp.json()["id"]
+
+    body = (
+        await app_client.get(
+            f"/api/v1/webhooks/subscriptions/{sub_id}", headers=ws_headers(tokens, wid)
+        )
+    ).json()
+    assert body["id"] == sub_id
+    assert body["workspace_id"] == wid
+    assert body["url"] == "https://example.com/hook"
+    assert body["events"] == ["member.joined"]
+    assert body["active"] is True
+    assert "created_at" in body and "updated_at" in body
+    # The signing secret is minted only on create/rotate; a plain read must
+    # never carry it (or any key-like field).
+    assert "secret" not in body
+    assert "_signing_key" not in body
+
+    # Cross-workspace id 404s (never 403) so callers cannot probe existence.
+    resp = await app_client.get(
+        f"/api/v1/webhooks/subscriptions/{sub_id}", headers=ws_headers(tokens2, ws2["id"])
+    )
+    assert resp.status_code == 404
+
+    resp = await app_client.get(
+        f"/api/v1/webhooks/subscriptions/{uuid.uuid4()}", headers=ws_headers(tokens, wid)
+    )
+    assert resp.status_code == 404
+
+
 async def test_private_url_rejected(app_client):
     from tests.conftest import create_workspace, login, register_user, ws_headers
 

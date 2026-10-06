@@ -246,6 +246,11 @@ class WebhookService:
             )
         return secret
 
+    async def get_subscription(
+        self, workspace_id: str, subscription_id: str
+    ) -> WebhookSubscription:
+        return await self._get_or_404(workspace_id, subscription_id)
+
     async def list_deliveries(self, workspace_id: str, *, subscription_id: str | None = None):
         stmt = select(WebhookDelivery).where(WebhookDelivery.workspace_id == workspace_id)
         if subscription_id is not None:
