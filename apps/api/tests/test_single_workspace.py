@@ -484,7 +484,7 @@ async def _gone_user_is_gone(app_client, monkeypatch, entry: str):
         # Both throttled entry points charge the limiter on this 401 instead of
         # resetting the window. On login that is the whole point: the key is
         # ip:email and stays reusable, so a reset would leave it unthrottled.
-        # /register has no limiter at all.
+        # /register meters on its own per-IP limiter, not this one (#1343).
         assert [op for op, _ in calls] == ["check", "fail"], calls
 
 

@@ -106,6 +106,11 @@ class Settings(BaseSettings):
     # Auth brute-force protection: failures allowed per (IP, account) per window.
     auth_rate_limit_max_attempts: int = 10
     auth_rate_limit_window_seconds: int = 300
+    # Registration mail budget (#1343), keyed on the IP alone: distinct from
+    # auth_rate_limit_* because the registrant owns every fresh address, and
+    # tests that tighten the auth pair must not collapse this window.
+    auth_register_rate_limit_max_attempts: int = 10
+    auth_register_rate_limit_window_seconds: int = 300
     # Single-workspace mode. When true, the first login/register creates the
     # one shared workspace (owned by whoever arrives first, normally the
     # superadmin) and every later login/register auto-joins it as
