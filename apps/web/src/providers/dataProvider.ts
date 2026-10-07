@@ -1,4 +1,10 @@
-import type { BaseKey, BaseRecord, DataProvider, DeleteManyResponse } from "@refinedev/core";
+import type {
+  BaseKey,
+  BaseRecord,
+  DataProvider,
+  DeleteManyParams,
+  DeleteManyResponse,
+} from "@refinedev/core";
 import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import dataProviderModule from "@refinedev/simple-rest";
 
@@ -196,9 +202,10 @@ const baseDataProvider = dataProviderModule(API_URL, httpClient);
 async function bulkDelete<TData extends BaseRecord>(
   resource: string,
   ids: BaseKey[],
+  params: Pick<DeleteManyParams<any>, "variables" | "meta"> = {},
 ): Promise<DeleteManyResponse<TData>> {
   const results = await Promise.all(
-    ids.map((id) => baseDataProvider.deleteOne<TData>({ resource, id })),
+    ids.map((id) => baseDataProvider.deleteOne<TData>({ resource, id, ...params })),
   );
   return { data: results.map(({ data }) => data) };
 }
@@ -265,7 +272,8 @@ export const dataProvider: DataProvider = {
     baseDataProvider.create({ resource: resourcePath(resource), ...params }),
   deleteOne: ({ resource, ...params }) =>
     baseDataProvider.deleteOne({ resource: resourcePath(resource), ...params }),
-  deleteMany: ({ resource, ids }) => bulkDelete(resourcePath(resource), ids),
+  deleteMany: ({ resource, ids, ...params }) =>
+    bulkDelete(resourcePath(resource), ids, params),
   custom: async ({ url, ...params }) => {
     const resolved =
       !url || /^https?:\/\//.test(url) || url.startsWith("/")
