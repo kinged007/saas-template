@@ -21,7 +21,7 @@ import {
   getActiveWorkspaceId,
   setActiveWorkspaceId,
 } from "../utils/storage";
-import { clearAllCaches, clearWorkspaceCaches, isClientError, isNoResponseError } from "../providers/queryClient";
+import { clearAllCaches, clearWorkspaceCaches, shouldRetry } from "../providers/queryClient";
 import { API_URL, httpClient } from "../providers/dataProvider";
 
 type WorkspaceContextValue = {
@@ -48,13 +48,14 @@ const IDENTITY_QUERY_KEY = ["auth", "identity"] as const;
 // options on the shared query (react-query merges observer options).
 // This override exists because refine hardcodes `retry: false` on
 // useGetIdentity, and an explicit per-query value beats the client default —
-// so it is the only way the retry policy reaches /me. 4xx is refused here
-// too: a 401 from /me has already triggered
-// forceLogout() in the response interceptor, and its retries raced the redirect.
+// so it is the only way the retry policy reaches /me. The refusal set is
+// the app-wide one (see shouldRetry in providers/queryClient): 4xx — a 401
+// from /me has already triggered forceLogout() in the response interceptor,
+// and its retries raced the redirect — and 5xx, matching the default's
+// fail-fast.
 export const IDENTITY_QUERY_OPTIONS = {
   staleTime: 30_000,
-  retry: (failureCount: number, error: unknown) =>
-    failureCount < 2 && !isClientError(error) && !isNoResponseError(error),
+  retry: (failureCount: number, error: unknown) => shouldRetry(failureCount, error, 2),
   retryDelay: (attempt: number) => Math.min(500 * 2 ** attempt, 4000),
 };
 
