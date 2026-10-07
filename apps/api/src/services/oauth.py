@@ -335,9 +335,13 @@ async def _verified_email(client: httpx.AsyncClient, url: str, headers: dict[str
     return str(chosen["email"]) if chosen else ""
 
 
+_CC_CONTROLS = "".join(map(chr, [*range(0x20), *range(0x7F, 0xA0)]))
+_CC_TO_SPACE = str.maketrans(_CC_CONTROLS, " " * len(_CC_CONTROLS))
+
+
 def _single_line(text: object, limit: int = 200) -> str:
-    """Truncate, then flatten CR/LF so untrusted text cannot forge log lines."""
-    return str(text)[:limit].replace("\r", " ").replace("\n", " ")
+    """Truncate, then flatten every Cc control char to a space: no log forging, no ANSI escapes."""
+    return str(text).translate(_CC_TO_SPACE)[:limit]
 
 
 def _failure_detail(exc: Exception) -> str:

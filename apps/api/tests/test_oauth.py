@@ -2,7 +2,9 @@
 exchanges are monkeypatched at the service-module boundary."""
 
 import json
+import logging
 from dataclasses import replace
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -447,6 +449,33 @@ async def test_callback_rejects_state_entry_without_verifier(app_client, oauth_o
     assert resp.status_code == 302
     assert resp.headers["location"].startswith("http://localhost:5173/login?error=")
     assert httpx.URL(resp.headers["location"]).params["error"] == "invalid or expired state"
+
+
+async def test_callback_failure_log_is_control_free(app_client, oauth_on, caplog):
+    # Starlette percent-decodes the path param, so CR/LF/ESC survive into
+    # provider_id and into the OAuthError text the callback logs. The warning
+    # must leave no Cc control behind (log forging / ANSI injection).
+    from src.main import app as fastapi_app
+
+    provider_id = "bad\r\nidp\x1b[31m"
+    fastapi_app.state.container.cache.set(
+        oauth_svc.STATE_TTL_HINT + "s-forged",
+        {"provider": provider_id, "redirect_uri": "http://test/cb", "code_verifier": "v"},
+    )
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.oauth"):
+        resp = await app_client.get(
+            f"/api/v1/auth/oauth/{quote(provider_id)}/callback?code=x&state=s-forged",
+            follow_redirects=False,
+        )
+    assert resp.status_code == 302
+    assert httpx.URL(resp.headers["location"]).params["error"] == "sign-in failed"
+    record = next(r for r in caplog.records if "oauth callback failed" in r.getMessage())
+    text = record.getMessage()
+    for control in ("\r", "\n", "\x1b", "\x7f"):
+        assert control not in text
+    # exc content survives flattened: unknown-provider echo + the id itself.
+    assert "unknown oauth provider" in text
+    assert "bad" in text and "idp" in text
 
 
 async def test_register_blocked_when_disabled(app_client, monkeypatch):
