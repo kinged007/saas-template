@@ -80,10 +80,9 @@ export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: str
   return {};
 }
 
-// Module scope, not the ref below: the workspace provider leaves its loading
-// gate as the identity settles, which unmounts and remounts this page with a
-// fresh ref while the URL still carries the code — the ref alone resets with
-// the instance and the code is exchanged twice.
+// Module scope, not the ref below: the ref resets with the component
+// instance, and a remount while the URL still carries the code (StrictMode's
+// dev double-mount, HMR) would exchange the single-use code twice.
 let consumedCode: string | null = null;
 
 const PENDING_STATUS = "Signing you in…";

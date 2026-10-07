@@ -162,8 +162,20 @@ export function App() {
           { name: "admin-audit", list: "/admin/audit", meta: { hide: true } },
         ]}
       >
-        <WorkspaceProvider>
-          <Routes>
+        <Routes>
+          {/* Pathless layout: everything that needs the workspace context lives
+              here. The four public auth routes below are top-level siblings —
+              they read no workspace context, and wrapping /oauth/callback in the
+              provider would unmount and remount it mid-exchange on every
+              identity settle, because the gate renders nothing while the
+              identity loads. */}
+          <Route
+            element={
+              <WorkspaceProvider>
+                <Outlet />
+              </WorkspaceProvider>
+            }
+          >
             <Route
               path="/"
               element={
@@ -237,26 +249,8 @@ export function App() {
               </Route>
               <Route path="*" element={<NotFoundPage />} />
             </Route>
-            <Route
-              path="/login"
-              element={
-                <Authenticated key="login" fallback={<LoginPage />}>
-                  <Navigate to="/" replace />
-                </Authenticated>
-              }
-            />
-            <Route
-              path="/register"
-              element={
-                <Authenticated key="register" fallback={<RegisterPage />}>
-                  <Navigate to="/" replace />
-                </Authenticated>
-              }
-            />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
-            <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
-            <Route path="/verify-email" element={<VerifyEmailPage />} />
             {/* Emailed invite link — public: the recipient may not have an account yet. */}
             <Route
               path="/invitations/accept"
@@ -271,9 +265,27 @@ export function App() {
                 above "/" would flip that. Authenticated's fallback sends a signed-out
                 visitor to /login. */}
             <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-          <Toaster />
-        </WorkspaceProvider>
+          </Route>
+          <Route
+            path="/login"
+            element={
+              <Authenticated key="login" fallback={<LoginPage />}>
+                <Navigate to="/" replace />
+              </Authenticated>
+            }
+          />
+          <Route
+            path="/register"
+            element={
+              <Authenticated key="register" fallback={<RegisterPage />}>
+                <Navigate to="/" replace />
+              </Authenticated>
+            }
+          />
+          <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
+          <Route path="/verify-email" element={<VerifyEmailPage />} />
+        </Routes>
+        <Toaster />
       </Refine>
       </BrowserRouter>
     </ThemeProvider>
