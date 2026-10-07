@@ -39,7 +39,7 @@ from src.db.session import SessionFactory
 from src.events.bus import EventBus
 from src.events.factory import WorkflowRegistry
 from src.events.publisher import publish_audit
-from src.events.subjects import Subjects
+from src.events.subjects import OWNERSHIP_TRANSFER_REASON, Subjects
 from src.jobs.executor import execute_run
 from src.models.workspace import ACTIVE_MEMBERSHIP_STATUSES, WorkspaceMember
 from src.realtime.manager import ConnectionManager
@@ -268,7 +268,7 @@ def build_workflows(
         # role". A transfer says so on the event; the role names carry no such
         # claim, since a workspace may rename or omit its owner role.
         if user_id == payload.get("changed_by_user_id"):
-            if payload.get("reason") == "ownership_transfer":
+            if payload.get("reason") == OWNERSHIP_TRANSFER_REASON:
                 # A null to_role names no new role, so the clause is dropped
                 # and the transfer itself is still reported.
                 body = (
