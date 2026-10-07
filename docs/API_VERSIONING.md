@@ -26,6 +26,8 @@ as `api_version`.
 
 ## Recorded corrections
 
+- `GET /api/v1/jobs/global/{id}/runs` returns `404 "job not found"` for an id
+  matching no definition — not `200 []` with `X-Total-Count: 0`.
 - `GET /api/v1/jobs/{id}`, `PATCH /api/v1/jobs/{id}`,
   `POST /api/v1/jobs/{id}/execute` and `GET /api/v1/jobs/{id}/runs` return
   `403 "you are not a member of this workspace"` — not `404 "job not found"` —
