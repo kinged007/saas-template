@@ -34,6 +34,21 @@ const MESSAGE_ROWS = Array.from({ length: 25 }, (_, i) => ({
 }));
 
 /**
+ * A failed messages query must be flagged by the pane's own note — refine's
+ * default error toast would echo it transiently. The toast mounts in a later
+ * effect tick than the note's commit, so its absence only counts as a settled
+ * absence: settle past the mount window first. Sonner keeps a mounted toast
+ * up ~4s, so an absence measured after this wait holds for its lifetime.
+ */
+async function expectNoRefineToast(page: import("playwright/test").Page) {
+  await page.waitForTimeout(2_000);
+  // No content filter: without an i18nProvider refine falls back to the raw
+  // `notifications.error` key as the toast title, so match the toast element
+  // itself — these failure paths raise no other toast.
+  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
+}
+
+/**
  * The message pane has no tripwire of its own — `queryClient.test.ts` pins that
  * the override exists, not that it still suppresses the storm. These are the
  * two shapes the pane has to survive: a transport failure (`statusCode: 0`,
@@ -56,6 +71,9 @@ test.describe("inbox message fetch", () => {
 
     await expect(page.getByText("Could not load messages.")).toBeVisible();
     await expect(page.getByText("No messages yet.")).toHaveCount(0);
+    // The destructive empty-pane text is the failure signal; refine's default
+    // toast is suppressed on this query too.
+    await expectNoRefineToast(page);
     // Long enough to see the client's own budget (1s + 2s) fire if it ever does.
     await page.waitForTimeout(5_000);
     expect(attempts).toBe(1);
@@ -79,6 +97,7 @@ test.describe("inbox message fetch", () => {
 
     await expect(page.getByText("Could not load messages.")).toBeVisible();
     await expect(page.getByText("No messages yet.")).toHaveCount(0);
+    await expectNoRefineToast(page);
     await page.waitForTimeout(5_000);
     expect(attempts).toBe(1);
   });
@@ -141,15 +160,19 @@ test.describe("inbox message fetch", () => {
     const staleNote = page.locator('[role="status"]', { hasText: "Showing the last messages loaded." });
     await expect(staleNote).toBeVisible();
     await expect(staleNote).toHaveAttribute("role", "status");
-    // The guard for the placement: `toBeVisible` and `toBeInViewport` both pass when the
-    // note is the first child of a pane that happens not to be scrolled. The page wrapper is
-    // itself `.overflow-y-auto`, so containment is measured against the scroller that holds
-    // the message rows — the one the note must not live in.
-    const noteSharesPaneWithMessages = await page
-      .getByText("shipping friday #25")
-      .first()
-      .evaluate((row, text) => Boolean(row.closest(".overflow-y-auto")?.textContent?.includes(text)), "Showing the last messages loaded.");
-    expect(noteSharesPaneWithMessages).toBe(false);
+    // The inline note is the only failure signal on a warm cache: refine's
+    // default toast stays suppressed on this query, so it cannot echo the note
+    // transiently next to it.
+    await expectNoRefineToast(page);
+    // The guard for the placement: `toBeVisible` and `toBeInViewport` both pass when
+    // the note is the first child of a pane that happens not to be scrolled. It is
+    // measured against the message scroller — the one the note must not live in —
+    // anchored on the scroller's own test id, so the assertion depends on the
+    // note's DOM position alone and not on fixture text matching the note text.
+    const noteInsideMessagesScroller = await staleNote.evaluate((note) =>
+      Boolean(note.closest('[data-testid="thread-messages"]')),
+    );
+    expect(noteInsideMessagesScroller).toBe(false);
     await expect(staleNote).toBeInViewport();
     await expect(page.getByText("shipping friday").first()).toBeVisible();
     // `text-destructive` stays reserved for the empty list, where nothing loaded.

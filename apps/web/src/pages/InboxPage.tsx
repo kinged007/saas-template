@@ -266,6 +266,9 @@ export function InboxPage() {
     config: {
       query: { limit: 100 },
     },
+    // The inline note in the thread header is this failure's only signal;
+    // refine's default toast would echo it transiently next to the note.
+    errorNotification: false,
     queryOptions: {
       enabled: !!selectedConvId && tab === "messages",
       // Network failures make one attempt; a 4xx never retries anyway.
@@ -996,7 +999,7 @@ export function InboxPage() {
                 </div>
 
                 {/* Messages */}
-                <div className="flex-1 overflow-y-auto p-4">
+                <div data-testid="thread-messages" className="flex-1 overflow-y-auto p-4">
                   <div className="flex flex-col gap-4">
                     {messagesLoading ? (
                       <p className="text-muted-foreground text-sm">Loading…</p>
