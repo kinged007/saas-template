@@ -14,6 +14,20 @@ test("429 maps to the rate-limit message", () => {
     forgotPasswordError(429, { headers: { get: () => "0" } }),
     "Too many attempts — try again later.",
   );
+  // header absent maps to exactly 0 seconds, so it lands on the same fallback.
+  assert.equal(
+    forgotPasswordError(429, { headers: { get: () => null } }),
+    "Too many attempts — try again later.",
+  );
+  assert.equal(
+    forgotPasswordError(429, { headers: { get: () => "-5" } }),
+    "Too many attempts — try again later.",
+  );
+  // exactly one minute is still rounded to "~1 min", not bumped to 2.
+  assert.equal(
+    forgotPasswordError(429, { headers: { get: () => "60" } }),
+    "Too many attempts — try again in ~1 min.",
+  );
 });
 
 test("429 renders whole minutes from the Retry-After header", () => {
