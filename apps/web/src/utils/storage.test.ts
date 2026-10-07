@@ -68,6 +68,23 @@ test("resetSessionState() removes the identity key instead of storing \"null\"",
   }
 });
 
+test("tokenStore.clear() drops the guard-recorded sign-in destination", () => {
+  returnToStore.set("/api-keys?page=2");
+
+  tokenStore.clear();
+
+  assert.equal(returnToStore.take(), null);
+});
+
+test("tokenStore.clear() drops the destination after a token is also set", () => {
+  tokenStore.setTokens("t");
+  returnToStore.set("/api-keys?page=2");
+
+  tokenStore.clear();
+
+  assert.equal(returnToStore.take(), null);
+});
+
 test("returnToStore.take() returns the stored path and clears it", () => {
   returnToStore.set("/api-keys?page=2");
 
