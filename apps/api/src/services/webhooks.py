@@ -19,6 +19,7 @@ import json
 import logging
 import secrets
 import urllib.parse
+import uuid
 from datetime import timedelta
 
 import httpx
@@ -160,6 +161,10 @@ class WebhookService:
         self._secrets = secret_store
 
     async def _get_or_404(self, workspace_id: str, subscription_id: str) -> WebhookSubscription:
+        try:
+            uuid.UUID(subscription_id)
+        except ValueError:
+            raise WebhookError("webhook subscription not found") from None
         sub = await self._session.get(WebhookSubscription, subscription_id)
         if sub is None or sub.workspace_id != workspace_id:
             raise WebhookError("webhook subscription not found")
