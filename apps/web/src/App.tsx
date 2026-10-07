@@ -184,7 +184,11 @@ export function App() {
               <Route path="workspaces/create" element={<WorkspaceCreatePage />} />
               <Route path="invitations" element={<ReceivedInvitationsPage />} />
               {/* Every route below reads the active workspace; the guard keeps a
-                  user in zero workspaces out instead of stranding them here. */}
+                  user in zero workspaces out instead of stranding them here.
+                  Workspace-free routes (settings/profile, users/:id/settings,
+                  workspaces/create, admin, invitations) stay outside — the guard
+                  redirects on zero workspaces, and those pages are reachable
+                  without one. See RequireWorkspace's doc comment above. */}
               <Route element={<RequireWorkspace />}>
                 <Route path="members" element={<MembersPage />} />
                 <Route path="api-keys/create" element={<ApiKeyCreatePage />} />
@@ -207,8 +211,10 @@ export function App() {
                     element={<Navigate to="/settings/workspace/general" replace />}
                   />
                 </Route>
-                {/* Legacy redirects — keep old URLs working. Inside the guard, so
-                    a user in zero workspaces is sent straight to the dashboard. */}
+                {/* Legacy redirects — keep old URLs working. Inside the guard for
+                    the same reason as the routes above; their workspace-free
+                    siblings are listed just outside it. See the comment on the
+                    RequireWorkspace group above. */}
                 <Route path="roles" element={<Navigate to="/settings/workspace/roles" replace />} />
                 <Route path="jobs" element={<Navigate to="/settings/workspace/jobs" replace />} />
               </Route>
