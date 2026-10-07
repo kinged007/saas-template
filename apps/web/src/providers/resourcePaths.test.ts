@@ -20,16 +20,15 @@ test("a resource that is its own path is left alone", () => {
 });
 
 test("only a resource with no GET-by-id route is refused by getOne", () => {
-  // The webhooks router serves GET /subscriptions but no GET /subscriptions/{id}
-  // (only PATCH, DELETE, rotate-secret and deliveries), and the admin
-  // workspaces/audit lists have no detail route — so getOne there 404s or 405s.
-  // Every other renamed resource has a read-by-id route
-  // (`admin-users` → GET /admin/users/{id}), and an unmapped resource is
+  // The admin workspaces/audit lists have no detail route (the admin surface
+  // is list-only) — so getOne there 404s. Every other renamed resource has a
+  // read-by-id route (`webhooks` → GET /webhooks/subscriptions/{id},
+  // `admin-users` → GET /admin/users/{id}), and an unmapped resource is
   // assumed to have one.
-  for (const resource of ["webhooks", "admin-workspaces", "admin-audit"]) {
+  for (const resource of ["admin-workspaces", "admin-audit"]) {
     assert.equal(hasReadById(resource), false, resource);
   }
-  for (const resource of ["admin-users", "members"]) {
+  for (const resource of ["webhooks", "admin-users", "members"]) {
     assert.equal(hasReadById(resource), true, resource);
   }
 });
