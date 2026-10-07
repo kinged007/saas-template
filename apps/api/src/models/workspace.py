@@ -69,13 +69,16 @@ class AuthToken(Base, TimestampMixin):
 class RefreshToken(Base, TimestampMixin):
     __tablename__ = "refresh_tokens"
 
-    # Same constraint 0019 creates; kept on the model so `create_all` (tests,
-    # fresh installs) and the ORM agree on the domain.
+    # Same constraint 0020 creates; kept on the model so `create_all` (tests,
+    # fresh installs) and the ORM agree on the domain. The naming convention
+    # (src/db/base.py) prefixes ck_<table>_ onto the declared name, so the bare
+    # suffix lands ck_refresh_tokens_revoke_reason — declaring the full name
+    # would double it (docs/MIGRATIONS.md, Dialect branches).
     __table_args__ = (
         CheckConstraint(
             "revoke_reason IS NULL OR revoke_reason IN "
             "('rotated', 'user', 'logout', 'password', 'reuse')",
-            name="ck_refresh_tokens_revoke_reason",
+            name="revoke_reason",
         ),
     )
 
@@ -160,10 +163,11 @@ class WorkspaceMember(Base, TimestampMixin):
 
     # Same constraint the 0017 migration creates; kept on the model so
     # `create_all` (tests, fresh installs) and the ORM agree on the domain.
+    # Bare suffix for the same convention reason as RefreshToken above.
     __table_args__ = (
         CheckConstraint(
             "status IN ('active', 'invited', 'suspended')",
-            name="ck_workspace_members_status",
+            name="status",
         ),
     )
 
