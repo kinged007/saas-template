@@ -1,6 +1,7 @@
 import { Fragment, useState } from "react";
 import { useCan } from "@refinedev/core";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
+import { cn } from "@/lib/utils";
 import { Webhook } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -31,15 +32,18 @@ function DeliveryLog({ subscriptionId }: { subscriptionId: string }) {
   });
   /* refine hands back a frozen empty object as `result.data` whenever the
      query has no data — a disabled query reports neither loading nor error —
-     so the shape is checked before anything reaches `rows.map`. */
-  const rows = Array.isArray(result?.data) ? result.data : [];
+     so the shape is checked once, before anything reaches `rows.map`. */
+  const isList = Array.isArray(result?.data);
+  const rows = isList ? result.data : [];
 
   if (query.isLoading) {
     return <p className="text-muted-foreground text-sm">Loading deliveries…</p>;
   }
   /* A failed refetch keeps the rows react-query already had, and stale rows
-     beat an error message; only a load that produced no data at all is one. */
-  if (query.isError && !Array.isArray(result?.data)) {
+     beat an error message; only a load that produced no data at all is one.
+     Uncaptioned rows would read as current — the `staleNote` `<p>` below
+     marks them instead. */
+  if (query.isError && !isList) {
     return (
       <p className="text-destructive text-sm">
         Could not load deliveries: {query.error?.message ?? "Unknown error"}
@@ -51,8 +55,23 @@ function DeliveryLog({ subscriptionId }: { subscriptionId: string }) {
       <p className="text-muted-foreground text-sm">No deliveries yet.</p>
     );
   }
+  const staleNote = query.isError && isList;
   return (
-    <Table>
+    <div>
+      {/* Caption for a failed background refetch, per InboxPage's staleness
+          note. Always mounted: a live region has to be in the accessibility
+          tree before its text changes to be announced — `sr-only` keeps the
+          idle (textless) state out of the layout. */}
+      <p
+        role="status"
+        className={cn(
+          "text-muted-foreground mb-2 text-sm",
+          !staleNote && "sr-only",
+        )}
+      >
+        {staleNote ? "Showing the last deliveries loaded." : ""}
+      </p>
+      <Table>
       <TableHeader>
         <TableRow>
           <TableHead>Event</TableHead>
@@ -103,7 +122,8 @@ function DeliveryLog({ subscriptionId }: { subscriptionId: string }) {
           </TableRow>
         ))}
       </TableBody>
-    </Table>
+      </Table>
+    </div>
   );
 }
 
