@@ -19,6 +19,23 @@ async def test_list_shows_role_and_joined_at(app_client):
     assert next(r for r in me.json()["workspaces"] if r["id"] == ws["id"]).get("joined_at")
 
 
+async def test_session_branch_permissions_match_auth_me(app_client):
+    """Issue #1436: GET /workspaces session rows carry the same nested
+    permissions as /auth/me for the same principal."""
+    client = app_client
+    tokens = await register_user(client, "perms-parity@example.com")
+    ws = await create_workspace(client, tokens)
+    lst = await client.get("/api/v1/workspaces", headers=auth_headers(tokens))
+    assert lst.status_code == 200, lst.text
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert me.status_code == 200, me.text
+    row = next(r for r in lst.json() if r["id"] == ws["id"])
+    nested = next(r for r in me.json()["workspaces"] if r["id"] == ws["id"])
+    assert row["permissions"] == nested["permissions"]
+    assert row["permissions"], f"expected non-empty owner perms, got {row}"
+    assert (row["role"], row["permissions"]) == (nested["role"], nested["permissions"])
+
+
 async def test_leave_removes_membership(app_client):
     client = app_client
     owner = await register_user(client, "leave-owner@example.com")

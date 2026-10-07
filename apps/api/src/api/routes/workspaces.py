@@ -168,9 +168,15 @@ async def list_workspaces(
     memberships = await service.list_workspaces(user.id)
     roles_by_ws = {w.id: role.name for w, role, _ in memberships}
     joined_by_ws = {w.id: m.created_at for w, _, m in memberships}
+    perms_by_ws = {w.id: role.permissions for w, role, _ in memberships}
     response.headers["X-Total-Count"] = str(total)
     return [
-        workspace_to_dict(w, role=roles_by_ws.get(w.id), joined_at=joined_by_ws.get(w.id))
+        workspace_to_dict(
+            w,
+            role=roles_by_ws.get(w.id),
+            permissions=perms_by_ws.get(w.id),
+            joined_at=joined_by_ws.get(w.id),
+        )
         for w in rows.scalars().all()
     ]
 
