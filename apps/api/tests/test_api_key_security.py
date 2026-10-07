@@ -268,6 +268,30 @@ async def test_key_reads_within_its_permission_scope(app_client):
     assert [w["id"] for w in resp.json()] == [ws["id"]]
 
 
+@pytest.mark.parametrize("grant", [["workspace:read"], ["workspace:read", "member:read"]])
+async def test_workspaces_list_reports_the_keys_grant_for_key_principals(app_client, grant):
+    """GET /workspaces for a key reports the key's own grant, like /auth/me.
+
+    The two endpoints must agree on the shape: `permissions` is what this
+    principal can do, not the creator's role. `[]` is a real grant, never a
+    fallback to the role.
+    """
+    client = app_client
+    owner = await register_user(client, "ws-grant@example.com")
+    ws = await create_workspace(client, owner, "Ws Grant Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "ws-granted", grant)
+
+    resp = await client.get("/api/v1/workspaces", headers=_key_headers(key["key"], ws["id"]))
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()) == 1
+    assert resp.json()[0]["permissions"] == sorted(grant)
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    assert me_key.json()["workspaces"][0]["permissions"] == resp.json()[0]["permissions"]
+    assert me_key.json()["permissions"] == resp.json()[0]["permissions"]
+
+
 async def test_key_cannot_read_outside_its_permission_scope(app_client):
     client = app_client
     owner = await register_user(client, "leo@example.com")
@@ -1058,6 +1082,24 @@ async def test_auth_me_narrows_workspace_permissions_to_the_keys_grant(app_clien
     assert me_owner.status_code == 200, me_owner.text
     assert "*" in me_owner.json()["workspaces"][0]["permissions"]
     assert body["workspaces"][0]["permissions"] != me_owner.json()["workspaces"][0]["permissions"]
+
+
+async def test_auth_me_passes_a_wildcard_grant_through_verbatim(app_client):
+    """A wildcard key is the highest-stakes pass-through: `['*']` reaches both
+    the nested entry and the top-level field unfiltered. No inequality-vs-owner
+    assertion here — an owner's role is also `*`, which is why the equality
+    parametrization above skips this grant."""
+    client = app_client
+    owner = await register_user(client, "wild@example.com")
+    ws = await create_workspace(client, owner, "Wild Grant Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "wild", ["*"])
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    body = me_key.json()
+    assert len(body["workspaces"]) == 1
+    assert body["workspaces"][0]["permissions"] == ["*"]
+    assert body["permissions"] == ["*"]
 
 
 async def test_auth_me_drops_a_keys_grant_when_its_membership_is_suspended(app_client):
