@@ -102,6 +102,7 @@ async def test_reuse_marks_revoked_rows_with_the_reason(app_client):
     async with SessionFactory() as session:
         stmt = select(RefreshToken.revoke_reason).where(RefreshToken.token_hash.in_(hashes))
         reasons = (await session.execute(stmt)).scalars().all()
+    assert len(reasons) == 2, reasons
     assert set(reasons) == {"reuse"}, reasons
 
 
