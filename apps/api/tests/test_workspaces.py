@@ -388,11 +388,10 @@ async def test_role_writers_require_an_actor(app_client):
     async with SessionFactory() as session:
         service = WorkspaceService(session)
         with pytest.raises(TypeError):
-            await service.create_custom_role(
-                "ws-x", name="ops", description=None, permissions=[]
-            )
+            await service.create_custom_role("ws-x", name="ops", description=None, permissions=[])
         with pytest.raises(TypeError):
             await service.update_role("ws-x", "role-x", name="ops")
+
 
 async def test_service_stores_trimmed_names(app_client):
     """The service trims even when no schema validated the input.
