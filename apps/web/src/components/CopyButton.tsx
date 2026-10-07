@@ -31,7 +31,13 @@ export function CopyButton({
   label: string;
 }) {
   const subject = label.replace(/^Copy\s+/i, "");
-  const note = copied ? subject.charAt(0).toUpperCase() + subject.slice(1) + " copied" : "";
+  // `label` falls back for degenerate labels (e.g. bare "Copy") so the note
+  // never hands a screen reader an empty subject.
+  const note = copied
+    ? subject
+      ? subject.charAt(0).toUpperCase() + subject.slice(1) + " copied"
+      : label
+    : "";
   return (
     <>
       <Button
