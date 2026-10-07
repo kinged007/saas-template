@@ -79,7 +79,7 @@ test("shouldRetry is the one refusal policy at any budget", () => {
 test("both retry call sites route through the shared refusal policy", () => {
   const identity = readFileSync(join(srcDir, "contexts/WorkspaceContext.tsx"), "utf8");
   assert.match(identity, /shouldRetry\(failureCount, error, 2\)/);
-  assert.doesNotMatch(identity, /isClientError|isNoResponseError/);
+  assert.doesNotMatch(identity, /isClientError|isNoResponseError|isServerError/);
 
   const client = readFileSync(join(srcDir, "providers/queryClient.ts"), "utf8");
   assert.match(client, /retry: \(failureCount, error\) => shouldRetry\(failureCount, error, 3\)/);
