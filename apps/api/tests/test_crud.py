@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from src.api.crud import InvalidQuery
+
 SRC = Path(__file__).resolve().parents[1] / "src"
 CRUD = SRC / "api" / "crud.py"
 
@@ -147,3 +149,61 @@ def test_reads_are_utf8_under_an_ascii_locale(tmp_path):
     )
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == "[]"
+
+
+# --- parser: sort-dialect symmetry (#1057, #1013, #1134) -------------------
+
+
+def _parse(query_string: str):
+    """Run `parse_query` against a stub request; returns (spec, InvalidQuery|None)."""
+    from starlette.requests import Request
+
+    from src.api.crud import parse_query
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [],
+        "query_string": query_string.encode(),
+    }
+    try:
+        return parse_query(Request(scope)), None
+    except InvalidQuery as exc:
+        return None, str(exc)
+
+
+def test_parse_rejects_order_only_in_both_dialects():
+    """#1013 made `_order=desc` alone reject; #1134 makes it name the dialect.
+
+    Symmetry: the same order-only query in the repeated dialect must reject
+    with the same message shape, with the parameter names following the
+    dialect the client actually used.
+    """
+    spec, err = _parse("_order=desc")
+    assert spec is None
+    assert err == "_sort and _order must have the same number of entries", err
+
+    spec, err = _parse("order[]=desc")
+    assert spec is None
+    assert err == "sort[] and order[] must have the same number of entries", err
+
+
+def test_parse_order_only_length_guard_beats_direction_check():
+    """Which message an order-only query answers must not depend on the
+    direction value: a bogus direction gets the same length guard (#1134)."""
+    spec, err = _parse("_order=sideways")
+    assert spec is None
+    assert err == "_sort and _order must have the same number of entries", err
+
+    spec, err = _parse("order[]=sideways")
+    assert spec is None
+    assert err == "sort[] and order[] must have the same number of entries", err
+
+
+def test_parse_sort_dialect_symmetry_for_well_formed_queries():
+    """Well-formed sort pairs parse identically in both dialects (#1013)."""
+    comma, _ = _parse("_sort=name,created_at&_order=desc,asc")
+    repeated, _ = _parse("sort[]=name&sort[]=created_at&order[]=desc&order[]=asc")
+    assert comma.sort_by == repeated.sort_by == ["name", "created_at"]
+    assert comma.sort_order == repeated.sort_order == ["desc", "asc"]

@@ -563,6 +563,7 @@ def build_workflows(
         regardless of which replica holds their WebSocket.
         """
         participant_ids: list[str] = payload.get("participant_user_ids") or []
+        participant_ids = list(dict.fromkeys(participant_ids))
         if not participant_ids:
             return
         await connection_manager.push_many(

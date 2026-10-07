@@ -48,14 +48,54 @@ const ROUTED_VERBS = [
   "deleteMany",
 ];
 
-// Verbs whose url does not come from `resource`.
-const UNSCOPED_VERBS = ["custom", "getApiUrl"];
+// Verbs whose url does not come from `resource`. Only verbs actually declared
+// in the dataProvider literal belong here: `getApiUrl` arrives via the
+// ...baseDataProvider spread and was never assertable, so listing it would be
+// an entry that can rot silently.
+const UNSCOPED_VERBS = ["custom"];
 
-test("every resource-scoped verb in dataProvider maps the resource through resourcePath()", () => {
+// simple-rest v6's provider type omits createMany and updateMany, so they are
+// declared neither in the provider literal nor as overrides — and the API has
+// no bulk create/update routes. Recorded so the absence reads as deliberate:
+// if the provider starts declaring one, this list must be updated and the verb
+// routed or marked unscoped.
+const ABSENT_VERBS = ["createMany", "updateMany"];
+function providerVerbDeclarations() {
   const source = readFileSync(join(srcDir, "providers", "dataProvider.ts"), "utf8");
   const start = source.indexOf("export const dataProvider");
   const literal = source.slice(start, source.indexOf("\n};", start));
-  const declared = [...literal.matchAll(/^ {2}([a-zA-Z]+):/gm)].map((m) => m[1]);
+  return {
+    source,
+    literal,
+    declared: [...literal.matchAll(/^ {2}([a-zA-Z]+):/gm)].map((m) => m[1]),
+  };
+}
+
+test("deleteMany forwards variables and meta through the fan-out", () => {
+  const { source } = providerVerbDeclarations();
+  assert.match(
+    source,
+    /deleteMany:[\s\S]*?\{ resource, ids, \.\.\.params \}[\s\S]*?bulkDelete[\s\S]*?\(resourcePath\(resource\), ids, params\)/,
+    "deleteMany drops variables/meta — forward them, the API shape decides whether they are used",
+  );
+  assert.match(
+    source,
+    /baseDataProvider\.deleteOne<TData>\(\{ resource, id, \.\.\.params \}\)/,
+    "bulkDelete drops variables/meta — thread them into each deleteOne",
+  );
+});
+
+test("verbs recorded as absent stay absent", () => {
+  const { declared } = providerVerbDeclarations();
+  assert.deepEqual(
+    declared.filter((verb) => ABSENT_VERBS.includes(verb)),
+    [],
+    "dataProvider now declares a verb recorded in ABSENT_VERBS — move it to ROUTED_VERBS or UNSCOPED_VERBS",
+  );
+});
+
+test("every resource-scoped verb in dataProvider maps the resource through resourcePath()", () => {
+  const { literal, declared } = providerVerbDeclarations();
 
   // The lookahead stops the scan at the next `  verb:` property, so an override
   // that is present but passes the raw resource through still fails.
@@ -80,5 +120,10 @@ test("every resource-scoped verb in dataProvider maps the resource through resou
     ROUTED_VERBS.filter((verb) => !declared.includes(verb)),
     [],
     "dataProvider is missing an override listed in ROUTED_VERBS",
+  );
+  assert.deepEqual(
+    UNSCOPED_VERBS.filter((verb) => !declared.includes(verb)),
+    [],
+    "UNSCOPED_VERBS lists a verb the provider no longer declares",
   );
 });

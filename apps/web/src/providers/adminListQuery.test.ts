@@ -43,7 +43,12 @@ test("directions stay on their own column when an earlier sorter has none", () =
 
 test("an empty direction degrades to asc — the parser drops it just like an omitted one", () => {
   const params = adminListQuery({
-    sorters: [{ field: "a" }, { field: "b", order: "" }],
+    sorters: [
+      { field: "a" },
+      // @ts-expect-error — "" is outside the CrudSort contract, but the runtime
+      // still degrades it the same way as an omitted direction
+      { field: "b", order: "" },
+    ],
   });
   assert.deepEqual(appliedPairs(params), [
     ["a", "asc"],
@@ -76,4 +81,17 @@ test("pagination becomes offset/limit and q stays a bare cross-field term", () =
   assert.equal(params.get("q"), "acme");
   assert.equal(params.get("status_like"), "active");
   assert.equal(params.get("and_like"), null);
+});
+
+test("shapes outside refine's contract are compile errors", () => {
+  adminListQuery({
+    sorters: [
+      // @ts-expect-error — order must be CrudSort's "asc" | "desc"
+      { field: "created_at", order: "up" },
+    ],
+    filters: [
+      // @ts-expect-error — a CrudFilter must declare operator and value
+      { field: "status" },
+    ],
+  });
 });
