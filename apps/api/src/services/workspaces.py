@@ -1200,19 +1200,18 @@ class WorkspaceService:
         name: str,
         description: str | None,
         permissions: list[str],
-        actor: User | None = None,
+        # Required: there is no opt-out-by-omission path; a system caller
+        # passes an explicit actor instead.
+        actor: User,
         ip_address: str | None = None,
     ) -> Role:
         name = name.strip()
-        assignable: set[str] = set()
-        is_owner = False
-        if actor is not None:
-            membership = await self.get_membership(workspace_id, actor.id, active_only=True)
-            if membership is None:
-                raise WorkspaceForbidden("you are not a member of this workspace")
-            _, actor_role = membership
-            is_owner = "*" in actor_role.permissions
-            assignable = set(actor_role.permissions)
+        membership = await self.get_membership(workspace_id, actor.id, active_only=True)
+        if membership is None:
+            raise WorkspaceForbidden("you are not a member of this workspace")
+        _, actor_role = membership
+        is_owner = "*" in actor_role.permissions
+        assignable = set(actor_role.permissions)
         self._check_permissions_assignable(permissions, assignable, owner=is_owner)
         await self._check_name_free(workspace_id, name)
         role = Role(
@@ -1230,7 +1229,7 @@ class WorkspaceService:
             resource_type="role",
             resource_id=role.id,
             action="role.created",
-            actor_user_id=actor.id if actor else None,
+            actor_user_id=actor.id,
             details={"name": name, "permissions": permissions},
             ip_address=ip_address,
         )
@@ -1244,7 +1243,7 @@ class WorkspaceService:
         name: str | None = None,
         description: str | None = None,
         permissions: list[str] | None = None,
-        actor: User | None = None,
+        actor: User,
         ip_address: str | None = None,
     ) -> Role:
         if name is not None:
@@ -1258,15 +1257,12 @@ class WorkspaceService:
         # Same shape and message as `set_member_role` and `_require_manager`.
         # ponytail: ROLE_CREATE stays the route's guard; add the service-side
         # check when a caller outside the route needs it.
-        assignable: set[str] = set()
-        is_owner = False
-        if actor is not None:
-            membership = await self.get_membership(workspace_id, actor.id, active_only=True)
-            if membership is None:
-                raise WorkspaceForbidden("you are not a member of this workspace")
-            _, actor_role = membership
-            is_owner = "*" in actor_role.permissions
-            assignable = set(actor_role.permissions)
+        membership = await self.get_membership(workspace_id, actor.id, active_only=True)
+        if membership is None:
+            raise WorkspaceForbidden("you are not a member of this workspace")
+        _, actor_role = membership
+        is_owner = "*" in actor_role.permissions
+        assignable = set(actor_role.permissions)
         changed = False
         if name is not None and name != role.name:
             await self._check_name_free(workspace_id, name, exclude_id=role.id)
@@ -1291,7 +1287,7 @@ class WorkspaceService:
             resource_type="role",
             resource_id=role.id,
             action="role.updated",
-            actor_user_id=actor.id if actor else None,
+            actor_user_id=actor.id,
             details={"name": role.name, "permissions": role.permissions},
             ip_address=ip_address,
         )
