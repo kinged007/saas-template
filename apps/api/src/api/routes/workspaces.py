@@ -137,7 +137,13 @@ async def list_workspaces(
         membership = await service.get_membership(workspace_id, user.id, active_only=True)
         role = membership[1] if membership else None
         response.headers["X-Total-Count"] = "1"
-        return [workspace_to_dict(workspace, role=role.name if role else None)]
+        return [
+            workspace_to_dict(
+                workspace,
+                role=role.name if role else None,
+                permissions=sorted(principal.api_key.permissions) if role else [],
+            )
+        ]
     stmt = (
         select(Workspace)
         .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
