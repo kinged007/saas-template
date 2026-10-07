@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { oauthCallbackLoginHref, oauthCodeConsumed } from "./oauthCallback.ts";
+import { oauthCallbackLoginHref, oauthCodeConsumed } from "./oauth-callback.ts";
 
 test("a remount after navigate() stripped the code is a repeat, not a missing code", () => {
-  // navigate() rewrites the URL before the remount commits, so the code is
-  // already gone from the query string — it was ours, and the sign-in is
-  // succeeding. Reporting a missing code here painted a wrong error.
   assert.equal(oauthCodeConsumed(null, "abc123", true), true);
 });
 
