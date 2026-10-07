@@ -48,6 +48,7 @@ class TtlCache:
         with self._lock:
             self._store.clear()
 
+
 class SingleFlight:
     """Coalesces concurrent async calls by key into one shared in-flight task.
 
