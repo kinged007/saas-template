@@ -32,8 +32,8 @@ make db-history   # show the chain
 `db-check` migrates a scratch embedded postgres to head, then asserts
 `alembic revision --autogenerate` produces no `op.*` calls — i.e. no
 "changed models, forgot migration" (checks 1–2). It also migrates a scratch
-SQLite file and pins the check-constraint names dialect-branched migrations
-produce (check 3, below). It runs in CI on every PR. It never touches your
+SQLite file and pins the check-constraint names the chain lands on both
+dialects (check 3, below). It runs in CI on every PR. It never touches your
 dev database (`EMBEDDED_DB_DIR` points at a temp dir).
 
 Known limitation: `env.py` disables `compare_type` / `compare_server_default`
@@ -44,21 +44,26 @@ narrowings are not caught — reviewers check type changes by eye.
 
 SQLite cannot `ALTER` a table to add or drop a constraint, so such a migration
 branches on `bind.dialect.name` and takes the SQLite path through
-`op.batch_alter_table()`. Batch mode rebuilds the table through the naming
-convention in `src/db/base.py`, which prefixes `ck_<table>_` onto whatever
-name you pass — so the batch branch takes the bare suffix and the plain path
-the full name. Handing the full name to both lands
-`ck_refresh_tokens_ck_refresh_tokens_revoke_reason` on SQLite. See `0020`:
+`op.batch_alter_table()`. The naming convention in `src/db/base.py`
+(`ck_%(table_name)s_%(constraint_name)s`) applies to the name of every
+check-constraint operation — batch and plain paths alike — so passing the full
+name doubles it to `ck_refresh_tokens_ck_refresh_tokens_revoke_reason` on both
+dialects. Every path therefore passes the bare suffix and the constraint lands
+on the clean `ck_refresh_tokens_revoke_reason`; the models spell the bare
+suffix too, so `create_all` and squash baselines land the same name. See
+`0020`:
 
 ```python
-_CONSTRAINT = "ck_refresh_tokens_revoke_reason"
-_BATCH_CONSTRAINT = _CONSTRAINT.removeprefix("ck_refresh_tokens_")
+_SUFFIX = "revoke_reason"
+_CONSTRAINT = f"ck_refresh_tokens_{_SUFFIX}"
 ```
 
-`db-check` check 3 migrates the chain on SQLite and asserts the constraint
-names on dialect-branched tables — extend that assert when your migration adds
-one. A squash baseline erases dialect branches by design: its constraint names
-come straight from the naming convention, so the assert survives squashing.
+`db-check` check 3 migrates the chain on SQLite and on the scratch Postgres
+and asserts the exact check-constraint name set on both dialects — extend that
+assert when your migration adds a check constraint. The assert survives
+squashing: a baseline has no dialect branches, and its `create_table` names
+render off the models through the same convention, so they land the same clean
+names.
 
 ## Release squashes
 

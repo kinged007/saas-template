@@ -11,9 +11,9 @@
 #      `alembic revision --autogenerate` — the generated file must contain no
 #      `op.*` calls (catches "changed models, forgot migration").
 #   3. Migrates a scratch SQLite DB to head and pins the check-constraint
-#      names on dialect-branched tables — batch_alter_table renames
-#      constraints through the naming convention, and only this pass runs
-#      those branches (see docs/MIGRATIONS.md, "Dialect branches").
+#      names the dialect-branched migrations land on both paths: the sqlite
+#      file exercises the batch branches, the scratch postgres from checks
+#      1-2 the plain ones (see docs/MIGRATIONS.md, "Dialect branches").
 #
 # The scratch DB is a fresh embedded postgres in a temp dir (EMBEDDED_DB_DIR),
 # so this never touches your dev database.
@@ -38,7 +38,10 @@ fi
 echo "    ok: single head"
 
 echo "==> migrating scratch DB to head"
-uv run alembic upgrade head >/dev/null 2>&1
+if ! uv run alembic upgrade head >/dev/null 2>&1; then
+  echo "FAIL: postgres migration failed"
+  exit 1
+fi
 echo "    ok"
 
 echo "==> check 2/3: autogenerate must be empty"
@@ -58,30 +61,55 @@ fi
 rm -f "$NEW"
 echo "    ok: models match migrations"
 
-echo "==> check 3/3: sqlite batch-path constraint names"
-# Autogenerate stays postgres-only: SQLite reflection produces phantom type
-# diffs. Here we only need the constraint names a batch branch produces.
+echo "==> check 3/3: constraint names on both dialect paths"
+# Dialect-branched migrations take two code paths, and the naming convention
+# re-applies to every name those paths pass, so a full name silently doubles.
+# Autogenerate does not compare check constraints, so this pass pins the names
+# the chain actually lands (see docs/MIGRATIONS.md, "Dialect branches").
 export DATABASE_URL="sqlite+aiosqlite:///$EMBEDDED_DB_DIR/dbcheck-sqlite.db"
-uv run alembic upgrade head >/dev/null
+if ! uv run alembic upgrade head >/dev/null; then
+  echo "FAIL: sqlite migration failed"
+  exit 1
+fi
 uv run python - <<'PY'
+import asyncio
 import os
 
 import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import create_async_engine
 
-engine = sa.create_engine(f"sqlite:///{os.environ['EMBEDDED_DB_DIR']}/dbcheck-sqlite.db")
+from src.db.embedded import embedded_uri
+
 EXPECTED = {
     "refresh_tokens": {"ck_refresh_tokens_revoke_reason"},
     "workspace_members": {"ck_workspace_members_status"},
 }
-insp = sa.inspect(engine)
-for table, expected in EXPECTED.items():
-    names = {c["name"] for c in insp.get_check_constraints(table)}
-    if names != expected:
-        raise SystemExit(
-            f"FAIL: {table} check constraints {sorted(names)} != {sorted(expected)} "
-            "— batch_alter_table takes the bare suffix, not the full name "
-            "(docs/MIGRATIONS.md, Dialect branches)"
-        )
-    print(f"    ok: {table} -> {sorted(names)}")
+
+
+async def main() -> None:
+    for label, url in (
+        ("sqlite batch path", f"sqlite+aiosqlite:///{os.environ['EMBEDDED_DB_DIR']}/dbcheck-sqlite.db"),
+        ("postgres plain path", embedded_uri()),
+    ):
+        engine = create_async_engine(url)
+        async with engine.connect() as conn:
+            for table, expected in EXPECTED.items():
+                names = {
+                    c["name"]
+                    for c in await conn.run_sync(
+                        lambda c, table=table: sa.inspect(c).get_check_constraints(table)
+                    )
+                }
+                if names != expected:
+                    raise SystemExit(
+                        f"FAIL: {label}: {table} check constraints {sorted(names)} != {sorted(expected)} "
+                        "— check-constraint ops take the bare suffix; the convention adds "
+                        "ck_<table>_ (docs/MIGRATIONS.md, Dialect branches)"
+                    )
+                print(f"    ok: {label} {table} -> {sorted(names)}")
+        await engine.dispose()
+
+
+asyncio.run(main())
 PY
 echo "PASS: migration chain is clean"
