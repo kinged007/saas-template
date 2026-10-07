@@ -264,6 +264,10 @@ class WebhookService:
         return stmt
 
     async def get_delivery(self, workspace_id: str, delivery_id: str) -> WebhookDelivery:
+        try:
+            uuid.UUID(delivery_id)
+        except ValueError:
+            raise WebhookError("webhook delivery not found") from None
         delivery = await self._session.get(WebhookDelivery, delivery_id)
         if delivery is None or delivery.workspace_id != workspace_id:
             raise WebhookError("webhook delivery not found")
