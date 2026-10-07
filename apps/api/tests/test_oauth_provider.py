@@ -34,6 +34,7 @@ from src.services.oauth import (
     OAuthError,
     ProviderConfig,
     _discovery,
+    _jwks,
     _single_line,
     build_authorize_url,
     claims_from_id_token,
@@ -98,6 +99,7 @@ class _StubIdP:
         # own, so it can carry bytes json.dumps would escape.
         self.token_error_body: str | None = None
         self.jwks_delay = 0.0
+        self.discovery_delay = 0.0
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
@@ -184,6 +186,8 @@ class _StubIdP:
                 elif self.path.startswith("/.well-known/openid-configuration-text"):
                     self._send(200, None, raw="this is not json")
                 elif self.path.startswith("/.well-known/openid-configuration"):
+                    if stub.discovery_delay:
+                        time.sleep(stub.discovery_delay)
                     self._send(200, stub.doc)
                 elif self.path == "/jwks":
                     if stub.jwks_delay:
@@ -526,6 +530,61 @@ async def test_jwks_refuses_a_key_set_that_is_not_an_object(provider, idp, cache
     assert cache.get(f"oauth:jwks:{provider.id}") is None, "the bad key set was cached"
 
 
+async def test_concurrent_kid_misses_refetch_once(provider, idp, cache):
+    """#1025: a burst of logins meeting an unknown kid shares one in-flight refetch
+    instead of paying one outbound JWKS request per login."""
+    assert await claims_from_id_token(provider, idp.doc, idp.mint(), cache) is not None
+    before = idp.hits.count("/jwks")
+    idp.published = [(idp.other_key, ROTATED_KID, "RS256")]
+    idp.jwks_delay = 0.05
+    try:
+        tokens = [idp.mint(key=idp.other_key, kid=ROTATED_KID) for _ in range(5)]
+        claims = await asyncio.gather(
+            *[claims_from_id_token(provider, idp.doc, t, cache) for t in tokens]
+        )
+    finally:
+        idp.published = [(idp.signing_key, KID, "RS256"), (idp.ec_key, EC_KID, "ES256")]
+        idp.jwks_delay = 0.0
+    assert all(c is not None for c in claims)
+    assert idp.hits.count("/jwks") == before + 1
+
+
+async def test_concurrent_cold_jwks_fetches_once(provider, idp):
+    """#1025: a cold cache under a burst is filled once, not once per login."""
+    fresh = TtlCache(ttl_seconds=60)
+    before = idp.hits.count("/jwks")
+    idp.jwks_delay = 0.05
+    try:
+        claims = await asyncio.gather(
+            *[claims_from_id_token(provider, idp.doc, idp.mint(), fresh) for _ in range(5)]
+        )
+    finally:
+        idp.jwks_delay = 0.0
+    assert all(c is not None for c in claims)
+    assert idp.hits.count("/jwks") == before + 1
+
+
+async def test_concurrent_failed_jwks_fetches_fail_together(provider, idp, cache):
+    """One unusable set fails the whole burst with the same error, costs one fetch,
+    and leaves nothing behind: no cached set, no dead in-flight entry to join."""
+    doc = dict(idp.doc, jwks_uri=f"{idp.base}/jwks-broken")
+    idp.broken_jwks = {"keys": []}
+    before = idp.hits.count("/jwks-broken")
+    try:
+        outcomes = await asyncio.gather(
+            *[_jwks(provider, doc, cache) for _ in range(5)], return_exceptions=True
+        )
+    finally:
+        idp.broken_jwks = UNSET
+    assert idp.hits.count("/jwks-broken") == before + 1
+    assert all(isinstance(o, OAuthError) for o in outcomes)
+    assert cache.get(f"oauth:jwks:{provider.id}") is None, "the failed fetch was cached"
+    # The released entry means a later caller fetches again rather than joining
+    # a completed failure.
+    assert await _jwks(provider, doc, cache) is not None
+    assert idp.hits.count("/jwks-broken") == before + 2
+
+
 async def test_claims_from_id_token_survives_a_non_string_jwks_uri(provider, idp, cache):
     """A `jwks_uri` that is not a string must fail the sign-in, not raise."""
     doc = dict(idp.doc, jwks_uri=12345)
@@ -635,6 +694,24 @@ async def test_discovery_refuses_a_document_that_is_not_an_object(provider, idp,
     finally:
         idp.broken_doc = UNSET
     assert cache.get(f"oauth:discovery:{provider.id}") is None, "the bad document was cached"
+
+
+async def test_concurrent_discovery_fetches_once(provider, idp):
+    """#1025: the discovery path has the same burst shape — five cold callers, one
+    well-known fetch."""
+    fresh = TtlCache(ttl_seconds=60)
+
+    def known() -> int:
+        return sum(1 for h in idp.hits if h.startswith("/.well-known"))
+
+    before = known()
+    idp.discovery_delay = 0.05
+    try:
+        docs = await asyncio.gather(*[_discovery(provider, fresh) for _ in range(5)])
+    finally:
+        idp.discovery_delay = 0.0
+    assert all(d["issuer"] == idp.base for d in docs)
+    assert known() == before + 1
 
 
 def test_authorize_url_carries_s256_challenge(provider, idp):
