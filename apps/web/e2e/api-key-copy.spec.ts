@@ -60,4 +60,7 @@ test("dismissing the created-key dialog drops the copy confirmation", async ({ p
   await page.getByRole("button", { name: "Create API key" }).click();
 
   await expect(copy).toHaveAccessibleName("Copy API key");
+  // The dialog's region remounts with the key: any stale confirmation here
+  // would greet the next created key, so the text must be empty again.
+  await expect(status(page)).toHaveText("");
 });
