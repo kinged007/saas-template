@@ -131,7 +131,9 @@ async def test_refused_quota_words_match_every_json_type(app_client):
             headers=headers,
         )
 
-    for quota in (0, -1, -99, 0.0, -1.0, "0", "-5"):
+    # -(10**400) is a JSON int below 1 that a float64 cannot represent: the
+    # validator must judge the raw value, not the rounded float.
+    for quota in (0, -1, -99, 0.0, -1.0, "0", "-5", -(10**400)):
         resp = await mint(quota)
         assert resp.status_code == 422, (quota, resp.text)
         assert _quota_msg(resp) == QUOTA_MIN_MESSAGE, quota
@@ -166,6 +168,12 @@ def test_huge_json_integer_is_refused_by_the_schema():
         ApiKeyCreate(name="huge", usage_quota=10**400)
     assert exc.value.errors()[0]["type"] == "less_than_equal", exc.value.errors()
     assert exc.value.errors()[0]["msg"] == QUOTA_MAX_MESSAGE, exc.value.errors()
+
+    # Same width, on the other side of the floor.
+    with pytest.raises(ValidationError) as exc:
+        ApiKeyCreate(name="huge", usage_quota=-(10**400))
+    assert exc.value.errors()[0]["type"] == "greater_than_equal", exc.value.errors()
+    assert exc.value.errors()[0]["msg"] == QUOTA_MIN_MESSAGE, exc.value.errors()
 
 
 async def test_quota_above_the_column_bound_is_refused_over_http(app_client):
@@ -203,6 +211,18 @@ async def test_quota_above_the_column_bound_is_refused_over_http(app_client):
     )
     assert resp.status_code == 422, resp.text
     assert _quota_max_msg(resp) == QUOTA_MAX_MESSAGE
+    keys = (await client.get("/api/v1/api-keys", headers=headers)).json()
+    assert keys[0]["usage_quota"] == 5, keys
+
+    # Same shape below the floor: a huge negative int gets the quota words,
+    # not the generic ge=1 message, and the stored value is untouched.
+    resp = await client.patch(
+        f"/api/v1/api-keys/{created['id']}",
+        content='{"usage_quota": ' + str(-(10**400)) + "}",
+        headers=json_headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert _quota_msg(resp) == QUOTA_MIN_MESSAGE
     keys = (await client.get("/api/v1/api-keys", headers=headers)).json()
     assert keys[0]["usage_quota"] == 5, keys
 
