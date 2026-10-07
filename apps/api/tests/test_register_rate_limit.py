@@ -138,3 +138,40 @@ async def test_register_budget_is_per_ip(app, monkeypatch):
             )
             assert again.status_code == 429, again.text
     assert len(sent) == 2
+
+
+async def test_register_disabled_403_and_auth_budget_are_free(app_client, monkeypatch):
+    """The guards the route runs before check stay free, and the register
+    window stays out of the auth budget it does not share: 403-disabled
+    registers charge nothing (check runs after the 403 guard), and a maxed
+    forgot-password (IP, email) budget does not throttle register."""
+    sent = _capture_sends(monkeypatch)
+    monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 2)
+
+    monkeypatch.setattr(settings, "auth_allow_registration", False)
+    for _ in range(2):
+        resp = await app_client.post(
+            "/api/v1/auth/register", json=_register_body("meter-off@example.com")
+        )
+        assert resp.status_code == 403, resp.text
+    monkeypatch.setattr(settings, "auth_allow_registration", True)
+
+    # The disabled calls charged nothing, so the register window is empty.
+    first = await app_client.post(
+        "/api/v1/auth/register", json=_register_body("meter-after-403@example.com")
+    )
+    assert first.status_code == 201, first.text
+
+    # Fill the auth (IP, email) budget via forgot-password (its own cap),
+    # then register: the windows are separate, so register still sends.
+    for _ in range(2):
+        resp = await app_client.post(
+            "/api/v1/auth/forgot-password", json={"email": "meter-after-403@example.com"}
+        )
+        assert resp.status_code == 202, resp.text
+    resp = await app_client.post(
+        "/api/v1/auth/register", json=_register_body("meter-reverse@example.com")
+    )
+    assert resp.status_code == 201, resp.text
+    assert len(sent) == 4  # two registrations, two forgot-password sends —
+    # the register window was never consulted for the forgot sends.

@@ -134,6 +134,19 @@ class Settings(BaseSettings):
     jobs_default_timeout_seconds: int = 600
     jobs_run_retention: int = 1000  # per definition; pruned by scheduler housekeeping
 
+    # max_attempts 0 or negative means the check never has a positive budget
+    # to spend — the cap silently turns off, so a misconfigured env var must
+    # fail startup, not disable throttling.
+    @field_validator(
+        "auth_rate_limit_max_attempts",
+        "auth_register_rate_limit_max_attempts",
+    )
+    @classmethod
+    def _max_attempts_must_be_positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("auth rate-limit max_attempts must be >= 1")
+        return v
+
     # Retention cleanup (days; enforced by the system.retention_cleanup job).
     # audit_log_retention_days=0 keeps audit entries forever (compliance trail).
     jobs_log_retention_days: int = Field(default=90, ge=0)
