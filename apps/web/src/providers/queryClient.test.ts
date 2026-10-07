@@ -4,7 +4,13 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
-import { isClientError, isNoResponseError, isServerError, queryClient } from "./queryClient.ts";
+import {
+  isClientError,
+  isNoResponseError,
+  isServerError,
+  queryClient,
+  shouldRetry,
+} from "./queryClient.ts";
 
 const srcDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -54,6 +60,29 @@ test("a 5xx is never retried", () => {
 // what put ~7s of "Loading…" in front of every refusal.
 test("the refusal is what costs a retry", () => {
   assert.equal(retry(2, { statusCode: 404 }), false);
+});
+
+test("shouldRetry is the one refusal policy at any budget", () => {
+  // No response, 4xx, 5xx: refused on the first attempt, whatever the budget.
+  for (const max of [2, 3]) {
+    for (const error of [{ statusCode: 0 }, { statusCode: 404 }, { statusCode: 500 }]) {
+      assert.equal(shouldRetry(0, error, max), false, `max ${max} ${JSON.stringify(error)}`);
+    }
+    // An unknown error rides the budget: `max` retries, then it stops.
+    assert.equal(shouldRetry(max - 1, {}, max), true, `max ${max}`);
+    assert.equal(shouldRetry(max, {}, max), false, `max ${max}`);
+  }
+});
+
+// The identity override cannot be imported here (its .tsx drags in React),
+// so its drift pin is a source scan, same style as the retry-override audit.
+test("both retry call sites route through the shared refusal policy", () => {
+  const identity = readFileSync(join(srcDir, "contexts/WorkspaceContext.tsx"), "utf8");
+  assert.match(identity, /shouldRetry\(failureCount, error, 2\)/);
+  assert.doesNotMatch(identity, /isClientError|isNoResponseError/);
+
+  const client = readFileSync(join(srcDir, "providers/queryClient.ts"), "utf8");
+  assert.match(client, /retry: \(failureCount, error\) => shouldRetry\(failureCount, error, 3\)/);
 });
 
 test("the retry-override scan catches an unbounded retry", () => {

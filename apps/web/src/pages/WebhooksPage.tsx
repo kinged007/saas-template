@@ -50,12 +50,29 @@ function DeliveryLog({ subscriptionId }: { subscriptionId: string }) {
       </p>
     );
   }
+  // A failed refetch leaves a cached empty list in place too — the pane must
+  // caption it, not let "No deliveries yet." read as current.
+  const staleNote = query.isError && isList;
   if (rows.length === 0) {
     return (
-      <p className="text-muted-foreground text-sm">No deliveries yet.</p>
+      <div>
+        {/* Caption for a failed background refetch. Always mounted: a live
+            region has to be in the accessibility tree before its text changes
+            to be announced — `sr-only` keeps the idle (textless) state out of
+            the layout. */}
+        <p
+          role="status"
+          className={cn(
+            "text-muted-foreground mb-2 text-sm",
+            !staleNote && "sr-only",
+          )}
+        >
+          {staleNote ? "Showing the last deliveries loaded." : ""}
+        </p>
+        <p className="text-muted-foreground text-sm">No deliveries yet.</p>
+      </div>
     );
   }
-  const staleNote = query.isError && isList;
   return (
     <div>
       {/* Caption for a failed background refetch, per InboxPage's staleness

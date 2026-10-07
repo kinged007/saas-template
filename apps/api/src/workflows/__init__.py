@@ -576,10 +576,8 @@ def build_workflows(
         """Fan-out conversation rename to participants."""
 
         participant_ids: list[str] | None = payload.get("participant_user_ids")
-        # If payload does not contain participant list (legacy service path
-        # with just workspace_id), fall back to no fan-out
-        # New service publishes without participant list for rename; we need
-        # to resolve participants from DB.
+        # If the payload lacks the participant list (legacy service path
+        # publishes rename without it), resolve participants from the DB.
         if participant_ids is None:
             conversation_id = payload.get("conversation_id")
             if not conversation_id:
@@ -595,6 +593,7 @@ def build_workflows(
                 )
                 participant_ids = [r[0] for r in result.all()]
 
+        participant_ids = list(dict.fromkeys(participant_ids))
         if not participant_ids:
             return
         await connection_manager.push_many(

@@ -220,6 +220,41 @@ test.describe("webhooks page", () => {
     await expect(page.getByText("Could not load deliveries")).toHaveCount(0);
   });
 
+  test("a failed log refetch captions an empty cached list", async ({ page }) => {
+    await webhooks(page);
+    await subscriptions(page, 200, [SUBSCRIPTION]);
+    let refused = false;
+    await page.route(
+      (url) => url.pathname.startsWith(DELIVERIES),
+      (route) =>
+        route.fulfill(
+          refused
+            ? {
+                status: 403,
+                contentType: "application/json",
+                body: JSON.stringify({ detail: "Not allowed to read deliveries" }),
+              }
+            : { status: 200, contentType: "application/json", body: JSON.stringify([]) },
+        ),
+    );
+
+    // The log loads an empty list, then the pane is closed and reopened: the
+    // mount refetch fails while the cached empty list is what renders. That
+    // is the empty-list twin of the redeliver spec above — the empty state
+    // must not read as current.
+    await page.goto("/webhooks");
+    await page.getByRole("button", { name: "Delivery log" }).click();
+    await expect(page.getByText("No deliveries yet.")).toBeVisible();
+
+    refused = true;
+    await page.getByRole("button", { name: "Hide log" }).click();
+    await page.getByRole("button", { name: "Delivery log" }).click();
+
+    await expect(page.getByText("Showing the last deliveries loaded.")).toBeVisible();
+    await expect(page.getByText("No deliveries yet.")).toBeVisible();
+    await expect(page.getByText("Could not load deliveries")).toHaveCount(0);
+  });
+
   test("create and delete target the same collection", async ({ page }) => {
     await webhooks(page);
     await subscriptions(page, 200, [SUBSCRIPTION]);
