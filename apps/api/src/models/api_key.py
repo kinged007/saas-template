@@ -19,6 +19,7 @@ QUOTA_MIN_MESSAGE = "usage quota must be at least 1 (omit it or send null for un
 # BigInteger column with le=2**63 - 1 (plus `make db-new m="..."`).
 MAX_QUOTA = 2**31 - 1
 QUOTA_MAX_MESSAGE = f"usage quota must be at most {MAX_QUOTA} (omit it or send null for unlimited)"
+QUOTA_TYPE_MESSAGE = "usage quota must be an integer"
 
 
 class ApiKey(Base, TimestampMixin):
