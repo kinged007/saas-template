@@ -472,7 +472,12 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
               // Clicking the trigger is one of the popover's own exits, but
               // Radix reports it here before it checks where the click landed,
               // so it has to be excluded or the caret is dropped on close.
-              if (linkTriggerRef.current?.contains(e.target as Node)) return;
+              // It is still a dismissal path: clear the marker so a later close
+              // cannot inherit a stale outside-click from an earlier dismissal.
+              if (linkTriggerRef.current?.contains(e.target as Node)) {
+                linkDismissedOutside.current = false;
+                return;
+              }
               linkDismissedOutside.current = true;
             }}
             // The trigger eats mousedown so the caret survives, which leaves
@@ -482,9 +487,17 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
               linkInputRef.current?.focus();
               linkInputRef.current?.select();
             }}
+            onEscapeKeyDown={() => {
+              // Escape is its own dismissal path: the caret goes back to the
+              // document being edited, exactly as in onCloseAutoFocus below.
+              linkDismissedOutside.current = false;
+            }}
             onCloseAutoFocus={(e) => {
               // Radix would otherwise park focus on the trigger.
               e.preventDefault();
+              // Each dismissal path above leaves linkDismissedOutside in its own
+              // state before close, so this read never sees a value left over
+              // from an earlier dismissal.
               const dismissedOutside = linkDismissedOutside.current;
               linkDismissedOutside.current = false;
               // Apply, Cancel and Escape close the popover from its own controls,

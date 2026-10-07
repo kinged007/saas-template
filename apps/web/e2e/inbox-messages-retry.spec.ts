@@ -106,9 +106,10 @@ test.describe("inbox message fetch", () => {
    * A refetch that fails keeps the last successful `data` in the cache, so the
    * pane stays usable — but it has to say the list is not live, and it has to say
    * it where the user is looking. The pane holds more messages than fit and is
-   * scrolled to the newest, so the note belongs in the header: rendered inside
-   * the scroller it lands ~2200px above the viewport. The containment assertion
-   * below is what keeps it there.
+   * scrolled to the newest, so the note is sticky at the top edge of the message
+   * scroller: it stays visible at any scroll position, and the scroller's scroll
+   * anchoring keeps the reading position stable when it appears. The
+   * containment and scrolled-state assertions below are what keep it there.
    */
   test("a failed refetch keeps the messages and marks them stale", async ({ page }) => {
     await mockApi(page, {
@@ -168,12 +169,31 @@ test.describe("inbox message fetch", () => {
     // the note is the first child of a pane that happens not to be scrolled. It is
     // measured against the message scroller — the one the note must not live in —
     // anchored on the scroller's own test id, so the assertion depends on the
-    // note's DOM position alone and not on fixture text matching the note text.
-    const noteInsideMessagesScroller = await staleNote.evaluate((note) =>
-      Boolean(note.closest('[data-testid="thread-messages"]')),
-    );
-    expect(noteInsideMessagesScroller).toBe(false);
+    // note's DOM position alone and not on fixture text matching the note text. It is
+    // a double lock: the data-testid anchor excludes the conversation list while
+    // `parentElement === scroller` pins the note as the scroller's direct child,
+    // keeping the sticky top row free of row-flow artifacts.
+    const scrollerCheck = await staleNote.evaluate((note) => {
+      const scroller = note.closest('[data-testid="thread-messages"].overflow-y-auto');
+      return {
+        found: scroller !== null,
+        directChild: scroller !== null && note.parentElement === scroller,
+      };
+    });
+    expect(scrollerCheck.found).toBe(true);
+    expect(scrollerCheck.directChild).toBe(true);
     await expect(staleNote).toBeInViewport();
+    // The pane auto-scrolls to the newest message; `absolute` passed every
+    // assertion above yet sat thousands of pixels off-screen there. The note has
+    // to survive the scrolled reading state, with Retry reachable for another try.
+    const scrolledToNewest = await staleNote.evaluate((note) => {
+      const scroller = note.closest(".overflow-y-auto") as HTMLElement;
+      scroller.scrollTop = scroller.scrollHeight;
+      return scroller.scrollTop;
+    });
+    expect(scrolledToNewest).toBeGreaterThan(0);
+    await expect(staleNote).toBeInViewport();
+    await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
     await expect(page.getByText("shipping friday").first()).toBeVisible();
     // `text-destructive` stays reserved for the empty list, where nothing loaded.
     await expect(page.getByText("Could not load messages.")).toHaveCount(0);
