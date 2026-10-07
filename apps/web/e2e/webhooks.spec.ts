@@ -31,7 +31,10 @@ const DELIVERY = {
   workspace_id: "ws-1",
   event_type: "apikey.created",
   subject: "apikey/ak-1",
-  status: "failed",
+  // The API only writes pending/success/exhausted — nothing ever assigns
+  // `WebhookDeliveryStatus.FAILED` — so the fixture states the terminal value
+  // a real row with `error` set would carry.
+  status: "exhausted",
   attempt_count: 3,
   response_status: 500,
   error: "Upstream returned 500",
@@ -173,7 +176,13 @@ test.describe("webhooks page", () => {
       (route) => {
         if (route.request().method() === "POST") {
           queued = true;
-          return route.fulfill({ status: 202, contentType: "application/json", body: "{}" });
+          // The redeliver route declares no status_code, so it answers 200 with
+          // the delivery record — `dispatch_due` has already reset its status.
+          return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ ...DELIVERY, status: "pending" }),
+          });
         }
         // The refetch fails while the rows it had are still good. A 403 is used
         // over a 500 because a client error skips react-query's retry budget
@@ -196,6 +205,8 @@ test.describe("webhooks page", () => {
     // row, so the filter also matches that outer row.
     const row = page.getByRole("row").filter({ hasText: DELIVERY.error }).last();
     await expect(row).toBeVisible();
+    // Rows without the staleness caption can only mean the log is current.
+    await expect(page.getByText("Showing the last deliveries loaded.")).toHaveCount(0);
 
     await page.getByRole("button", { name: "Redeliver" }).click();
 
@@ -203,6 +214,9 @@ test.describe("webhooks page", () => {
     await expect.poll(() => readsAfterQueue).toBeGreaterThan(0);
     // …and the failed refetch leaves the rows it already had on screen.
     await expect(row).toBeVisible();
+    // The failure is captioned next to the table, so stale rows are
+    // distinguishable from a current list.
+    await expect(page.getByText("Showing the last deliveries loaded.")).toBeVisible();
     await expect(page.getByText("Could not load deliveries")).toHaveCount(0);
   });
 
