@@ -34,14 +34,36 @@ async def test_seed_creates_only_first_workspace_in_single_mode(single_workspace
 
 
 async def test_seed_creates_demo_data_in_clean_single_mode(single_workspace_on):
-    """A clean single-workspace seed still attaches the full demo fixture set."""
+    """On a clean database, single mode seeds only the acme-corp workspace.
+
+    The workspace gets the full demo fixture set, and the assertions pin the
+    exact rows so an extra fixture entry fails here instead of passing
+    silently: three API keys (`ci-deploy`, `automation`, `editor-script`),
+    one invitation (`user2@example.com`) and three notifications
+    (admin/user1/user2). No globex fixture rows, no drift-blind gaps.
+    """
     await seed_main()
 
     async with SessionFactory() as session:
-        keys = await session.execute(select(ApiKey.id))
-        invites = await session.execute(select(Invitation.id))
-        assert keys.scalars().all() != []
-        assert invites.scalars().all() != []
+        api_keys = (await session.execute(select(ApiKey.name))).scalars().all()
+        invites = (await session.execute(select(Invitation.email))).scalars().all()
+        notifications = (
+            await session.execute(
+                select(User.email, Notification.title).join(User, User.id == Notification.user_id)
+            )
+        ).all()
+
+        assert sorted(api_keys) == ["automation", "ci-deploy", "editor-script"], (
+            f"api keys: {api_keys}"
+        )
+        assert invites == ["user2@example.com"], f"invitations: {invites}"
+        # A set, not a list: select order is not pinned, and sorted() cannot
+        # order (email, title) pairs against each other's tuple shape.
+        assert set(notifications) == {
+            ("admin@example.com", "New invitation sent"),
+            ("user1@example.com", "You were invited to Acme Corp"),
+            ("user2@example.com", "You were invited to Acme Corp"),
+        }, f"notifications: {notifications}"
 
 
 async def test_seed_reuses_oldest_workspace_in_single_mode(single_workspace_on, monkeypatch):
