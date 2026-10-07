@@ -969,20 +969,20 @@ export function InboxPage() {
 
                 {/* Messages */}
                 <div className="relative flex-1 overflow-y-auto p-4">
-                  {/* A failed refetch keeps the cached messages. The note is pinned to the
-                      top edge of the scroller as a non-layout overlay, so appearing it
-                      neither shifts the thread header nor the rows or the scroll position —
-                      reading history is not interrupted. `pointer-events-none` keeps the
-                      overlay from blocking clicks on the messages it covers. Always mounted:
-                      a live region has to be in the accessibility tree before its text
-                      changes to be announced — `sr-only` keeps it out of the layout. */}
+                  {/* A failed refetch keeps the cached messages. The note is sticky at the
+                      top edge of the scroller, so it stays visible at any scroll position
+                      — including the auto-scrolled-to-newest reading state.
+                      `pointer-events-none` keeps the note from blocking clicks on the
+                      messages it covers. Always mounted: a live region has to be in the
+                      accessibility tree before its text changes to be announced —
+                      `sr-only` keeps it out of the layout. */}
                   <p
                     role="status"
                     className={cn(
                       "flex items-center justify-between gap-2 text-sm",
                       !staleNote && "sr-only",
                       staleNote &&
-                        "pointer-events-none absolute inset-x-0 top-0 z-10 bg-background px-4 pb-2 pt-3",
+                        "pointer-events-none sticky inset-x-0 top-0 z-10 bg-background px-4 pb-2 pt-3",
                       staleNote && (messagesRefused ? "text-destructive" : "text-muted-foreground"),
                     )}
                   >
