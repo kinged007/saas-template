@@ -157,6 +157,7 @@ async def test_workspace_update_emits_audit_only_when_changed(bus, owner):
     assert bus.actions() == ["workspace.updated"]
     assert bus.by_subject(Subjects.WORKSPACE_CREATED) == []
     audit = bus.audit()[0][0]
+    assert audit["actor_user_id"] == owner.id
     assert audit["details"]["name"] == {"from": "Acme Corp", "to": "Acme Renamed"}
 
     bus.events.clear()
@@ -175,6 +176,7 @@ async def test_workspace_delete_emits_audit(bus, owner):
         await WorkspaceService(session, bus).delete_workspace(workspace.id, actor=owner)
     assert bus.actions() == ["workspace.deleted"]
     assert bus.audit()[0][0]["resource_id"] == workspace.id
+    assert bus.audit()[0][0]["actor_user_id"] == owner.id
 
 
 # --------------------------------------------------------------- invitations

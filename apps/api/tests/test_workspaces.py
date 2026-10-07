@@ -388,6 +388,8 @@ async def test_role_writers_require_an_actor(app_client):
     With an optional `actor`, leaving it off skipped the membership gate —
     that path could still flip a seeded role's `system` flag. The argument is
     required, so an omitted actor fails loudly instead of acting unbounded.
+    Audit attribution needs the same guarantee: without an actor the
+    workspace writers would publish `actor_user_id=None`.
     """
     import pytest
 
@@ -398,6 +400,10 @@ async def test_role_writers_require_an_actor(app_client):
         service = WorkspaceService(session)
         with pytest.raises(TypeError):
             await service.create_custom_role("ws-x", name="ops", description=None, permissions=[])
+        with pytest.raises(TypeError):
+            await service.update_workspace("ws-x", name="ops")
+        with pytest.raises(TypeError):
+            await service.delete_workspace("ws-x")
         with pytest.raises(TypeError):
             await service.update_role("ws-x", "role-x", name="ops")
 
@@ -430,7 +436,7 @@ async def test_service_stores_trimmed_names(app_client):
             permissions=["member:read"],
             actor=user,
         )
-        await service.update_workspace(workspace.id, name="  Acme Renamed  ")
+        await service.update_workspace(workspace.id, name="  Acme Renamed  ", actor=user)
         # The owner is an explicit actor: the writers have no opt-out-by-omission
         # system path, so a direct caller names who acts.
         await service.update_role(workspace.id, role.id, name="  operators  ", actor=user)
