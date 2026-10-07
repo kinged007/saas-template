@@ -5,10 +5,14 @@ import { mockApi } from "./mock-api";
 
 /**
  * The setup-key copy button is icon-only and its icon flips to a check for 1.5 s
- * after the write, so the accessible name has to flip with it: a button that
- * still reads "Copy setup key" in the copied state announces the action the
- * user just performed instead of a confirmation. `title` duplicates the
- * accessible name (the pair #332 established), so the two are asserted equal.
+ * after the write — a purely visual confirmation. The announced one goes to a
+ * visually hidden `role="status"` region next to the button (#1075): the button
+ * keeps DOM focus across the copy, and a screen reader announces an
+ * accessible-name change on a focused element only opportunistically, while
+ * text entering a live region is announced reliably. So the button's
+ * accessible name and `title` stay at "Copy setup key" in both states — a
+ * button that reads "Copied" calls itself a status instead of a button. `title`
+ * duplicates the accessible name (the pair #332 established).
  *
  * The confirmation clears itself after 1.5 s, so every read of it goes through
  * a retrying assertion on one handle — a one-shot read of a state that expires
@@ -23,8 +27,8 @@ const SETUP = {
   secret: "JBSWY3DPEHPK3PXP",
 };
 
-/** Matches the button in either state, so the handle survives the rename. */
-const copyButton = (page: Page) => page.getByRole("button", { name: /^(Copy setup key|Copied)$/ });
+/** The setup panel's live region: scoped by its text, so the page's other status regions don't collide. */
+const confirmed = (page: Page) => page.getByRole("status").filter({ hasText: "Setup key copied" });
 
 /**
  * `install` fakes the page clock but leaves it running in real time, so a 1.5 s
@@ -51,38 +55,46 @@ async function openSetupPanel(page: Page) {
   await page.getByRole("button", { name: "Set up authenticator" }).click();
 }
 
-test("the setup-key copy button announces the copy, then the confirmation", async ({ page }) => {
+test("the setup-key copy button keeps its name and announces through the status region", async ({
+  page,
+}) => {
   await openSetupPanel(page);
 
-  const copy = copyButton(page);
+  const copy = page.getByRole("button", { name: "Copy setup key", exact: true });
   await expect(copy).toHaveAccessibleName("Copy setup key");
 
   await copy.click();
 
-  // One handle, two retrying assertions: the name check covers the rename (the
-  // old name no longer resolves), the attribute check covers #332's pair.
-  await expect(copy).toHaveAccessibleName("Copied");
-  await expect(copy).toHaveAttribute("title", "Copied");
+  // The button keeps focus and its name — a name change on a focused element
+  // is the announcement channel this suite must not rely on.
+  await expect(copy).toBeFocused();
+  await expect(copy).toHaveAccessibleName("Copy setup key");
+  await expect(copy).toHaveAttribute("title", "Copy setup key");
+  // The icon flip stays as the visual confirmation; the live region carries the
+  // announced one.
+  await expect(copy.locator("svg.lucide-check")).toBeVisible();
+  await expect(confirmed(page)).toHaveCount(1);
 });
 
 test("a second click restarts the 1.5 s window", async ({ page }) => {
   await openSetupPanel(page);
   await freezePageTime(page);
 
-  const copy = copyButton(page);
+  const copy = page.getByRole("button", { name: "Copy setup key", exact: true });
   await copy.click();
-  await expect(copy).toHaveAccessibleName("Copied");
+  await expect(confirmed(page)).toHaveCount(1);
 
   await page.clock.fastForward(1000);
   await copy.click();
-  await expect(copy).toHaveAccessibleName("Copied");
+  await expect(confirmed(page)).toHaveCount(1);
 
   // The first window ends here. A timer left over from the first click clears
   // the confirmation the second one owns; the second owns the whole 1.5 s.
   await page.clock.fastForward(500);
-  await expect(copy).toHaveAccessibleName("Copied");
+  await expect(confirmed(page)).toHaveCount(1);
 
   await page.clock.fastForward(1000);
+  await expect(confirmed(page)).toHaveCount(0);
   await expect(copy).toHaveAccessibleName("Copy setup key");
 });
 
@@ -95,11 +107,13 @@ test("a denied write toasts instead of claiming success", async ({ page }) => {
   });
   await openSetupPanel(page);
 
-  // Unchanged name: `copied` stays false, so the button never claims success;
-  // the fixture fails the test on the unhandled rejection itself.
+  // No live-region announcement: `copied` stays false, so the region stays
+  // empty and the button never claims success; the fixture fails the test on
+  // the unhandled rejection itself.
   const copy = page.getByRole("button", { name: "Copy setup key", exact: true });
   await copy.click();
   await expect(copy).toHaveAccessibleName("Copy setup key");
+  await expect(confirmed(page)).toHaveCount(0);
   await expect
     .poll(async () => (await page.locator('section[aria-live="polite"]').textContent()) ?? "")
     .toMatch(/could not copy/i);
@@ -120,12 +134,13 @@ test("a denied second write clears the pending confirmation", async ({ page }) =
   });
   await openSetupPanel(page);
 
-  const copy = copyButton(page);
+  const copy = page.getByRole("button", { name: "Copy setup key", exact: true });
   await copy.click();
-  await expect(copy).toHaveAccessibleName("Copied");
+  await expect(confirmed(page)).toHaveCount(1);
   await copy.click();
-  // Without a `setCopied(false)` in the catch the button stays "Copied"
-  // forever: the second-click handler cleared the pending timer first.
+  // Without a `setCopied(false)` in the catch the region keeps "Setup key
+  // copied" forever: the second-click handler cleared the pending timer first.
+  await expect(confirmed(page)).toHaveCount(0);
   await expect(copy).toHaveAccessibleName("Copy setup key");
   await expect
     .poll(async () => (await page.locator('section[aria-live="polite"]').textContent()) ?? "")
@@ -138,12 +153,13 @@ test("cancel drops the copy confirmation", async ({ page }) => {
   // indistinguishable from one that expired in time.
   await freezePageTime(page);
 
-  const copy = copyButton(page);
+  const copy = page.getByRole("button", { name: "Copy setup key", exact: true });
   await copy.click();
-  await expect(copy).toHaveAccessibleName("Copied");
+  await expect(confirmed(page)).toHaveCount(1);
 
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("button", { name: "Set up authenticator" }).click();
 
+  await expect(confirmed(page)).toHaveCount(0);
   await expect(copy).toHaveAccessibleName("Copy setup key");
 });
