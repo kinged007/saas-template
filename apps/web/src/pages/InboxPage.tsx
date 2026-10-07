@@ -462,7 +462,7 @@ export function InboxPage() {
       if (mentioned.length > 0) convQuery.refetch();
     } catch (err: unknown) {
       removeThreadMessage(conversationId, tempId);
-      const msg = (err as { message?: string })?.message || String(err);
+      const msg = errorMessage(err);
       toast.error(msg);
       // Restore draft on failure for retry
       setDraft(body);

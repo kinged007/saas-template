@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useCustomMutation, useGetIdentity } from "@refinedev/core";
 import { toast } from "sonner";
+import { errorMessage } from "@/utils/errorMessage";
 import { Check, ChevronsUpDown, X } from "lucide-react";
 
 import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "@/contexts/WorkspaceContext";
@@ -94,7 +95,7 @@ export function EditParticipantsDialog({
       onOpenChange(false);
     } catch (err: unknown) {
       toast.error("Could not update recipients", {
-        description: (err as { message?: string })?.message || String(err),
+        description: errorMessage(err),
       });
     }
   };

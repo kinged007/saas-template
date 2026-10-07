@@ -22,6 +22,7 @@ import {
   setActiveWorkspaceId,
 } from "../utils/storage";
 import { clearAllCaches, clearWorkspaceCaches, shouldRetry } from "../providers/queryClient";
+import { errorMessage } from "../utils/errorMessage";
 import { API_URL, httpClient } from "../providers/dataProvider";
 
 type WorkspaceContextValue = {
@@ -373,7 +374,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           <p className="text-muted-foreground max-w-md text-center text-sm">
             Couldn't load your account
             {identityError
-              ? `: ${String((identityError as { message?: string }).message ?? identityError)}`
+              ? `: ${errorMessage(identityError)}`
               : ""}
           </p>
           <div className="flex gap-2">
