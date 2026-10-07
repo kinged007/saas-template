@@ -58,6 +58,9 @@ test.describe("audit log fetch", () => {
         await page.locator('[data-sonner-toast]:has-text("You do not have permission")').count(),
       ).toBe(0);
       await expect(page.getByText("No audit entries yet.")).toHaveCount(0);
+      // The failure row's only recovery affordance is present whatever the
+      // status that landed there.
+      await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
       // The footer counts rows it never received, so a refused query drops it
       // rather than asserting "0 entries" under the failure row.
       await expect(page.getByText(/^Showing 0/)).toHaveCount(0);
@@ -68,6 +71,59 @@ test.describe("audit log fetch", () => {
       expect(calls).toBe(2);
     });
   }
+
+  // Both the 403 refusal and a 5xx land in the same failure row, so its
+  // only recovery affordance has to work for either status.
+  test("Try again re-runs the query and recovers when the failure clears", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    let calls = 0;
+    let succeed = false;
+    await page.route("**/api/v1/audit**", (route) => {
+      calls += 1;
+      return route.fulfill({
+        status: succeed ? 200 : 500,
+        contentType: "application/json",
+        body: succeed ? "[]" : "{}",
+      });
+    });
+
+    await page.goto("/settings/workspace/audit");
+    await expect(
+      page.getByRole("row").filter({ hasText: "Could not load audit entries." }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+
+    const before = calls;
+    succeed = true;
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByText("No audit entries yet.")).toBeVisible();
+    // The click drove new request(s): the row recovery is the query
+    // refetching, not stale `list` data from anywhere else.
+    expect(calls).toBeGreaterThan(before);
+    await expect(page.getByText(/Could not load audit entries\./)).toHaveCount(0);
+  });
+
+  test("a 5xx fails on the first attempt", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    let calls = 0;
+    await page.route("**/api/v1/audit**", (route) => {
+      calls += 1;
+      return route.fulfill({ status: 500, contentType: "application/json", body: "{}" });
+    });
+
+    await page.goto("/settings/workspace/audit");
+
+    await expect(
+      page.getByRole("row").filter({ hasText: "Could not load audit entries." }),
+    ).toBeVisible();
+    await expect(page.getByText("No audit entries yet.")).toHaveCount(0);
+    await expect(page.getByText(/^Showing 0/)).toHaveCount(0);
+    await expect(page.getByText("Page 1 of 1")).toHaveCount(0);
+    // The shared client does not retry a 5xx either, so this is the
+    // StrictMode baseline and not the tail of a retry budget.
+    await page.waitForTimeout(1_500);
+    expect(calls).toBe(2);
+  });
 
   test("a request with no response fails on the first attempt", async ({ page }) => {
     await mockApi(page, { signedIn: true });

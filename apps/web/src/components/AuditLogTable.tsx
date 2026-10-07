@@ -130,7 +130,10 @@ export function AuditLogTable({
               <EmptyRow colSpan={colSpan}>Loading…</EmptyRow>
             ) : failed ? (
               <EmptyRow colSpan={colSpan}>
-                Could not load audit entries. {errorMessage(error)}
+                Could not load audit entries. {errorMessage(error)}{" "}
+                <Button variant="outline" size="sm" onClick={() => query.refetch()}>
+                  Try again
+                </Button>
               </EmptyRow>
             ) : rows.length === 0 ? (
               <EmptyRow colSpan={colSpan}>No audit entries yet.</EmptyRow>
