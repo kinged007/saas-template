@@ -16,7 +16,7 @@ from src.core.permissions import (
 )
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
-from src.events.subjects import Subjects
+from src.events.subjects import OWNERSHIP_TRANSFER_REASON, Subjects
 from src.models.core import Invitation
 from src.models.workspace import (
     ACTIVE_MEMBERSHIP_STATUSES,
@@ -743,7 +743,7 @@ class WorkspaceService:
             "changed_by_name": actor.display_name,
             # Both role changes are the transfer, said so on the event rather
             # than left for the subscriber to infer from the role names.
-            "reason": "ownership_transfer",
+            "reason": OWNERSHIP_TRANSFER_REASON,
         }
         # The actor is the current owner (checked above), so both role changes
         # belong to a user: the promotion and the owner's own demotion. One
