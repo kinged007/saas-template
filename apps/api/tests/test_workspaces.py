@@ -223,21 +223,30 @@ async def test_list_query_rejects_mismatched_sort_and_order_lengths(app_client):
 
 
 async def test_list_query_rejects_order_without_sort(app_client):
-    """An order with no sort is malformed in either dialect (#968).
+    """An order with no sort is malformed in either dialect (#968, #1134).
 
     `order[]=desc` alone reached the length guard while `_order=desc` alone
     parsed to an empty spec, so the same request was 422 or 200 depending on
-    the parameter spelling. Both dialects are rejected.
+    the parameter spelling. Both dialects are rejected, each naming the
+    parameters its dialect uses, and the length guard fires before the
+    direction check so the message does not flip with the direction value.
     """
     client = app_client
     tokens = await register_user(client, "logan@example.com")
-    for query in ("order[]=desc", "_order=desc"):
+    for query, detail in (
+        ("order[]=desc", "sort[] and order[] must have the same number of entries"),
+        ("_order=desc", "_sort and _order must have the same number of entries"),
+        # Direction check runs after the length guard, so a bogus direction on
+        # an order-only query answers the length guard in both dialects.
+        ("order[]=sideways", "sort[] and order[] must have the same number of entries"),
+        ("_order=sideways", "_sort and _order must have the same number of entries"),
+    ):
         resp = await client.get(
             f"/api/v1/workspaces?{query}",
             headers=auth_headers(tokens),
         )
         assert resp.status_code == 422, (query, resp.text)
-        assert "same number of entries" in resp.json()["detail"]
+        assert resp.json()["detail"] == detail, (query, resp.json()["detail"])
 
 
 async def test_list_query_rejects_unknown_sort_direction(app_client):
@@ -388,11 +397,10 @@ async def test_role_writers_require_an_actor(app_client):
     async with SessionFactory() as session:
         service = WorkspaceService(session)
         with pytest.raises(TypeError):
-            await service.create_custom_role(
-                "ws-x", name="ops", description=None, permissions=[]
-            )
+            await service.create_custom_role("ws-x", name="ops", description=None, permissions=[])
         with pytest.raises(TypeError):
             await service.update_role("ws-x", "role-x", name="ops")
+
 
 async def test_service_stores_trimmed_names(app_client):
     """The service trims even when no schema validated the input.
