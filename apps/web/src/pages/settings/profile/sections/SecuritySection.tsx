@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useCustom, useCustomMutation } from "@refinedev/core";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/CopyButton";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -116,10 +116,6 @@ export function SecuritySection() {
     setCopied(false);
   };
   useEffect(() => () => window.clearTimeout(copyTimer.current), []);
-
-  // The copy icon flips to a check, so its accessible name follows; the pair the
-  // button keeps is `title` + `aria-label`, equal to each other (#332).
-  const copyLabel = copied ? "Copied" : "Copy setup key";
 
   const refresh = () => {
     sessions.query.refetch();
@@ -265,11 +261,9 @@ export function SecuritySection() {
                 <p className="text-sm text-muted-foreground">Can&apos;t scan? Enter this key manually:</p>
                 <div className="flex items-center gap-2">
                   <code className="bg-muted block flex-1 rounded p-2 font-mono text-xs break-all">{setupSecret}</code>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    title={copyLabel}
-                    aria-label={copyLabel}
+                  <CopyButton
+                    copied={copied}
+                    label="Copy setup key"
                     onClick={async () => {
                       if (!setupSecret) return;
                       // Clear before the write so the previous window dies even if
@@ -288,9 +282,7 @@ export function SecuritySection() {
                         });
                       }
                     }}
-                  >
-                    {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  </Button>
+                  />
                 </div>
               </div>
               <div className="flex flex-col gap-2">
