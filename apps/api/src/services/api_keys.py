@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import operator
 import secrets
 from datetime import datetime
 
@@ -12,7 +13,13 @@ from src.core.permissions import ALL_PERMISSIONS_INCLUDING_KEY_ONLY, KEY_ONLY_PE
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
-from src.models.api_key import MAX_QUOTA, QUOTA_MAX_MESSAGE, QUOTA_MIN_MESSAGE, ApiKey
+from src.models.api_key import (
+    MAX_QUOTA,
+    QUOTA_MAX_MESSAGE,
+    QUOTA_MIN_MESSAGE,
+    QUOTA_TYPE_MESSAGE,
+    ApiKey,
+)
 from src.models.workspace import User
 from src.services.workspaces import WorkspaceService
 
@@ -27,6 +34,27 @@ class ApiKeyForbidden(ApiKeyError):
 
 class ApiKeyNotFound(ApiKeyError):
     pass
+
+
+def _quota(usage_quota: int | None) -> int | None:
+    """Strict-type then range-check a service-side quota.
+
+    `operator.index` accepts anything int-like (int, bool, numpy ints) and
+    refuses float/str values that only the schema would have coerced: a
+    direct caller that passes 5.5 must not reach the Integer column through
+    the range guards.
+    """
+    if usage_quota is None:
+        return None
+    try:
+        quota = operator.index(usage_quota)
+    except TypeError:
+        raise ApiKeyError(QUOTA_TYPE_MESSAGE) from None
+    if quota < 1:
+        raise ApiKeyError(QUOTA_MIN_MESSAGE)
+    if quota > MAX_QUOTA:
+        raise ApiKeyError(QUOTA_MAX_MESSAGE)
+    return quota
 
 
 class ApiKeyService:
@@ -109,10 +137,7 @@ class ApiKeyService:
             denied = sorted(capped - allowed)
             raise ApiKeyForbidden(f"cannot grant permissions you do not have: {', '.join(denied)}")
 
-        if usage_quota is not None and usage_quota < 1:
-            raise ApiKeyError(QUOTA_MIN_MESSAGE)
-        if usage_quota is not None and usage_quota > MAX_QUOTA:
-            raise ApiKeyError(QUOTA_MAX_MESSAGE)
+        usage_quota = _quota(usage_quota)
         if expires_at is not None and ensure_utc(expires_at) <= now_utc():
             raise ApiKeyError("expiry must be in the future")
 
@@ -338,10 +363,7 @@ class ApiKeyService:
             raise ApiKeyNotFound("api key not found")
         if actor is not None and key.created_by_user_id != actor.id:
             raise ApiKeyNotFound("api key not found")
-        if usage_quota is not None and usage_quota < 1:
-            raise ApiKeyError(QUOTA_MIN_MESSAGE)
-        if usage_quota is not None and usage_quota > MAX_QUOTA:
-            raise ApiKeyError(QUOTA_MAX_MESSAGE)
+        usage_quota = _quota(usage_quota)
         key.usage_quota = usage_quota
         await self._session.commit()
         await publish_event(
