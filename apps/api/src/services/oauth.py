@@ -340,7 +340,7 @@ _CC_TO_SPACE = str.maketrans(_CC_CONTROLS, " " * len(_CC_CONTROLS))
 
 
 def _single_line(text: object, limit: int = 200) -> str:
-    """Truncate, then flatten every Cc control char to a space: no log forging, no ANSI escapes."""
+    """Flatten every Cc control char to a space, then truncate: no log forging, no ANSI escapes."""
     return str(text).translate(_CC_TO_SPACE)[:limit]
 
 

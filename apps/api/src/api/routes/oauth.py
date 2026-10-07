@@ -164,7 +164,11 @@ async def oauth_callback(
             last_name=identity["last_name"],
         )
     except AuthError as exc:
-        logger.info("oauth signup rejected provider=%s: %s", provider_id, exc)
+        logger.info(
+            "oauth signup rejected provider=%s: %s",
+            _single_line(provider_id),
+            _single_line(exc),
+        )
         return _error_redirect("registration is disabled")
     # Join before the 2FA branch and before issue_tokens, as POST /auth/login
     # does. A failed join stays log-only and the 302 happens either way; the

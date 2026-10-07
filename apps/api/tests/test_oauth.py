@@ -473,9 +473,10 @@ async def test_callback_failure_log_is_control_free(app_client, oauth_on, caplog
     text = record.getMessage()
     for control in ("\r", "\n", "\x1b", "\x7f"):
         assert control not in text
-    # exc content survives flattened: unknown-provider echo + the id itself.
+    # exc content survives flattened: unknown-provider echo + the full flattened id
+    # (CR and LF each collapse to their own space; ESC becomes the space before [31m).
     assert "unknown oauth provider" in text
-    assert "bad" in text and "idp" in text
+    assert "bad  idp [31m" in text
 
 
 async def test_register_blocked_when_disabled(app_client, monkeypatch):
