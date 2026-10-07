@@ -285,7 +285,9 @@ class WorkspaceService:
         name: str | None = None,
         description: str | None = None,
         onboarding_enabled: bool | None = None,
-        actor: User | None = None,
+        # Required: every write names its actor for the audit trail; a system
+        # caller passes an explicit actor instead (see create_custom_role).
+        actor: User,
         ip_address: str | None = None,
     ) -> Workspace:
         workspace = await self._session.get(Workspace, workspace_id)
@@ -323,7 +325,7 @@ class WorkspaceService:
                 resource_type="workspace",
                 resource_id=workspace_id,
                 action="workspace.updated",
-                actor_user_id=actor.id if actor else None,
+                actor_user_id=actor.id,
                 details=changes,
                 ip_address=ip_address,
             )
@@ -333,7 +335,8 @@ class WorkspaceService:
         self,
         workspace_id: str,
         *,
-        actor: User | None = None,
+        # Required: see update_workspace.
+        actor: User,
         ip_address: str | None = None,
     ) -> None:
         workspace = await self._session.get(Workspace, workspace_id)
@@ -427,7 +430,7 @@ class WorkspaceService:
             resource_type="workspace",
             resource_id=workspace_id,
             action="workspace.deleted",
-            actor_user_id=actor.id if actor else None,
+            actor_user_id=actor.id,
             details={"name": name},
             ip_address=ip_address,
         )
