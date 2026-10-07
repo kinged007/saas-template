@@ -126,7 +126,7 @@ export function SecuritySection() {
     try {
       await call(revokeAllMutate, "auth/sessions", "delete");
       toast.success("All other sessions revoked");
-      refresh();
+      sessions.query.refetch();
     } catch (e) {
       toast.error((e as Error)?.message ?? "Revoke failed");
     }
@@ -341,7 +341,10 @@ export function SecuritySection() {
                     </TableCell>
                     <TableCell className="text-right">
                       {!s.current && (
-                        <SessionRevokeButton base="auth" sessionId={s.id} onRevoked={refresh} />
+                        // Revoking a session cannot change 2FA state, so the
+                        // refetch here is sessions-only; the dual refresh
+                        // stays with the 2FA actions (#1391).
+                        <SessionRevokeButton base="auth" sessionId={s.id} onRevoked={() => sessions.query.refetch()} />
                       )}
                     </TableCell>
                   </TableRow>
