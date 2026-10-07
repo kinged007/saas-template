@@ -65,8 +65,8 @@ def cookie_secure_for(request: Request | None = None) -> bool:
 
 
 def set_refresh_cookie(response: Response, token: str, *, request: Request) -> None:
-    """Set the refresh cookie. `request` is required: the Secure flag is derived
-    from it, and a default would silently restore the ENVIRONMENT-based flag."""
+    """Set the refresh cookie. `request` is required (keyword-only): the Secure flag
+    is derived from it, and a default would silently restore the ENVIRONMENT-based flag."""
     kwargs: dict = {
         "key": settings.refresh_cookie_name,
         "value": token,

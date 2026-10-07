@@ -703,8 +703,8 @@ async def me(
     if principal.api_key is not None:
         key_grant = sorted(principal.api_key.permissions) if memberships else []
         data["workspaces"] = [
-            workspace_to_dict(w, role=role.name, permissions=key_grant, joined_at=member.created_at)
-            for w, role, member in memberships
+            workspace_to_dict(w, role=role.name, permissions=key_grant, joined_at=m.created_at)
+            for w, role, m in memberships
         ]
         data["permissions"] = key_grant
     else:
