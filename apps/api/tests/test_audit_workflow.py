@@ -575,6 +575,9 @@ async def test_create_many_logs_the_recipients_a_redelivery_drops(caplog):
             for uid in recipients
         ]
 
+    def records():
+        return [r for r in caplog.records if r.name == "src.services.notifications"]
+
     with caplog.at_level(logging.INFO, logger="src.services.notifications"):
         async with SessionFactory() as session:
             assert (
@@ -585,7 +588,21 @@ async def test_create_many_logs_the_recipients_a_redelivery_drops(caplog):
                 )
                 == 2
             )
-        assert "dropped" not in caplog.text  # nothing dropped, nothing logged
+        assert not records()  # nothing dropped, nothing logged
+
+        async with SessionFactory() as session:
+            # Retention can purge one recipient's row between deliveries, so the
+            # redelivery is partial: one recipient is re-notified, one is new.
+            assert (
+                len(
+                    await NotificationService(session).create_many(
+                        [specs()[0], {**specs()[1], "user_id": str(uuid.uuid4())}],
+                        source_event_id=source_event_id,
+                        correlation_id="corr-1205",
+                    )
+                )
+                == 1
+            )
 
         async with SessionFactory() as session:
             assert (
@@ -595,8 +612,13 @@ async def test_create_many_logs_the_recipients_a_redelivery_drops(caplog):
                 == []
             )
 
-    assert source_event_id in caplog.text
-    assert "dropped 2 of 2" in caplog.text
+    partial, full = records()
+    assert source_event_id in partial.getMessage()
+    assert source_event_id in full.getMessage()
+    assert "corr-1205" in partial.getMessage()
+    assert "correlation -" in full.getMessage()
+    assert "dropped 1 of 2" in partial.getMessage()
+    assert "dropped 2 of 2" in full.getMessage()
 
 
 async def test_two_publishes_still_write_two_audit_rows(monkeypatch):
