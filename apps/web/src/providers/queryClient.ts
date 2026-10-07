@@ -11,6 +11,14 @@ export function isClientError(error: unknown): boolean {
 }
 
 /**
+ * True when the server answered with a 5xx.
+ */
+export function isServerError(error: unknown): boolean {
+  const status = (error as { statusCode?: number } | null | undefined)?.statusCode;
+  return typeof status === "number" && status >= 500 && status < 600;
+}
+
+/**
  * True when no HTTP response arrived. `normalizeError` (dataProvider)
  * stamps `statusCode: 0` for an abort, a cancel and a dropped connection
  * alike. None of them can succeed on a retry of the same observer, so
@@ -42,7 +50,11 @@ export function isNoResponseError(error: unknown): boolean {
  * spent ~7s of "Loading…" in front of every refusal, so 4xx now fails on
  * the first attempt. A request that produced no HTTP response fails on the
  * first attempt too — it cannot succeed on a retry of the same observer.
- * 5xx keeps the 3-retry budget: it may still succeed.
+ * Since then 5xx joins them and fails on the first attempt as well: four
+ * identical requests against a 5xx-ing server cost ~7s of "Loading…", the
+ * retry did not heal it anyway (same server, same request), and every error
+ * state now surfaces a visible failure the user can re-run by hand (e.g. the
+ * audit log's Try again).
  */
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -50,7 +62,7 @@ export const queryClient = new QueryClient({
       refetchOnWindowFocus: false,
       placeholderData: undefined,
       retry: (failureCount, error) =>
-        failureCount < 3 && !isClientError(error) && !isNoResponseError(error),
+        failureCount < 3 && !isClientError(error) && !isNoResponseError(error) && !isServerError(error),
     },
   },
 });
