@@ -56,9 +56,13 @@ test("no call site renders String((err as { message?: string })?.message ?? err)
   );
 });
 
+const orStringSweep = /\((\w+) as \{ message\?: string \}\)\??\.message \|\| String\(\1\)/;
+
 test("no call site renders (err as { message?: string })?.message || String(err)", () => {
-  sweep(
-    "x?.message || String(x) renders [object Object]",
-    /\((\w+) as \{ message\?: string \}\)\?\.message \|\| String\(\1\)/,
-  );
+  sweep("x?.message || String(x) renders [object Object]", orStringSweep);
+});
+
+test("the || sweep regex matches the non-optional .message spelling", () => {
+  assert.match("(err as { message?: string })?.message || String(err)", orStringSweep);
+  assert.match("(err as { message?: string }).message || String(err)", orStringSweep);
 });
