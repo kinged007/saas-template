@@ -279,7 +279,12 @@ async def test_create_role_rejects_blank_name(app_client):
         json={"name": "   ", "permissions": []},
         headers=ws_headers(owner, ws["id"]),
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 422, resp.text
+    # Pin the field: any other 422 (a bad permission, a missing field) would
+    # also satisfy a status-only assertion.
+    detail = resp.json()["detail"][0]
+    assert detail["loc"] == ["body", "name"]
+    assert detail["type"] == "string_too_short"
 
 
 async def test_update_role_strips_padded_name(app_client):
@@ -298,7 +303,28 @@ async def test_update_role_strips_padded_name(app_client):
     resp = await client.patch(
         f"/api/v1/roles/{created['id']}", json={"name": "   "}, headers=headers
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 422, resp.text
+    # Pin the field: any other 422 would also satisfy a status-only assertion.
+    detail = resp.json()["detail"][0]
+    assert detail["loc"] == ["body", "name"]
+    assert detail["type"] == "string_too_short"
+
+
+async def test_create_role_accepts_a_name_padded_to_the_50_char_bound(app_client):
+    # The 50-char bound applies to the stripped value, so a padded name whose
+    # stripped form is exactly the bound is accepted. If the length check ran
+    # on the raw string first (strip reordered after it), this would 422.
+    client = app_client
+    owner = await register_user(client, "cr-pad50@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    name = "x" * 50
+    resp = await client.post(
+        "/api/v1/roles", json={"name": f"  {name}  ", "permissions": []}, headers=headers
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == name
+    assert await _role_id(client, headers, name)
 
 
 async def test_permission_catalog_excludes_legacy_key_only_scope(app_client):
