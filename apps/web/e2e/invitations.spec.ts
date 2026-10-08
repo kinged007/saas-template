@@ -239,5 +239,16 @@ test.describe("invitations", () => {
     // cached list instead of leaving the button that made it.
     await expect(row(page, "expired@example.com").getByText("revoked", { exact: true })).toBeVisible();
     await expect(resend).toHaveCount(0);
+    // The refusal must still be announced. The toast comes from refine's
+    // hook-level onError (description carries the 409 detail), so it only
+    // survives while the refresh handlers stay in the per-mutate() options:
+    // hoisting them into useCustomMutation() would replace refine's handler and
+    // silently drop the detail. The sonner Toaster section is the page's only
+    // named live region; the toast <li> itself has no role.
+    await expect(
+      page
+        .getByRole("region", { name: "Notifications alt+T" })
+        .getByText(/cannot be re-sent/),
+    ).toBeVisible();
   });
 });
