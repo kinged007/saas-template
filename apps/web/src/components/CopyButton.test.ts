@@ -14,6 +14,9 @@ test("icon size is the default a call site can override", () => {
   // The icon-only control renders a square icon box by construction (#1223);
   // shadcn/ui's `sm` / `lg` still win when a call site passes them.
   assert.match(source, /\bsize\s*=\s*"icon"/);
+  // The default only matters if it reaches the Button: dropping `size={size}`
+  // would silently give every call site cva's wide `default` box (#1411).
+  assert.match(source, /\bsize=\{size\}/);
 });
 
 test("the doc comment does not claim the Omit enforces aria-label", () => {
