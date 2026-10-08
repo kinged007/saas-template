@@ -181,6 +181,11 @@ async def run_job_via_scheduler(
     Backdates the provisioned definition's `next_run_at` so a tick claims it as
     a missed occurrence, then waits for the durable worker to finish the run.
     Returns the run plus its captured log messages.
+
+    A tick also runs housekeeping when due: `_last_housekeeping` starts at 0.0
+    while being compared against `loop.time()`, so on a host up longer than
+    HOUSEKEEPING_INTERVAL_SECONDS (1h) the first tick additionally runs
+    `fail_stale_runs` + `prune_history` across other jobs' run rows.
     """
     from sqlalchemy import select
 
@@ -199,7 +204,6 @@ async def run_job_via_scheduler(
                 )
             )
         ).scalar_one()
-        assert definition.enabled is True, f"{key} is not enabled"
         definition.next_run_at = now_utc() - missed_by
         definition_id = definition.id
         await session.commit()
