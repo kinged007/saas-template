@@ -475,12 +475,16 @@ class WorkspaceService:
 
     async def has_member_row(self, workspace_id: str, user_id: str) -> bool:
         """Whether a member row exists at all, regardless of its status."""
-        stmt = select(WorkspaceMember.id).where(
-            WorkspaceMember.workspace_id == workspace_id,
-            WorkspaceMember.user_id == user_id,
+        stmt = (
+            select(WorkspaceMember.id)
+            .where(
+                WorkspaceMember.workspace_id == workspace_id,
+                WorkspaceMember.user_id == user_id,
+            )
+            .limit(1)
         )
         result = await self._session.execute(stmt)
-        return result.scalar_one_or_none() is not None
+        return result.first() is not None
 
     # ---------------------------------------------------------------- members
 

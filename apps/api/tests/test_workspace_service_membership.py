@@ -70,6 +70,29 @@ async def test_has_member_row_false_without_a_row():
         assert await service.has_member_row(workspace.id, outsider.id) is False
 
 
+async def test_has_member_row_tolerates_duplicate_rows():
+    """Two rows for one (workspace_id, user_id) must not raise: existence check."""
+    workspace_id = await _workspace_with_suspended_owner_row("dup-admin@example.com")
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session)
+        admin = await AuthService(session).get_by_email("dup-admin@example.com")
+        first = await session.execute(
+            select(WorkspaceMember).where(WorkspaceMember.workspace_id == workspace_id)
+        )
+        original = first.scalar_one()
+        duplicate = WorkspaceMember(
+            workspace_id=workspace_id,
+            user_id=admin.id,
+            role_id=original.role_id,
+            status="active",
+        )
+        session.add(duplicate)
+        await session.commit()
+
+        assert await service.has_member_row(workspace_id, admin.id) is True
+
+
 async def test_get_membership_rejects_the_active_only_flag():
     """The opt-out is gone: passing active_only fails loudly, not silently."""
     async with SessionFactory() as session:
