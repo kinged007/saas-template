@@ -1232,6 +1232,7 @@ export function InboxPage() {
                   </div>
                 </div>
                 <div className="prose prose-sm dark:prose-invert max-w-none flex-1">
+                  {/* ponytail: this panel can show a conversation other than the open one, so mentionPlugins — derived from the open conversation's participants — would style the wrong name set. */}
                   <Markdown components={markdownComponents}>{selectedNotif.body || ""}</Markdown>
                 </div>
                 <div className="border-border mt-6 flex items-center gap-2 border-t pt-4">
