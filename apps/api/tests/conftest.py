@@ -173,38 +173,40 @@ def ws_headers(tokens: dict, workspace_id: str) -> dict:
 async def run_job_via_scheduler(
     key: str,
     *,
+    workspace_id: str | None = None,
     missed_by: timedelta = timedelta(hours=3),
     timeout_s: float = 10.0,
 ) -> tuple[JobRun, list[str]]:
-    """Drive a global job through the real scheduler -> bus -> executor path.
+    """Drive a job through the real scheduler -> bus -> executor path.
 
     Backdates the provisioned definition's `next_run_at` so a tick claims it as
     a missed occurrence, then waits for the durable worker to finish the run.
-    Returns the run plus its captured log messages.
+    Ticks the production `app.state.job_scheduler` built in `main.py`, so the
+    container -> scheduler wiring is under test too. Returns the run plus its
+    captured log messages.
     """
     from sqlalchemy import select
 
     from src.core.dates import now_utc
     from src.db.session import SessionFactory
-    from src.jobs.scheduler import JobScheduler
     from src.main import app as fastapi_app
     from src.models.jobs import JobDefinition, JobLogEntry, JobRun
 
     async with SessionFactory() as session:
+        scope = (
+            JobDefinition.workspace_id == workspace_id
+            if workspace_id is not None
+            else JobDefinition.workspace_id.is_(None)
+        )
         definition = (
-            await session.execute(
-                select(JobDefinition).where(
-                    JobDefinition.key == key,
-                    JobDefinition.workspace_id.is_(None),
-                )
-            )
+            await session.execute(select(JobDefinition).where(JobDefinition.key == key, scope))
         ).scalar_one()
         assert definition.enabled is True, f"{key} is not enabled"
         definition.next_run_at = now_utc() - missed_by
         definition_id = definition.id
         await session.commit()
 
-    await JobScheduler(bus=fastapi_app.state.container.bus).tick()
+    scheduled = await fastapi_app.state.job_scheduler.tick()
 
     for _ in range(int(timeout_s * 10)):
         async with SessionFactory() as session:
@@ -233,4 +235,4 @@ async def run_job_via_scheduler(
                 )
                 return run, list(messages)
         await asyncio.sleep(0.1)
-    raise AssertionError(f"job {key} did not finish within {timeout_s}s")
+    raise AssertionError(f"job {key} did not finish within {timeout_s}s (scheduled={scheduled})")
