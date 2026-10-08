@@ -28,7 +28,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { cn } from "@/lib/utils";
 import type { Identity, Member } from "../../types";
-import { getMemberDisplayName } from "../../types";
+import { getDisplayNameFromRow } from "../../types";
 
 type Props = {
   open: boolean;
@@ -101,7 +101,7 @@ export function EditParticipantsDialog({
   };
 
   const renderMember = (m: Member) => {
-    const name = getMemberDisplayName(m);
+    const name = getDisplayNameFromRow(m);
     const isSelected = selected.includes(m.id);
     return (
       <CommandItem
@@ -158,7 +158,7 @@ export function EditParticipantsDialog({
                 <p className="text-muted-foreground text-sm">Nobody selected yet.</p>
               ) : (
                 selectedMembers.map((m) => {
-                  const name = getMemberDisplayName(m);
+                  const name = getDisplayNameFromRow(m);
                   const self = m.id === currentUserId;
                   return (
                     <div key={m.id} className="flex items-center gap-2 rounded-md border px-2 py-1.5">
