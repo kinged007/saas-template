@@ -796,7 +796,7 @@ class WorkspaceService:
         ip_address: str | None = None,
     ) -> Invitation:
         await self._require_manager(workspace_id, actor)
-        invite = await self._session.get(Invitation, invitation_id)
+        invite = await self._invitation_or_not_found(invitation_id)
         if invite is None or invite.workspace_id != workspace_id:
             raise WorkspaceError("invitation not found")
         if invite.status in ("accepted", "revoked"):
@@ -955,10 +955,24 @@ class WorkspaceService:
         result = await self._session.execute(stmt)
         return list(result.all())
 
+    async def _invitation_or_not_found(self, invitation_id: str) -> Invitation | None:
+        """get(Invitation, ...) with the malformed-id check at the same point.
+
+        A non-UUID id must raise the same WorkspaceError a miss raises, not a
+        StatementError from the bind processor. Callers keep their own
+        authorization order — the manager check runs before this lookup — so
+        a caller who may not see invitations gets 403 for a malformed id too.
+        """
+        try:
+            uuid.UUID(invitation_id)
+        except ValueError:
+            return None
+        return await self._session.get(Invitation, invitation_id)
+
     async def decline_invitation(
         self, invitation_id: str, user: User, *, ip_address: str | None = None
     ) -> Invitation:
-        invite = await self._session.get(Invitation, invitation_id)
+        invite = await self._invitation_or_not_found(invitation_id)
         if invite is None or invite.email != user.email.lower():
             raise WorkspaceError("invitation not found")
         if invite.status != "pending":
@@ -990,7 +1004,7 @@ class WorkspaceService:
         ip_address: str | None = None,
     ) -> Invitation:
         await self._require_manager(workspace_id, actor)
-        invite = await self._session.get(Invitation, invitation_id)
+        invite = await self._invitation_or_not_found(invitation_id)
         if invite is None or invite.workspace_id != workspace_id:
             raise WorkspaceError("invitation not found")
         if invite.status != "pending":

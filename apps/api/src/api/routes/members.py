@@ -12,6 +12,7 @@ from src.api.deps import (
     get_current_user,
     get_current_workspace_id,
     require_permission,
+    uuid_or_404,
 )
 from src.core.dates import iso_or_none
 from src.core.permissions import MEMBER_DELETE, MEMBER_READ, MEMBER_UPDATE
@@ -110,6 +111,7 @@ async def set_member_role(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    uuid_or_404(membership_id, "member")
     try:
         member = await WorkspaceService(db, container.bus).set_member_role(
             workspace_id,
@@ -137,6 +139,7 @@ async def suspend_member(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    uuid_or_404(membership_id, "member")
     try:
         member = await WorkspaceService(db, container.bus).suspend_member(
             workspace_id,
@@ -163,6 +166,7 @@ async def reactivate_member(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    uuid_or_404(membership_id, "member")
     try:
         member = await WorkspaceService(db, container.bus).reactivate_member(
             workspace_id,
@@ -189,6 +193,7 @@ async def remove_member(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    uuid_or_404(membership_id, "member")
     try:
         await WorkspaceService(db, container.bus).remove_member(
             workspace_id,

@@ -13,6 +13,7 @@ from src.api.deps import (
     require_key_permission,
     require_permission,
     resolve_auth_principal,
+    uuid_or_404,
 )
 from src.core.permissions import MESSAGE_CREATE, MESSAGE_READ, MESSAGE_UPDATE
 from src.db.session import get_db
@@ -173,6 +174,7 @@ async def get_conversation(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    uuid_or_404(conversation_id, "conversation")
     service = ConversationService(db, container.bus)
     try:
         data = await service.get_conversation(
@@ -199,6 +201,7 @@ async def update_conversation(
 ):
     if body.title is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "title is required")
+    uuid_or_404(conversation_id, "conversation")
     service = ConversationService(db, container.bus)
     try:
         data = await service.rename(
@@ -231,6 +234,7 @@ async def update_participants(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    uuid_or_404(conversation_id, "conversation")
     service = ConversationService(db, container.bus)
     try:
         data = await service.set_participants(
@@ -259,6 +263,7 @@ async def mark_read(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    uuid_or_404(conversation_id, "conversation")
     service = ConversationService(db, container.bus)
     try:
         data = await service.mark_read(
@@ -286,6 +291,7 @@ async def mark_unread(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    uuid_or_404(conversation_id, "conversation")
     service = ConversationService(db, container.bus)
     try:
         data = await service.mark_unread(
@@ -313,6 +319,7 @@ async def archive_conversation(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    uuid_or_404(conversation_id, "conversation")
     service = ConversationService(db, container.bus)
     try:
         data = await service.set_archived(
@@ -352,6 +359,7 @@ async def list_messages(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     sort_by = spec.sort_by[0] if spec.sort_by else "created_at"
     sort_order = spec.sort_order[0] if spec.sort_order else "asc"
+    uuid_or_404(conversation_id, "conversation")
     service = ConversationService(db, container.bus)
     try:
         items, total = await service.list_messages(
@@ -385,6 +393,7 @@ async def send_message(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    uuid_or_404(conversation_id, "conversation")
     service = ConversationService(db, container.bus)
     try:
         msg = await service.send_message(

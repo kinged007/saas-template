@@ -13,6 +13,7 @@ from src.api.deps import (
     get_current_workspace_id,
     require_permission,
     resolve_auth_principal,
+    uuid_or_404,
 )
 from src.core.dates import iso_or_none
 from src.core.permissions import (
@@ -155,6 +156,7 @@ async def set_api_key_quota(
 ):
     # Personal scope is owned by the service (404, not 403, so another
     # user's key id is not leaked) — same as the revoke route below.
+    uuid_or_404(api_key_id, "api key")
     try:
         key = await ApiKeyService(db, container.bus).set_quota(
             workspace_id,
@@ -180,6 +182,7 @@ async def revoke_api_key(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    uuid_or_404(api_key_id, "api key")
     try:
         await ApiKeyService(db, container.bus).revoke_api_key(
             workspace_id,

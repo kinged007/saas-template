@@ -154,7 +154,9 @@ async def test_permission_catalog_requires_auth(app_client):
     resp = await app_client.get(
         "/api/v1/roles/permission-catalog", headers={"X-Workspace-ID": "ws-does-not-exist"}
     )
-    assert resp.status_code in (401, 403)
+    # 404: the malformed workspace header is rejected at the route boundary
+    # (uuid_or_404 in the header dependency), which runs before auth resolves.
+    assert resp.status_code in (401, 403, 404)
 
 
 async def test_permission_catalog_filtered_to_assignable(app_client):

@@ -207,7 +207,7 @@ async def get_current_workspace_id(
 ) -> str:
     if not x_workspace_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "X-Workspace-ID header is required")
-    return x_workspace_id
+    return uuid_or_404(x_workspace_id, "workspace")
 
 
 async def get_optional_workspace_id(
@@ -219,7 +219,9 @@ async def get_optional_workspace_id(
     received invitations, workspace listing) but become workspace-scoped the
     moment an API key is presented.
     """
-    return x_workspace_id
+    if not x_workspace_id:
+        return None
+    return uuid_or_404(x_workspace_id, "workspace")
 
 
 def _quota_headers(api_key: ApiKey, now: datetime) -> dict[str, str]:
@@ -450,6 +452,7 @@ async def require_existing_workspace(
     (missing) from 403 (exists, not a member); workspace ids are
     unguessable UUIDs, so this tradeoff is intentional.
     """
+    uuid_or_404(workspace_id, "workspace")
     if await db.get(Workspace, workspace_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
 

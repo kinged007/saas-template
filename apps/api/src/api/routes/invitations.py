@@ -16,6 +16,7 @@ from src.api.deps import (
     require_permission,
     require_session_user,
     resolve_auth_principal,
+    uuid_or_404,
 )
 from src.core.dates import ensure_utc, iso_or_none, now_utc
 from src.core.permissions import MEMBER_CREATE, MEMBER_DELETE
@@ -231,6 +232,7 @@ async def decline_invitation(
     container=Depends(get_container),
 ):
     if principal.api_key is not None:
+        uuid_or_404(invitation_id, "invitation")
         invite = await db.get(Invitation, invitation_id)
         if invite is None or invite.workspace_id != workspace_id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "invitation not found in this workspace")

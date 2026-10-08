@@ -12,6 +12,7 @@ from src.api.deps import (
     get_current_user,
     get_current_workspace_id,
     require_permission,
+    uuid_or_404,
 )
 from src.core.dates import iso_or_none
 from src.core.permissions import ALL_PERMISSIONS, ROLE_CREATE, ROLE_READ
@@ -154,6 +155,7 @@ async def update_role(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    uuid_or_404(role_id, "role")
     try:
         role = await WorkspaceService(db, container.bus).update_role(
             workspace_id,
@@ -182,6 +184,7 @@ async def get_role(
     _=Depends(require_permission(ROLE_READ)),
     db: AsyncSession = Depends(get_db),
 ):
+    uuid_or_404(role_id, "role")
     try:
         role = await WorkspaceService(db).get_role(workspace_id, role_id)
     except WorkspaceNotFound as exc:

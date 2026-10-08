@@ -27,6 +27,7 @@ from src.api.deps import (
     require_superuser,
     resolve_auth_principal,
     resolve_or_deny,
+    uuid_or_404,
 )
 from src.core.permissions import JOB_READ, JOB_UPDATE
 from src.db.session import get_db
@@ -66,6 +67,7 @@ async def _admin_definition_or_404(
     a caller that is not superuser-gated has to authorize the definition it
     gets from here itself.
     """
+    uuid_or_404(definition_id, "job")
     definition = await JobService(db).get_definition(definition_id)
     if definition is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
@@ -176,6 +178,7 @@ async def list_global_job_runs(
 
 async def _get_run_or_deny(service: JobService, principal: AuthPrincipal, run_id: str) -> JobRun:
     """`resolve_or_deny` for a run; see there for why a key gets one answer."""
+    uuid_or_404(run_id, "run")
     return await resolve_or_deny(principal, service.get_run(run_id), "run not found")
 
 
@@ -313,6 +316,7 @@ async def get_job(
     principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
 ):
+    uuid_or_404(definition_id, "job")
     definition = await resolve_or_deny(
         principal, JobService(db).get_definition(definition_id), "job not found"
     )
@@ -331,6 +335,7 @@ async def update_job(
     container=Depends(get_container),
 ):
     _validate_patch(body)
+    uuid_or_404(definition_id, "job")
     definition = await resolve_or_deny(
         principal, JobService(db).get_definition(definition_id), "job not found"
     )
@@ -372,6 +377,7 @@ async def execute_job(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    uuid_or_404(definition_id, "job")
     definition = await resolve_or_deny(
         principal, JobService(db).get_definition(definition_id), "job not found"
     )
@@ -387,6 +393,7 @@ async def list_job_runs(
     principal: AuthPrincipal = Depends(resolve_auth_principal),
     db: AsyncSession = Depends(get_db),
 ):
+    uuid_or_404(definition_id, "job")
     definition = await resolve_or_deny(
         principal, JobService(db).get_definition(definition_id), "job not found"
     )
