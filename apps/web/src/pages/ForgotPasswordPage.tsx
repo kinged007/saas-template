@@ -27,7 +27,7 @@ export function ForgotPasswordPage() {
       if (!resp.ok) throw new Error(forgotPasswordError(resp.status, resp));
       setDone(true);
     } catch (err) {
-      setError((err as Error)?.message ?? "Request failed");
+      setError((err as Error)?.message ?? "request failed");
     } finally {
       setPending(false);
     }
