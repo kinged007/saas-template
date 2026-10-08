@@ -202,4 +202,45 @@ test.describe("inbox message fetch", () => {
     await page.getByRole("button", { name: "Retry" }).click();
     await expect(staleNote).toHaveCount(0);
   });
+
+  // The dead end — a failure with no cached rows — has no stale note to
+  // carry a Retry button, so it carries its own Try again: with
+  // refetchOnWindowFocus off, a refused load otherwise waits for a remount,
+  // navigation or reload.
+  test("Try again recovers the dead-end failure into the loaded messages", async ({ page }) => {
+    await mockApi(page, { signedIn: true, lists: { conversations: [CONVERSATION] } });
+
+    let attempts = 0;
+    let succeed = false;
+    await page.route(MESSAGES, async (route) => {
+      attempts += 1;
+      if (succeed) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(MESSAGE_ROWS),
+        });
+      }
+      return route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Boom" }),
+      });
+    });
+
+    await page.goto("/inbox");
+    await page.getByRole("button", { name: /Release plan/ }).click();
+
+    await expect(page.getByText("Could not load messages.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+
+    const before = attempts;
+    succeed = true;
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByText("shipping friday").first()).toBeVisible();
+    await expect(page.getByText("Could not load messages.")).toHaveCount(0);
+    // The click drove new request(s): the recovery is the query refetching,
+    // not rows arriving from anywhere else.
+    expect(attempts).toBeGreaterThan(before);
+  });
 });

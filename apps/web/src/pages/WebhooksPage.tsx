@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { Webhook } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -45,8 +46,11 @@ function DeliveryLog({ subscriptionId }: { subscriptionId: string }) {
      marks them instead. */
   if (query.isError && !isList) {
     return (
-      <p className="text-destructive text-sm">
+      <p className="text-destructive flex flex-wrap items-center gap-2 text-sm">
         Could not load deliveries: {query.error?.message ?? "Unknown error"}
+        <Button variant="outline" size="sm" onClick={() => query.refetch()}>
+          Try again
+        </Button>
       </p>
     );
   }
@@ -239,7 +243,10 @@ export function WebhooksPage() {
                 <span className="text-destructive">
                   Could not load webhook subscriptions:{" "}
                   {query.error?.message ?? "Unknown error"}
-                </span>
+                </span>{" "}
+                <Button variant="outline" size="sm" onClick={() => query.refetch()}>
+                  Try again
+                </Button>
               </EmptyRow>
             )}
             {!query.isPending && !query.isError && rows.length === 0 && (
