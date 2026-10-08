@@ -461,6 +461,30 @@ async def test_cleanup_job_logs_only_the_first_publish_failure_with_a_traceback(
     assert [r.levelno for r in records] == [logging.ERROR, logging.WARNING, logging.WARNING]
 
 
+async def _wait_for_audit(resource_id: str, timeout_s: float = 10.0):
+    """The audit consumer is a background handler — poll for its row."""
+    for _ in range(int(timeout_s * 10)):
+        async with SessionFactory() as session:
+            entry = (
+                (
+                    await session.execute(
+                        select(AuditLogEntry)
+                        .where(
+                            AuditLogEntry.resource_id == resource_id,
+                            AuditLogEntry.action == "apikey.revoked",
+                        )
+                        .order_by(AuditLogEntry.created_at.desc())
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if entry is not None:
+                return entry
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"no apikey.revoked audit entry for {resource_id}")
+
+
 async def test_job_is_dispatched_by_the_scheduler(app_client):
     """Production wiring: the provisioned global job runs on the daily
     schedule, is claimed by a scheduler tick, and reaches its handler with the
@@ -479,7 +503,7 @@ async def test_job_is_dispatched_by_the_scheduler(app_client):
                 )
             )
         ).scalar_one()
-        assert definition.enabled is True
+        assert definition.enabled is True, "apikeys.cleanup is not enabled"
         assert definition.cron_schedule == "0 5 * * *"
         assert definition.missed_policy == "single"
 
@@ -501,21 +525,3 @@ async def test_job_is_dispatched_by_the_scheduler(app_client):
     # executor really passed the app's bus to the handler.
     audited = await _wait_for_audit(expired["id"])
     assert audited.details.get("reason") == "expired"
-
-
-async def _wait_for_audit(resource_id: str, timeout_s: float = 10.0):
-    """The audit consumer is a background handler — poll for its row."""
-    for _ in range(int(timeout_s * 10)):
-        async with SessionFactory() as session:
-            entry = (
-                await session.execute(
-                    select(AuditLogEntry).where(
-                        AuditLogEntry.resource_id == resource_id,
-                        AuditLogEntry.action == "apikey.revoked",
-                    )
-                )
-            ).scalar_one_or_none()
-            if entry is not None:
-                return entry
-        await asyncio.sleep(0.1)
-    raise AssertionError(f"no apikey.revoked audit entry for {resource_id}")
