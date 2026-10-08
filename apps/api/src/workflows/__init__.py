@@ -54,15 +54,29 @@ logger = logging.getLogger(__name__)
 INVITATIONS_ROUTE = "/invitations"
 
 
-def _participant_user_ids(payload: dict) -> list[str] | None:
+def _participant_user_ids(
+    payload: dict,
+    *,
+    subject: str | None = None,
+    correlation_id: str | None = None,
+) -> list[str] | None:
     """Sanitized participant list for conversation event payloads.
 
-    None = field absent or malformed (non-list, bare string, any non-string or
-    empty item); [] = explicitly empty list. Rejects instead of coercing so a
-    bad publisher cannot make the consumers fan out garbage ids.
+    None = field absent or malformed (non-list, bare string, any non-string,
+    empty, or whitespace-only item); [] = explicitly empty list. Rejects
+    instead of coercing so a bad publisher cannot make the consumers fan out
+    garbage ids. A present-but-malformed field logs a warning (an absent field
+    stays silent) so a publisher regression is diagnosable instead of
+    surfacing only as "users stopped getting notifications".
     """
     raw = payload.get("participant_user_ids")
-    if not isinstance(raw, list) or any(not isinstance(x, str) or not x for x in raw):
+    if not isinstance(raw, list) or any(not isinstance(x, str) or not x.strip() for x in raw):
+        if raw is not None:
+            logger.warning(
+                "malformed participant_user_ids on %s (correlation_id=%s)",
+                subject,
+                correlation_id,
+            )
         return None
     return list(dict.fromkeys(raw))
 
@@ -512,7 +526,9 @@ def build_workflows(
         conversation_id = payload.get("conversation_id")
         sender_id = payload.get("sender_id")
         sender_type = payload.get("sender_type", "user")
-        participant_ids = _participant_user_ids(payload)
+        participant_ids = _participant_user_ids(
+            payload, subject=metadata.subject, correlation_id=metadata.correlation_id
+        )
 
         if not workspace_id or not conversation_id or not participant_ids:
             return
@@ -574,7 +590,9 @@ def build_workflows(
         Registered in every replica, so users receive `message.created`
         regardless of which replica holds their WebSocket.
         """
-        participant_ids = _participant_user_ids(payload)
+        participant_ids = _participant_user_ids(
+            payload, subject=metadata.subject, correlation_id=metadata.correlation_id
+        )
         if not participant_ids:
             return
         await connection_manager.push_many(
@@ -586,10 +604,13 @@ def build_workflows(
     async def on_conversation_renamed(payload: dict, metadata) -> None:
         """Fan-out conversation rename to participants."""
 
-        participant_ids = _participant_user_ids(payload)
-        # Malformed (non-list, bare string, non-string item) is treated like an
-        # absent list: resolve participants from the DB instead of fanning out
-        # garbage. An explicit empty list keeps the no-fallback semantics.
+        participant_ids = _participant_user_ids(
+            payload, subject=metadata.subject, correlation_id=metadata.correlation_id
+        )
+        # Malformed (non-list, bare string, non-string, empty, or
+        # whitespace-only item) is treated like an absent list: resolve
+        # participants from the DB instead of fanning out garbage. An explicit
+        # empty list keeps the no-fallback semantics.
         if participant_ids is None:
             conversation_id = payload.get("conversation_id")
             if not conversation_id:

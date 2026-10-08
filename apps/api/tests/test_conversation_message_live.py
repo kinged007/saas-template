@@ -77,6 +77,7 @@ async def test_live_message_malformed_participants_push_nothing():
         {"participant_user_ids": "u1"},
         {"participant_user_ids": ["u1", 42]},
         {"participant_user_ids": ["u1", ""]},
+        {"participant_user_ids": ["u1", " "]},
         {"participant_user_ids": {"a": "b"}},
         {"participant_user_ids": 42},
     ):

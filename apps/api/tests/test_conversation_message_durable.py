@@ -5,11 +5,13 @@ The durable consumer persists notification pointers from
 written); a valid list must produce one pointer per non-sender recipient,
 deduped in first-seen order. The tail covers the shared normalizer
 (`_participant_user_ids`) directly: absent / None / empty list / bare
-string / non-string items / dict payload / dedupe + order.
+string / non-string, empty, or whitespace-only items / dict payload /
+dedupe + order, plus the malformed-field warning (#1514).
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from sqlalchemy import select
@@ -73,7 +75,7 @@ async def test_durable_message_creates_pointer_per_non_sender_recipient():
 
 async def test_durable_message_malformed_participants_write_nothing():
     handler = _wired()
-    for malformed in ("u1", ["u1", 42], ["u1", ""], {"a": "b"}, 42):
+    for malformed in ("u1", ["u1", 42], ["u1", ""], ["u1", " "], {"a": "b"}, 42):
         await handler(
             {
                 "workspace_id": str(uuid.uuid4()),
@@ -87,6 +89,29 @@ async def test_durable_message_malformed_participants_write_nothing():
     assert await _notification_user_ids() == []
 
 
+async def test_durable_message_malformed_participants_logs_warning(caplog):
+    """A present-but-malformed field logs a warning carrying the event's
+    subject and correlation_id so a publisher regression is diagnosable."""
+    handler = _wired()
+    with caplog.at_level(logging.WARNING, logger="src.workflows"):
+        await handler(
+            {
+                "workspace_id": str(uuid.uuid4()),
+                "conversation_id": str(uuid.uuid4()),
+                "sender_id": str(uuid.uuid4()),
+                "participant_user_ids": "u1",
+            },
+            EventMetadata(
+                subject=Subjects.CONVERSATION_MESSAGE_CREATED, correlation_id="corr-1514"
+            ),
+        )
+
+    warnings = [r for r in caplog.records if "malformed participant_user_ids" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "conversations.message.created" in warnings[0].getMessage()
+    assert "corr-1514" in warnings[0].getMessage()
+
+
 def test_participant_user_ids_normalizer():
     assert _participant_user_ids({}) is None
     assert _participant_user_ids({"participant_user_ids": None}) is None
@@ -96,4 +121,22 @@ def test_participant_user_ids_normalizer():
     assert _participant_user_ids({"participant_user_ids": {"a": "b"}}) is None
     assert _participant_user_ids({"participant_user_ids": ["u1", 42]}) is None
     assert _participant_user_ids({"participant_user_ids": ["u1", ""]}) is None
+    assert _participant_user_ids({"participant_user_ids": ["u1", " "]}) is None
+    assert _participant_user_ids({"participant_user_ids": ["\t", "\n"]}) is None
     assert _participant_user_ids({"participant_user_ids": ["u2", "u1", "u2"]}) == ["u2", "u1"]
+
+
+def test_participant_user_ids_malformed_logs_warning(caplog):
+    with caplog.at_level(logging.WARNING, logger="src.workflows"):
+        assert (
+            _participant_user_ids(
+                {"participant_user_ids": "u1"}, subject="subj.x", correlation_id="corr-1"
+            )
+            is None
+        )
+        assert _participant_user_ids({}) is None
+
+    warnings = [r for r in caplog.records if "malformed participant_user_ids" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "subj.x" in warnings[0].getMessage()
+    assert "corr-1" in warnings[0].getMessage()
