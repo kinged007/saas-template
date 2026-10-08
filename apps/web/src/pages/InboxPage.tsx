@@ -23,7 +23,7 @@ import { formatDate } from "../components/ui";
 import { TabbedPageHeader } from "../components/refine-ui/layout/tabbed-page-header";
 import { cn } from "@/lib/utils";
 import type { Notification, Conversation, Message, Identity, Member } from "../types";
-import { getDisplayName, getParticipantDisplayName, getMemberDisplayName } from "../types";
+import { getDisplayName, getDisplayNameFromRow } from "../types";
 import { ComposeDialog } from "../components/inbox/ComposeDialog";
 import { TiptapEditor } from "../components/inbox/TiptapEditor";
 import { EditParticipantsDialog } from "../components/inbox/EditParticipantsDialog";
@@ -231,7 +231,7 @@ export function InboxPage() {
       (membersResult?.data ?? []).map((m) => ({
         id: m.id,
         type: "user",
-        label: getMemberDisplayName(m),
+        label: getDisplayNameFromRow(m),
         email: m.email,
         avatar_url: m.avatar_url,
         first_name: m.first_name,
@@ -245,7 +245,7 @@ export function InboxPage() {
   const participantNames = useMemo(
     () =>
       (selectedConversation?.participants ?? []).map((p) =>
-        getParticipantDisplayName(
+        getDisplayNameFromRow(
           p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null },
         ),
       ),
@@ -692,7 +692,7 @@ export function InboxPage() {
                         <span className="text-muted-foreground shrink-0 text-[11px]">{formatListTime(c.last_message_at)}</span>
                         <div className="flex min-w-0 -space-x-1">
                           {c.participants.slice(0, 3).map((p) => {
-                            const name = getParticipantDisplayName(
+                            const name = getDisplayNameFromRow(
                               p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null },
                             );
                             const pEmail = (p as unknown as { email?: string | null }).email ?? null;
@@ -884,7 +884,7 @@ export function InboxPage() {
                       )}
                       <div className="mt-1 flex flex-wrap items-center gap-1">
                         {selectedConversation.participants.slice(0, 2).map((p) => {
-                          const name = getParticipantDisplayName(
+                          const name = getDisplayNameFromRow(
                             p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null },
                           );
                           const pEmail = (p as unknown as { email?: string | null }).email ?? null;
@@ -941,7 +941,7 @@ export function InboxPage() {
                               <TooltipContent side="bottom" align="start" className="max-w-[260px]">
                                 <div className="flex flex-col gap-1 text-xs">
                                   {selectedConversation.participants.map((p) => {
-                                    const name = getParticipantDisplayName(p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null });
+                                    const name = getDisplayNameFromRow(p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null });
                                     return (
                                       <span key={p.id} className="truncate">
                                         {name}

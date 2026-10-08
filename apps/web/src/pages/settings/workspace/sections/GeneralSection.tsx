@@ -41,7 +41,7 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { IDENTITY_QUERY_OPTIONS } from "@/contexts/WorkspaceContext";
 import { useWorkspaceList } from "@/hooks/useWorkspaceQuery";
 import type { Identity, Member } from "@/types";
-import { getMemberDisplayName, memberOptionLabel } from "@/types";
+import { getDisplayNameFromRow, memberOptionLabel } from "@/types";
 import { WorkspaceExportCard } from "@/components/WorkspaceExportCard";
 import { workspaceStore } from "@/utils/storage";
 import { resolveTransferTarget, transferCandidateMessage, transferEligibleMembers } from "./transfer-ownership";
@@ -89,7 +89,7 @@ export function GeneralSection() {
   // needs the picked member as its own text — the same label the options render
   // via memberOptionLabel.
   const transferTarget = resolveTransferTarget(transferCandidates, transferId);
-  const transferTargetName = transferTarget ? getMemberDisplayName(transferTarget) : "";
+  const transferTargetName = transferTarget ? getDisplayNameFromRow(transferTarget) : "";
   const transferTargetLabel = transferTarget ? memberOptionLabel(transferTarget) : "";
   // ponytail: the members endpoint clamps `limit` to 100, so the list can be
   // truncated. The UI says so; page the select once a workspace can exceed 100 members.
