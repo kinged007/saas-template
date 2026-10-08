@@ -22,6 +22,7 @@ from httpx import ASGITransport, AsyncClient  # noqa: E402
 from sqlalchemy.engine import make_url  # noqa: E402
 
 from src import models as _models  # noqa: E402,F401  (register tables on Base.metadata)
+from src.core.security.ratelimit import get_register_limiter  # noqa: E402
 from src.db.base import Base  # noqa: E402
 from src.db.session import engine  # noqa: E402
 from src.settings import settings  # noqa: E402
@@ -80,6 +81,10 @@ async def _clean_db():
 async def app():
     from src.main import app as fastapi_app
 
+    # /auth/register meters mail per IP on the register limiter; spent keys are
+    # process-wide, so a test's registrations must not throttle the next test's
+    # register_user setup (#1343).
+    get_register_limiter().clear()
     async with LifespanManager(fastapi_app):
         yield fastapi_app
 

@@ -36,9 +36,12 @@ proxy's.
 Behind an external load balancer or CDN, add its address to
 `FORWARDED_ALLOW_IPS`. nginx appends to `X-Forwarded-For`, so an unlisted LB
 makes uvicorn stop at the LB entry: every recorded client IP becomes the LB's,
-and the OAuth rate limiter (`oauth:{ip}:{provider}` at
-`apps/api/src/api/routes/oauth.py`) collapses into one bucket shared by all
-users.
+and every IP-keyed limiter collapses into one bucket shared by all users —
+the OAuth limiter (`oauth:{ip}:{provider}` at
+`apps/api/src/api/routes/oauth.py`) and, worse, the register limiter
+(`apps/api/src/api/routes/auth.py`), whose key is the client IP alone: all
+signups site-wide share one register window, so one abuser behind that
+shared address blocks every new user from registering until it drains.
 
 Only `X-Forwarded-For` is honoured. `X-Real-IP` and `CF-Connecting-IP` are read
 by neither uvicorn nor this code, so a proxy configured to send only
