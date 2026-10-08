@@ -14,7 +14,7 @@ import { UserAvatar } from "@/components/ui/user-avatar";
 import { Bold, Italic, Code2, SquareCode, List, ListOrdered, Link2, Quote } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isAllowedLinkHref, normalizeLinkUrl } from "@/lib/link-url";
-import { pickerIndex, rankMentionTargets, type MentionTarget } from "@/lib/mentions";
+import { nextPickerIndex, pickerIndex, rankMentionTargets, type MentionTarget } from "@/lib/mentions";
 
 const turndownService = new TurndownService({
   headingStyle: "atx",
@@ -49,23 +49,11 @@ const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(f
 
   useImperativeHandle(ref, () => ({
     onKeyDown: ({ event }) => {
-      if (items.length === 0) return false;
-      if (event.key === "ArrowUp") {
-        setSelectedId(items[index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length].id);
-        return true;
-      }
-      if (event.key === "ArrowDown") {
-        setSelectedId(items[index < 0 ? 0 : (index + 1) % items.length].id);
-        return true;
-      }
-      if (event.key === "Enter" || event.key === "Tab") {
-        // Nothing to highlight: pass the key on to the editor rather than
-        // swallowing it, so Enter still inserts a newline.
-        if (index < 0) return false;
-        select(index);
-        return true;
-      }
-      return false;
+      const next = nextPickerIndex(event.key, index, items);
+      if (next < 0) return false;
+      if (event.key === "Enter" || event.key === "Tab") select(next);
+      else setSelectedId(items[next].id);
+      return true;
     },
   }));
 
