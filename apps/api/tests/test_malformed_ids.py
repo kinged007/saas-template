@@ -51,9 +51,7 @@ async def _conversation(app_client, tokens, workspace_id) -> str:
     )
     assert accepted.status_code == 200, accepted.text
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
-    peer_id = (
-        await app_client.get("/api/v1/auth/me", headers=auth_headers(peer))
-    ).json()["id"]
+    peer_id = (await app_client.get("/api/v1/auth/me", headers=auth_headers(peer))).json()["id"]
     resp = await app_client.post(
         "/api/v1/conversations",
         json={
