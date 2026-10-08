@@ -387,11 +387,17 @@ async def refresh(
         get_auth_limiter().fail(key)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, ACCOUNT_GONE_DETAIL)
     if settings.single_workspace:
+        # Captured before the try: the helper's rollback expires the instance,
+        # so reading attributes in the handler would lazy-load.
+        user_id = user.id
         try:
             # The only HTTPException in here is the helper's account-gone
             # guard, so this charge is always a 401 charge, nothing else.
             await _join_single_workspace_best_effort(db, container, user)
         except HTTPException:
+            # Error, not exception: the helper logged the fault with a
+            # traceback already; this is the refresh-level correlation (#714).
+            logger.error("account gone on refresh (user %s)", user_id)
             get_auth_limiter().fail(key)
             raise
         except Exception:

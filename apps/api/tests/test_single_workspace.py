@@ -385,7 +385,8 @@ async def test_refresh_refuses_pair_when_account_deleted_mid_rotation(app_client
 
 
 async def test_refresh_fails_closed_when_the_owner_re_read_raises(app_client, monkeypatch):
-    """A raising owner re-read surfaces as a 500, not a 401, and that is deliberate.
+    """A raising owner re-read surfaces as a 500, not a 401, and that is deliberate
+    (in production; the test observes the raise directly via ASGITransport).
 
     The RuntimeError escapes to Starlette's ServerErrorMiddleware: the re-read
     is a security precondition, so the raise must fail closed instead of
@@ -434,6 +435,38 @@ async def test_refresh_account_gone_charges_rate_limiter(
         "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
     )
     assert again.status_code == 429, again.text
+
+
+async def test_refresh_account_gone_reraise_logs_refresh_level_signal(
+    app_client, single_workspace_on, monkeypatch, caplog
+):
+    # The helper logs the underlying join fault before its rollback; the
+    # re-raise added by #692 must keep its own correlated refresh-level record
+    # (#714) instead of vanishing between the helper's log and the access logs.
+    import logging
+
+    from src.services.auth import AuthService
+
+    await break_single_workspace_join(app_client)
+    tokens = await register_user(app_client, "newcomer@example.com")
+
+    async def _gone(self, user_id):
+        return None
+
+    monkeypatch.setattr(AuthService, "get_user", _gone)
+    with caplog.at_level(logging.ERROR, logger="src.api.routes.auth"):
+        resp = await app_client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+        )
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["detail"] == "account no longer exists"
+    gone_records = [
+        r
+        for r in caplog.records
+        if r.name == "src.api.routes.auth" and r.getMessage().startswith("account gone on refresh")
+    ]
+    assert len(gone_records) == 1, caplog.text
+    assert gone_records[0].levelno == logging.ERROR
 
 
 async def _gone_user_is_gone(app_client, monkeypatch, entry: str):
