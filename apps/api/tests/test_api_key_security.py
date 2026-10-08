@@ -61,11 +61,10 @@ async def _add_member(client, owner_headers, ws_id, email, role_name):
 
 
 async def _create_key(client, headers, name, permissions, usage_quota=None):
-    resp = await client.post(
-        "/api/v1/api-keys",
-        json={"name": name, "permissions": permissions, "usage_quota": usage_quota},
-        headers=headers,
-    )
+    body = {"name": name, "permissions": permissions}
+    if usage_quota is not None:
+        body["usage_quota"] = usage_quota
+    resp = await client.post("/api/v1/api-keys", json=body, headers=headers)
     assert resp.status_code == 201, resp.text
     return resp.json()
 
@@ -1228,22 +1227,20 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
             # the charge must not clobber the list route's own header
             assert first.headers["X-Total-Count"] == "1", url
 
-        # quota exhausted → 403, and the refusal does not spend again
+        # quota exhausted → 403, and the refusal does not spend again: the
+        # charge happens in the access helper before the handler body, and a
+        # refused call neither increments nor commits.
         second = await client.request(method, url, json=refused_body, headers=capped_headers)
         assert second.status_code == 403, (url, second.text)
         assert "quota" in second.json()["detail"].lower(), url
+        async with SessionFactory() as db:
+            row = await db.get(ApiKey, capped["id"])
+            assert row.usage_count == 1, (url, "a refused request must not spend a unit")
 
     # The refused PATCH never reached the write: the definition still holds
     # the schedule the charged request set.
     after = await client.get(f"/api/v1/jobs/{runs['definition']}", headers=auth_headers(owner))
     assert after.json()["cron_schedule"] == "30 4 * * *", after.text
-
-    # ... and the refused request never spent the unit it refused. This is the
-    # separate guard from the 403 above: the row must be left exactly as the
-    # charged request left it.
-    async with SessionFactory() as db:
-        row = await db.get(ApiKey, capped["id"])
-        assert row.usage_count == 1, "a refused request must not spend a unit"
 
 
 async def test_key_cannot_probe_global_run_existence(app_client):

@@ -65,6 +65,11 @@ client that has run out can still read its budget and when it recovers.
 `Remaining` counts the request being answered, so it reaches `0` on the last
 accepted call and the next call is rejected.
 
+The charge happens in the access helper, before the handler body: an accepted
+request spends and commits its unit even when the handler later fails, and the
+quota-exceeded `403` is raised before the handler runs, so a refused request
+spends nothing.
+
 ### Changed meanings
 
 `usage_quota` and `X-API-Key-Remaining` were lifetime-scoped and are now per
