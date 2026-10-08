@@ -14,13 +14,16 @@ import {
 
 test("clear() undoes only the caller's own dismissal for that workspace", () => {
   onboardingStore.dismiss("w1", "u1");
+  onboardingStore.dismiss("w2", "u1");
+  onboardingStore.dismiss("w1", "u2");
   assert.equal(onboardingStore.isDismissed("w1", "u1"), true);
-  assert.equal(onboardingStore.isDismissed("w1", "u2"), false);
-  assert.equal(onboardingStore.isDismissed("w2", "u1"), false);
+  assert.equal(onboardingStore.isDismissed("w2", "u1"), true);
+  assert.equal(onboardingStore.isDismissed("w1", "u2"), true);
 
   onboardingStore.clear("w1", "u1");
   assert.equal(onboardingStore.isDismissed("w1", "u1"), false);
-  assert.equal(onboardingStore.isDismissed("w2", "u1"), false);
+  assert.equal(onboardingStore.isDismissed("w2", "u1"), true);
+  assert.equal(onboardingStore.isDismissed("w1", "u2"), true);
 });
 
 test("resetSessionState() drops the outgoing user's active workspace and identity", () => {
