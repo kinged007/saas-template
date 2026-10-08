@@ -10,6 +10,7 @@ from tests.conftest import (
     create_workspace,
     login,
     register_user,
+    run_job_via_scheduler,
     ws_headers,
 )
 
@@ -761,49 +762,22 @@ async def test_scheduled_tick_with_bus_executes_via_worker(app_client):
     Before the fix, JobScheduler.tick() used JobService(session) without a bus,
     so schedule_due() created a pending JobRun but never published jobs.execute.
     The run stayed pending until fail_stale_runs marked it
-    'abandoned: no worker completed this run'. This test wires the bus into
-    schedule_due and asserts the scheduled run reaches success with logs.
+    'abandoned: no worker completed this run'. Driving the app's real scheduler
+    through the shared harness pins the production wiring: the scheduled run
+    reaches success with its logs, and the tick claims the occurrence exactly
+    once.
     """
-    from datetime import timedelta
-
-    from sqlalchemy import select
-
-    from src.core.dates import now_utc
-    from src.db.session import SessionFactory
-    from src.jobs.scheduler import JobScheduler
-    from src.main import app as fastapi_app
-    from src.models.jobs import JobDefinition, JobRun
-
     client = app_client
     _, ws, headers, _ = await setup_workspace(client, "sched-bus-owner@example.com")
     job = _by_key((await client.get("/api/v1/jobs", headers=headers)).json(), "test.echo")
 
-    async with SessionFactory() as session:
-        definition = await session.get(JobDefinition, job["id"])
-        definition.enabled = True
-        definition.next_run_at = now_utc() - timedelta(seconds=5)
-        await session.commit()
+    patch = await client.patch(f"/api/v1/jobs/{job['id']}", json={"enabled": True}, headers=headers)
+    assert patch.status_code == 200, patch.text
 
-    bus = fastapi_app.state.container.bus
-    scheduler = JobScheduler(bus=bus)
-    scheduled = await scheduler.tick()
-    assert scheduled == 1
+    run, messages = await run_job_via_scheduler("test.echo", workspace_id=ws["id"])
 
-    # The run was published via bus; wait for the durable consumer to execute it.
-    async with SessionFactory() as session:
-        runs = (
-            (await session.execute(select(JobRun).where(JobRun.definition_id == job["id"])))
-            .scalars()
-            .all()
-        )
-        assert len(runs) == 1
-        run_id = runs[0].id
-        assert runs[0].trigger == "scheduled"
-
-    finished = await wait_for_terminal(client, headers, run_id, timeout_s=10.0)
-    assert finished["status"] == "success", finished
-
-    logs = await client.get(f"/api/v1/jobs/runs/{run_id}/logs", headers=headers)
-    assert logs.status_code == 200
-    messages = [e["message"] for e in logs.json()]
+    assert run.trigger == "scheduled"
+    assert run.status == "success", run.error
     assert any("echo: hello" in m for m in messages), messages
+    runs = await client.get(f"/api/v1/jobs/{job['id']}/runs", headers=headers)
+    assert [r["id"] for r in runs.json()] == [run.id], runs.text
