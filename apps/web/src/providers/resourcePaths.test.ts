@@ -60,22 +60,82 @@ const UNSCOPED_VERBS = ["custom"];
 // if the provider starts declaring one, this list must be updated and the verb
 // routed or marked unscoped.
 const ABSENT_VERBS = ["createMany", "updateMany"];
-function providerVerbDeclarations() {
-  const source = readFileSync(join(srcDir, "providers", "dataProvider.ts"), "utf8");
+// Declared keys of the provider literal. Tolerates every form TypeScript
+// allows for a function-valued member: `verb:`, `"verb":`, `verb(...)` and
+// `"verb"(...)` shorthand methods, and an optional `async` prefix on either.
+// Assumes alphanumeric member names at exactly two-space indentation.
+const DECLARED_KEY = /^ {2}(?:async\s+)?(?:(['"])([a-zA-Z]+)\1|([a-zA-Z]+))(?=\s*:|\s*\()/gm;
+
+function providerVerbDeclarations(
+  source: string = readFileSync(join(srcDir, "providers", "dataProvider.ts"), "utf8"),
+) {
   const start = source.indexOf("export const dataProvider");
   const literal = source.slice(start, source.indexOf("\n};", start));
-  return {
-    source,
-    literal,
-    declared: [...literal.matchAll(/^ {2}([a-zA-Z]+):/gm)].map((m) => m[1]),
-  };
+  const keys = [...literal.matchAll(DECLARED_KEY)];
+  const blocks: Record<string, string> = {};
+  const declared = keys.map((key, i) => {
+    const verb = key[2] ?? key[3];
+    const end = i + 1 < keys.length ? keys[i + 1].index! : literal.length;
+    blocks[verb] = literal.slice(key.index!, end);
+    return verb;
+  });
+  return { source, literal, declared, blocks };
 }
 
+test("the declared-key scan tolerates every function-member form", () => {
+  const members = [
+    "  deleteMany: ({ resource }) => resource,\n",
+    "  deleteMany: async ({ resource }) => resource,\n",
+    `  "deleteMany": ({ resource }) => resource,\n`,
+    "  deleteMany({ resource }) { return resource; },\n",
+    "  async deleteMany({ resource }) { return resource; },\n",
+    `  "deleteMany"({ resource }) { return resource; },\n`,
+    `  async "deleteMany"({ resource }) { return resource; },\n`,
+  ];
+  for (const member of members) {
+    const { declared, blocks } = providerVerbDeclarations(
+      `export const dataProvider = {\n  ...base,\n${member}};\n`,
+    );
+    assert.deepEqual(declared, ["deleteMany"], member);
+    assert.ok(blocks.deleteMany.includes(member.trim()), member);
+  }
+});
+
+test("the declared-key scan reads only top-level members", () => {
+  const { declared } = providerVerbDeclarations(
+    `export const dataProvider = {\n  ...base,\n    nested: ({ resource }) => resource,\n  // getList: commented out\n};\n`,
+  );
+  assert.deepEqual(declared, []);
+});
+
+test("each verb is judged by its own override block", () => {
+  const { blocks } = providerVerbDeclarations(
+    `export const dataProvider = {\n  getMany: ({ resource }) => resource,\n  create: ({ resource }) => ({ resource: resourcePath(resource) }),\n};\n`,
+  );
+  assert.doesNotMatch(blocks.getMany, /resourcePath\(/);
+  assert.match(blocks.create, /resourcePath\(/);
+});
+
+test("the deleteMany forwarding scan is scoped to the deleteMany block", () => {
+  // The override drops variables/meta, but code after the literal contains
+  // every piece of the forwarding chain — an unbounded scan would match it.
+  const { blocks } = providerVerbDeclarations(
+    `export const dataProvider = {\n  ...base,\n  deleteMany: ({ resource, ids }) => base,\n};\nexport const stray = { resource, ids, ...params };\nbulkDelete(resourcePath(resource), ids, params);\n`,
+  );
+  assert.doesNotMatch(
+    blocks.deleteMany,
+    /\{ resource, ids, \.\.\.params \}[\s\S]*?bulkDelete[\s\S]*?\(resourcePath\(resource\), ids, params\)/,
+  );
+});
+
 test("deleteMany forwards variables and meta through the fan-out", () => {
-  const { source } = providerVerbDeclarations();
+  const { source, blocks } = providerVerbDeclarations();
+  assert.ok(blocks.deleteMany !== undefined, "dataProvider does not declare deleteMany");
+  // Matched inside the override block, so the chain cannot be satisfied by
+  // unrelated code elsewhere in the file.
   assert.match(
-    source,
-    /deleteMany:[\s\S]*?\{ resource, ids, \.\.\.params \}[\s\S]*?bulkDelete[\s\S]*?\(resourcePath\(resource\), ids, params\)/,
+    blocks.deleteMany,
+    /\{ resource, ids, \.\.\.params \}[\s\S]*?bulkDelete[\s\S]*?\(resourcePath\(resource\), ids, params\)/,
     "deleteMany drops variables/meta — forward them, the API shape decides whether they are used",
   );
   assert.match(
@@ -95,14 +155,15 @@ test("verbs recorded as absent stay absent", () => {
 });
 
 test("every resource-scoped verb in dataProvider maps the resource through resourcePath()", () => {
-  const { literal, declared } = providerVerbDeclarations();
+  const { declared, blocks } = providerVerbDeclarations();
 
-  // The lookahead stops the scan at the next `  verb:` property, so an override
-  // that is present but passes the raw resource through still fails.
+  // Each verb is scanned inside its own override block, so an override that
+  // is present but passes the raw resource through still fails.
   for (const verb of ROUTED_VERBS) {
+    assert.ok(blocks[verb] !== undefined, `dataProvider does not declare ${verb}`);
     assert.match(
-      literal,
-      new RegExp(`${verb}:\\s*(?:async\\s*)?\\(\\{(?:(?!\\n  [a-zA-Z]+:)[\\s\\S])*?resourcePath\\(`),
+      blocks[verb],
+      /resourcePath\(/,
       `dataProvider.${verb} does not route through resourcePath()`,
     );
   }
