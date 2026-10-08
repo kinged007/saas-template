@@ -170,6 +170,26 @@ def ws_headers(tokens: dict, workspace_id: str) -> dict:
     return headers
 
 
+async def expire_invitation(invitation_id: str) -> None:
+    """Backdate an invitation's expiry for expired-invite test paths.
+
+    The assert pins the helper's preconditions: a stale id must fail the
+    calling test naming the row, and the row must still carry an expiry (the
+    column is NOT NULL, so a NULL here means the fixture wrote something else).
+    """
+    from datetime import timedelta
+
+    from src.core.dates import now_utc
+    from src.db.session import SessionFactory
+    from src.models.core import Invitation
+
+    async with SessionFactory() as session:
+        row = await session.get(Invitation, invitation_id)
+        assert row is not None and row.expires_at is not None, invitation_id
+        row.expires_at = now_utc() - timedelta(minutes=5)
+        await session.commit()
+
+
 async def run_job_via_scheduler(
     key: str,
     *,
