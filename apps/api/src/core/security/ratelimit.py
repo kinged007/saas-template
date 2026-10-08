@@ -8,8 +8,7 @@ entry point is no proof that its key was charged. Branches leave the budget
 intact for two unrelated reasons:
 
 - On purpose, because the credentials were accepted and the caller is not
-  finished: the 2FA challenge on POST /auth/login, and the OAuth callback's
-  error redirect for an account that is gone.
+  finished: the 2FA challenge on POST /auth/login.
 - Because that branch never charges: /auth/2fa/login's 401s raised before
   `check` (challenge-token guessing is unthrottled by this limiter) and by
   `verify_login_code`, where only a rejected code charges, on `ip:<user_id>`
