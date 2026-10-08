@@ -29,22 +29,36 @@ test("errorMessage renders the interceptor's message instead of [object Object]"
 
 const srcRoot = fileURLToPath(new URL("..", import.meta.url));
 
-test("no call site renders String((err as { message?: string })?.message ?? err)", () => {
+const sweep = (message: string, pattern: RegExp): void => {
   const sourceFiles = readdirSync(srcRoot, { recursive: true, withFileTypes: true })
     // Test files carry the pattern as a literal, including this one.
-    .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name) && !entry.name.endsWith(".test.ts"))
+    .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name) && !/\.(test|spec)\.tsx?$/.test(entry.name))
     .map((entry) => join(entry.parentPath, entry.name));
   const hits: string[] = [];
   for (const file of sourceFiles) {
     readFileSync(file, "utf8")
       .split("\n")
       .forEach((line, index) => {
-        if (/String\(\((\w+) as \{ message\?: string \}\)\?\.message \?\? \1\)/.test(line)) {
+        if (pattern.test(line)) {
           hits.push(`${file.slice(srcRoot.length)}:${index + 1}`);
         }
       });
   }
-  // Without errorMessage these render "[object Object]"; the message-carrying
-  // form is the fix, so none of the call sites may go back to it.
-  assert.equal(hits.length, 0, `String(x?.message ?? x) renders [object Object]: ${hits.join(", ")}`);
+  assert.deepEqual(hits, [], message);
+};
+
+test("no call site renders String((err as { message?: string })?.message ?? err)", () => {
+  // Both the optional-chain `?.message` and the plain `.message` casts
+  // existed in the codebase; the operand (x) is pinned by the backreference.
+  sweep(
+    "String(x?.message ?? x) renders [object Object]",
+    /String\(\((\w+) as \{ message\?: string \}\)\??\.message \?\? \1\)/,
+  );
+});
+
+test("no call site renders (err as { message?: string })?.message || String(err)", () => {
+  sweep(
+    "x?.message || String(x) renders [object Object]",
+    /\((\w+) as \{ message\?: string \}\)\?\.message \|\| String\(\1\)/,
+  );
 });

@@ -38,6 +38,7 @@ import {
 import { useDeleteAccount, useExportProfile, useProfile, useTargetUserId, useUpdateProfile } from "@/hooks/useProfile";
 import type { Identity, UserProfile } from "@/types";
 import { getProfileField } from "@/types";
+import { errorMessage } from "@/utils/errorMessage";
 
 const profileSchema = z.object({
   first_name: z.string().max(100, "Max 100 characters").optional().or(z.literal("")),
@@ -236,8 +237,7 @@ export function GeneralSection() {
         toast.success("Profile updated");
       },
       onError: (err: unknown) => {
-        const msg = (err as { message?: string })?.message || String(err);
-        toast.error(msg);
+        toast.error(errorMessage(err));
       },
     });
   };
@@ -247,8 +247,7 @@ export function GeneralSection() {
       await exportMyData();
       toast.success("Export downloaded");
     } catch (e: unknown) {
-      const msg = (e as { message?: string })?.message || String(e);
-      toast.error(msg);
+      toast.error(errorMessage(e));
     }
   };
 
@@ -262,8 +261,7 @@ export function GeneralSection() {
         window.location.assign("/login");
       },
       onError: (err: unknown) => {
-        const msg = (err as { message?: string })?.message || String(err);
-        toast.error(msg);
+        toast.error(errorMessage(err));
       },
     });
   };

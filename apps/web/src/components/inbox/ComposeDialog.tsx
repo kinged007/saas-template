@@ -5,6 +5,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { toast } from "sonner";
+import { errorMessage } from "@/utils/errorMessage";
 import { Check, ChevronsUpDown, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -99,7 +100,7 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
       onOpenChange(false);
       if (conv && onCreated) onCreated(conv);
     } catch (err: unknown) {
-      const msg = (err as { message?: string })?.message || String(err);
+      const msg = errorMessage(err);
       toast.error("Could not create conversation", { description: msg });
     }
   };
