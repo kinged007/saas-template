@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -149,8 +150,6 @@ async def test_fan_out_carries_correlation_id_into_payload(app):
 
 
 async def test_transfer_produces_two_paired_role_changed_deliveries(app_client):
-    import asyncio
-
     from tests.conftest import create_workspace, login, register_user, ws_headers
 
     await register_user(app_client, email="wh-owner@example.com")

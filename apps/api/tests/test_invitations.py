@@ -2,11 +2,15 @@ import asyncio  # noqa: E402
 from datetime import timedelta
 
 import pytest
+from sqlalchemy import select
 
 import src.core.permissions as perms
 from src.core.dates import now_utc
 from src.db.session import SessionFactory
+from src.models.audit import AuditLogEntry
 from src.models.core import Invitation
+from src.models.workspace import User
+from src.services.workspaces import WorkspaceForbidden, WorkspaceService
 from tests.conftest import (
     auth_headers,
     create_workspace,
@@ -416,11 +420,6 @@ async def test_notification_unacknowledge_and_filter(app_client):
 async def _wait_for_audit(action: str, workspace_id: str, deadline_seconds: float = 5.0) -> list:
     """Poll audit_log_entries — the in-process bus delivers asynchronously, so
     a single immediate read can race the workflow."""
-    from sqlalchemy import select
-
-    from src.db.session import SessionFactory
-    from src.models.audit import AuditLogEntry
-
     deadline = asyncio.get_running_loop().time() + deadline_seconds
     while True:
         async with SessionFactory() as session:
@@ -454,9 +453,6 @@ async def _wait_for(predicate, deadline_seconds: float = 5.0) -> bool:
 
 
 async def test_failed_invitation_email_is_recorded_in_audit(app_client, monkeypatch):
-    from src.db.session import SessionFactory
-    from src.models.core import Invitation
-
     async def failing_send(message):
         return False
 
@@ -616,10 +612,6 @@ async def test_list_invitations_pagination(app_client):
 async def test_resend_invitation_requires_a_manager_actor(app_client):
     """#302: resend is a manager action. A viewer actor must be refused, and
     the actor may not be left out — an omitted actor skipped authorization."""
-    from src.db.session import SessionFactory
-    from src.models.workspace import User
-    from src.services.workspaces import WorkspaceForbidden, WorkspaceService
-
     client = app_client
     owner = await register_user(client, "resend-owner@example.com")
     ws = await create_workspace(client, owner)
