@@ -297,11 +297,11 @@ async def test_list_rejects_malformed_sort(app_client):
 async def test_list_sorts_by_uppercase_order(app_client):
     """`_order=DESC` must sort like `desc` on both service-layer routes (#963).
 
-    Both routes read `spec.sort_order[0]` and compare it against the literal
-    "desc", so the direction has to arrive normalized from `parse_query`; an
-    unnormalized `DESC` took the asc branch there. The seeded stamps run
-    against the insertion order, so a desc read must reverse it while a
-    rowid-ordered read would leave it unchanged.
+    Both routes read `spec.sort_order[0]` and hand it to the service, which
+    compares it against the literal "desc", so the direction has to arrive
+    normalized from `parse_query`; an unnormalized `DESC` took the asc branch
+    there. The seeded stamps run against the insertion order, so a desc read
+    must reverse it while a rowid-ordered read would leave it unchanged.
     """
     client = app_client
     owner, ws, members = await _setup(client)
