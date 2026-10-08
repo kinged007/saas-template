@@ -10,6 +10,7 @@ from src.models.core import Invitation, Notification
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.seed import DEMO_PASSWORD
 from src.seed import main as seed_main
+from src.services.api_keys import ApiKeyForbidden
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
 from src.settings import settings
@@ -243,8 +244,6 @@ async def test_seed_api_key_guard_looks_for_the_row_not_the_status(single_worksp
     active-only membership check in the guard would skip the key silently
     instead.
     """
-    from src.services.api_keys import ApiKeyForbidden
-
     async with SessionFactory() as session:
         admin = await AuthService(session).register(
             email="admin@example.com",

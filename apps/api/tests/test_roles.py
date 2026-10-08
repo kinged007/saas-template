@@ -4,8 +4,13 @@ import re
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 
 import src.core.permissions as perms
+from src.db.session import SessionFactory
+from src.models.workspace import Role, WorkspaceMember
+from src.services.auth import AuthService
+from src.services.workspaces import WorkspaceForbidden, WorkspaceService
 from tests.conftest import (
     auth_headers,
     create_workspace,
@@ -408,13 +413,6 @@ async def test_suspended_actor_is_capped_on_role_writes(app_client):
     still be able to write — otherwise a refusal for everyone would satisfy the
     deny half.
     """
-    from sqlalchemy import select  # noqa: E402
-
-    from src.db.session import SessionFactory
-    from src.models.workspace import Role, WorkspaceMember
-    from src.services.auth import AuthService
-    from src.services.workspaces import WorkspaceForbidden, WorkspaceService
-
     client = app_client
     owner = await register_user(client, "cap-owner@example.com")
     ws = await create_workspace(client, owner)
