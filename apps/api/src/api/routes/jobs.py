@@ -239,9 +239,7 @@ async def _require_run_access(
             await record_key_use(api_key, db, response)
             return
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"missing permission: {JOB_READ}") from None
-    membership = await WorkspaceService(db).get_membership(
-        run.workspace_id, principal.user.id, active_only=True
-    )
+    membership = await WorkspaceService(db).get_membership(run.workspace_id, principal.user.id)
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership
@@ -286,7 +284,7 @@ async def _require_job_access(
             return
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"missing permission: {required}") from None
     membership = await WorkspaceService(db).get_membership(
-        definition.workspace_id, principal.user.id, active_only=True
+        definition.workspace_id, principal.user.id
     )
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")

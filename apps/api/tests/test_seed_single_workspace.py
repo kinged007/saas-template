@@ -237,11 +237,11 @@ async def test_seed_keeps_both_workspaces_when_single_mode_is_off(monkeypatch):
 async def test_seed_api_key_guard_looks_for_the_row_not_the_status(single_workspace_on):
     """The seed guard asks whether a member row exists at all, not its status.
 
-    A suspended owner row is still a row, so the guard admits the workspace and
-    ApiKeyService — which resolves the actor with `active_only=True` — is what
-    refuses the mint. With a status-blind default this holds; with an
-    `active_only` default of True and no explicit opt-out the guard would skip
-    the key silently instead.
+    A suspended owner row is still a row, so the guard — `has_member_row`,
+    which ignores status — admits the workspace, and ApiKeyService, which
+    resolves the actor with `get_membership`, is what refuses the mint. An
+    active-only membership check in the guard would skip the key silently
+    instead.
     """
     from src.services.api_keys import ApiKeyForbidden
 

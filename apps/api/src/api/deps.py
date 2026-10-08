@@ -294,9 +294,7 @@ def require_key_permission(permission: str):
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, "api key is not scoped to this workspace"
             )
-        membership = await WorkspaceService(db).get_membership(
-            workspace_id, principal.user.id, active_only=True
-        )
+        membership = await WorkspaceService(db).get_membership(workspace_id, principal.user.id)
         if membership is None:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
         if "*" in api_key.permissions or permission in api_key.permissions:
@@ -314,7 +312,7 @@ async def resolve_membership(
     user=Depends(get_current_user),
     workspace_id: str = Depends(get_current_workspace_id),
 ):
-    membership = await WorkspaceService(db).get_membership(workspace_id, user.id, active_only=True)
+    membership = await WorkspaceService(db).get_membership(workspace_id, user.id)
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     return membership
@@ -336,9 +334,7 @@ def require_permission(permission: str):
                 raise HTTPException(
                     status.HTTP_403_FORBIDDEN, "api key is not scoped to this workspace"
                 )
-            membership = await WorkspaceService(db).get_membership(
-                workspace_id, principal.user.id, active_only=True
-            )
+            membership = await WorkspaceService(db).get_membership(workspace_id, principal.user.id)
             if membership is None:
                 raise HTTPException(
                     status.HTTP_403_FORBIDDEN, "you are not a member of this workspace"
@@ -350,7 +346,7 @@ def require_permission(permission: str):
                 status.HTTP_403_FORBIDDEN, f"missing permission: {permission}"
             ) from None
         service = WorkspaceService(db)
-        membership = await service.get_membership(workspace_id, principal.user.id, active_only=True)
+        membership = await service.get_membership(workspace_id, principal.user.id)
         if membership is None:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
         _, role = membership

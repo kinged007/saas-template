@@ -402,11 +402,11 @@ async def test_create_role_capped_by_creator_permissions(app_client):
 async def test_suspended_actor_is_capped_on_role_writes(app_client):
     """A suspended actor is capped as if unauthenticated, not by its own role.
 
-    The role-capping sites resolve the actor's membership with
-    `active_only=True`; a suspended row therefore reads as "no actor cap" and
-    every requested permission is denied. The same actor, active, must still be
-    able to write — otherwise a refusal for everyone would satisfy the deny
-    half.
+    The role-capping sites resolve the actor's membership with `get_membership`,
+    which reads active rows only; a suspended row therefore reads as "no actor
+    cap" and every requested permission is denied. The same actor, active, must
+    still be able to write — otherwise a refusal for everyone would satisfy the
+    deny half.
     """
     from sqlalchemy import select  # noqa: E402
 
