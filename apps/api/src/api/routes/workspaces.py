@@ -134,7 +134,7 @@ async def list_workspaces(
         workspace = await service.get_workspace(workspace_id)
         if workspace is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
-        membership = await service.get_membership(workspace_id, user.id, active_only=True)
+        membership = await service.get_membership(workspace_id, user.id)
         role = membership[1] if membership else None
         response.headers["X-Total-Count"] = "1"
         return [
@@ -222,7 +222,7 @@ async def get_workspace(
     workspace = await service.get_workspace(workspace_id)
     if workspace is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
-    membership = await service.get_membership(workspace_id, user.id, active_only=True)
+    membership = await service.get_membership(workspace_id, user.id)
     role = membership[1] if membership else None
     return workspace_to_dict(workspace, role=role.name if role else None)
 

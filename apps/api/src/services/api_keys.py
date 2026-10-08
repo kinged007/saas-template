@@ -116,9 +116,7 @@ class ApiKeyService:
         only ever returned once.
         """
         name = name.strip()
-        membership = await WorkspaceService(self._session).get_membership(
-            workspace_id, actor.id, active_only=True
-        )
+        membership = await WorkspaceService(self._session).get_membership(workspace_id, actor.id)
         if membership is None:
             raise ApiKeyForbidden("you are not a member of this workspace")
         _, role = membership

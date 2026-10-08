@@ -453,13 +453,13 @@ class WorkspaceService:
         return await self._session.get(Workspace, workspace_id)
 
     async def get_membership(
-        self, workspace_id: str, user_id: str, *, active_only: bool = True
+        self, workspace_id: str, user_id: str
     ) -> tuple[WorkspaceMember, Role] | None:
         """Resolve (member, role) for a user in a workspace.
 
-        Defaults to active rows only, so a caller that forgets the flag cannot
-        read a suspended member as active. A caller asking about the row itself
-        rather than about access must pass `active_only=False`.
+        Active rows only: a suspended member reads as no membership, so an
+        authorization guard cannot admit them. A caller asking whether the row
+        itself exists, regardless of status, uses `has_member_row`.
         """
         stmt = (
             select(WorkspaceMember, Role)
@@ -467,12 +467,20 @@ class WorkspaceService:
             .where(
                 WorkspaceMember.workspace_id == workspace_id,
                 WorkspaceMember.user_id == user_id,
+                WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
             )
         )
-        if active_only:
-            stmt = stmt.where(WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES))
         result = await self._session.execute(stmt)
         return result.first()
+
+    async def has_member_row(self, workspace_id: str, user_id: str) -> bool:
+        """Whether a member row exists at all, regardless of its status."""
+        stmt = select(WorkspaceMember.id).where(
+            WorkspaceMember.workspace_id == workspace_id,
+            WorkspaceMember.user_id == user_id,
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none() is not None
 
     # ---------------------------------------------------------------- members
 
@@ -496,7 +504,7 @@ class WorkspaceService:
         actor: User,
         ip_address: str | None = None,
     ) -> WorkspaceMember:
-        membership = await self.get_membership(workspace_id, actor.id, active_only=True)
+        membership = await self.get_membership(workspace_id, actor.id)
         if membership is None:
             raise WorkspaceForbidden("you are not a member of this workspace")
         _, actor_role = membership
@@ -640,7 +648,7 @@ class WorkspaceService:
     async def _require_manager(
         self, workspace_id: str, actor: User
     ) -> tuple[WorkspaceMember, Role]:
-        membership = await self.get_membership(workspace_id, actor.id, active_only=True)
+        membership = await self.get_membership(workspace_id, actor.id)
         if membership is None:
             raise WorkspaceForbidden("you are not a member of this workspace")
         if not is_manager_role_name(membership[1].name):
@@ -718,7 +726,7 @@ class WorkspaceService:
         actor: User,
         ip_address: str | None = None,
     ) -> WorkspaceMember:
-        membership = await self.get_membership(workspace_id, actor.id, active_only=True)
+        membership = await self.get_membership(workspace_id, actor.id)
         if membership is None or not is_owner_role_name(membership[1].name):
             raise WorkspaceForbidden("only the workspace owner can transfer ownership")
         actor_member, _ = membership
@@ -1209,7 +1217,7 @@ class WorkspaceService:
         ip_address: str | None = None,
     ) -> Role:
         name = name.strip()
-        membership = await self.get_membership(workspace_id, actor.id, active_only=True)
+        membership = await self.get_membership(workspace_id, actor.id)
         if membership is None:
             raise WorkspaceForbidden("you are not a member of this workspace")
         _, actor_role = membership
@@ -1260,7 +1268,7 @@ class WorkspaceService:
         # Same shape and message as `set_member_role` and `_require_manager`.
         # ponytail: ROLE_CREATE stays the route's guard; add the service-side
         # check when a caller outside the route needs it.
-        membership = await self.get_membership(workspace_id, actor.id, active_only=True)
+        membership = await self.get_membership(workspace_id, actor.id)
         if membership is None:
             raise WorkspaceForbidden("you are not a member of this workspace")
         _, actor_role = membership
