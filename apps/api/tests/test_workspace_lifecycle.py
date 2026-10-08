@@ -3,7 +3,13 @@ import asyncio
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
+from tests.conftest import (
+    auth_headers,
+    create_workspace,
+    expire_invitation,
+    register_user,
+    ws_headers,
+)
 
 
 async def _role_id(client, headers, name: str) -> str:
@@ -16,19 +22,6 @@ async def _member_by_email(client, headers, email: str) -> dict:
     members = await client.get("/api/v1/members", headers=headers)
     assert members.status_code == 200, members.text
     return next(m for m in members.json() if m["email"] == email)
-
-
-async def _expire_invitation(invitation_id: str) -> None:
-    from datetime import timedelta
-
-    from src.core.dates import now_utc
-    from src.db.session import SessionFactory
-    from src.models.core import Invitation
-
-    async with SessionFactory() as session:
-        row = await session.get(Invitation, invitation_id)
-        row.expires_at = now_utc() - timedelta(minutes=5)
-        await session.commit()
 
 
 async def _invite_and_join(client, owner_tokens, ws, email: str, role_name: str = "viewer"):
@@ -171,7 +164,7 @@ async def test_resend_expired_invitation(app_client):
     old_token = invite.json()["token"]
 
     # Backdate the expiry, then resend to prove a dead invite becomes usable again.
-    await _expire_invitation(invite.json()["id"])
+    await expire_invitation(invite.json()["id"])
     resp = await client.post(
         f"/api/v1/invitations/{invite.json()['id']}/resend", headers=owner_headers
     )

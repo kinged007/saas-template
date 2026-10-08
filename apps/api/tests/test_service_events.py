@@ -18,6 +18,7 @@ from src.services.api_keys import ApiKeyService
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
 from tests.bus_doubles import RecordingBus
+from tests.conftest import expire_invitation
 
 
 @pytest.fixture
@@ -49,18 +50,6 @@ async def _create_workspace(bus, owner_id, *, slug, name="Acme Corp"):
             description=None,
             owner=await AuthService(session, bus).get_user(owner_id),
         )
-
-
-async def _expire(invitation_id: str) -> None:
-    from datetime import timedelta
-
-    from src.core.dates import now_utc
-    from src.models.core import Invitation
-
-    async with SessionFactory() as session:
-        row = await session.get(Invitation, invitation_id)
-        row.expires_at = now_utc() - timedelta(minutes=5)
-        await session.commit()
 
 
 async def _invite_member(bus, owner_id, workspace, email, role_name="editor"):
@@ -229,7 +218,7 @@ async def test_resend_invitation_emits_delivery_event(bus, owner):
     invite = await _invite_member(bus, owner.id, workspace, "stranger@example.com")
     bus.events.clear()
     async with SessionFactory() as session:
-        await _expire(invite.id)
+        await expire_invitation(invite.id)
         service = WorkspaceService(session, bus)
         await service.resend_invitation(workspace.id, invite.id, actor=owner)
 
