@@ -82,6 +82,13 @@ User ──< WorkspaceMember >── Workspace (slug, name)
   - `admin` — manage members, roles, invitations, jobs
   - `editor` — read, manage API keys
   - `viewer` — read-only
+- Role names are stripped on write (`POST /roles`, `PATCH /roles/{id}`) and
+  compared exactly on read, so a row written before the strip existed can hold
+  a padded name that no lookup (auto-join, name-based role lookups) matches.
+  Remediation: rename the row with `PATCH /roles/{id}` — the payload name is
+  stripped and the row's own id is excluded from the duplicate check, so
+  resubmitting the row's padded name rewrites it stripped. A row named `Owner`
+  (any case) is the owner role and refuses every edit with 403.
 - Global (deployment-wide) administration — e.g. global jobs — is gated on
   the bootstrap superuser (`SUPERADMIN_EMAIL`), which does **not** bypass
   workspace-scoped checks.
