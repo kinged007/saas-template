@@ -16,6 +16,11 @@ test("canRevokeInvitation offers Delete on a live invitation only", () => {
   assert.equal(canRevokeInvitation(inv("accepted")), false);
 });
 
+test("canRevokeInvitation denies a status outside the union", () => {
+  const future = { status: "suspended" as unknown as InvitationStatus, expired: false };
+  assert.equal(canRevokeInvitation(future), false);
+});
+
 test("canResendInvitation is off on the terminal statuses", () => {
   assert.equal(canResendInvitation(inv("revoked")), false);
   assert.equal(canResendInvitation(inv("revoked", true)), false);

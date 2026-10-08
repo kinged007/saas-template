@@ -787,6 +787,9 @@ class WorkspaceService:
         invite = await self._session.get(Invitation, invitation_id)
         if invite is None or invite.workspace_id != workspace_id:
             raise WorkspaceError("invitation not found")
+        # Terminal statuses. The web mirror is `RESEND_ALLOWED` in
+        # apps/web/src/pages/invitation-actions.ts, whose `false` rows are a
+        # wider set: `pending` is no-op there, not terminal.
         if invite.status in ("accepted", "revoked"):
             raise WorkspaceConflict(
                 f"invitation is {invite.status} and cannot be re-sent; invite this address again"
