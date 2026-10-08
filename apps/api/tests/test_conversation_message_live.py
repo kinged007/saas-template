@@ -67,3 +67,19 @@ async def test_live_message_no_participants_pushes_nothing():
         await handler(payload, EventMetadata(subject=Subjects.CONVERSATION_MESSAGE_LIVE))
 
     assert cm.calls == []
+
+
+async def test_live_message_malformed_participants_push_nothing():
+    """A bare string would dedupe into single characters and ints/dicts would
+    reach push_many verbatim — malformed payloads must be rejected, not fanned out."""
+    handler, cm = _wired()
+    for payload in (
+        {"participant_user_ids": "u1"},
+        {"participant_user_ids": ["u1", 42]},
+        {"participant_user_ids": ["u1", ""]},
+        {"participant_user_ids": {"a": "b"}},
+        {"participant_user_ids": 42},
+    ):
+        await handler(payload, EventMetadata(subject=Subjects.CONVERSATION_MESSAGE_LIVE))
+
+    assert cm.calls == []
