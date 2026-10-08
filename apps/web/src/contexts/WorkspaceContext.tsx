@@ -351,9 +351,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [workspaces, selected, refetch, identityId],
   );
 
-  // Signed out (e.g. on /login): render children and let the Authenticated
-  // guard route to the login flow. Caches were already cleared synchronously
-  // in authProvider.logout / the 401 interceptor.
+  // Signed out (e.g. /forgot-password on a cold load): render children and let
+  // the Authenticated guard route to the login flow. Caches were already
+  // cleared synchronously in authProvider.logout / the 401 interceptor.
   if (!hasAccessToken) {
     return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
   }
