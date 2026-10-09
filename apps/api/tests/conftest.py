@@ -77,6 +77,18 @@ async def _clean_db():
     await _discard_db_file()
 
 
+@pytest.fixture(autouse=True)
+def _pin_refresh_cookie_secure(monkeypatch):
+    """Start every test from the unset-cookie-flag state.
+
+    Settings loads .env / ~/.config/saas-template/.env at import time, so an
+    ambient REFRESH_COOKIE_SECURE short-circuits the first clause of
+    cookie_secure_for() and cookie-secure assertions fail for reasons the
+    tests do not assert (#524). Tests wanting an explicit value monkeypatch
+    it on top of this pin.
+    """
+    monkeypatch.setattr(settings, "refresh_cookie_secure", None)
+
 @pytest.fixture
 async def app():
     from src.main import app as fastapi_app
