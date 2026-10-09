@@ -36,6 +36,37 @@ async def test_session_branch_permissions_match_auth_me(app_client):
     assert (row["role"], row["permissions"]) == (nested["role"], nested["permissions"])
 
 
+async def test_me_permissions_follow_role_registry_order(app_client):
+    """Issue #1476: the top-level permissions union keeps the role's registry
+    order (ordered dedup), not an alphabetical sort."""
+    client = app_client
+    owner = await register_user(client, "order-owner@example.com")
+    ws = await create_workspace(client, owner)
+    ordered = ["workspace:update", "member:read", "audit:read"]
+    role = await client.post(
+        "/api/v1/roles",
+        json={"name": "scanner", "permissions": ordered},
+        headers=ws_headers(owner, ws["id"]),
+    )
+    assert role.status_code == 201, role.text
+    member = await register_user(client, "order-member@example.com")
+    inv = await client.post(
+        "/api/v1/invitations",
+        json={"email": "order-member@example.com", "role_id": role.json()["id"]},
+        headers=ws_headers(owner, ws["id"]),
+    )
+    assert inv.status_code == 201, inv.text
+    acc = await client.post(
+        "/api/v1/invitations/accept",
+        params={"token": inv.json()["token"]},
+        headers=auth_headers(member),
+    )
+    assert acc.status_code == 200, acc.text
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(member))
+    assert me.status_code == 200, me.text
+    assert me.json()["permissions"] == ordered
+
+
 async def test_leave_removes_membership(app_client):
     client = app_client
     owner = await register_user(client, "leave-owner@example.com")

@@ -730,7 +730,12 @@ async def me(
             )
             for w, role, member in memberships
         ]
-        data["permissions"] = sorted({p for _, role, _ in memberships for p in role.permissions})
+        # Ordered dedup, not a sort: the union keeps each role's registry
+        # order (first occurrence wins across memberships), matching the
+        # nested entries which carry role.permissions verbatim.
+        data["permissions"] = list(
+            dict.fromkeys(p for _, role, _ in memberships for p in role.permissions)
+        )
     data["single_workspace"] = settings.single_workspace
     # Embed profile (lazy create)
     try:
