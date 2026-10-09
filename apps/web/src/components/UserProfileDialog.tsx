@@ -1,4 +1,5 @@
 import { UserAvatar } from "@/components/ui/user-avatar";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -17,7 +18,7 @@ type UserProfileDialogProps = {
 };
 
 function ProfileBody({ userId, fallback }: { userId: string | null; fallback: UserProfileDialogProps["fallback"] }) {
-  const { data, isLoading, isError } = usePublicProfile(userId);
+  const { data, isLoading, isError, query } = usePublicProfile(userId);
   const p: UserProfile | null | undefined = data ?? fallback?.preloaded ?? null;
 
   const displayName = p
@@ -30,7 +31,14 @@ function ProfileBody({ userId, fallback }: { userId: string | null; fallback: Us
     return <p className="text-muted-foreground py-8 text-center text-sm">Loading…</p>;
   }
   if (isError) {
-    return <p className="text-destructive py-8 text-center text-sm">Could not load profile.</p>;
+    return (
+      <div className="flex flex-col items-center gap-2 py-8">
+        <p className="text-destructive text-center text-sm">Could not load profile.</p>
+        <Button variant="outline" size="sm" onClick={() => query.refetch()}>
+          Try again
+        </Button>
+      </div>
+    );
   }
   if (!p && !fallback) {
     return <p className="text-muted-foreground py-8 text-center text-sm">No profile data.</p>;

@@ -144,6 +144,71 @@ test.describe("webhooks page", () => {
     await expect(page.getByText("No deliveries yet.")).toHaveCount(0);
   });
 
+  // The shared client refuses a 5xx on the first attempt, so the dead-end
+  // failure rows are the only recovery: with refetchOnWindowFocus off, a
+  // refused load otherwise waits for a remount or a reload.
+  test("Try again re-runs the refused subscriptions query and recovers", async ({ page }) => {
+    await webhooks(page);
+    let calls = 0;
+    let succeed = false;
+    await page.route(
+      (url) => url.pathname.startsWith(COLLECTION),
+      (route) => {
+        calls += 1;
+        return route.fulfill({
+          status: succeed ? 200 : 500,
+          contentType: "application/json",
+          body: succeed ? "[]" : JSON.stringify({ detail: "Boom" }),
+        });
+      },
+    );
+
+    await page.goto("/webhooks");
+    const row = page.getByRole("row").filter({ hasText: "Could not load" });
+    await expect(row).toBeVisible();
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+
+    const before = calls;
+    succeed = true;
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByText("No webhook subscriptions yet.")).toBeVisible();
+    // The click drove new request(s): the recovery is the query refetching,
+    // not stale `list` data from anywhere else.
+    expect(calls).toBeGreaterThan(before);
+    await expect(row).toHaveCount(0);
+  });
+
+  test("Try again re-runs the refused delivery log and recovers", async ({ page }) => {
+    await webhooks(page);
+    await subscriptions(page, 200, [SUBSCRIPTION]);
+    let calls = 0;
+    let succeed = false;
+    await page.route(
+      (url) => url.pathname.startsWith(DELIVERIES),
+      (route) => {
+        calls += 1;
+        return route.fulfill({
+          status: succeed ? 200 : 500,
+          contentType: "application/json",
+          body: succeed ? "[]" : JSON.stringify({ detail: "Boom" }),
+        });
+      },
+    );
+
+    await page.goto("/webhooks");
+    await page.getByRole("button", { name: "Delivery log" }).click();
+    const row = page.getByRole("row").filter({ hasText: "Could not load deliveries" });
+    await expect(row).toBeVisible();
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+
+    const before = calls;
+    succeed = true;
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByText("No deliveries yet.")).toBeVisible();
+    expect(calls).toBeGreaterThan(before);
+    await expect(row).toHaveCount(0);
+  });
+
   test("a deliveries payload that is not an array renders the empty state", async ({ page }) => {
     await webhooks(page);
     await subscriptions(page, 200, [SUBSCRIPTION]);

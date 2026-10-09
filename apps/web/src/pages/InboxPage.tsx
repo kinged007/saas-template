@@ -1009,7 +1009,17 @@ export function InboxPage() {
                     {messagesLoading ? (
                       <p className="text-muted-foreground text-sm">Loading…</p>
                     ) : messagesError && !hasCachedMessages ? (
-                      <p className="text-destructive text-sm">Could not load messages.</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-destructive text-sm">Could not load messages.</p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void messagesQuery.refetch()}
+                          disabled={messagesQuery.isFetching}
+                        >
+                          Try again
+                        </Button>
+                      </div>
                     ) : !hasCachedMessages ? (
                       <p className="text-muted-foreground text-sm">No messages yet.</p>
                     ) : (
