@@ -7,6 +7,8 @@ once per occurrence, preserving first-seen order — same rule as the durable pa
 
 from __future__ import annotations
 
+import logging
+
 from src.events.bus import EventMetadata
 from src.events.factory import WorkflowRegistry
 from src.events.subjects import Subjects
@@ -61,12 +63,17 @@ async def test_live_message_pushes_each_participant_once_in_first_seen_order():
     assert cm.calls == [(["u2", "u1", "u3"], "message.created")]
 
 
-async def test_live_message_no_participants_pushes_nothing():
+async def test_live_message_explicit_empty_list_pushes_nothing(caplog):
+    """An explicit `[]` is valid: no push and no warning."""
     handler, cm = _wired()
-    for payload in ({}, {"participant_user_ids": []}, {"participant_user_ids": None}):
-        await handler(payload, EventMetadata(subject=Subjects.CONVERSATION_MESSAGE_LIVE))
+    with caplog.at_level(logging.WARNING, logger="src.workflows"):
+        await handler(
+            {"participant_user_ids": []},
+            EventMetadata(subject=Subjects.CONVERSATION_MESSAGE_LIVE),
+        )
 
     assert cm.calls == []
+    assert not [r for r in caplog.records if "malformed participant_user_ids" in r.getMessage()]
 
 
 async def test_live_message_malformed_participants_push_nothing():
@@ -78,6 +85,7 @@ async def test_live_message_malformed_participants_push_nothing():
         {"participant_user_ids": ["u1", 42]},
         {"participant_user_ids": ["u1", ""]},
         {"participant_user_ids": ["u1", " "]},
+        {"participant_user_ids": ["u1", "u1 "]},
         {"participant_user_ids": {"a": "b"}},
         {"participant_user_ids": 42},
     ):

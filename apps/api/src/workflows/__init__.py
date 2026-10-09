@@ -63,19 +63,24 @@ def _participant_user_ids(
     """Sanitized participant list for conversation event payloads.
 
     None = field absent or malformed (non-list, bare string, any non-string,
-    empty, or whitespace-only item); [] = explicitly empty list. Rejects
-    instead of coercing so a bad publisher cannot make the consumers fan out
-    garbage ids. A present-but-malformed field logs a warning (an absent field
-    stays silent) so a publisher regression is diagnosable instead of
-    surfacing only as "users stopped getting notifications".
+    empty, whitespace-only, or whitespace-padded item); [] = explicitly empty
+    list. Rejects instead of coercing so a bad publisher cannot make the
+    consumers fan out garbage ids. A present-but-malformed field logs a warning
+    (an absent field stays silent) so a publisher regression is diagnosable
+    instead of surfacing only as "users stopped getting notifications".
     """
     raw = payload.get("participant_user_ids")
-    if not isinstance(raw, list) or any(not isinstance(x, str) or not x.strip() for x in raw):
+    if not isinstance(raw, list) or any(
+        not isinstance(x, str) or not x.strip() or x.strip() != x for x in raw
+    ):
         if raw is not None:
             logger.warning(
-                "malformed participant_user_ids on %s (correlation_id=%s)",
+                "malformed participant_user_ids on %s"
+                " (correlation_id=%s, conversation_id=%s, workspace_id=%s)",
                 subject,
                 correlation_id,
+                payload.get("conversation_id"),
+                payload.get("workspace_id"),
             )
         return None
     return list(dict.fromkeys(raw))
@@ -607,8 +612,8 @@ def build_workflows(
         participant_ids = _participant_user_ids(
             payload, subject=metadata.subject, correlation_id=metadata.correlation_id
         )
-        # Malformed (non-list, bare string, non-string, empty, or
-        # whitespace-only item) is treated like an absent list: resolve
+        # Malformed (non-list, bare string, non-string, empty, whitespace-only,
+        # or whitespace-padded item) is treated like an absent list: resolve
         # participants from the DB instead of fanning out garbage. An explicit
         # empty list keeps the no-fallback semantics.
         if participant_ids is None:
