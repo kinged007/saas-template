@@ -449,6 +449,8 @@ async def test_refresh_account_gone_reraise_logs_refresh_level_signal(
 
     await break_single_workspace_join(app_client)
     tokens = await register_user(app_client, "newcomer@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    user_id = me.json()["id"]
 
     async def _gone(self, user_id):
         return None
@@ -463,7 +465,46 @@ async def test_refresh_account_gone_reraise_logs_refresh_level_signal(
     gone_records = [
         r
         for r in caplog.records
-        if r.name == "src.api.routes.auth" and r.getMessage().startswith("account gone on refresh")
+        if r.name == "src.api.routes.auth"
+        and r.getMessage() == f"account gone on refresh (user {user_id})"
+    ]
+    assert len(gone_records) == 1, caplog.text
+    assert gone_records[0].levelno == logging.ERROR
+
+
+async def test_login_account_gone_reraise_logs_login_level_signal(
+    app_client, single_workspace_on, monkeypatch, caplog
+):
+    # Same correlation the refresh flow got in #714: the helper logs the join
+    # fault before its rollback, so login's re-raise must keep its own
+    # login-level record instead of vanishing between the helper's log and the
+    # access logs. Filtered by logger name + exact message so the helper's own
+    # logger.exception record on the same logger cannot satisfy the count.
+    import logging
+
+    from src.services.auth import AuthService
+
+    await break_single_workspace_join(app_client)
+    tokens = await register_user(app_client, "newcomer@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    user_id = me.json()["id"]
+
+    async def _gone(self, user_id):
+        return None
+
+    monkeypatch.setattr(AuthService, "get_user", _gone)
+    with caplog.at_level(logging.ERROR, logger="src.api.routes.auth"):
+        resp = await app_client.post(
+            "/api/v1/auth/login",
+            json={"email": "newcomer@example.com", "password": "Password123!"},
+        )
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["detail"] == "account no longer exists"
+    gone_records = [
+        r
+        for r in caplog.records
+        if r.name == "src.api.routes.auth"
+        and r.getMessage() == f"account gone on login (user {user_id})"
     ]
     assert len(gone_records) == 1, caplog.text
     assert gone_records[0].levelno == logging.ERROR

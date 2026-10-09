@@ -316,6 +316,9 @@ async def login(
         if msg in ("password login is disabled",):
             raise HTTPException(status.HTTP_403_FORBIDDEN, msg) from None
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, msg) from None
+    # Captured before the try: the helper's rollback expires the instance,
+    # so reading attributes in the handler would lazy-load.
+    user_id = user.id
     try:
         # The only HTTPException in here is the helper's account-gone guard, so
         # charging the limiter for it is always a 401 charge, nothing else.
@@ -323,6 +326,10 @@ async def login(
         # charge on it can actually throttle the caller.
         user = await _join_single_workspace_best_effort(db, container, user)
     except HTTPException:
+        # Error, not exception: the helper logged the fault with a traceback
+        # already; this is the login-level correlation (parity with the
+        # refresh flow's #714 fix).
+        logger.error("account gone on login (user %s)", user_id)
         get_auth_limiter().fail(key)
         raise
     get_auth_limiter().reset(key)
