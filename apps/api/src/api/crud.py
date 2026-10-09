@@ -186,6 +186,8 @@ def parse_query(request: Request, *, max_limit: int = 100) -> QuerySpec:
 
 def _coerce(column: ColumnElement, value: str) -> Any:
     """Best-effort type coercion so comparisons work on typed columns."""
+    if isinstance(column.type, StringUUID):
+        return value
     for candidate in (int, float):
         try:
             return candidate(value)
@@ -228,6 +230,13 @@ def apply_query(
         column = getattr(model, fname)
         if op not in _COMPARATORS:
             raise InvalidQuery(f"unsupported filter operator: {op}")
+        if isinstance(column.type, StringUUID) and op in (
+            "contains",
+            "ncontains",
+            "startswith",
+            "endswith",
+        ):
+            raise InvalidQuery(f"{fname} does not support text operators")
         if op in _VALUE_OPS:
             # The in/nin comparator splits on comma and drops empty terms, so
             # validate exactly the terms it would bind.
