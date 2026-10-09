@@ -9,7 +9,7 @@ export function SettingsNav({
 }: {
   sections: SettingsSection[];
   basePath: string;
-  /** Landmark name. Defaults to "Settings"; the admin shell passes its own. */
+  /** Landmark name. Defaults to "Settings"; shells pass their own when it differs. */
   label?: string;
 }) {
   return (
