@@ -7,7 +7,7 @@ from src.db.session import SessionFactory
 from src.models.workspace import WorkspaceMember
 from src.seed import DEMO_PASSWORD
 from src.services.auth import AuthService
-from src.services.workspaces import WorkspaceService
+from src.services.workspaces import WorkspaceForbidden, WorkspaceService
 
 
 async def _workspace_with_suspended_owner_row(email: str) -> str:
@@ -100,3 +100,42 @@ async def test_get_membership_rejects_the_active_only_flag():
 
         with pytest.raises(TypeError):
             await service.get_membership("ws-id", "user-id", active_only=False)
+
+
+async def test_suspended_actor_is_refused_at_every_guard():
+    """A suspended actor gets the same message from all four guarded writes.
+
+    `_require_active_member` is where the resolve-or-raise block these sites
+    each copied now lives. This passes before and after the fold; it is the net
+    that keeps one site from dropping the guard or rewriting its message.
+    """
+    workspace_id = await _workspace_with_suspended_owner_row("guard-owner@example.com")
+    message = "you are not a member of this workspace"
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session)
+        owner = await AuthService(session).get_by_email("guard-owner@example.com")
+        member = (
+            await session.execute(
+                select(WorkspaceMember).where(WorkspaceMember.workspace_id == workspace_id)
+            )
+        ).scalar_one()
+        member_id, role_id = member.id, member.role_id
+        # `update_role` reads the owner role and refuses before the actor guard,
+        # so it is handed a row that reaches the guard for the stated reason.
+        editor = next(
+            role for role in await service.list_roles(workspace_id) if role.name == "editor"
+        )
+
+        with pytest.raises(WorkspaceForbidden, match=message):
+            await service.set_member_role(workspace_id, member_id, role_id, actor=owner)
+        with pytest.raises(WorkspaceForbidden, match=message):
+            await service._require_manager(workspace_id, owner)
+        with pytest.raises(WorkspaceForbidden, match=message):
+            await service.create_custom_role(
+                workspace_id, name="ops", description=None, permissions=[], actor=owner
+            )
+        with pytest.raises(WorkspaceForbidden, match=message):
+            await service.update_role(
+                workspace_id, editor.id, permissions=["member:read"], actor=owner
+            )
