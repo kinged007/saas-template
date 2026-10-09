@@ -129,11 +129,21 @@ test.describe("inbox icon buttons", () => {
   test("every icon-only button in the notifications pane is named", async ({ page }) => {
     await mockApi(page, { signedIn: true });
     await page.goto("/inbox");
-    // `exact` picks this tab over the header's notification trigger, which is
-    // the same word in another case and so matches a case-insensitive query.
+    // `exact` pins this tab: the header bell opens the same list under the
+    // name "Show notifications", which a case-insensitive non-exact query
+    // would match too.
     await pageBody(page).getByRole("button", { name: "Notifications", exact: true }).click();
 
     await expectButtonsNamed(pageBody(page));
+  });
+
+  test("the header bell announces its action, not a bare noun", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    await page.goto("/inbox");
+    // The bell sits in the AppLayout header, outside the panes audited above,
+    // so its name is pinned here: a bare noun is announced as a single stray
+    // word, the name has to state the action like every other control.
+    await expect(page.getByRole("button", { name: "Show notifications", exact: true })).toBeVisible();
   });
 
   test("the messages pane toggle paints the icon it announces", async ({ page }) => {
