@@ -520,6 +520,12 @@ class WorkspaceService:
         current_role = await self._session.get(Role, member.role_id)
         if current_role is not None and is_owner_role_name(current_role.name):
             raise WorkspaceConflict("cannot change the workspace owner's role")
+        # A malformed body role_id must keep the status a valid-but-unknown id
+        # gets (404), not a bind error inside the lookup.
+        try:
+            uuid.UUID(role_id)
+        except ValueError:
+            raise WorkspaceError("role not found in workspace") from None
         role = await self._session.get(Role, role_id)
         if role is None or role.workspace_id != workspace_id:
             raise WorkspaceError("role not found in workspace")
@@ -734,6 +740,12 @@ class WorkspaceService:
         if membership is None or not is_owner_role_name(membership[1].name):
             raise WorkspaceForbidden("only the workspace owner can transfer ownership")
         actor_member, _ = membership
+        # A malformed body membership id must keep the status a valid-but-unknown
+        # id gets (404), not a bind error inside the lookup.
+        try:
+            uuid.UUID(new_owner_membership_id)
+        except ValueError:
+            raise WorkspaceError("member not found in workspace") from None
         target = await self._session.get(WorkspaceMember, new_owner_membership_id)
         if target is None or target.workspace_id != workspace_id:
             raise WorkspaceError("member not found in workspace")

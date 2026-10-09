@@ -127,6 +127,15 @@ class ConversationService:
         """Reject ids that are not active members of the workspace."""
         if not user_ids:
             return
+        # A malformed participant id must stay the same client error as a
+        # non-member id (400), not a bind error inside the lookup.
+        for uid in user_ids:
+            try:
+                uuid.UUID(uid)
+            except ValueError:
+                raise ConversationError(
+                    "one or more participants are not members of this workspace"
+                ) from None
         result = await self._session.execute(
             select(WorkspaceMember.user_id).where(
                 WorkspaceMember.workspace_id == workspace_id,
