@@ -7,6 +7,7 @@ import {
   asAdminUserDetail,
   canToggleUser,
   pageRange,
+  toggleDisabled,
   type AdminUserDetail,
 } from "./users-toggle.ts";
 
@@ -71,4 +72,20 @@ test("pageRange clamps the visible window and never reports zero pages", () => {
 test("adminUserPatch's url is built from a row typed as the list item, not the detail", () => {
   const row: AdminUser = { ...detail(), workspaces: undefined };
   assert.equal(adminUserPatch(row, false).url, "admin/users/u-1");
+});
+
+test("the toggle is disabled while the PATCH is in flight", () => {
+  assert.equal(toggleDisabled({ isPending: true }, { isFetching: false, isError: false }), true);
+});
+
+test("the toggle is disabled while the detail refetch is in flight", () => {
+  assert.equal(toggleDisabled({ isPending: false }, { isFetching: true, isError: false }), true);
+});
+
+test("the toggle is disabled when the detail refetch failed", () => {
+  assert.equal(toggleDisabled({ isPending: false }, { isFetching: false, isError: true }), true);
+});
+
+test("the toggle is enabled once the mutation settled and the detail refetched", () => {
+  assert.equal(toggleDisabled({ isPending: false }, { isFetching: false, isError: false }), false);
 });

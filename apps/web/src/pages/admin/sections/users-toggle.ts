@@ -5,6 +5,17 @@ export type AdminUserDetail = AdminUser & Required<Pick<AdminUser, "workspaces">
 export const PAGE_SIZE = 20;
 
 /**
+ * The panel renders the pre-toggle `is_active` until the `onSuccess` detail refetch
+ * lands, so a click inside that window re-sends the value just `PATCH`ed. Keep the
+ * toggle closed for the whole post-mutation window, including a failed refetch
+ * (the row on screen is then unconfirmed, not stale data to act on again).
+ */
+export const toggleDisabled = (
+  mutation: { isPending: boolean },
+  detail: { isFetching: boolean; isError: boolean },
+) => mutation.isPending || detail.isFetching || detail.isError;
+
+/**
  * Patch payload for the disable/re-enable toggle. `errorNotification: false` suppresses
  * refine's generic toast because the caller's `onError` surfaces the server `detail`.
  */

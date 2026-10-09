@@ -21,6 +21,7 @@ import {
   asAdminUserDetail,
   canToggleUser,
   pageRange,
+  toggleDisabled,
   type AdminUserDetail,
 } from "./users-toggle";
 import { errorMessage } from "@/utils/errorMessage";
@@ -162,7 +163,7 @@ export function UsersSection() {
                   <Button
                     variant={detail.is_active ? "destructive" : "default"}
                     size="sm"
-                    disabled={mutation.isPending}
+                    disabled={toggleDisabled(mutation, detailQuery.query)}
                     onClick={() => toggle(detail, !detail.is_active)}
                   >
                     {detail.is_active ? "Disable access" : "Re-enable"}
