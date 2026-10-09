@@ -23,12 +23,14 @@ from pathlib import Path
 import yaml
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
-from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware, _TrustedHosts
 
 from src.db.session import SessionFactory
 from src.models.audit import AuditLogEntry
 
 COMPOSE = Path(__file__).resolve().parents[3] / "infra/docker/docker-compose.prod.yml"
+DOCKERFILE_API = Path(__file__).resolve().parents[3] / "infra/docker/Dockerfile.api"
+NGINX_CONF = Path(__file__).resolve().parents[3] / "infra/docker/nginx.conf"
 WORKFLOWS = Path(__file__).resolve().parents[1] / "src/workflows/__init__.py"
 
 
@@ -328,25 +330,69 @@ def test_prod_compose_trusts_only_the_pinned_proxy_network():
 
     Reverting docker-compose.prod.yml to '--forwarded-allow-ips=*' leaves every
     other test green while reopening the spoofing hole, so pin the config too:
-    every entry must be a network, no entry may be a default route, the subnet
-    the compose file pins nginx to must be inside the trusted set, and
-    --proxy-headers must be on or the allowlist never applies.
+    uvicorn must parse every entry as an IP or network (strict=True — anything
+    else is demoted to an untrusted literal that silently matches no peer), no
+    entry may be a default route, the subnet the compose file pins nginx to
+    must be inside the trusted set, and --proxy-headers must be on or the
+    allowlist never applies. The value is parsed through uvicorn's own
+    _TrustedHosts so the guard cannot drift from what uvicorn actually does
+    with it (uv.lock pins the version).
     """
     compose = yaml.safe_load(COMPOSE.read_text())
     command = compose["services"]["api"]["command"]
     default = re.search(r"--forwarded-allow-ips=\$\{FORWARDED_ALLOW_IPS:-([^}]+)\}", command)
     assert default, f"no --forwarded-allow-ips default in: {command}"
-    trusted = [
-        ipaddress.ip_network(entry.strip(), strict=False) for entry in default.group(1).split(",")
+    trusted = _TrustedHosts(default.group(1))
+    assert trusted.always_trust is False and not trusted.trusted_literals, (
+        f"FORWARDED_ALLOW_IPS default trusts every peer or carries an entry "
+        f"uvicorn cannot parse (silently untrusted): {default.group(1)}"
+    )
+    nets = list(trusted.trusted_networks) + [
+        ipaddress.ip_network(ip) for ip in trusted.trusted_hosts
     ]
-    assert all(net.prefixlen > 0 for net in trusted), (
-        f"FORWARDED_ALLOW_IPS default trusts every peer: {trusted}"
+    assert all(net.prefixlen > 0 for net in trusted.trusted_networks), (
+        f"FORWARDED_ALLOW_IPS default trusts every peer: {default.group(1)}"
     )
     subnet = ipaddress.ip_network(compose["networks"]["default"]["ipam"]["config"][0]["subnet"])
-    assert all(subnet.subnet_of(net) for net in trusted), (
-        f"pinned subnet {subnet} outside FORWARDED_ALLOW_IPS default {trusted}"
+    assert all(subnet.subnet_of(net) for net in nets), (
+        f"pinned subnet {subnet} outside FORWARDED_ALLOW_IPS default {default.group(1)}"
     )
     assert "--proxy-headers" in command, f"--proxy-headers missing from: {command}"
+
+
+def test_image_cmd_carries_proxy_flags():
+    """A direct docker run, Kubernetes manifest or buildpack launch uses the
+    image CMD — compose's `command:` overrides it, so the flags must be on the
+    default or every non-compose deployment records the proxy's address and the
+    IP-keyed limiters collapse. The allowlist is wired to FORWARDED_ALLOW_IPS
+    with a loopback-only default: outside compose nothing remote is trusted
+    until the operator names the proxy.
+    """
+    cmd = re.search(r"^CMD (.+)$", DOCKERFILE_API.read_text(), re.MULTILINE)
+    assert cmd, "no CMD line in Dockerfile.api"
+    line = cmd.group(1)
+    default = re.search(r"--forwarded-allow-ips=\$\{FORWARDED_ALLOW_IPS:-([^}]+)\}", line)
+    assert default, f"image CMD must wire --forwarded-allow-ips to FORWARDED_ALLOW_IPS: {line}"
+    trusted = _TrustedHosts(default.group(1))
+    assert trusted.always_trust is False and not trusted.trusted_literals, (
+        f"image CMD default trusts every peer or carries an entry uvicorn "
+        f"cannot parse (silently untrusted): {default.group(1)}"
+    )
+    assert "--proxy-headers" in line, f"--proxy-headers missing from: {line}"
+
+
+def test_nginx_ws_location_forwards_client_ip():
+    """Without X-Forwarded-For on the /api/v1/ws location, uvicorn's client is
+    the connecting peer alone — every WebSocket-originated audit row records
+    nginx's address instead of the end user's. X-Forwarded-Proto keeps the
+    scheme honest (ws vs wss) exactly as the /api/ location already does.
+    """
+    ws = re.search(r"location /api/v1/ws \{([^}]*)\}", NGINX_CONF.read_text())
+    assert ws, "no /api/v1/ws location in nginx.conf"
+    for header in ("X-Forwarded-For", "X-Forwarded-Proto"):
+        assert f"proxy_set_header {header}" in ws.group(1), (
+            f"{header} missing from /api/v1/ws location: {ws.group(0)}"
+        )
 
 
 async def _email_failed_rows(resource_id: str) -> list[AuditLogEntry]:
