@@ -142,9 +142,15 @@ async def _user_count() -> int:
         return (await s.execute(select(func.count()).select_from(User))).scalar_one()
 
 
-async def _link_count() -> int:
+async def _link_count(provider: str, user_id: str) -> int:
     async with SessionFactory() as s:
-        return (await s.execute(select(func.count()).select_from(OAuthAccount))).scalar_one()
+        return (
+            await s.execute(
+                select(func.count())
+                .select_from(OAuthAccount)
+                .where(OAuthAccount.provider == provider, OAuthAccount.user_id == user_id)
+            )
+        ).scalar_one()
 
 
 async def test_config_reflects_flags(app_client, oauth_on, monkeypatch):
@@ -270,7 +276,11 @@ async def test_oauth_same_provider_new_subject_links_same_user(app_client, oauth
     _, second = await _callback(app_client, monkeypatch, state="s2")
     assert second.status_code == 302
     assert await _user_count() == before
-    assert await _link_count() == 2
+    async with SessionFactory() as s:
+        user_id = (
+            await s.execute(select(User.id).where(User.email == "sso@example.com"))
+        ).scalar_one()
+    assert await _link_count("testidp", user_id) == 2
 
 
 async def test_oauth_callback_survives_join_failure(app_client, oauth_on, monkeypatch):
