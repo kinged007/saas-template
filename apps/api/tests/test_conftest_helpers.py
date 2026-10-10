@@ -6,9 +6,12 @@ an AssertionError naming the row, not an AttributeError raised while assigning
 type before the helper's guard can matter, so the stale case uses a
 well-formed id that simply does not exist.
 
-`wait_for` is the one deadline loop the suite's per-test pollers used to carry,
-so it must stop at the first satisfied poll (never burn the budget) and return
-False instead of hanging when a predicate never turns true.
+`wait_for` is the deadline loop behind the api-keys pollers, so it must stop
+at the first satisfied poll (never burn the budget), skip polling entirely on
+a non-positive budget, propagate a predicate's exception rather than swallow it,
+and return False instead of hanging when a predicate never turns true. The
+per-test pollers in the other test files still carry their own loops; #695 owns
+migrating those.
 """
 
 import asyncio
@@ -40,10 +43,36 @@ async def test_wait_for_stops_at_the_first_satisfied_poll():
 
 
 async def test_wait_for_awaits_an_async_predicate():
-    async def row() -> str:
-        return "audit row"
+    """A coroutine object is always truthy, so only the awaited result counts."""
+    polls = 0
 
-    assert await wait_for(row, timeout_secs=5, interval=0.01)
+    async def no_row_yet() -> str | None:
+        nonlocal polls
+        polls += 1
+        return "audit row" if polls >= 2 else None
+
+    assert await wait_for(no_row_yet, timeout_secs=5, interval=0.01)
+    assert polls == 2
+
+
+async def test_wait_for_does_not_poll_a_non_positive_budget():
+    polls = 0
+
+    def predicate() -> bool:
+        nonlocal polls
+        polls += 1
+        return True
+
+    assert not await wait_for(predicate, timeout_secs=0, interval=0.01)
+    assert polls == 0
+
+
+async def test_wait_for_propagates_a_predicate_exception():
+    async def boom() -> None:
+        raise RuntimeError("fetchval failed")
+
+    with pytest.raises(RuntimeError, match="fetchval failed"):
+        await wait_for(boom, timeout_secs=5, interval=0.01)
 
 
 async def test_wait_for_returns_false_when_the_predicate_never_satisfies():

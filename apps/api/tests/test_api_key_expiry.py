@@ -723,7 +723,10 @@ async def test_cleanup_job_logs_only_the_first_publish_failure_with_a_traceback(
 
 async def _wait_for_audit(resource_id: str, timeout_s: float = 10.0):
     """The audit consumer is a background handler — poll for its row."""
-    for _ in range(int(timeout_s * 10)):
+    entry = None
+
+    async def poll() -> AuditLogEntry | None:
+        nonlocal entry
         async with SessionFactory() as session:
             entry = (
                 (
@@ -739,10 +742,11 @@ async def _wait_for_audit(resource_id: str, timeout_s: float = 10.0):
                 .scalars()
                 .first()
             )
-            if entry is not None:
-                return entry
-        await asyncio.sleep(0.1)
-    raise AssertionError(f"no apikey.revoked audit entry for {resource_id}")
+        return entry
+
+    if not await wait_for(poll, timeout_secs=timeout_s, interval=0.1):
+        raise AssertionError(f"no apikey.revoked audit entry for {resource_id}")
+    return entry
 
 
 async def test_job_is_dispatched_by_the_scheduler(app_client):
