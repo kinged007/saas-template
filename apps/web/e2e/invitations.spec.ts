@@ -43,7 +43,7 @@ const actor = (permissions: string[], role = "admin") => ({
   ...IDENTITY,
   is_superuser: false,
   permissions: [],
-  workspaces: [{ id: "ws-1", name: "Acme Corp", role, permissions }],
+  workspaces: [{ id: "ws-1", name: "Acme Corp", slug: "acme-corp", role, permissions }],
 });
 
 // May invite (member:create) and re-send but not revoke: DELETE
