@@ -482,8 +482,6 @@ def test_export_csv_leaves_safe_values_untouched():
 
 async def test_export_members_csv_neutralises_injected_display_name(app_client):
     """End to end: a formula-shaped display_name is prefixed in the response."""
-    from sqlalchemy import select
-
     from src.db.session import SessionFactory
     from src.models.workspace import User
 
