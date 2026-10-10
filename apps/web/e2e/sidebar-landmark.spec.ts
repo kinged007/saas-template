@@ -43,4 +43,21 @@ test.describe("sidebar landmark", () => {
     await expect(settingsNav).toBeVisible();
     await expect(settingsNav.getByRole("link", { name: "General" })).toBeVisible();
   });
+
+  test("the workspace settings page names its settings nav after the page heading", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    await page.goto("/settings/workspace/general");
+    const heading = page.getByRole("heading", { level: 1 });
+    await expect(heading).toBeVisible();
+    const headingName = (await heading.textContent())?.trim() ?? "";
+    expect(headingName).not.toBe("");
+
+    // Asserted as a pair, and `exact` is what pins it: under the default
+    // substring match the old default label "Settings" also matched
+    // "Workspace Settings", so the guard passed either way.
+    await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
+    const settingsNav = page.getByRole("navigation", { name: headingName, exact: true });
+    await expect(settingsNav).toBeVisible();
+    await expect(settingsNav.getByRole("link", { name: "General" })).toBeVisible();
+  });
 });
