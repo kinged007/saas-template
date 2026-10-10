@@ -1,18 +1,22 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { errorTitle } from "./error-title.ts";
 
-test("errorTitle drops a status token that is not an HTTP status", () => {
-  // The #512 widening from (\d+) to (\S+) plus the guard change from
-  // /^\d{3}$/ to /^[1-5]\d\d$/ changed the result for ten of these (all but
-  // 0, 99 and 4040, which were dropped before it too — #396 matrix).
-  for (const token of [
-    "undefined", "null", "NaN", "0", "099", "600", "999",
-    "ERR_NETWORK", "404.0", "1e3", "-1", "99", "4040",
-  ])
-    assert.equal(errorTitle(`Error (status code: ${token})`), "Error", token);
-});
+// The #512 widening from (\d+) to (\S+) plus the guard change from
+// /^\d{3}$/ to /^[1-5]\d\d$/ changed the result for ten of these (all but
+// 0, 99 and 4040, which were dropped before it too — #396 matrix).
+//
+// One test() per token instead of a loop over one assert: a single run then
+// reports every dropped token that regresses, not just the first failure.
+for (const token of [
+  "undefined", "null", "NaN", "0", "099", "600", "999",
+  "ERR_NETWORK", "404.0", "1e3", "-1", "99", "4040",
+])
+  test(`errorTitle drops status token ${JSON.stringify(token)}`, () => {
+    assert.equal(errorTitle(`Error (status code: ${token})`), "Error");
+  });
 
 test("errorTitle keeps a real HTTP status", () => {
   assert.equal(
@@ -62,9 +66,12 @@ test("errorTitle matches the suffix at the end, parentheses and all", () => {
 });
 
 // Source-scan: the provider is .tsx, which node --test cannot load, so its
-// wiring is asserted on the text instead (same style as CopyButton.test.ts).
+// wiring is asserted on the text instead. fileURLToPath around the URL is
+// the convention the sibling source scans follow (CopyButton.test.ts,
+// SecuritySection.test.ts) — readFileSync accepts either form, so keep
+// this one wrapped and the reads uniform.
 const provider = readFileSync(
-  new URL("./use-notification-provider.tsx", import.meta.url),
+  fileURLToPath(new URL("./use-notification-provider.tsx", import.meta.url)),
   "utf8",
 );
 
