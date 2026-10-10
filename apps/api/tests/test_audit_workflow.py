@@ -371,8 +371,11 @@ def test_image_cmd_carries_proxy_flags():
     cmd = re.search(r"^CMD (.+)$", DOCKERFILE_API.read_text(), re.MULTILINE)
     assert cmd, "no CMD line in Dockerfile.api"
     line = cmd.group(1)
-    default = re.search(r"--forwarded-allow-ips=\$\{FORWARDED_ALLOW_IPS:-([^}]+)\}", line)
-    assert default, f"image CMD must wire --forwarded-allow-ips to FORWARDED_ALLOW_IPS: {line}"
+    default = re.search(r'--forwarded-allow-ips=\\"\$\{FORWARDED_ALLOW_IPS:-([^}]+)\}\\"', line)
+    assert default, (
+        f"image CMD must wire --forwarded-allow-ips to FORWARDED_ALLOW_IPS, "
+        f"quoted so a value containing spaces stays one argv: {line}"
+    )
     trusted = _TrustedHosts(default.group(1))
     assert trusted.always_trust is False and not trusted.trusted_literals, (
         f"image CMD default trusts every peer or carries an entry uvicorn "
@@ -383,9 +386,11 @@ def test_image_cmd_carries_proxy_flags():
 
 def test_nginx_ws_location_forwards_client_ip():
     """Without X-Forwarded-For on the /api/v1/ws location, uvicorn's client is
-    the connecting peer alone — every WebSocket-originated audit row records
-    nginx's address instead of the end user's. X-Forwarded-Proto keeps the
-    scheme honest (ws vs wss) exactly as the /api/ location already does.
+    the connecting peer alone — nginx's address, not the end user's.
+    X-Forwarded-Proto keeps the scheme honest (ws vs wss) exactly as the /api/
+    location already does. No ws route reads scope["client"] today, so the
+    headers keep future client-IP-dependent ws code correct rather than fix a
+    live misattribution.
     """
     ws = re.search(r"location /api/v1/ws \{([^}]*)\}", NGINX_CONF.read_text())
     assert ws, "no /api/v1/ws location in nginx.conf"
