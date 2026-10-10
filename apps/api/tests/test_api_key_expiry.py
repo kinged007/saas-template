@@ -6,7 +6,6 @@ import os
 import shutil
 import tempfile
 import threading
-import time
 import uuid
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta, timezone
@@ -32,6 +31,7 @@ from tests.conftest import (
     create_workspace,
     register_user,
     run_job_via_scheduler,
+    wait_for,
     ws_headers,
 )
 
@@ -538,12 +538,11 @@ async def _wait_for_blocked_pid(dsn: str, pid: int, timeout_s: float = 10.0) -> 
     """
     conn = await asyncpg.connect(dsn, timeout=5)
     try:
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
-            if await conn.fetchval("select pg_blocking_pids($1)", pid):
-                return True
-            await asyncio.sleep(0.05)
-        return False
+        return await wait_for(
+            lambda: conn.fetchval("select pg_blocking_pids($1)", pid),
+            timeout_secs=timeout_s,
+            interval=0.05,
+        )
     finally:
         await conn.close()
 
