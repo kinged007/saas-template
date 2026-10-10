@@ -51,6 +51,29 @@ Only `X-Forwarded-For` is honoured. `X-Real-IP` and `CF-Connecting-IP` are read
 by neither uvicorn nor this code, so a proxy configured to send only
 `X-Real-IP` records the proxy's address.
 
+## Client scheme attribution
+
+`cookie_secure_for()` (`apps/api/src/core/security/cookies.py`) sets `Secure`
+on the refresh cookie only for HTTPS sessions, reading the scheme from
+`request.url.scheme` or the leftmost `X-Forwarded-Proto`. A TLS-terminating
+load balancer ends HTTPS and forwards plain HTTP to nginx, so nginx's `$scheme`
+is always `http`; without a fix the API never sees `https` and skips `Secure`.
+
+`infra/docker/nginx.conf` fixes this on the `/api/` and `/api/v1/ws` locations.
+It proves the requesting peer is a proxy this deployment trusts — a
+`geo $trusted_proxy` set of private and loopback ranges, the `172.30.0.0/24`
+compose subnet included, no trust-all default — and only for such a peer
+forwards that peer's `X-Forwarded-Proto` (leftmost entry of a chain, `http` or
+`https`, case-insensitive) to the API. Any other peer, including a client that
+forges the header straight at nginx, falls back to the local `$scheme`, so a
+spoofed `https` cannot upgrade a plain-HTTP request.
+
+Narrow it before going public. nginx has no env-configurable `geo`, so edit the
+ranges in `infra/docker/nginx.conf` to the load balancer's exact address; the
+shipped ranges cover an LB inside a private network, not the public internet.
+The one conf is baked into the web image (Dockerfile.web), so every deployment
+running that image shares this edit.
+
 ## Metrics
 
 `GET /metrics` exposes Prometheus text exposition (no auth, same as

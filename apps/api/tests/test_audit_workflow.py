@@ -20,6 +20,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 import yaml
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
@@ -398,6 +399,114 @@ def test_nginx_ws_location_forwards_client_ip():
         assert f"proxy_set_header {header}" in ws.group(1), (
             f"{header} missing from /api/v1/ws location: {ws.group(0)}"
         )
+
+
+def _nginx_block_body(kind: str, anchor: str) -> str:
+    """Inner text of the first top-level `<kind> <anchor> { … }`.
+
+    Non-greedy so it stops at the block's own closing brace; the geo/map
+    blocks carry no nested braces. `anchor` is regex-safe.
+    """
+    body = NGINX_CONF.read_text()
+    match = re.search(rf"{kind}\s+{anchor}\s*\{{(.*?)\}}", body, re.DOTALL)
+    assert match, f"no {kind} {anchor} {{...}} block in nginx.conf"
+    return match.group(1)
+
+
+def _forwarded_proto(trusted: str, forwarded: str, local_scheme: str = "http") -> str:
+    """Evaluate the shipped `map ... $forwarded_proto` block the way nginx does.
+
+    nginx listens on plain :80, so `$scheme` is always `http` here — that is
+    `local_scheme`, the fallback when no rule matches. Regex keys (`~*`
+    case-insensitive) match first-in-order; a bare key is exact; `default` is
+    the fallback. Mirrors nginx's documented map semantics for the constructs
+    the conf uses, so the guard asserts shipped behaviour, not a retyping.
+    """
+    block = _nginx_block_body(
+        "map", r'"\$trusted_proxy:\$http_x_forwarded_proto"\s+\$forwarded_proto'
+    )
+    key = f"{trusted}:{forwarded}"
+    default = None
+    for line in block.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("default"):
+            default = line.split(None, 1)[1].rstrip(";").strip().strip('"')
+            continue
+        token, _, value = line.partition(" ")
+        token = token.strip().strip('"')
+        value = value.strip().rstrip(";").strip().strip('"')
+        if token.startswith("~*"):
+            matched = re.search(token[2:], key, re.IGNORECASE) is not None
+        elif token.startswith("~"):
+            matched = re.search(token[1:], key) is not None
+        else:
+            matched = token == key
+        if matched:
+            return local_scheme if value == "$scheme" else value
+    assert default is not None, "map block has no default"
+    return local_scheme if default == "$scheme" else default
+
+
+@pytest.mark.parametrize(
+    "trusted,forwarded,expected",
+    [
+        ("1", "https", "https"),
+        ("1", "HTTPS", "https"),
+        ("1", "https, http", "https"),
+        ("1", "http", "http"),
+        ("1", "HTTP", "http"),
+        ("1", "http, https", "http"),
+        ("1", "", "http"),
+        ("1", "gopher", "http"),
+        ("0", "https", "http"),
+        ("0", "HTTPS", "http"),
+        ("0", "https, http", "http"),
+    ],
+)
+def test_nginx_forwarded_proto_matches_trusted_proxy_header(trusted, forwarded, expected):
+    """A trusted TLS-terminating load balancer's scheme reaches the API; a
+    spoofed header from anyone else is dropped to the local $scheme.
+
+    The API only sets Secure on the refresh cookie when it sees https (see
+    `cookie_secure_for`), so an https client behind the external terminator
+    must land here as https while an untrusted client cannot.
+    """
+    assert _forwarded_proto(trusted, forwarded) == expected
+
+
+def test_nginx_locations_forward_the_trusted_proto_variable():
+    """Both proxied locations send X-Forwarded-Proto from the mapped
+    variable, never the always-http $scheme."""
+    for loc in (r"/api/", r"/api/v1/ws"):
+        match = re.search(rf"location {re.escape(loc)} \{{([^}}]*)\}}", NGINX_CONF.read_text())
+        assert match, f"no {loc} location in nginx.conf"
+        body = match.group(1)
+        assert "proxy_set_header X-Forwarded-Proto $scheme" not in body, (
+            f"{loc} forwards $scheme (always http here) instead of the mapped variable"
+        )
+        assert "proxy_set_header X-Forwarded-Proto $forwarded_proto" in body, (
+            f"{loc} must forward X-Forwarded-Proto from $forwarded_proto"
+        )
+
+
+def test_nginx_trusted_proxy_set_is_not_everyone():
+    """The geo set defaults to untrusted, trusts no default route, and still
+    covers the subnet compose pins nginx to."""
+    block = _nginx_block_body("geo", r"\$trusted_proxy")
+    assert re.search(r"default\s+0\b", block), f"geo must default to untrusted (0):\n{block}"
+    assert "0.0.0.0/0" not in block and "::/0" not in block, (
+        f"geo trusts every peer via a default route:\n{block}"
+    )
+    pinned = re.search(r"subnet:\s*(\S+)", COMPOSE.read_text())
+    assert pinned, "no pinned subnet in docker-compose.prod.yml"
+    pinned_net = ipaddress.ip_network(pinned.group(1).strip().strip('"'))
+    cidrs = re.findall(r"(\d+\.\d+\.\d+\.\d+/\d+)", block)
+    assert cidrs, f"no CIDR ranges in geo block:\n{block}"
+    assert any(pinned_net.subnet_of(ipaddress.ip_network(cidr)) for cidr in cidrs), (
+        f"pinned subnet {pinned_net} is not inside any trusted range: {cidrs}"
+    )
 
 
 async def _email_failed_rows(resource_id: str) -> list[AuditLogEntry]:
