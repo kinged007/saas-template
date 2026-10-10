@@ -13,10 +13,9 @@ the workflow's.
 pending invitation. ``invitation_id`` / ``invited_by`` stay gated on a real
 invitation row, since those describe an invite that actually exists.
 
-Re-running the seed leaves these notification rows untouched: same user,
-workspace and title, not merely the same count. That is scoped to the
-notifications this file reads; the test does not assert idempotency for the
-other tables the seed writes.
+Re-running the seed keeps the same notification rows: same user, workspace and
+title, and same row count. That is scoped to the notifications this file reads;
+the test does not assert idempotency for the other tables the seed writes.
 """
 
 import pytest
@@ -98,13 +97,15 @@ async def test_seeded_invitation_notifications_carry_url_pair_and_stay_idempoten
     await seed_main()
 
     async with SessionFactory() as session:
-        after = set(
-            (
-                await session.execute(
-                    select(Notification.user_id, Notification.workspace_id, Notification.title)
-                )
-            ).all()
-        )
+        after_rows = (
+            await session.execute(
+                select(Notification.user_id, Notification.workspace_id, Notification.title)
+            )
+        ).all()
+    assert len(after_rows) == len(rows), (
+        f"re-running the seed must add no notifications: {len(rows)} -> {len(after_rows)}"
+    )
+    after = set(after_rows)
     assert after == before, (
         "re-running the seed must leave the notifications unchanged: "
         f"added {sorted(after - before)}, dropped {sorted(before - after)}"
