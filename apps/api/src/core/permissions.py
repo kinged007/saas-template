@@ -115,17 +115,21 @@ def register_permission(permission: str, *, resource: str, action: str) -> str:
 
 
 def permissions_for_role(role_name: str) -> list[str]:
-    """Default permission set per seeded system role."""
-    all_ = set(ALL_PERMISSIONS)
+    """Default permission set per seeded system role.
+
+    Built from `ALL_PERMISSIONS` itself, not a set of it: the declaration order
+    is what a stored row (and so `/roles`, `/auth/me`) reports, and it is stable
+    across processes — a set's iteration order is hash-randomized per process.
+    """
     match role_name:
         case "owner":
-            return [*all_, "*"]
+            return [*ALL_PERMISSIONS, "*"]
         case "admin":
             # everything except deleting the workspace itself. Adding a
             # capability here also grants it to every existing unedited admin
             # role at the next boot (sync_system_role_permissions), so a
             # takeover-capable scope like profile:update needs a callout.
-            return [p for p in all_ if p not in {WORKSPACE_DELETE}]
+            return [p for p in ALL_PERMISSIONS if p not in {WORKSPACE_DELETE}]
         case "editor":
             return [
                 WORKSPACE_READ,

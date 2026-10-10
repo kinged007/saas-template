@@ -1079,6 +1079,10 @@ class WorkspaceService:
         list changed. Used when a default role's permission set evolves
         (e.g. granting apikey management to viewers) so existing workspaces
         pick up the change on re-seed instead of only new ones.
+
+        The comparison is order-sensitive: a system role left in the order an
+        older build seeded is rewritten once, because that order is part of
+        what a consumer sees on `/roles` and `/auth/me`.
         """
         result = await self._session.execute(select(Role).where(Role.system.is_(True)))
         changed = 0
@@ -1087,7 +1091,7 @@ class WorkspaceService:
                 defaults = permissions_for_role(role.name)
             except ValueError:
                 continue  # system flag on a renamed/custom role — leave it alone
-            if sorted(role.permissions) != sorted(defaults):
+            if role.permissions != defaults:
                 role.permissions = defaults
                 changed += 1
         if changed:

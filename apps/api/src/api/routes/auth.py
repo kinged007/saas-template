@@ -724,7 +724,11 @@ async def me(
     # membership in the key's workspace is not active: `list_workspaces`
     # drops those rows and the gate refuses them, so the two must not disagree.
     if principal.api_key is not None:
-        key_grant = sorted(principal.api_key.permissions) if memberships else []
+        # Same discipline as the session branch below: the stored order, deduped
+        # — not a re-sort. `services/api_keys.py` is the only writer of the
+        # column and stores `sorted(...)` there, so a key minted through the
+        # API reads back alphabetically and this changes nothing for it.
+        key_grant = list(dict.fromkeys(principal.api_key.permissions)) if memberships else []
         data["workspaces"] = [
             workspace_to_dict(w, role=role.name, permissions=key_grant, joined_at=m.created_at)
             for w, role, m in memberships

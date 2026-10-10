@@ -139,6 +139,77 @@ async def _add_member_holding_role(
     return user, membership_id
 
 
+# ------------------------------------------- registry order of seeded defaults
+
+
+async def test_owner_and_admin_defaults_keep_registry_order():
+    """Issue #1569: owner/admin defaults are the registry in its declared order.
+
+    The set-iteration order this replaced was hash-randomized per process, so
+    the same seed code stored a different list on each boot. `editor`/`viewer`
+    are literal lists and already ordered this way.
+    """
+    owner = perms.permissions_for_role("owner")
+    admin = perms.permissions_for_role("admin")
+    assert owner == [*perms.ALL_PERMISSIONS, "*"]
+    assert admin == [p for p in perms.ALL_PERMISSIONS if p != perms.WORKSPACE_DELETE]
+    # Same content, only the order — the fix must not change who can do what.
+    assert sorted(owner) == sorted([*perms.ALL_PERMISSIONS, "*"])
+    assert sorted(admin) == sorted(p for p in perms.ALL_PERMISSIONS if p != perms.WORKSPACE_DELETE)
+
+
+async def test_seeded_system_rows_store_registry_ordered_permissions(app_client):
+    """Issue #1569: a freshly created workspace stores the registry order, and
+    that is the order `GET /roles` (and so `/auth/me`) reports. Comparing
+    `sorted(...)` here would hide a permutation."""
+    owner = await register_user(app_client, "seeded-order@example.com")
+    ws = await create_workspace(app_client, owner)
+    rows = {
+        r["name"]: r["permissions"] for r in await _roles(app_client, ws_headers(owner, ws["id"]))
+    }
+    assert rows["owner"] == [*perms.ALL_PERMISSIONS, "*"]
+    assert rows["admin"] == [p for p in perms.ALL_PERMISSIONS if p != perms.WORKSPACE_DELETE]
+
+
+async def test_sync_system_role_permissions_rewrites_shuffled_system_rows(app_client):
+    """Issue #1569: a system role seeded by an older build keeps its hash-random
+    order until it is rewritten, so the sync is order-sensitive. Idempotent: the
+    second call reports nothing to do."""
+    owner = await register_user(app_client, "shuffled-admin@example.com")
+    ws = await create_workspace(app_client, owner)
+    expected = [p for p in perms.ALL_PERMISSIONS if p != perms.WORKSPACE_DELETE]
+    shuffled = list(reversed(expected))
+    assert shuffled != expected
+
+    async with SessionFactory() as session:
+        admin = await session.scalar(
+            select(Role).where(
+                Role.workspace_id == ws["id"],
+                Role.name == "admin",
+                Role.system.is_(True),
+            )
+        )
+        assert admin is not None
+        admin.permissions = shuffled
+        await session.commit()
+
+    async with SessionFactory() as session:
+        assert await WorkspaceService(session).sync_system_role_permissions() >= 1
+
+    async with SessionFactory() as session:
+        admin = await session.scalar(
+            select(Role).where(
+                Role.workspace_id == ws["id"],
+                Role.name == "admin",
+                Role.system.is_(True),
+            )
+        )
+        assert admin.permissions == expected
+
+    async with SessionFactory() as session:
+        assert await WorkspaceService(session).sync_system_role_permissions() == 0
+
+
 # ------------------------------------------------------- registry + catalog
 
 

@@ -1735,3 +1735,28 @@ async def test_seed_creates_api_keys(app_client):
         assert sorted(key.permissions) == sorted(permissions)
         assert key.key_prefix.startswith("sk_live_")
         assert len(key.key_hash) == 64
+
+
+async def test_auth_me_key_grant_keeps_stored_order_not_alphabetical(app_client):
+    """Issue #1570: the key branch of /auth/me reports the stored grant in its
+    own order, like the session branch reports a role's list — not a re-sort."""
+    client = app_client
+    owner = await register_user(client, "grant-order@example.com")
+    ws = await create_workspace(client, owner)
+    key = await _create_key(
+        client, ws_headers(owner, ws["id"]), "grant-order", ["member:read", "audit:read"]
+    )
+
+    stored = ["member:read", "audit:read", "member:read", "workspace:update"]
+    async with SessionFactory() as session:
+        row = (
+            await session.execute(select(ApiKey).where(ApiKey.name == "grant-order"))
+        ).scalar_one()
+        row.permissions = stored
+        await session.commit()
+
+    me = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me.status_code == 200, me.text
+    # Same set, stored order, duplicate collapsed once.
+    assert me.json()["permissions"] == ["member:read", "audit:read", "workspace:update"]
+    assert sorted(me.json()["permissions"]) == sorted(set(stored))

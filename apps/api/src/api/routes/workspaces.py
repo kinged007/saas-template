@@ -141,6 +141,11 @@ async def list_workspaces(
             workspace_to_dict(
                 workspace,
                 role=role.name if role else None,
+                # Decision, not an oversight: this route still re-sorts the
+                # grant where /auth/me reports the stored order. Both are
+                # identical for every key minted through the API, whose only
+                # writer stores `sorted(...)`. Change both together if a flow
+                # can ever store an unsorted grant.
                 permissions=sorted(principal.api_key.permissions) if role else [],
             )
         ]
