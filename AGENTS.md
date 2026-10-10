@@ -40,6 +40,16 @@ accidental drops, wrong nullability, missing server_default), commit the file.
 `make db-check` (also in CI) fails on multiple heads or models≠migrations.
 Full workflow: `docs/MIGRATIONS.md`.
 
+## Cookie `Secure` precedence
+
+`cookie_secure_for()` (`apps/api/src/core/security/cookies.py`) decides the
+refresh-cookie `Secure` flag. When it or `REFRESH_COOKIE_SECURE` changes,
+restate the precedence identically in all three places, override first:
+`apps/api/.env.example` (`REFRESH_COOKIE_SECURE` comment), `docs/ARCHITECTURE.md`
+§5 auth flows table, and `docs/ARCHITECTURE.md` §9 security list. Behavior is
+covered by `apps/api/tests/test_auth_cookie.py`; no doc-lint exists yet — add
+one only if the wording drifts again.
+
 ---
 
 ## Agent Instructions
