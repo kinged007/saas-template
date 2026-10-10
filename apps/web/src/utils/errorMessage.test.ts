@@ -47,16 +47,15 @@ const sweep = (message: string, pattern: RegExp): void => {
   assert.deepEqual(hits, [], message);
 };
 
+const nullishSweep = /String\(\((\w+) as \{ message\?: string(?:; [^}]*)? \}\)\??\.message \?\? \1\)/;
+
 test("no call site renders String((err as { message?: string })?.message ?? err)", () => {
   // Both the optional-chain `?.message` and the plain `.message` casts
   // existed in the codebase; the operand (x) is pinned by the backreference.
-  sweep(
-    "String(x?.message ?? x) renders [object Object]",
-    /String\(\((\w+) as \{ message\?: string \}\)\??\.message \?\? \1\)/,
-  );
+  sweep("String(x?.message ?? x) renders [object Object]", nullishSweep);
 });
 
-const orStringSweep = /\((\w+) as \{ message\?: string \}\)\??\.message \|\| String\(\1\)/;
+const orStringSweep = /\((\w+) as \{ message\?: string(?:; [^}]*)? \}\)\??\.message \|\| String\(\1\)/;
 
 test("no call site renders (err as { message?: string })?.message || String(err)", () => {
   sweep("x?.message || String(x) renders [object Object]", orStringSweep);
@@ -65,4 +64,26 @@ test("no call site renders (err as { message?: string })?.message || String(err)
 test("the || sweep regex matches the non-optional .message spelling", () => {
   assert.match("(err as { message?: string })?.message || String(err)", orStringSweep);
   assert.match("(err as { message?: string }).message || String(err)", orStringSweep);
+});
+
+test("the ?? sweep regex matches the non-optional .message spelling", () => {
+  assert.match("String((err as { message?: string })?.message ?? err)", nullishSweep);
+  assert.match("String((err as { message?: string }).message ?? err)", nullishSweep);
+});
+
+// Call-site casts may carry additional properties, e.g. `{ message?: string; code?: string }`.
+test("both sweeps catch casts with additional properties", () => {
+  assert.match("(err as { message?: string; code?: string }).message || String(err)", orStringSweep);
+  assert.match("(err as { message?: string; code?: string })?.message || String(err)", orStringSweep);
+  assert.match("String((err as { message?: string; code?: string }).message ?? err)", nullishSweep);
+  assert.match("String((err as { message?: string; code?: string })?.message ?? err)", nullishSweep);
+  // The operand stays pinned by the backreference even with the widened cast type.
+  assert.doesNotMatch(
+    "(err as { message?: string; code?: string }).message || String(other)",
+    orStringSweep,
+  );
+  assert.doesNotMatch(
+    "String((err as { message?: string; code?: string }).message ?? other)",
+    nullishSweep,
+  );
 });
