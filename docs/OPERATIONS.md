@@ -29,9 +29,13 @@ the api service publishes no ports, so nginx is its only peer — and
 Keep the list narrow. Under `'*'`, uvicorn takes the leftmost `X-Forwarded-For`
 entry verbatim, so any peer that can reach the API port picks the address
 recorded against it. Set the flag to your proxy's IP, CIDR, or a
-comma-separated list. Running the image outside compose means supplying both
-proxy flags yourself; without them no header is read and every address is the
-proxy's.
+comma-separated list. Running the image outside compose already supplies both
+proxy flags: the CMD wires `--forwarded-allow-ips` to `FORWARDED_ALLOW_IPS`
+with a loopback-only default, quoted so a value with spaces stays one argv.
+Set `FORWARDED_ALLOW_IPS` to your proxy's address; until you do, no header is
+honoured and every address is the proxy's. The CMD does not run migrations
+(only the compose `command:` does), so apply `alembic upgrade head` yourself
+before starting the image outside compose.
 
 Behind an external load balancer or CDN, add its address to
 `FORWARDED_ALLOW_IPS`. nginx appends to `X-Forwarded-For`, so an unlisted LB
