@@ -460,6 +460,8 @@ def _forwarded_proto(trusted: str, forwarded: str, local_scheme: str = "http") -
         ("1", "http, https", "http"),
         ("1", "", "http"),
         ("1", "gopher", "http"),
+        ("1", "httpsfoo", "http"),
+        ("1", "https-x", "http"),
         ("0", "https", "http"),
         ("0", "HTTPS", "http"),
         ("0", "https, http", "http"),
@@ -474,6 +476,25 @@ def test_nginx_forwarded_proto_matches_trusted_proxy_header(trusted, forwarded, 
     must land here as https while an untrusted client cannot.
     """
     assert _forwarded_proto(trusted, forwarded) == expected
+
+
+def test_nginx_geo_and_map_blocks_are_at_http_level():
+    """The geo and map blocks sit at http level, before any server{}.
+
+    Both directives are rejected inside `server{}` — `nginx -t` fails with
+    "directive is not allowed here" and the container refuses to start — but
+    the guards above read the conf as plain text and would still pass, so an
+    indented or misplaced edit goes unnoticed.
+    """
+    lines = NGINX_CONF.read_text().splitlines()
+    server_line = next(i for i, ln in enumerate(lines) if ln.startswith("server {"))
+    directives = ("geo $trusted_proxy", 'map "$trusted_proxy:$http_x_forwarded_proto"')
+    for directive in directives:
+        at_column_zero = [i for i, ln in enumerate(lines) if ln.startswith(directive)]
+        assert at_column_zero, f"{directive!r} is indented (nested in server{{}}?)"
+        assert min(at_column_zero) < server_line, (
+            f"{directive} is declared inside server{{}}: nginx -t would fail"
+        )
 
 
 def test_nginx_locations_forward_the_trusted_proto_variable():
