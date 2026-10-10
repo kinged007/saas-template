@@ -54,6 +54,11 @@ async def _wait_for_count(user_id: str, type: str, expected: int) -> None:
     assert await _wait_for(lambda: _count_ge(user_id, type, expected))
 
 
+def _sent_to(captured: list, address: str) -> list:
+    """Registering sends a verification email, so scope captures by recipient."""
+    return [m for m in captured if m.to == address]
+
+
 async def _latest_role_change(user_id: str):
     async with SessionFactory() as session:
         result = await session.execute(
@@ -451,9 +456,8 @@ async def test_unregistered_invite_emails_accept_link(app_client, monkeypatch):
 
     monkeypatch.setattr(email_factory, "send_email", _capture)
 
-    # Registering sends a verification email, so scope assertions per recipient.
     def sent_to(address: str) -> list:
-        return [m for m in captured if m.to == address]
+        return _sent_to(captured, address)
 
     owner = await register_user(app_client, "owner@wf5.com")
     ws = await create_workspace(app_client, owner)
@@ -468,24 +472,51 @@ async def test_unregistered_invite_emails_accept_link(app_client, monkeypatch):
     member = await register_user(app_client, "member@wf5.com")
     member_me = await _me(app_client, member)
     captured.clear()  # drop the registration verification email
-    await _invite(app_client, owner, ws["id"], roles["editor"], "member@wf5.com")
+    member_invite = await _invite(app_client, owner, ws["id"], roles["editor"], "member@wf5.com")
     # The in-app notification proves the event was delivered; the handler returns
     # early for registered recipients, so no email follows.
     await _wait_for_count(member_me["id"], "workspace_invitation", 1)
-    await asyncio.sleep(0.1)
-    assert sent_to("member@wf5.com") == []
+
+    def invitation_emails(address: str, token: str) -> list:
+        """Scoped by the accept token: only the invitation template carries it,
+        never a notification email, so the assertion does not depend on the
+        recipient's default notification channel being in-app."""
+        link = f"/invitations/accept?token={token}"
+        return [m for m in sent_to(address) if link in m.text_body]
+
+    # Ordering barrier, not a fixed delay: `invitation.created` runs one FIFO
+    # consumer task per subject, so the accept-link email for a later invite
+    # proves the registered member's handler already returned.
+    follow_up = await _invite(app_client, owner, ws["id"], roles["editor"], "stranger2@wf5.com")
+    assert await _wait_for(lambda: invitation_emails("stranger2@wf5.com", follow_up["token"]))
+    assert invitation_emails("member@wf5.com", member_invite["token"]) == []
 
 
-async def test_unregistered_invite_emits_no_in_app_notification(app_client):
+async def test_unregistered_invite_emits_no_in_app_notification(app_client, monkeypatch):
     """An invite to an email with no account produces no member.invited event."""
+    import src.email.factory as email_factory
     from tests.conftest import create_workspace, register_user
+
+    captured: list = []
+
+    async def _capture(message):
+        captured.append(message)
+        return True
+
+    monkeypatch.setattr(email_factory, "send_email", _capture)
 
     owner = await register_user(app_client, "owner@wf4.com")
     ws = await create_workspace(app_client, owner)
     roles = await _roles_by_name(app_client, owner, ws["id"])
 
-    await _invite(app_client, owner, ws["id"], roles["editor"], "stranger@wf4.com")
-    await asyncio.sleep(0.1)
+    invite = await _invite(app_client, owner, ws["id"], roles["editor"], "stranger@wf4.com")
+    # The accept-link email is this recipient's only `invitation.created` side
+    # effect, so waiting for it replaces the sleep that stood in for ordering.
+    assert await _wait_for(lambda: _sent_to(captured, "stranger@wf4.com"))
+    assert (
+        f"/invitations/accept?token={invite['token']}"
+        in _sent_to(captured, "stranger@wf4.com")[0].text_body
+    )
 
     async with SessionFactory() as session:
         result = await session.execute(select(func.count()).select_from(Notification))
