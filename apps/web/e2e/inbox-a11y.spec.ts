@@ -57,6 +57,35 @@ async function mountedButtons(scope: Locator) {
 }
 
 /**
+ * Answer `GET /notifications/unread-count` with a fixed count.
+ *
+ * `mockApi` answers it with an empty array, which the component reads as zero
+ * unread. A route registered later overrides it, so the count is pinned
+ * locally; the pattern is a regex because the call carries a query string,
+ * which a glob ending at the resource name would not match.
+ */
+async function mockUnreadNotifications(page: Page, count: number) {
+  await page.route(/\/api\/v1\/notifications\/unread-count/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ count }),
+    }),
+  );
+}
+
+/**
+ * The bell's accessible name per unread count. The names are literals, not a
+ * copy of the component's wording, so the count cannot be dropped or
+ * misspelled while both sides of the test drift together.
+ */
+const BELL_NAME_BY_UNREAD = [
+  { unread: 0, name: "Show notifications" },
+  { unread: 1, name: "Show notifications, 1 unread notification" },
+  { unread: 3, name: "Show notifications, 3 unread notifications" },
+];
+
+/**
  * A node line that carries an accessible name: `- button "Search":` for a name
  * computed from aria-label / title / text, or `- combobox: Active` for a Radix
  * trigger named by its value. An unnamed control prints a bare `- button:`.
@@ -155,6 +184,18 @@ test.describe("inbox icon buttons", () => {
     await bell.click();
     await expect(page.getByRole("dialog").getByRole("heading", { name: "Notifications" })).toBeVisible();
   });
+
+  // The badge is decoration: the count reaches a screen reader only through
+  // the accessible name, so the count is part of the name in the wording of
+  // the number it carries. Zero keeps the bare action name pinned above.
+  for (const { unread, name } of BELL_NAME_BY_UNREAD) {
+    test(`the bell name carries ${unread} unread`, async ({ page }) => {
+      await mockApi(page, { signedIn: true });
+      await mockUnreadNotifications(page, unread);
+      await page.goto("/inbox");
+      await expect(page.locator("header").getByRole("button", { name, exact: true })).toBeVisible();
+    });
+  }
 
   test("the messages pane toggle paints the icon it announces", async ({ page }) => {
     await mockApi(page, { signedIn: true });

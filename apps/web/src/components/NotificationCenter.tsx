@@ -216,10 +216,18 @@ export function NotificationCenter() {
     );
   };
 
+  // The badge is decoration: the count reaches a screen reader only through
+  // the name, in the singular at one unread and the plural above it, while
+  // zero unread leaves the plain action name.
+  const bellName =
+    unread > 0
+      ? `Show notifications, ${unread} unread ${unread === 1 ? "notification" : "notifications"}`
+      : "Show notifications";
+
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
-        <Button variant="outline" size="icon" className="relative" aria-label="Show notifications">
+        <Button variant="outline" size="icon" className="relative" aria-label={bellName}>
           <Bell className="h-4 w-4" />
           {unread > 0 && (
             <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-xs text-destructive-foreground">
