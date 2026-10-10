@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dates import iso_or_none
+from src.core.permissions import SUPERUSER_ACCESS_REQUIRED
 from src.core.security.password import PasswordHasher
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
@@ -407,7 +408,7 @@ class ProfileService:
         self, target_user_id: str, actor: User, ip_address: str | None = None
     ) -> None:
         if not actor.is_superuser:
-            raise HTTPException(status_code=403, detail="superuser access required")
+            raise HTTPException(status_code=403, detail=SUPERUSER_ACCESS_REQUIRED)
         target = await self._session.get(User, target_user_id)
         if target is None:
             raise HTTPException(status_code=404, detail="user not found")
