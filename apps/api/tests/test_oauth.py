@@ -18,6 +18,10 @@ from src.settings import settings
 from tests.conftest import auth_headers, break_single_workspace_join, register_user
 from tests.test_auth_2fa_sessions import _totp_for
 
+# Shared by _mock_oauth's default and the scoped lookup so an edit to the mock
+# email cannot leave the lookup raising NoResultFound.
+SSO_EMAIL = "sso@example.com"
+
 PROVIDERS = [
     {
         "id": "testidp",
@@ -142,15 +146,14 @@ async def _user_count() -> int:
         return (await s.execute(select(func.count()).select_from(User))).scalar_one()
 
 
-async def _link_count(provider: str, user_id: str) -> int:
+async def _link_count(provider: str | None, user_id: str) -> int:
     async with SessionFactory() as s:
-        return (
-            await s.execute(
-                select(func.count())
-                .select_from(OAuthAccount)
-                .where(OAuthAccount.provider == provider, OAuthAccount.user_id == user_id)
-            )
-        ).scalar_one()
+        query = (
+            select(func.count()).select_from(OAuthAccount).where(OAuthAccount.user_id == user_id)
+        )
+        if provider is not None:
+            query = query.where(OAuthAccount.provider == provider)
+        return (await s.execute(query)).scalar_one()
 
 
 async def test_config_reflects_flags(app_client, oauth_on, monkeypatch):
@@ -189,7 +192,7 @@ async def test_unknown_provider_404(app_client, oauth_on):
     assert resp.status_code == 404
 
 
-def _mock_oauth(monkeypatch, *, sub="sub-1", email="sso@example.com"):
+def _mock_oauth(monkeypatch, *, sub="sub-1", email=SSO_EMAIL):
     async def fake_discovery(provider, cache):
         return {
             "authorization_endpoint": provider.authorize_url,
@@ -277,10 +280,11 @@ async def test_oauth_same_provider_new_subject_links_same_user(app_client, oauth
     assert second.status_code == 302
     assert await _user_count() == before
     async with SessionFactory() as s:
-        user_id = (
-            await s.execute(select(User.id).where(User.email == "sso@example.com"))
-        ).scalar_one()
+        user_id = (await s.execute(select(User.id).where(User.email == SSO_EMAIL))).scalar_one()
     assert await _link_count("testidp", user_id) == 2
+    # Total across providers catches a row another provider adds, which the
+    # scoped testidp count above cannot see.
+    assert await _link_count(None, user_id) == 2
 
 
 async def test_oauth_callback_survives_join_failure(app_client, oauth_on, monkeypatch):
