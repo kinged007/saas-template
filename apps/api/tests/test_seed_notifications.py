@@ -1,4 +1,5 @@
-"""Issues #212, #378, #379, #381: seeded invitation notifications must carry payload["url"].
+"""Issues #212, #378, #379, #381, #580, #584, #585: seeded invitation notifications
+must carry payload["url"], pair with their invitation and survive a re-seed.
 
 The real invite path (workflows.on_member_invited) sets ``url`` to
 ``src.workflows.INVITATIONS_ROUTE`` in the notification payload, and
@@ -12,7 +13,8 @@ the workflow's.
 pending invitation. ``invitation_id`` / ``invited_by`` stay gated on a real
 invitation row, since those describe an invite that actually exists.
 
-Re-running the seed adds no notification rows. That is scoped to the
+Re-running the seed leaves these notification rows untouched: same user,
+workspace and title, not merely the same count. That is scoped to the
 notifications this file reads; the test does not assert idempotency for the
 other tables the seed writes.
 """
@@ -46,7 +48,9 @@ def test_seed_and_workflow_share_one_route_constant():
     assert seed.INVITATIONS_ROUTE is INVITATIONS_ROUTE
 
 
-async def test_seed_invitation_notifications_carry_url(monkeypatch):
+async def test_seeded_invitation_notifications_carry_url_pair_and_stay_idempotent(
+    monkeypatch,
+):
     from src.seed import _notifications
     from src.seed import main as seed_main
 
@@ -78,24 +82,32 @@ async def test_seed_invitation_notifications_carry_url(monkeypatch):
     # link per notification. The resolve check runs before distinctness: a
     # dangling id is the worse defect, and the distinctness failure would
     # otherwise report in its place (#581).
-    with_invite = [
+    linked_ids = [
         n.payload["invitation_id"] for n in invitations if (n.payload or {}).get("invitation_id")
     ]
-    assert set(with_invite) == pending, (
+    assert set(linked_ids) == pending, (
         f"every pending invitation must be linked and every link must resolve; "
-        f"unlinked: {sorted(pending - set(with_invite))}, "
-        f"dangling: {sorted(set(with_invite) - pending)}"
+        f"unlinked: {sorted(pending - set(linked_ids))}, "
+        f"dangling: {sorted(set(linked_ids) - pending)}"
     )
-    assert len(with_invite) == len(set(with_invite)), (
-        f"each notification should link to a distinct invitation, got {sorted(with_invite)}"
+    assert len(linked_ids) == len(set(linked_ids)), (
+        f"each notification should link to a distinct invitation, got {sorted(linked_ids)}"
     )
+    before = {(n.user_id, n.workspace_id, n.title) for n in rows}
 
     await seed_main()
 
     async with SessionFactory() as session:
-        after = len((await session.execute(select(Notification.id))).scalars().all())
-    assert after == len(rows), (
-        f"re-running the seed must add no notifications: {len(rows)} -> {after}"
+        after = set(
+            (
+                await session.execute(
+                    select(Notification.user_id, Notification.workspace_id, Notification.title)
+                )
+            ).all()
+        )
+    assert after == before, (
+        "re-running the seed must leave the notifications unchanged: "
+        f"added {sorted(after - before)}, dropped {sorted(before - after)}"
     )
 
 
