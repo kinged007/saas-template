@@ -209,6 +209,7 @@
 - token_hash: String (unique, index)
 - expires_at: DateTime
 - revoked_at: DateTime (nullable)
+- revoke_reason: String (nullable)
 - ip_address: String (nullable)
 - user_agent: String (nullable)
 

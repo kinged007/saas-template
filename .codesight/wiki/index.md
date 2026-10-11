@@ -1,6 +1,6 @@
-# 267 — Wiki
+# saas-template — Wiki
 
-_Generated 2026-09-30 — re-run `npx codesight --wiki` if the codebase has changed._
+_Generated 2026-10-11 — re-run `npx codesight --wiki` if the codebase has changed._
 
 Structural map compiled from source code via AST. No LLM — deterministic, 200ms.
 
@@ -29,10 +29,10 @@ Structural map compiled from source code via AST. No LLM — deterministic, 200m
 
 ## Quick Stats
 
-- Routes: **102**
+- Routes: **111**
 - Models: **23**
-- Components: **64**
-- Env vars: **8** required, **31** with defaults
+- Components: **67**
+- Env vars: **13** required, **32** with defaults
 
 ## How to Use
 
@@ -59,4 +59,4 @@ These exist in your codebase but are **not** reflected in wiki articles:
 When in doubt, search the source. The wiki is a starting point, not a complete inventory.
 
 ---
-_Last compiled: 2026-09-30 · 19 articles · [codesight](https://github.com/Houseofmvps/codesight)_
+_Last compiled: 2026-10-11 · 19 articles · [codesight](https://github.com/Houseofmvps/codesight)_
