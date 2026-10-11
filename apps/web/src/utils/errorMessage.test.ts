@@ -32,6 +32,10 @@ const srcRoot = fileURLToPath(new URL("..", import.meta.url));
 // Five call sites fall back to a literal (`?? "Export failed"`, `|| "Failed to delete workspace"`) rather than
 // to `String(err)`, so the sweeps below do not cover them: components/WorkspaceExportCard.tsx:68 and
 // pages/settings/workspace/sections/GeneralSection.tsx:139,179,203,480.
+//
+// The walk is line-based: a cast split over two lines is out of scope, as is a cast whose additional
+// property is a nested object type (`{ message?: string; response?: { detail: string } }`), because a
+// regex cannot balance braces.
 const sweep = (message: string, pattern: RegExp): void => {
   const sourceFiles = readdirSync(srcRoot, { recursive: true, withFileTypes: true })
     // Test files carry the pattern as a literal, including this one.
@@ -53,7 +57,7 @@ const sweep = (message: string, pattern: RegExp): void => {
 
 
 // The cast body is shared so both sweeps widen together: `[^}]*` covers the member separators this repo
-// uses (`;`, `,`, `|`) and cannot cross a `}`.
+// uses (`;`, `,`, `|`), cannot cross a `}`, and cannot cross a line break.
 const cast = String.raw`\((\w+) as \{ message\?: string\b[^}]*\s*\}\)\??\.message`;
 const nullishSweep = new RegExp(String.raw`String\(` + cast + String.raw` \?\? \1\)`);
 const orStringSweep = new RegExp(cast + String.raw` \|\| String\(\1\)`);
