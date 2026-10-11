@@ -4,6 +4,7 @@
 - **AppLayout** — `apps/web/src/components/AppLayout.tsx`
 - **AuditLogTable** — props: resource, searchPlaceholder, searchEnabled, showWorkspace — `apps/web/src/components/AuditLogTable.tsx`
 - **SsoButtons** — props: providers, disabled — `apps/web/src/components/AuthConfig.tsx`
+- **CopyButton** — props: copied, label, onClick, type, size — `apps/web/src/components/CopyButton.tsx`
 - **NotificationCenter** — `apps/web/src/components/NotificationCenter.tsx`
 - **PendingInvitationsBadge** — `apps/web/src/components/PendingInvitations.tsx`
 - **UserProfileDialog** — props: userId, open, onOpenChange, fallback — `apps/web/src/components/UserProfileDialog.tsx`
@@ -52,12 +53,14 @@
 - **UsersSection** — `apps/web/src/pages/admin/sections/UsersSection.tsx`
 - **WorkspacesSection** — `apps/web/src/pages/admin/sections/WorkspacesSection.tsx`
 - **GenericSettingsLayout** — props: registry, basePath, title, subtitle, can, guard — `apps/web/src/pages/settings/components/GenericSettingsLayout.tsx`
-- **SettingsNav** — props: sections, basePath — `apps/web/src/pages/settings/components/SettingsNav.tsx`
+- **SettingsNav** — props: sections, basePath, label — `apps/web/src/pages/settings/components/SettingsNav.tsx`
 - **ProfileSettingsLayout** — `apps/web/src/pages/settings/profile/ProfileSettingsLayout.tsx`
 - **GeneralSection** — `apps/web/src/pages/settings/profile/sections/GeneralSection.tsx`
 - **NotificationsSection** — `apps/web/src/pages/settings/profile/sections/NotificationsSection.tsx`
 - **SecuritySection** — `apps/web/src/pages/settings/profile/sections/SecuritySection.tsx`
 - **WorkspacesSection** — `apps/web/src/pages/settings/profile/sections/WorkspacesSection.tsx`
+- **UserSettingsLayout** — `apps/web/src/pages/settings/user/UserSettingsLayout.tsx`
+- **SecuritySection** — `apps/web/src/pages/settings/user/sections/SecuritySection.tsx`
 - **WorkspaceSettingsLayout** — `apps/web/src/pages/settings/workspace/WorkspaceSettingsLayout.tsx`
 - **AuditLogSection** — `apps/web/src/pages/settings/workspace/sections/AuditLogSection.tsx`
 - **GeneralSection** — `apps/web/src/pages/settings/workspace/sections/GeneralSection.tsx`

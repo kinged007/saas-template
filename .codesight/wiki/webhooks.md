@@ -2,13 +2,15 @@
 
 > **Navigation aid.** Route list and file locations extracted via AST. Read the source files listed below before implementing or modifying this subsystem.
 
-The Webhooks subsystem handles **10 routes** and touches: db.
+The Webhooks subsystem handles **11 routes** and touches: db.
 
 ## Routes
 
 - `GET` `/events` [webhook]
   `apps/api/src/api/routes/webhooks.py`
 - `GET` `/subscriptions` [db, webhook]
+  `apps/api/src/api/routes/webhooks.py`
+- `GET` `/subscriptions/{subscription_id}` params(subscription_id) [webhook]
   `apps/api/src/api/routes/webhooks.py`
 - `POST` `/subscriptions` → in: WebhookSubscriptionCreate [webhook]
   `apps/api/src/api/routes/webhooks.py`
