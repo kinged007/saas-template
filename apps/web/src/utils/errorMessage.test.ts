@@ -29,11 +29,15 @@ test("errorMessage renders the interceptor's message instead of [object Object]"
 
 const srcRoot = fileURLToPath(new URL("..", import.meta.url));
 
+// Five call sites fall back to a literal (`?? "Export failed"`, `|| "Failed to delete workspace"`) rather than
+// to `String(err)`, so the sweeps below do not cover them: components/WorkspaceExportCard.tsx:68 and
+// pages/settings/workspace/sections/GeneralSection.tsx:139,179,203,480.
 const sweep = (message: string, pattern: RegExp): void => {
   const sourceFiles = readdirSync(srcRoot, { recursive: true, withFileTypes: true })
     // Test files carry the pattern as a literal, including this one.
     .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name) && !/\.(test|spec)\.tsx?$/.test(entry.name))
     .map((entry) => join(entry.parentPath, entry.name));
+  assert.ok(sourceFiles.length > 0, "sweep scanned no source files");
   const hits: string[] = [];
   for (const file of sourceFiles) {
     readFileSync(file, "utf8")
@@ -47,15 +51,18 @@ const sweep = (message: string, pattern: RegExp): void => {
   assert.deepEqual(hits, [], message);
 };
 
-const nullishSweep = /String\(\((\w+) as \{ message\?: string(?:; [^}]*)? \}\)\??\.message \?\? \1\)/;
+
+// The cast body is shared so both sweeps widen together: `[^}]*` covers the member separators this repo
+// uses (`;`, `,`, `|`) and cannot cross a `}`.
+const cast = String.raw`\((\w+) as \{ message\?: string\b[^}]*\s*\}\)\??\.message`;
+const nullishSweep = new RegExp(String.raw`String\(` + cast + String.raw` \?\? \1\)`);
+const orStringSweep = new RegExp(cast + String.raw` \|\| String\(\1\)`);
 
 test("no call site renders String((err as { message?: string })?.message ?? err)", () => {
   // Both the optional-chain `?.message` and the plain `.message` casts
   // existed in the codebase; the operand (x) is pinned by the backreference.
   sweep("String(x?.message ?? x) renders [object Object]", nullishSweep);
 });
-
-const orStringSweep = /\((\w+) as \{ message\?: string(?:; [^}]*)? \}\)\??\.message \|\| String\(\1\)/;
 
 test("no call site renders (err as { message?: string })?.message || String(err)", () => {
   sweep("x?.message || String(x) renders [object Object]", orStringSweep);
@@ -77,6 +84,11 @@ test("both sweeps catch casts with additional properties", () => {
   assert.match("(err as { message?: string; code?: string })?.message || String(err)", orStringSweep);
   assert.match("String((err as { message?: string; code?: string }).message ?? err)", nullishSweep);
   assert.match("String((err as { message?: string; code?: string })?.message ?? err)", nullishSweep);
+  // `;`, `,` and `|` all separate members of the cast type.
+  assert.match("(err as { message?: string, code?: string }).message || String(err)", orStringSweep);
+  assert.match("String((err as { message?: string | null })?.message ?? err)", nullishSweep);
+  // `\b` keeps `string` from matching a longer identifier.
+  assert.doesNotMatch("(err as { message?: stringify }).message || String(err)", orStringSweep);
   // The operand stays pinned by the backreference even with the widened cast type.
   assert.doesNotMatch(
     "(err as { message?: string; code?: string }).message || String(other)",
