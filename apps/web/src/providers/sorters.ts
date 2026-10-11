@@ -23,5 +23,5 @@ export const normalizeSorters = <T extends SorterInput>(
 ): Normalized<T>[] =>
   (sorters ?? []).map((s) => ({
     ...s,
-    order: (s.order?.trim() || "asc") as Normalized<T>["order"],
+    order: (String(s.order ?? "").trim() || "asc") as Normalized<T>["order"],
   }));
