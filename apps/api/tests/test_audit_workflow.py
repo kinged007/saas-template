@@ -326,6 +326,54 @@ async def test_forwarded_for_from_untrusted_peer_is_ignored(app):
     assert rows[0].ip_address == "198.51.100.7"
 
 
+async def test_operator_forwarded_allow_ips_typo_is_silently_untrusted(app):
+    """Why FORWARDED_ALLOW_IPS must be checked after an edit, not just set.
+
+    uvicorn parses the operator's list itself and rejects nothing: an entry that
+    is not an address or a CIDR network is demoted to a literal that matches no
+    peer. The stack starts, nothing is logged, and the mistake surfaces only as
+    recorded client IPs equal to the proxy's — one rate-limit bucket for every
+    user. docs/OPERATIONS.md records that; these assertions pin the two facts
+    the docs sentence rests on (uv.lock pins the uvicorn version).
+    """
+    typo = "172.30.0.0/33"  # a bad mask where the intended proxy entry belonged
+    trusted = _TrustedHosts(typo)
+    assert set(trusted.trusted_literals) == {typo}, (
+        f"uvicorn no longer demotes an unparseable {typo!r} to a literal; "
+        "OPERATIONS.md needs the new behaviour recorded"
+    )
+    assert not trusted.trusted_networks and not trusted.trusted_hosts, (
+        f"{typo!r} is still trusted, so a typo costs nothing"
+    )
+
+    proxy = "172.30.0.2"
+    middleware = ProxyHeadersMiddleware(app, trusted_hosts=typo)
+    transport = ASGITransport(app=middleware, client=(proxy, 40000))
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "audit9@example.com",
+                "password": "Password123!",
+                "first_name": "Audit",
+                "last_name": "User",
+            },
+            headers={"X-Forwarded-For": "203.0.113.9"},
+        )
+    assert resp.status_code == 201, resp.text
+    assert await _wait_for(
+        lambda: _actions_equal(["user.register", "user.email_verification_sent"])
+    )
+    rows = await _audit_rows()
+    assert rows[0].ip_address == proxy
+
+    assert _TrustedHosts("*").always_trust is True
+    mixed = _TrustedHosts("*, 127.0.0.1")
+    assert mixed.always_trust is False and set(mixed.trusted_literals) == {"*"}, (
+        "'*' is a wildcard only as the whole value; see OPERATIONS.md"
+    )
+
+
 def test_prod_compose_trusts_only_the_pinned_proxy_network():
     """The shipped value the tests above stand in for must stay narrow.
 

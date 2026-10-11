@@ -26,10 +26,16 @@ network to `172.30.0.0/24` and defaults `FORWARDED_ALLOW_IPS` to that subnet —
 the api service publishes no ports, so nginx is its only peer — and
 `infra/docker/.env` overrides it.
 
-Keep the list narrow. Under `'*'`, uvicorn takes the leftmost `X-Forwarded-For`
-entry verbatim, so any peer that can reach the API port picks the address
-recorded against it. Set the flag to your proxy's IP, CIDR, or a
-comma-separated list. Running the image outside compose already supplies both
+Keep the list narrow: `'*'` is a wildcard only as the whole value (`'*, 127.0.0.1'`
+trusts nothing beyond loopback), and under it uvicorn takes the leftmost
+`X-Forwarded-For` entry verbatim, so any peer that can reach the API port picks
+the address recorded against it. Set the flag to your proxy's IP, CIDR, or a
+comma-separated list — entries are parsed by uvicorn, which rejects nothing: one
+it cannot read as an address or a CIDR network is demoted to a literal that matches
+no peer, so the stack starts, nothing is logged, and when that entry was the proxy
+every recorded client IP becomes the proxy's and every IP-keyed limiter collapses
+into one bucket. Check the IP recorded on a row you just triggered after changing
+the list. Running the image outside compose already supplies both
 proxy flags: the CMD wires `--forwarded-allow-ips` to `FORWARDED_ALLOW_IPS`
 with a loopback-only default, quoted so a value with spaces stays one argv.
 Set `FORWARDED_ALLOW_IPS` to your proxy's address; until you do, no header is
