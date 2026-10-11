@@ -233,6 +233,19 @@ row's primary key, in the direction of the last sort key, so the order is total
 and `offset`/`limit` paging cannot drop or repeat a row when the sorted columns
 tie. Ties resolve by `id`, not by insertion order — the ids are UUIDs.
 
+That last key carries a documented cost ceiling (#854). `EXPLAIN QUERY PLAN` on
+SQLite is identical with and without it for every route's sort: the scoped lists
+pick the scope's equality index and then sort the scoped set
+(`USE TEMP B-TREE FOR ORDER BY` either way), the two unscoped sorts land on
+unique indexes (`users.email`, `workspaces.slug`) where no row ties, and
+PostgreSQL 13+ covers `ORDER BY <indexed col>, id` with an incremental sort. A
+composite `(<sort col>, id)` index per hot list is the fix only once the leading
+sort term itself is the indexed column and omits `id` — SQLite then adds
+`USE TEMP B-TREE FOR LAST TERM OF ORDER BY`, a sort bounded to each tie group.
+Re-measure when a route's default sort column grows an index that omits `id`, or
+when `EXPLAIN (ANALYZE, BUFFERS)` on a production-sized table shows the extra
+key changing the plan.
+
 ## 9. Security
 
 - bcrypt password hashing, Fernet-encrypted secrets (versioned keys)
