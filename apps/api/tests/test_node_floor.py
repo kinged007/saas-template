@@ -2,8 +2,8 @@
 
 Skip shape for missing optional tooling: a `requires_make` marker, so a make-less
 runner names the tests that shell out and still collects the file-only test below.
-`allow_module_level=True` instead collapsed the whole module into one file-level
-skip, hiding that test (issue #1238)."""
+The convention is stated once in `conftest.py`; `allow_module_level=True` there instead
+collapsed the whole module into one file-level skip, hiding that test (issue #1238)."""
 
 import json
 import os

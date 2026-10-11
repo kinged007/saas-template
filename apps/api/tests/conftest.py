@@ -1,3 +1,11 @@
+"""Shared api test fixtures.
+
+Skip shape for a missing optional tooling: a `requires_make` marker on the tests that
+use it (see `test_node_floor.py`), not `allow_module_level=True`, which collapses the
+whole module into one file-level skip and hides every test that would still pass.
+`test_nats_integration.py` uses the per-test fixture shape, which reports the same way.
+"""
+
 from __future__ import annotations
 
 import asyncio  # noqa: E402

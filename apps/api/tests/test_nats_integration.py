@@ -9,6 +9,8 @@ The NATS URL is resolved in this order:
 2. settings.nats_url (defaults to nats://localhost:4222)
 3. the Docker host derived from $DOCKER_HOST (remote docker daemons publish
    the container port on the daemon's host, not on localhost)
+
+The per-test skip below follows the skip shape stated in `conftest.py`.
 """
 
 from __future__ import annotations
