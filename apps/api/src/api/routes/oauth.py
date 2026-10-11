@@ -130,6 +130,10 @@ async def oauth_callback(
         from src.services.oauth import _discovery
 
         doc = await _discovery(provider, container.cache)
+        if not isinstance(doc, dict):
+            # #1020: this block catches only OAuthError, so a non-object document has
+            # to fail here or its AttributeError escapes as a 500.
+            raise OAuthError(f"discovery document for '{provider.id}' is not an object")
         tokens = await exchange_code(
             provider,
             doc,

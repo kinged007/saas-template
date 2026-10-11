@@ -448,6 +448,18 @@ async def test_callback_bad_state_redirects_to_login(app_client, oauth_on):
     assert resp.headers["location"].startswith("http://localhost:5173/login?error=")
 
 
+async def test_callback_non_object_discovery_redirects_to_login(app_client, oauth_on, monkeypatch):
+    # #1020: the callback catches only OAuthError, so a discovery document that is not
+    # an object must land on the login error redirect, not a 500 traceback.
+    async def fake_discovery(provider, cache):
+        return ["not", "an", "object"]
+
+    monkeypatch.setattr(oauth_svc, "_discovery", fake_discovery)
+    _, resp = await _callback(app_client, monkeypatch)
+    assert resp.status_code == 302, resp.text
+    assert resp.headers["location"] == "http://localhost:5173/login?error=sign-in%20failed"
+
+
 async def test_callback_rejects_state_entry_without_verifier(app_client, oauth_on):
     # A verifier-less entry would mint a token POST with no code_verifier, the
     # one request the challenge exists to prevent.
