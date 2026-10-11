@@ -256,8 +256,8 @@ async def _clean_db():
     """No-op override of the autouse fixture in conftest.
 
     These tests never touch the database, and each default unlink/recreate cycle
-    churns the SQLite file the whole suite shares (#319). Skipping it here keeps
-    26 pointless teardowns out of every full run.
+    churns the SQLite file the whole suite shares (#319). Skipping it here keeps the
+    pointless teardowns out of every full run.
 
     This is a workaround for #319, not a fix — skipping the churn is also what
     keeps tests/test_jobs_atomicity_battle.py green. Delete this override when
@@ -357,14 +357,13 @@ async def test_claims_from_id_token_rejects_es256_token_signed_by_another_ec_key
     assert claims is None
 
 
-async def test_claims_from_id_token_rejects_es256_token_published_under_the_rsa_kid(
+async def test_claims_from_id_token_rejects_es256_token_labeled_with_the_rsa_kid(
     provider, idp, cache
 ):
-    """Cross-family control: the JWKS resolves an RSA key for an `alg=ES256` token. Both
-    same-family twins keep the kid's key type and only swap the private key; this re-labels
-    the kid, so only the kid↔key-type binding can reject it. The first mint signs with the
-    published EC key, which makes the signature valid on its own, so a resolver trusting the
-    header `alg` over the kid accepts it; the second is the shape an attacker sends."""
+    """Cross-family control: the JWKS resolves an RSA key for an `alg=ES256` token, so the key type
+    rejects it before any signature is checked. The twins keep the kid's key type and swap only the
+    private key; here the kid is re-labeled instead. The first mint is valid on its own — a resolver
+    trusting the header `alg` over the kid accepts it; the second is the shape an attacker sends."""
     from_published_ec_key = idp.mint(kid=KID, key=idp.ec_key, alg="ES256")
     from_attacker_ec_key = idp.mint(kid=KID, key=idp.other_ec_key, alg="ES256")
 
@@ -372,7 +371,7 @@ async def test_claims_from_id_token_rejects_es256_token_published_under_the_rsa_
     assert await claims_from_id_token(provider, idp.doc, from_attacker_ec_key, cache) is None
 
 
-async def test_claims_from_id_token_rejects_rs256_token_published_under_the_ec_kid(
+async def test_claims_from_id_token_rejects_rs256_token_labeled_with_the_ec_kid(
     provider, idp, cache
 ):
     """The mirror direction, so neither key family is the one that goes uncovered."""
