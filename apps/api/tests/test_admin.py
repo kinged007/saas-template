@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 
 from src.db.session import SessionFactory
+from src.models.audit import AuditLogEntry
 from src.models.workspace import User, Workspace
 from tests.conftest import auth_headers, create_workspace, login, register_user, ws_headers
 
@@ -292,6 +294,132 @@ async def test_admin_lists_default_created_desc_with_tiebreaker(app_client):
     emails = [u["email"] for u in resp.json()]
     assert emails == sorted(emails), emails
     assert "aaa@example.com" in emails and "zzz@example.com" in emails
+
+
+async def _seed_admin_ties(superuser_id: str, count: int = 3) -> dict[str, list[str]]:
+    """`count` rows in each admin list, all sharing one `created_at`, ids ascending in
+    insertion order.
+
+    Arranged, not hoped for (see `test_api_keys._seed_created_tie`): the stamp is
+    explicit and *newer* than anything the app writes, so the tie group is what a
+    newest-first walk reads first. Inserting the ids in ascending order is what
+    makes the missing-tiebreaker result distinguishable from the fixed one —
+    without the `id` term the group comes back as inserted.
+    """
+    stamp = datetime(2030, 1, 1, tzinfo=UTC)
+    ids = [f"00000000-0000-4000-8000-{n:012d}" for n in range(1, count + 1)]
+    rows = {
+        "/api/v1/admin/users": [
+            User(
+                id=id_,
+                email=f"tie{n}@example.com",
+                display_name=f"tie{n}@example.com",
+                created_at=stamp,
+                updated_at=stamp,
+            )
+            for n, id_ in enumerate(ids, start=1)
+        ],
+        "/api/v1/admin/workspaces": [
+            Workspace(
+                id=id_,
+                name=f"Tied {n}",
+                slug=f"tied-{n}",
+                created_by_user_id=superuser_id,
+                created_at=stamp,
+                updated_at=stamp,
+            )
+            for n, id_ in enumerate(ids, start=1)
+        ],
+        "/api/v1/admin/audit": [
+            AuditLogEntry(
+                id=id_,
+                action="user.enabled",
+                resource_type="user",
+                resource_id=str(uuid.uuid4()),
+                actor_user_id=superuser_id,
+                created_at=stamp,
+                updated_at=stamp,
+            )
+            for id_ in ids
+        ],
+    }
+    async with SessionFactory() as session:
+        session.add_all([row for group in rows.values() for row in group])
+        await session.commit()
+    return {path: [row.id for row in group] for path, group in rows.items()}
+
+
+async def test_admin_lists_explicit_sort_breaks_ties_on_id(app_client):
+    """The sorter the UI sends decides the tie, in both directions.
+
+    `adminListQuery` appends one `sort[]`/`order[]` pair per sorter, and
+    `UsersSection`, `WorkspacesSection` and `AuditLogTable` all send
+    `{field: "created_at", order: "desc"}`, so `spec.sort_by` is never empty when
+    the app lists these resources. The total order therefore has to come from
+    `apply_query` (it does), not from the no-sort default the routes keep. Ids
+    ascend in insertion order, so only the `id` term can put a descending read
+    in descending order.
+    """
+    client, tokens = await _superuser_client(app_client)
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    tied = await _seed_admin_ties(me.json()["id"])
+
+    for path, ids in tied.items():
+        for order, descending in (("asc", False), ("desc", True)):
+            resp = await client.get(
+                path,
+                params={"sort[]": "created_at", "order[]": order, "limit": 50},
+                headers=auth_headers(tokens),
+            )
+            assert resp.status_code == 200, resp.text
+            listed = [r for r in resp.json() if r["id"] in set(ids)]
+            assert len(listed) == len(ids), (path, order)
+            assert len({r["created_at"] for r in listed}) == 1, f"{path}: no tie"
+            assert [r["id"] for r in listed] == sorted(ids, reverse=descending), path
+
+        # Both dialects the app can send reach the same order.
+        comma = await client.get(
+            path,
+            params={"_sort": "created_at", "_order": "desc", "limit": 50},
+            headers=auth_headers(tokens),
+        )
+        assert comma.status_code == 200, comma.text
+        tie_order = [r["id"] for r in comma.json() if r["id"] in set(ids)]
+        assert tie_order == sorted(ids, reverse=True), path
+
+
+async def test_admin_lists_explicit_sort_pages_across_tie(app_client):
+    """Paging across the tie repeats no row and skips none (#331).
+
+    The sections read with `sort[]=created_at&order[]=desc` and `PAGE_SIZE` rows at
+    a time, so the tiebreaker is the only thing standing between that walk and a
+    row double-counted or missed. Read the tie group one row per page: the walk
+    must equal the unpaginated read, not merely be complete.
+    """
+    client, tokens = await _superuser_client(app_client)
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    tied = await _seed_admin_ties(me.json()["id"])
+
+    for path, ids in tied.items():
+        whole = await client.get(path, headers=auth_headers(tokens))
+        assert whole.status_code == 200, whole.text
+        expected = [r["id"] for r in whole.json()][: len(ids)]
+
+        walked = []
+        for offset in range(len(ids)):
+            resp = await client.get(
+                path,
+                params={"sort[]": "created_at", "order[]": "desc", "offset": offset, "limit": 1},
+                headers=auth_headers(tokens),
+            )
+            assert resp.status_code == 200, resp.text
+            page = resp.json()
+            assert len(page) == 1, f"{path}: page at offset {offset} is not one row"
+            walked.append(page[0]["id"])
+
+        assert len(set(walked)) == len(walked), f"{path}: a row was paged twice"
+        assert walked == sorted(ids, reverse=True), path
+        assert walked == expected, f"{path}: pages disagree with the unpaginated read"
 
 
 async def test_admin_self_reenable_200(app_client):
