@@ -367,10 +367,20 @@ async def test_operator_forwarded_allow_ips_typo_is_silently_untrusted(app):
     rows = await _audit_rows()
     assert rows[0].ip_address == proxy
 
+
+def test_wildcard_is_trusted_only_as_the_whole_value():
+    """FORWARDED_ALLOW_IPS trusting everyone has exactly one spelling: the bare '*'.
+
+    In a list it parses as a literal that matches no address, so only the other
+    entries still trust; see OPERATIONS.md.
+    """
     assert _TrustedHosts("*").always_trust is True
     mixed = _TrustedHosts("*, 127.0.0.1")
     assert mixed.always_trust is False and set(mixed.trusted_literals) == {"*"}, (
         "'*' is a wildcard only as the whole value; see OPERATIONS.md"
+    )
+    assert ipaddress.ip_address("127.0.0.1") in mixed.trusted_hosts, (
+        "the literal '*' must not cost the real entry its trusted status"
     )
 
 
@@ -552,11 +562,14 @@ def test_nginx_locations_forward_the_trusted_proto_variable():
         match = re.search(rf"location {re.escape(loc)} \{{([^}}]*)\}}", NGINX_CONF.read_text())
         assert match, f"no {loc} location in nginx.conf"
         body = match.group(1)
-        assert "proxy_set_header X-Forwarded-Proto $scheme" not in body, (
-            f"{loc} forwards $scheme (always http here) instead of the mapped variable"
+        values = re.findall(r"proxy_set_header X-Forwarded-Proto\s+([^\s;]+)", body)
+        assert len(values) == 1, (
+            f"{loc} declares X-Forwarded-Proto {len(values)} times ({values}); the last "
+            "declaration wins, so a duplicate can override the trusted mapping"
         )
-        assert "proxy_set_header X-Forwarded-Proto $forwarded_proto" in body, (
-            f"{loc} must forward X-Forwarded-Proto from $forwarded_proto"
+        assert values == ["$forwarded_proto"], (
+            f"{loc} must forward X-Forwarded-Proto from $forwarded_proto, the mapped "
+            f"trusted scheme, never the always-http $scheme; found {values}"
         )
 
 
