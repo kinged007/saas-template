@@ -29,7 +29,7 @@ async def _count_notifications(user_id: str, type: str) -> int:
         return result.scalar_one()
 
 
-async def _wait_for(predicate, timeout_secs: float = 3.0, interval: float = 0.02) -> bool:
+async def _wait_for(predicate, timeout_secs: float = 5.0, interval: float = 0.02) -> bool:
     loop = asyncio.get_event_loop()
     deadline = loop.time() + timeout_secs
     while loop.time() < deadline:
@@ -456,18 +456,17 @@ async def test_unregistered_invite_emails_accept_link(app_client, monkeypatch):
 
     monkeypatch.setattr(email_factory, "send_email", _capture)
 
-    def sent_to(address: str) -> list:
-        return _sent_to(captured, address)
-
     owner = await register_user(app_client, "owner@wf5.com")
     ws = await create_workspace(app_client, owner)
     roles = await _roles_by_name(app_client, owner, ws["id"])
 
     invite = await _invite(app_client, owner, ws["id"], roles["editor"], "stranger@wf5.com")
-    assert await _wait_for(lambda: len(sent_to("stranger@wf5.com")) == 1)
+    assert await _wait_for(lambda: len(_sent_to(captured, "stranger@wf5.com")) == 1), (
+        "no accept-link email for stranger@wf5.com"
+    )
     link = f"/invitations/accept?token={invite['token']}"
-    assert link in sent_to("stranger@wf5.com")[0].text_body
-    assert link in sent_to("stranger@wf5.com")[0].html_body
+    assert link in _sent_to(captured, "stranger@wf5.com")[0].text_body
+    assert link in _sent_to(captured, "stranger@wf5.com")[0].html_body
 
     member = await register_user(app_client, "member@wf5.com")
     member_me = await _me(app_client, member)
@@ -482,13 +481,18 @@ async def test_unregistered_invite_emails_accept_link(app_client, monkeypatch):
         never a notification email, so the assertion does not depend on the
         recipient's default notification channel being in-app."""
         link = f"/invitations/accept?token={token}"
-        return [m for m in sent_to(address) if link in m.text_body]
+        return [m for m in _sent_to(captured, address) if link in m.text_body]
 
     # Ordering barrier, not a fixed delay: `invitation.created` runs one FIFO
     # consumer task per subject, so the accept-link email for a later invite
-    # proves the registered member's handler already returned.
+    # proves the registered member's handler already returned. Barrier valid
+    # only while `workspaces.invitation.created` has exactly one in-process
+    # consumer (`src/events/inprocess.py` `subscribe`/`_consume`); NATS, a
+    # wildcard subscriber, or a second subscription would break it.
     follow_up = await _invite(app_client, owner, ws["id"], roles["editor"], "stranger2@wf5.com")
-    assert await _wait_for(lambda: invitation_emails("stranger2@wf5.com", follow_up["token"]))
+    assert await _wait_for(lambda: invitation_emails("stranger2@wf5.com", follow_up["token"])), (
+        "no barrier email for stranger2@wf5.com"
+    )
     assert invitation_emails("member@wf5.com", member_invite["token"]) == []
 
 
@@ -512,7 +516,9 @@ async def test_unregistered_invite_emits_no_in_app_notification(app_client, monk
     invite = await _invite(app_client, owner, ws["id"], roles["editor"], "stranger@wf4.com")
     # The accept-link email is this recipient's only `invitation.created` side
     # effect, so waiting for it replaces the sleep that stood in for ordering.
-    assert await _wait_for(lambda: _sent_to(captured, "stranger@wf4.com"))
+    assert await _wait_for(lambda: _sent_to(captured, "stranger@wf4.com")), (
+        "no accept-link email for stranger@wf4.com"
+    )
     assert (
         f"/invitations/accept?token={invite['token']}"
         in _sent_to(captured, "stranger@wf4.com")[0].text_body

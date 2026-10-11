@@ -456,7 +456,11 @@ async def _publish_invitation_created(
     app, ws: dict, owner_me: dict, email: str, invitation_id: str | None = None
 ) -> None:
     """Publish `invitation.created`; a missing `invitation_id` is the payload
-    shape whose missing guard this module's email-failure tests exercise."""
+    shape whose missing guard this module's email-failure tests exercise.
+
+    The keys mirror the real producer, `WorkspaceService.invite`
+    (`src/services/workspaces.py`); keep the two in step.
+    """
     from src.events.subjects import Subjects
 
     await app.state.container.bus.publish(
@@ -536,7 +540,9 @@ async def test_successful_invitation_email_records_no_audit_row(app_client, monk
 
     # The send has to have happened, otherwise "no audit row" proves nothing.
     # Registration also sends mail, so match the invitee rather than index 0.
-    assert await _wait_for(lambda: any(m.to == "reachable@example.com" for m in sent))
+    assert await _wait_for(lambda: any(m.to == "reachable@example.com" for m in sent)), (
+        "no invitation email for reachable@example.com"
+    )
     invites = [m for m in sent if m.to == "reachable@example.com"]
     assert len(invites) == 1
     assert "/invitations/accept?token=" in invites[0].html_body
@@ -567,14 +573,21 @@ async def test_invitation_email_failure_without_invitation_id_is_not_audited(
     owner_me = (await client.get("/api/v1/auth/me", headers=auth_headers(owner))).json()
 
     await _publish_invitation_created(app, ws, owner_me, "noid@example.com")
-    assert await _wait_for(lambda: any(m.to == "noid@example.com" for m in sent))
+    assert await _wait_for(lambda: any(m.to == "noid@example.com" for m in sent)), (
+        "no failed-send email for noid@example.com"
+    )
 
     # Ordering barrier instead of a fixed delay: the bus runs one FIFO consumer
     # task per subject, so the send for a second `invitation.created` proves the
     # first handler already returned — past the missing-id guard that would
-    # have published an audit. Nothing can audit after it.
+    # have published an audit. Nothing can audit after it. Barrier valid only
+    # while `workspaces.invitation.created` has exactly one in-process consumer
+    # (`src/events/inprocess.py` `subscribe`/`_consume`); NATS, a wildcard
+    # subscriber, or a second subscription would break it.
     await _publish_invitation_created(app, ws, owner_me, "barrier@example.com")
-    assert await _wait_for(lambda: any(m.to == "barrier@example.com" for m in sent))
+    assert await _wait_for(lambda: any(m.to == "barrier@example.com" for m in sent)), (
+        "no barrier email for barrier@example.com"
+    )
     assert audits == []
     assert await _wait_for_audit("invitation.email_failed", ws["id"], deadline_seconds=0.5) == []
 
