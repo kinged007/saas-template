@@ -1743,14 +1743,19 @@ async def test_api_key_writer_stores_alphabetical_deduplicated_grant(app_client)
     client = app_client
     owner = await register_user(client, "grant-writer@example.com")
     ws = await create_workspace(client, owner)
+    # Unsorted input with a duplicate: the writer stores sorted and deduped.
     key = await _create_key(
         client,
         ws_headers(owner, ws["id"]),
         "grant-writer",
         ["member:read", "audit:read", "member:read"],
     )
-    assert key["permissions"] == sorted(set(key["permissions"]))
     assert key["permissions"] == ["audit:read", "member:read"]
+    # The invariant is the column, not the response: re-read the persisted row.
+    async with SessionFactory() as session:
+        row = await session.get(ApiKey, key["id"])
+        assert row is not None
+        assert row.permissions == ["audit:read", "member:read"]
 
 
 async def test_auth_me_key_grant_keeps_stored_order_not_alphabetical(app_client):
