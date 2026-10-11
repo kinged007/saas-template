@@ -15,7 +15,7 @@ for (const token of [
   "ERR_NETWORK", "404.0", "1e3", "-1", "99", "4040",
 ])
   test(`errorTitle drops status token ${JSON.stringify(token)}`, () => {
-    assert.equal(errorTitle(`Error (status code: ${token})`), "Error");
+    assert.equal(errorTitle(`Error (status code: ${token})`), "Error", token);
   });
 
 test("errorTitle keeps a real HTTP status", () => {
@@ -66,10 +66,10 @@ test("errorTitle matches the suffix at the end, parentheses and all", () => {
 });
 
 // Source-scan: the provider is .tsx, which node --test cannot load, so its
-// wiring is asserted on the text instead. fileURLToPath around the URL is
-// the convention the sibling source scans follow (CopyButton.test.ts,
-// SecuritySection.test.ts) — readFileSync accepts either form, so keep
-// this one wrapped and the reads uniform.
+// wiring is asserted on the text instead. fileURLToPath around the URL
+// matches CopyButton.test.ts:3 and SecuritySection.test.ts:3 — readFileSync
+// accepts either form and the other three scans still pass a URL, so either
+// works; keep this one wrapped for uniformity.
 const provider = readFileSync(
   fileURLToPath(new URL("./use-notification-provider.tsx", import.meta.url)),
   "utf8",
