@@ -181,6 +181,9 @@ async def register(
     pair = await service.issue_tokens(
         user, ip_address=_client_ip(request), user_agent=_user_agent(request)
     )
+    # Unlike the OAuth callback, this order is safe: the join result is bound to
+    # `user` and issue_tokens commits its refresh row first, so nothing reads the
+    # pre-join instance after this point.
     user = await _join_single_workspace_best_effort(db, container, user)
     try:
         await _send_verification(service, user)
