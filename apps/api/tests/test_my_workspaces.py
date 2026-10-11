@@ -1,5 +1,7 @@
 """My workspaces list + leave (issue #173)."""
 
+from sqlalchemy import select
+
 from src.db.session import SessionFactory
 from src.models.workspace import Workspace
 from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
@@ -113,14 +115,19 @@ async def test_me_permissions_union_keeps_first_occurrence_across_memberships(ap
         assert acc.status_code == 200, acc.text
 
     # created_at is a one-second server_default here, so two workspaces
-    # created in the same test tie. Pin the tie equal: (created_at desc,
-    # id desc) then decides, so the order is the tiebreak, not scan order.
+    # created in the same test tie and the id breaks the tie
+    # (`Workspace.created_at.desc(), Workspace.id.desc()`). Derive the
+    # expectation from the documented order rather than hand-pinning a
+    # timestamp: a re-sort or a scan-order tiebreak fails here.
     async with SessionFactory() as session:
-        a = await session.get(Workspace, ws_a["id"])
-        b = await session.get(Workspace, ws_b["id"])
-        b.created_at = a.created_at
-        await session.commit()
-    id_desc = sorted([ws_a["id"], ws_b["id"]], reverse=True)
+        stamped = (
+            await session.execute(
+                select(Workspace.id, Workspace.created_at).where(
+                    Workspace.id.in_([ws_a["id"], ws_b["id"]])
+                )
+            )
+        ).all()
+    order = [row[0] for row in sorted(stamped, key=lambda row: (row[1], row[0]), reverse=True)]
     grants = {
         ws_a["id"]: role_a.json()["permissions"],
         ws_b["id"]: role_b.json()["permissions"],
@@ -128,9 +135,9 @@ async def test_me_permissions_union_keeps_first_occurrence_across_memberships(ap
 
     me = await client.get("/api/v1/auth/me", headers=auth_headers(member))
     assert me.status_code == 200, me.text
-    assert [w["id"] for w in me.json()["workspaces"]] == id_desc
+    assert [w["id"] for w in me.json()["workspaces"]] == order
     assert me.json()["permissions"] == list(
-        dict.fromkeys(p for ws_id in id_desc for p in grants[ws_id])
+        dict.fromkeys(p for ws_id in order for p in grants[ws_id])
     )
 
 
