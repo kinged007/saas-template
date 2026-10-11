@@ -132,10 +132,7 @@ export function OAuthCallbackPage() {
         navigate(afterAuthRedirect(), { replace: true });
       })
       .catch(() => {
-        // The backend refused the code and this tab holds no session, so the
-        // latch above is stale: drop it and a repeat visit retries — landing on
-        // the expired-code status — instead of being swallowed into the pending
-        // state the guard returns from.
+        // Failed exchange: the latch is stale, so drop it and let a repeat visit retry.
         consumedCode = null;
         setStatus("Sign-in failed. The code may have expired.");
       });
