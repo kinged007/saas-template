@@ -1737,6 +1737,22 @@ async def test_seed_creates_api_keys(app_client):
         assert len(key.key_hash) == 64
 
 
+async def test_api_key_writer_stores_alphabetical_deduplicated_grant(app_client):
+    """Issue #1570: the sole writer of ApiKey.permissions. The /auth/me comment
+    that stored order and /workspaces' sorted() agree rests on this."""
+    client = app_client
+    owner = await register_user(client, "grant-writer@example.com")
+    ws = await create_workspace(client, owner)
+    key = await _create_key(
+        client,
+        ws_headers(owner, ws["id"]),
+        "grant-writer",
+        ["member:read", "audit:read", "member:read"],
+    )
+    assert key["permissions"] == sorted(set(key["permissions"]))
+    assert key["permissions"] == ["audit:read", "member:read"]
+
+
 async def test_auth_me_key_grant_keeps_stored_order_not_alphabetical(app_client):
     """Issue #1570: the key branch of /auth/me reports the stored grant in its
     own order, like the session branch reports a role's list — not a re-sort."""

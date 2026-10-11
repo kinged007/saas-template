@@ -1,7 +1,5 @@
 """My workspaces list + leave (issue #173)."""
 
-from datetime import timedelta
-
 from src.db.session import SessionFactory
 from src.models.workspace import Workspace
 from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
@@ -114,23 +112,26 @@ async def test_me_permissions_union_keeps_first_occurrence_across_memberships(ap
         )
         assert acc.status_code == 200, acc.text
 
-    # created_at is a one-second server_default here, so two workspaces created
-    # in the same test usually tie: pin A behind B to make the DESC order real.
+    # created_at is a one-second server_default here, so two workspaces
+    # created in the same test tie. Pin the tie equal: (created_at desc,
+    # id desc) then decides, so the order is the tiebreak, not scan order.
     async with SessionFactory() as session:
-        older = await session.get(Workspace, ws_a["id"])
-        newer = await session.get(Workspace, ws_b["id"])
-        older.created_at = newer.created_at - timedelta(hours=1)
+        a = await session.get(Workspace, ws_a["id"])
+        b = await session.get(Workspace, ws_b["id"])
+        b.created_at = a.created_at
         await session.commit()
+    id_desc = sorted([ws_a["id"], ws_b["id"]], reverse=True)
+    grants = {
+        ws_a["id"]: role_a.json()["permissions"],
+        ws_b["id"]: role_b.json()["permissions"],
+    }
 
-    # B comes first, so its occurrences win and A contributes workspace:update.
     me = await client.get("/api/v1/auth/me", headers=auth_headers(member))
     assert me.status_code == 200, me.text
-    assert [w["id"] for w in me.json()["workspaces"]] == [ws_b["id"], ws_a["id"]]
-    assert me.json()["permissions"] == [
-        "member:read",
-        "audit:read",
-        "workspace:update",
-    ]
+    assert [w["id"] for w in me.json()["workspaces"]] == id_desc
+    assert me.json()["permissions"] == list(
+        dict.fromkeys(p for ws_id in id_desc for p in grants[ws_id])
+    )
 
 
 async def test_leave_removes_membership(app_client):

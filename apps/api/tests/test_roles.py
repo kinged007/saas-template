@@ -151,11 +151,37 @@ async def test_owner_and_admin_defaults_keep_registry_order():
     """
     owner = perms.permissions_for_role("owner")
     admin = perms.permissions_for_role("admin")
-    assert owner == [*perms.ALL_PERMISSIONS, "*"]
-    assert admin == [p for p in perms.ALL_PERMISSIONS if p != perms.WORKSPACE_DELETE]
-    # Same content, only the order — the fix must not change who can do what.
-    assert sorted(owner) == sorted([*perms.ALL_PERMISSIONS, "*"])
-    assert sorted(admin) == sorted(p for p in perms.ALL_PERMISSIONS if p != perms.WORKSPACE_DELETE)
+    # Hard-coded, not re-derived from the registry: a reorder of
+    # PERMISSION_DEFINITIONS must fail here rather than change what a system
+    # role holds without a test noticing.
+    assert owner == [
+        "workspace:read",
+        "workspace:update",
+        "workspace:delete",
+        "member:read",
+        "member:create",
+        "member:update",
+        "member:delete",
+        "profile:update",
+        "role:read",
+        "role:create",
+        "apikey:read",
+        "apikey:create",
+        "apikey:delete",
+        "message:read",
+        "message:create",
+        "message:update",
+        "jobs:read",
+        "jobs:update",
+        "webhook:read",
+        "webhook:create",
+        "webhook:update",
+        "webhook:delete",
+        "audit:read",
+        "*",
+    ]
+    assert admin == [p for p in owner if p not in {"workspace:delete", "*"}]
+    assert admin[-1] == "audit:read"
 
 
 async def test_seeded_system_rows_store_registry_ordered_permissions(app_client):
@@ -194,7 +220,7 @@ async def test_sync_system_role_permissions_rewrites_shuffled_system_rows(app_cl
         await session.commit()
 
     async with SessionFactory() as session:
-        assert await WorkspaceService(session).sync_system_role_permissions() >= 1
+        assert await WorkspaceService(session).sync_system_role_permissions() == 1
 
     async with SessionFactory() as session:
         admin = await session.scalar(

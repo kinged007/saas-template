@@ -444,7 +444,7 @@ class WorkspaceService:
                 WorkspaceMember.user_id == user_id,
                 WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
             )
-            .order_by(Workspace.created_at.desc())
+            .order_by(Workspace.created_at.desc(), Workspace.id.desc())
         )
         result = await self._session.execute(stmt)
         return list(result.all())
@@ -1286,6 +1286,10 @@ class WorkspaceService:
         if description is not None and description != role.description:
             role.description = description
             changed = True
+        # Compare as sets: stored order is authority-derived for system roles
+        # only (the boot sync), so a PATCH never needs to reorder — and making
+        # this order-sensitive would let a reorder-only PATCH flip a system
+        # role to custom.
         if permissions is not None and sorted(permissions) != sorted(role.permissions or []):
             self._check_permissions_assignable(permissions, assignable, owner=is_owner)
             role.permissions = permissions
