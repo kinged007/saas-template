@@ -1,16 +1,106 @@
-import { useEditor, EditorContent } from "@tiptap/react";
+import { useEditor, EditorContent, ReactRenderer } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Link from "@tiptap/extension-link";
+import Mention from "@tiptap/extension-mention";
+import type { SuggestionProps, SuggestionKeyDownProps } from "@tiptap/suggestion";
 import TurndownService from "turndown";
-import { useEffect } from "react";
+import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { UserAvatar } from "@/components/ui/user-avatar";
 import { Bold, Italic, Code2, SquareCode, List, ListOrdered, Link2, Quote } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isAllowedLinkHref, normalizeLinkUrl } from "@/lib/link-url";
+import { nextPickerIndex, pickerIndex, rankMentionTargets, type MentionTarget } from "@/lib/mentions";
 
 const turndownService = new TurndownService({
   headingStyle: "atx",
   codeBlockStyle: "fenced",
+});
+
+// A mention is an inline atom node, so the markdown body has to be recovered
+// from the node itself â€” otherwise it serialises to an empty span.
+turndownService.addRule("mention", {
+  filter: (node) => node.nodeName === "SPAN" && node.getAttribute("data-type") === "mention",
+  replacement: (_content, node) => `@${node.getAttribute("data-label") ?? ""}`,
+});
+
+type MentionListRef = {
+  onKeyDown: (props: SuggestionKeyDownProps) => boolean;
+};
+
+const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(function MentionList(
+  props,
+  ref,
+) {
+  // The picked person, not their position: a keystroke re-ranks the list, and
+  // a position would land on whoever moved into that slot.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const items = props.items;
+  const index = pickerIndex(selectedId, items, props.query);
+
+  const select = (i: number) => {
+    const item = items[i];
+    if (item) props.command({ id: item.id, label: item.label, type: item.type });
+  };
+
+  useImperativeHandle(ref, () => ({
+    onKeyDown: ({ event }) => {
+      const next = nextPickerIndex(event.key, index, items);
+      if (next < 0) return false;
+      if (event.key === "Enter" || event.key === "Tab") select(next);
+      else setSelectedId(items[next].id);
+      return true;
+    },
+  }));
+
+  if (items.length === 0) {
+    return (
+      <div className="bg-popover text-popover-foreground rounded-md border p-3 text-sm shadow-md">
+        No one to mention here.
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-popover text-popover-foreground overflow-hidden rounded-md border shadow-md">
+      {/* max-h-72 is 288px, so all MENTION_PICKER_LIMIT (8) rows of 32px fit. */}
+      <ul className="max-h-72 overflow-y-auto p-1">
+        {items.map((item, i) => (
+          <li key={item.id}>
+            <button
+              type="button"
+              className={cn(
+                "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm",
+                i === index ? "bg-accent text-accent-foreground" : "hover:bg-accent/60"
+              )}
+              // onMouseDown so the click lands before the editor loses focus.
+              onMouseDown={(e) => {
+                e.preventDefault();
+                select(i);
+              }}
+            >
+              <UserAvatar
+                name={item.label}
+                email={item.email ?? null}
+                avatarUrl={item.avatar_url ?? null}
+                sizeClassName="h-5 w-5"
+                fallbackClassName="text-[9px]"
+                firstName={item.first_name ?? null}
+                lastName={item.last_name ?? null}
+                withTooltip={false}
+              />
+              <span className="truncate font-medium">{item.label}</span>
+              {item.email && <span className="text-muted-foreground truncate text-xs">{item.email}</span>}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 });
 
 type Props = {
@@ -19,37 +109,123 @@ type Props = {
   placeholder?: string;
   className?: string;
   minHeight?: string;
+  /** Omit (or pass []) to turn the `@` picker off. */
+  mentions?: MentionTarget[];
+  /** Ids of the users currently mentioned in the draft, in document order. */
+  onMention?: (userIds: string[]) => void;
 };
 
-export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€¦", className, minHeight = "80px" }: Props) {
-  const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        heading: false,
-        // StarterKit includes codeBlock/bulletList/orderedList/blockquote/code etc.
-      }),
-      Placeholder.configure({ placeholder }),
-      Link.configure({
-        openOnClick: false,
-        autolink: true,
-        linkOnPaste: true,
-        HTMLAttributes: { rel: "noopener noreferrer", target: null },
-      }),
-    ],
-    content: value ? `<p>${escapeHtml(value)}</p>` : "",
-    onUpdate: ({ editor }) => {
-      const html = editor.getHTML();
-      let markdown: string;
-      try {
-        markdown = turndownService.turndown(html);
-      } catch {
-        markdown = editor.getText();
-      }
-      // turndown leaves extra newlines; trim
-      markdown = markdown.trim();
-      onChange(markdown, html);
+export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€¦", className, minHeight = "80px", mentions, onMention }: Props) {
+  const mentionKey = useMemo(() => (mentions ?? []).map((m) => m.id).join(","), [mentions]);
+  // The picker reads the latest list without the extension being rebuilt for it.
+  const mentionsRef = useRef(mentions);
+  mentionsRef.current = mentions;
+
+  // Which formatting control holds the toolbar's single tab stop.
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const [toolbarIndex, setToolbarIndex] = useState(0);
+
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const linkInputRef = useRef<HTMLInputElement>(null);
+  const linkTriggerRef = useRef<HTMLButtonElement>(null);
+  const linkDismissedOutside = useRef(false);
+  const linkInputId = useId();
+  const linkLabelId = useId();
+
+  const editor = useEditor(
+    {
+      extensions: [
+        StarterKit.configure({
+          heading: false,
+          // StarterKit bundles Link; the explicitly configured Link below wins.
+          link: false,
+          // StarterKit includes codeBlock/bulletList/orderedList/blockquote/code etc.
+        }),
+        Placeholder.configure({ placeholder }),
+        Link.configure({
+          openOnClick: false,
+          autolink: true,
+          linkOnPaste: true,
+          HTMLAttributes: { rel: "noopener noreferrer", target: null },
+          // Autolink and linkOnPaste have to refuse the same hrefs the popover's
+          // editor does; `protocols` only adds to the extension's default list,
+          // so the allow-list is replaced here. A missing href is left to the
+          // extension, as it is today.
+          isAllowedUri: (url) => !url || isAllowedLinkHref(url),
+        }),
+        Mention.configure({
+          HTMLAttributes: { class: "mention" },
+          renderText: ({ node }) => `@${node.attrs.label}`,
+          renderHTML: ({ node }) => [
+            "span",
+            { "data-type": "mention", "data-id": node.attrs.id, "data-label": node.attrs.label, class: "mention" },
+            `@${node.attrs.label}`,
+          ],
+          suggestion: {
+            char: "@",
+            items: ({ query }) => rankMentionTargets(mentionsRef.current ?? [], query),
+            render: () => {
+              let component: ReactRenderer<MentionListRef> | null = null;
+              let unmount: (() => void) | null = null;
+              return {
+                onStart: (props: SuggestionProps<MentionTarget>) => {
+                  component = new ReactRenderer(MentionList, { props, editor: props.editor });
+                  component.element.classList.add("z-50");
+                  // TipTap mounts into document.body and keeps it anchored to the
+                  // caret, repositioning on scroll/resize.
+                  unmount = props.mount(component.element);
+                },
+                onUpdate: (props: SuggestionProps<MentionTarget>) => {
+                  component?.updateProps(props);
+                },
+                onKeyDown: (props: SuggestionKeyDownProps) => {
+                  if (props.event.key === "Escape") {
+                    unmount?.();
+                    component?.destroy();
+                    component = null;
+                    unmount = null;
+                    return true;
+                  }
+                  return component?.ref?.onKeyDown(props) ?? false;
+                },
+                onExit: () => {
+                  unmount?.();
+                  component?.destroy();
+                  component = null;
+                  unmount = null;
+                },
+              };
+            },
+          },
+        }),
+      ],
+      content: value ? `<p>${escapeHtml(value)}</p>` : "",
+      onUpdate: ({ editor }) => {
+        const html = editor.getHTML();
+        let markdown: string;
+        try {
+          markdown = turndownService.turndown(html);
+        } catch {
+          markdown = editor.getText();
+        }
+        // turndown leaves extra newlines; trim
+        markdown = markdown.trim();
+        onChange(markdown, html);
+        const userIds: string[] = [];
+        editor.state.doc.descendants((node) => {
+          if (node.type.name === "mention" && typeof node.attrs.id === "string") {
+            userIds.push(node.attrs.id);
+          }
+          return true;
+        });
+        onMention?.(userIds);
+      },
     },
-  });
+    // Rebuild when the mentionable set changes; the picker closes over it.
+    [mentionKey],
+  );
 
   // Sync external value if needed (e.g., reset after send)
   useEffect(() => {
@@ -78,16 +254,84 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
 
   if (!editor) return null;
 
+  const toolbarButtons = () => Array.from(toolbarRef.current?.querySelectorAll("button") ?? []);
+
+  /** The toolbar control the event came from, or -1 when it came from the container. */
+  const toolbarIndexOf = (target: EventTarget | null) =>
+    target instanceof HTMLButtonElement ? toolbarButtons().indexOf(target) : -1;
+
+  /**
+   * APG toolbar: one tab stop for the whole group, arrow keys move inside it.
+   * The tab stop follows whatever control last took focus.
+   */
+  const onToolbarKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const buttons = toolbarButtons();
+    const current = toolbarIndexOf(e.target);
+    const last = buttons.length - 1;
+    const next =
+      e.key === "ArrowRight" ? (current + 1) % buttons.length
+      : e.key === "ArrowLeft" ? (current === 0 ? last : current - 1)
+      : e.key === "Home" ? 0
+      : e.key === "End" ? last
+      : -1;
+    if (current < 0 || next < 0) return;
+    e.preventDefault();
+    buttons[next].focus();
+  };
+
+  const onToolbarFocus = (e: React.FocusEvent<HTMLDivElement>) => {
+    const index = toolbarIndexOf(e.target);
+    if (index >= 0) setToolbarIndex(index);
+  };
+
+  const onLinkOpenChange = (open: boolean) => {
+    setLinkOpen(open);
+    if (open) {
+      setLinkUrl((editor.getAttributes("link").href as string | undefined) ?? "");
+      setLinkError(null);
+    }
+  };
+
+  const applyLink = () => {
+    // An emptied field means "never mind", not a malformed URL.
+    if (!linkUrl.trim()) return setLinkOpen(false);
+    const href = normalizeLinkUrl(linkUrl);
+    if (href === null) {
+      setLinkError("Enter an absolute http:// or https:// URL.");
+      return;
+    }
+    editor.chain().focus().setLink({ href }).run();
+    setLinkOpen(false);
+  };
+
+  const removeLink = () => {
+    editor.chain().focus().unsetLink().run();
+    setLinkOpen(false);
+  };
+
   return (
+    // Every control below keeps the editor's focus by eating mousedown and
+    // acting on `click`, the one event a keyboard activation fires too.
     <div className={cn("rounded-md border bg-background", className)}>
-      <div className="flex flex-wrap items-center gap-1 border-b p-1">
+      <div
+        ref={toolbarRef}
+        role="toolbar"
+        aria-label="Formatting"
+        className="flex flex-wrap items-center gap-1 border-b p-1"
+        onKeyDown={onToolbarKeyDown}
+        onFocus={onToolbarFocus}
+      >
         <Button
           type="button"
           variant={editor.isActive("bold") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
-          onMouseDown={(e) => {
-            e.preventDefault();
+          title="Bold"
+          aria-label="Bold"
+          aria-pressed={editor.isActive("bold")}
+          tabIndex={toolbarIndex === 0 ? 0 : -1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
             editor.chain().focus().toggleBold().run();
           }}
         >
@@ -98,8 +342,12 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           variant={editor.isActive("italic") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
-          onMouseDown={(e) => {
-            e.preventDefault();
+          title="Italic"
+          aria-label="Italic"
+          aria-pressed={editor.isActive("italic")}
+          tabIndex={toolbarIndex === 1 ? 0 : -1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
             editor.chain().focus().toggleItalic().run();
           }}
         >
@@ -112,8 +360,10 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           className="h-7 w-7"
           title="Inline code"
           aria-label="Inline code"
-          onMouseDown={(e) => {
-            e.preventDefault();
+          aria-pressed={editor.isActive("code")}
+          tabIndex={toolbarIndex === 2 ? 0 : -1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
             editor.chain().focus().toggleCode().run();
           }}
         >
@@ -126,8 +376,10 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           className="h-7 w-7"
           title="Code block"
           aria-label="Code block"
-          onMouseDown={(e) => {
-            e.preventDefault();
+          aria-pressed={editor.isActive("codeBlock")}
+          tabIndex={toolbarIndex === 3 ? 0 : -1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
             editor.chain().focus().toggleCodeBlock().run();
           }}
         >
@@ -140,8 +392,10 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           className="h-7 w-7"
           title="Bullet list"
           aria-label="Bullet list"
-          onMouseDown={(e) => {
-            e.preventDefault();
+          aria-pressed={editor.isActive("bulletList")}
+          tabIndex={toolbarIndex === 4 ? 0 : -1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
             editor.chain().focus().toggleBulletList().run();
           }}
         >
@@ -152,8 +406,12 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           variant={editor.isActive("orderedList") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
-          onMouseDown={(e) => {
-            e.preventDefault();
+          title="Ordered list"
+          aria-label="Ordered list"
+          aria-pressed={editor.isActive("orderedList")}
+          tabIndex={toolbarIndex === 5 ? 0 : -1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
             editor.chain().focus().toggleOrderedList().run();
           }}
         >
@@ -164,32 +422,126 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           variant={editor.isActive("blockquote") ? "secondary" : "ghost"}
           size="icon"
           className="h-7 w-7"
-          onMouseDown={(e) => {
-            e.preventDefault();
+          title="Quote"
+          aria-label="Quote"
+          aria-pressed={editor.isActive("blockquote")}
+          tabIndex={toolbarIndex === 6 ? 0 : -1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
             editor.chain().focus().toggleBlockquote().run();
           }}
         >
           <Quote className="h-3.5 w-3.5" />
         </Button>
-        <Button
-          type="button"
-          variant={editor.isActive("link") ? "secondary" : "ghost"}
-          size="icon"
-          className="h-7 w-7"
-          onMouseDown={(e) => {
-            e.preventDefault();
-            const prev = editor.getAttributes("link").href as string | undefined;
-            const url = window.prompt("Enter URL", prev || "https://");
-            if (url === null) return;
-            if (url === "") {
-              editor.chain().focus().unsetLink().run();
-            } else {
-              editor.chain().focus().setLink({ href: url }).run();
-            }
-          }}
-        >
-          <Link2 className="h-3.5 w-3.5" />
-        </Button>
+        <Popover open={linkOpen} onOpenChange={onLinkOpenChange}>
+          <PopoverTrigger asChild>
+            <Button
+              ref={linkTriggerRef}
+              type="button"
+              // Link is an action, not a toggle: it opens a URL editor rather than
+              // flipping a state, so it carries no aria-pressed. The variant below
+              // still tracks isActive("link") as the pressed look.
+              variant={editor.isActive("link") ? "secondary" : "ghost"}
+              size="icon"
+              className="h-7 w-7"
+              title="Link"
+              aria-label="Link"
+              tabIndex={toolbarIndex === 7 ? 0 : -1}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <Link2 className="h-3.5 w-3.5" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="start"
+            className="w-80 p-3"
+            aria-labelledby={linkLabelId}
+            onInteractOutside={(e) => {
+              // Clicking the trigger is one of the popover's own exits, but
+              // Radix reports it here before it checks where the click landed,
+              // so it has to be excluded or the caret is dropped on close.
+              // It is still a dismissal path: clear the marker so a later close
+              // cannot inherit a stale outside-click from an earlier dismissal.
+              if (linkTriggerRef.current?.contains(e.target as Node)) {
+                linkDismissedOutside.current = false;
+                return;
+              }
+              linkDismissedOutside.current = true;
+            }}
+            // The trigger eats mousedown so the caret survives, which leaves
+            // nothing to focus the form for us.
+            onOpenAutoFocus={(e) => {
+              e.preventDefault();
+              linkInputRef.current?.focus();
+              linkInputRef.current?.select();
+            }}
+            onEscapeKeyDown={() => {
+              // Escape is its own dismissal path: the caret goes back to the
+              // document being edited, exactly as in onCloseAutoFocus below.
+              linkDismissedOutside.current = false;
+            }}
+            onCloseAutoFocus={(e) => {
+              // Radix would otherwise park focus on the trigger.
+              e.preventDefault();
+              // Each dismissal path above leaves linkDismissedOutside in its own
+              // state before close, so this read never sees a value left over
+              // from an earlier dismissal.
+              const dismissedOutside = linkDismissedOutside.current;
+              linkDismissedOutside.current = false;
+              // Apply, Cancel and Escape close the popover from its own controls,
+              // so the caret goes back to the document being edited. A click
+              // elsewhere in the compose dialog owns the focus it landed on.
+              if (!dismissedOutside) editor.commands.focus();
+            }}
+          >
+            {/* noValidate: this form reports its own message, not the browser's. */}
+            <form
+              noValidate
+              className="space-y-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                applyLink();
+              }}
+            >
+              <Label id={linkLabelId} htmlFor={linkInputId}>Link URL</Label>
+              <Input
+                id={linkInputId}
+                ref={linkInputRef}
+                type="url"
+                inputMode="url"
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                placeholder="https://example.com"
+                value={linkUrl}
+                aria-invalid={linkError ? true : undefined}
+                aria-describedby={linkError ? `${linkInputId}-error` : undefined}
+                onChange={(e) => {
+                  setLinkUrl(e.target.value);
+                  setLinkError(null);
+                }}
+              />
+              {linkError && (
+                <p id={`${linkInputId}-error`} role="alert" className="text-destructive text-xs">
+                  {linkError}
+                </p>
+              )}
+              <div className="flex items-center gap-2">
+                <Button type="submit" size="sm">
+                  Apply
+                </Button>
+                <Button type="button" size="sm" variant="ghost" onClick={() => setLinkOpen(false)}>
+                  Cancel
+                </Button>
+                {editor.isActive("link") && (
+                  <Button type="button" size="sm" variant="ghost" className="ml-auto" onClick={removeLink}>
+                    Remove link
+                  </Button>
+                )}
+              </div>
+            </form>
+          </PopoverContent>
+        </Popover>
       </div>
       <EditorContent
         editor={editor}
@@ -207,6 +559,8 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
           "[&_.tiptap_li_p]:m-0",
           // Inline code visibly distinct
           "[&_.tiptap_code]:bg-muted [&_.tiptap_code]:rounded [&_.tiptap_code]:px-1.5 [&_.tiptap_code]:py-0.5 [&_.tiptap_code]:font-mono [&_.tiptap_code]:text-[0.9em] [&_.tiptap_code]:border",
+          // Mention node, same treatment the rendered message gets
+          "[&_.tiptap_.mention]:bg-primary/10 [&_.tiptap_.mention]:text-primary [&_.tiptap_.mention]:rounded [&_.tiptap_.mention]:px-1 [&_.tiptap_.mention]:py-0.5 [&_.tiptap_.mention]:font-medium",
           // Code block distinct from inline (pre wraps code)
           "[&_.tiptap_pre]:bg-muted [&_.tiptap_pre]:rounded-md [&_.tiptap_pre]:p-3 [&_.tiptap_pre]:my-2 [&_.tiptap_pre]:overflow-x-auto [&_.tiptap_pre]:font-mono [&_.tiptap_pre]:text-sm [&_.tiptap_pre]:border",
           "[&_.tiptap_pre_code]:bg-transparent [&_.tiptap_pre_code]:p-0 [&_.tiptap_pre_code]:border-0 [&_.tiptap_pre_code]:rounded-none"

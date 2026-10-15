@@ -5,6 +5,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { toast } from "sonner";
+import { errorMessage } from "@/utils/errorMessage";
 import { Check, ChevronsUpDown, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -31,7 +32,7 @@ import {
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { TiptapEditor } from "./TiptapEditor";
 import type { Identity, Member, Conversation } from "@/types";
-import { getMemberDisplayName } from "@/types";
+import { getDisplayNameFromRow } from "@/types";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "@/contexts/WorkspaceContext";
 import { cn } from "@/lib/utils";
@@ -99,7 +100,7 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
       onOpenChange(false);
       if (conv && onCreated) onCreated(conv);
     } catch (err: unknown) {
-      const msg = (err as { message?: string })?.message || String(err);
+      const msg = errorMessage(err);
       toast.error("Could not create conversation", { description: msg });
     }
   };
@@ -159,7 +160,7 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
                                 ) : (
                                   <>
                                     {selectedMembers.slice(0, 3).map((m) => {
-                                      const name = getMemberDisplayName(m);
+                                      const name = getDisplayNameFromRow(m);
                                       return (
                                         <span
                                           key={m.id}
@@ -214,7 +215,7 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
                                   </div>
                                 ) : (
                                   selectableMembers.map((m) => {
-                                    const name = getMemberDisplayName(m);
+                                    const name = getDisplayNameFromRow(m);
                                     const isSelected = selectedIds.includes(m.id);
                                     return (
                                       <CommandItem

@@ -1,29 +1,21 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { ReactNode } from "react";
+import type { JobRunStatus } from "../types";
+import {
+  jobRunBadgeVariant,
+  statusBadgeVariant,
+  type StatusBadgeStatus,
+} from "./status-badge";
 
-export function StatusBadge({ status }: { status: string }) {
-  const variant =
-    status === "connected"
-      ? "success"
-      : status === "failed"
-        ? "destructive"
-        : status === "pending"
-          ? "warning"
-          : "secondary";
-  return <Badge variant={variant as "secondary"}>{status}</Badge>;
+export function StatusBadge({ status }: { status: StatusBadgeStatus }) {
+  return <Badge variant={statusBadgeVariant(status)}>{status}</Badge>;
 }
 
-export function JobRunStatusBadge({ status }: { status: string }) {
-  const variant =
-    status === "success"
-      ? "success"
-      : status === "failed" || status === "timed_out"
-        ? "destructive"
-        : status === "running" || status === "pending"
-          ? "warning"
-          : "secondary";
-  return <Badge variant={variant as "secondary"}>{status.replace("_", " ")}</Badge>;
+export function JobRunStatusBadge({ status }: { status: JobRunStatus }) {
+  return (
+    <Badge variant={jobRunBadgeVariant(status)}>{status.replace("_", " ")}</Badge>
+  );
 }
 
 export function PageHeader({
@@ -49,9 +41,17 @@ export function PageHeader({
 }
 
 export function EmptyRow({ colSpan, children }: { colSpan: number; children: ReactNode }) {
+  // The role sits on the cell, not the row: a `status` row would lose its row
+  // semantics (and the `getByRole("row")` assertions). `status` carries an
+  // implicit polite live region, so the Loading → failure/empty swap is
+  // announced — the same idiom as the inbox stale-messages note.
   return (
     <tr>
-      <td colSpan={colSpan} className="text-muted-foreground h-24 text-center text-sm">
+      <td
+        colSpan={colSpan}
+        role="status"
+        className="text-muted-foreground h-24 text-center text-sm"
+      >
         {children}
       </td>
     </tr>

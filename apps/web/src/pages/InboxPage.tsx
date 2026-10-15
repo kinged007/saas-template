@@ -2,10 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useUpdate, useCustomMutation, useInvalidate, useGetIdentity } from "@refinedev/core";
 import { useWorkspaceList, useWorkspaceCustom } from "../hooks/useWorkspaceQuery";
 import Markdown from "react-markdown";
-import { ArrowLeft, Inbox, Mail, MailOpen, ExternalLink, SendHorizontal, Pencil, Archive, ArchiveRestore, Search, MessageSquare, PanelLeftClose, PanelLeftOpen, X, Check } from "lucide-react";
+import { ArrowLeft, Inbox, Mail, MailOpen, ExternalLink, SendHorizontal, Pencil, Archive, ArchiveRestore, Search, MessageSquare, PanelLeftClose, PanelLeftOpen, X, Check, UserPlus } from "lucide-react";
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { markdownComponents, markdownComponentsInverted, stripMarkdown, truncate as truncatePreview } from "@/lib/markdown";
+import { mentionRemarkPlugin, mentionUrlTransform, type MentionTarget } from "@/lib/mentions";
+import { notificationLinkUrl } from "@/lib/notificationLink";
+import { errorMessage } from "@/utils/errorMessage";
+import { activeWorkspacePermissions } from "../utils/permissions";
+import { isClientError } from "../providers/queryClient";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,10 +22,11 @@ import { UserProfileDialog } from "@/components/UserProfileDialog";
 import { formatDate } from "../components/ui";
 import { TabbedPageHeader } from "../components/refine-ui/layout/tabbed-page-header";
 import { cn } from "@/lib/utils";
-import type { Notification, Conversation, Message, Identity } from "../types";
-import { getDisplayName, getParticipantDisplayName } from "../types";
+import type { Notification, Conversation, Message, Identity, Member } from "../types";
+import { getDisplayName, getDisplayNameFromRow } from "../types";
 import { ComposeDialog } from "../components/inbox/ComposeDialog";
 import { TiptapEditor } from "../components/inbox/TiptapEditor";
+import { EditParticipantsDialog } from "../components/inbox/EditParticipantsDialog";
 import {
   applyConversationRead,
   applyMessageCreated,
@@ -68,6 +74,8 @@ export function InboxPage() {
   const [editTitleValue, setEditTitleValue] = useState("");
   const [draft, setDraft] = useState("");
   const [, setDraftHtml] = useState("");
+  const [mentionIds, setMentionIds] = useState<string[]>([]);
+  const [editParticipantsOpen, setEditParticipantsOpen] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [searchExpanded, setSearchExpanded] = useState(false);
   const searchContainerRef = useRef<HTMLDivElement>(null);
@@ -206,6 +214,47 @@ export function InboxPage() {
     return conversations.find((c) => c.id === selectedConvId) ?? null;
   }, [conversations, selectedConvId]);
 
+  const canManageParticipants = useMemo(() => {
+    const perms = activeWorkspacePermissions(identity);
+    return perms.includes("*") || perms.includes("message:update");
+  }, [identity]);
+
+  // Mentionable people, read straight from the active workspace's members.
+  // This array is the container the `@` picker iterates.
+  const { result: membersResult } = useWorkspaceList<Member>({
+    resource: "members",
+    pagination: { pageSize: 100 },
+    queryOptions: { enabled: tab === "messages" && !!selectedConvId },
+  });
+  const mentionTargets: MentionTarget[] = useMemo(
+    () =>
+      (membersResult?.data ?? []).map((m) => ({
+        id: m.id,
+        type: "user",
+        label: getDisplayNameFromRow(m),
+        email: m.email,
+        avatar_url: m.avatar_url,
+        first_name: m.first_name,
+        last_name: m.last_name,
+        role: m.role,
+      })),
+    [membersResult],
+  );
+
+  // Names of the people in the open conversation, for mention highlighting.
+  const participantNames = useMemo(
+    () =>
+      (selectedConversation?.participants ?? []).map((p) =>
+        getDisplayNameFromRow(
+          p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null },
+        ),
+      ),
+    [selectedConversation],
+  );
+
+  // Built once per participant list, not once per message bubble.
+  const mentionPlugins = useMemo(() => [mentionRemarkPlugin(participantNames)], [participantNames]);
+
   const { mutate: updateConv } = useUpdate();
   const { mutate: customMutate } = useCustomMutation();
   const { mutateAsync: customMutateAsync } = useCustomMutation();
@@ -217,8 +266,12 @@ export function InboxPage() {
     config: {
       query: { limit: 100 },
     },
+    // The inline note in the thread header is this failure's only signal;
+    // refine's default toast would echo it transiently next to the note.
+    errorNotification: false,
     queryOptions: {
       enabled: !!selectedConvId && tab === "messages",
+      // Network failures make one attempt; a 4xx never retries anyway.
       retry: false,
     },
   });
@@ -227,9 +280,15 @@ export function InboxPage() {
     if (raw && Array.isArray(raw)) return raw as Message[];
     return [];
   }, [messagesResult]);
-  const messagesLoading = (messagesQuery as unknown as { isLoading?: boolean })?.isLoading ?? false;
+  const messagesLoading = messagesQuery.isLoading;
+  const messagesError = messagesQuery.isError;
+  // A 4xx means the server answered and refused; only a transport failure or 5xx
+  // leaves the cached list merely behind.
+  const messagesRefused = messagesError && isClientError(messagesQuery.error);
+  const hasCachedMessages = messages.length > 0;
+  const staleNote = messagesError && hasCachedMessages;
 
-  // Auto scroll to bottom when messages change
+  // Auto scroll to bottom when messages change.
   useEffect(() => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
@@ -324,7 +383,6 @@ export function InboxPage() {
     if (next.acknowledged) markNotifRead(cur.id);
     else markNotifUnread(cur.id);
   };
-  const linkUrl = (n: Notification) => (n.payload as Record<string, unknown> | undefined)?.url as string | undefined;
 
   // Conversation actions
   const handleSelectConv = (id: string) => {
@@ -352,6 +410,7 @@ export function InboxPage() {
     if (!selectedConvId || !draft.trim()) return;
     const body = draft.trim();
     const conversationId = selectedConvId;
+    const mentioned = mentionIds;
     // Optimistic: append directly to the thread cache so the message shows
     // before the server round-trip.
     const tempId = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -370,11 +429,12 @@ export function InboxPage() {
     upsertThreadMessage(conversationId, optimistic);
     setDraft("");
     setDraftHtml("");
+    setMentionIds([]);
     try {
       const res = await customMutateAsync({
         url: `conversations/${conversationId}/messages`,
         method: "post",
-        values: { body },
+        values: { body, mentioned_user_ids: mentioned },
         successNotification: false,
         errorNotification: false,
       });
@@ -398,9 +458,11 @@ export function InboxPage() {
       }
       // Sending marks the conversation read server-side — reflect it locally.
       applyConversationRead(conversationId);
+      // Mentioned users are joined server-side; the header list is now stale.
+      if (mentioned.length > 0) convQuery.refetch();
     } catch (err: unknown) {
       removeThreadMessage(conversationId, tempId);
-      const msg = (err as { message?: string })?.message || String(err);
+      const msg = errorMessage(err);
       toast.error(msg);
       // Restore draft on failure for retry
       setDraft(body);
@@ -426,7 +488,7 @@ export function InboxPage() {
           }
         },
         onError: (e) => {
-          toast.error(String((e as { message?: string })?.message ?? e));
+          toast.error(errorMessage(e));
         },
       }
     );
@@ -458,7 +520,7 @@ export function InboxPage() {
           invalidate({ resource: "notifications", invalidates: ["list"] });
         },
         onError: (e) => {
-          toast.error(String((e as { message?: string })?.message ?? e));
+          toast.error(errorMessage(e));
         },
       }
     );
@@ -480,7 +542,7 @@ export function InboxPage() {
           convQuery.refetch();
         },
         onError: (e) => {
-          toast.error(String((e as { message?: string })?.message ?? e));
+          toast.error(errorMessage(e));
         },
       }
     );
@@ -574,13 +636,16 @@ export function InboxPage() {
                     size="icon"
                     onClick={() => setSearchExpanded(true)}
                     aria-label="Search"
+                    title="Search"
                     className={cn("h-9 w-9 shrink-0", searchInput.trim() && "ring-1 ring-ring border-ring")}
                   >
                     <Search className="h-4 w-4" />
                   </Button>
                   <Select value={archivedFilter} onValueChange={(v) => setArchivedFilter(v as ArchivedFilter)}>
                     <SelectTrigger className="w-28">
-                      <SelectValue />
+                      <SelectValue>
+                        {archivedFilter === "archived" ? "Archived" : "Active"}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="active">Active</SelectItem>
@@ -592,10 +657,10 @@ export function InboxPage() {
                     size="icon"
                     onClick={() => setLeftCollapsed((v) => !v)}
                     aria-label={leftCollapsed ? "Expand panel" : "Collapse panel"}
-                    title={leftCollapsed ? "Expand" : "Collapse"}
+                    title={leftCollapsed ? "Expand panel" : "Collapse panel"}
                     className="ml-auto hidden h-9 w-9 shrink-0 md:inline-flex"
                   >
-                    <PanelLeftClose className="h-4 w-4" />
+                    {leftCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
                   </Button>
                 </>
               )}
@@ -627,7 +692,7 @@ export function InboxPage() {
                         <span className="text-muted-foreground shrink-0 text-[11px]">{formatListTime(c.last_message_at)}</span>
                         <div className="flex min-w-0 -space-x-1">
                           {c.participants.slice(0, 3).map((p) => {
-                            const name = getParticipantDisplayName(
+                            const name = getDisplayNameFromRow(
                               p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null },
                             );
                             const pEmail = (p as unknown as { email?: string | null }).email ?? null;
@@ -787,7 +852,7 @@ export function InboxPage() {
                             className="h-8 w-8 shrink-0"
                             onClick={handleTitleSave}
                             aria-label="Save title"
-                            title="Save"
+                            title="Save title"
                           >
                             <Check className="h-4 w-4" />
                           </Button>
@@ -805,14 +870,21 @@ export function InboxPage() {
                       ) : (
                         <div className="flex items-center gap-2">
                           <h3 className="truncate text-lg font-semibold">{selectedConversation.title || "Untitled"}</h3>
-                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditingTitle(true)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6"
+                            onClick={() => setEditingTitle(true)}
+                            aria-label="Edit title"
+                            title="Edit title"
+                          >
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
                         </div>
                       )}
                       <div className="mt-1 flex flex-wrap items-center gap-1">
                         {selectedConversation.participants.slice(0, 2).map((p) => {
-                          const name = getParticipantDisplayName(
+                          const name = getDisplayNameFromRow(
                             p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null },
                           );
                           const pEmail = (p as unknown as { email?: string | null }).email ?? null;
@@ -869,7 +941,7 @@ export function InboxPage() {
                               <TooltipContent side="bottom" align="start" className="max-w-[260px]">
                                 <div className="flex flex-col gap-1 text-xs">
                                   {selectedConversation.participants.map((p) => {
-                                    const name = getParticipantDisplayName(p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null });
+                                    const name = getDisplayNameFromRow(p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null });
                                     return (
                                       <span key={p.id} className="truncate">
                                         {name}
@@ -881,17 +953,74 @@ export function InboxPage() {
                             </Tooltip>
                           </TooltipProvider>
                         )}
+                        {canManageParticipants && (
+                          <Button
+                            variant="secondary"
+                            size="icon"
+                            className="h-5 w-5 shrink-0 rounded-full"
+                            onClick={() => setEditParticipantsOpen(true)}
+                            aria-label="Edit recipients"
+                            title="Edit recipients"
+                          >
+                            <UserPlus className="h-3 w-3" />
+                          </Button>
+                        )}
                       </div>
                     </div>
                   </div>
                 </div>
 
                 {/* Messages */}
-                <div className="flex-1 overflow-y-auto p-4">
+                <div data-testid="thread-messages" className="relative flex-1 overflow-y-auto p-4">
+                  {/* A failed refetch keeps the cached messages. The note is sticky at the
+                      top edge of the scroller, so it stays visible at any scroll position
+                      — including the auto-scrolled-to-newest reading state.
+                      `pointer-events-none` keeps the note from blocking clicks on the
+                      messages it covers. Always mounted: a live region has to be in the
+                      accessibility tree before its text changes to be announced —
+                      `sr-only` keeps it out of the layout. */}
+                  <p
+                    role="status"
+                    className={cn(
+                      "flex items-center justify-between gap-2 text-sm",
+                      !staleNote && "sr-only",
+                      staleNote &&
+                        "pointer-events-none sticky inset-x-0 top-0 z-10 bg-background px-4 pb-2 pt-3",
+                      staleNote && (messagesRefused ? "text-destructive" : "text-muted-foreground"),
+                    )}
+                  >
+                    <span>
+                      {staleNote && (messagesRefused ? "Could not refresh messages." : "Showing the last messages loaded.")}
+                    </span>
+                    {staleNote && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="pointer-events-auto"
+                        onClick={() => void messagesQuery.refetch()}
+                        disabled={messagesQuery.isFetching}
+                        aria-label="Retry loading messages"
+                      >
+                        Retry
+                      </Button>
+                    )}
+                  </p>
                   <div className="flex flex-col gap-4">
                     {messagesLoading ? (
                       <p className="text-muted-foreground text-sm">Loading…</p>
-                    ) : messages.length === 0 ? (
+                    ) : messagesError && !hasCachedMessages ? (
+                      <div className="flex items-center gap-2">
+                        <p className="text-destructive text-sm">Could not load messages.</p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void messagesQuery.refetch()}
+                          disabled={messagesQuery.isFetching}
+                        >
+                          Try again
+                        </Button>
+                      </div>
+                    ) : !hasCachedMessages ? (
                       <p className="text-muted-foreground text-sm">No messages yet.</p>
                     ) : (
                       messages.map((m) => {
@@ -911,7 +1040,13 @@ export function InboxPage() {
                             <div className={cn("max-w-[75%] rounded-lg px-3 py-2", isSelf ? "bg-primary text-primary-foreground" : "bg-muted")}>
                               {!isSelf && <p className="mb-1 text-xs font-medium opacity-70">{m.sender_name}</p>}
                               <div className={cn("prose prose-sm dark:prose-invert max-w-none break-words", isSelf ? "prose-invert" : "")}>
-                                <Markdown components={isSelf ? markdownComponentsInverted : markdownComponents}>{m.body}</Markdown>
+                                <Markdown
+                                  components={isSelf ? markdownComponentsInverted : markdownComponents}
+                                  remarkPlugins={mentionPlugins}
+                                  urlTransform={mentionUrlTransform}
+                                >
+                                  {m.body}
+                                </Markdown>
                               </div>
                               <p className={cn("mt-1 text-[11px]", isSelf ? "text-primary-foreground/70" : "text-muted-foreground")}>
                                 {formatDate(m.created_at)}
@@ -952,7 +1087,9 @@ export function InboxPage() {
                         setDraft(md);
                         setDraftHtml(html);
                       }}
-                      placeholder="Write a message..."
+                      onMention={setMentionIds}
+                      mentions={mentionTargets}
+                      placeholder="Write a message... Use @ to mention someone"
                       minHeight="60px"
                     />
                     <div className="flex justify-end">
@@ -991,7 +1128,9 @@ export function InboxPage() {
               <span className="shrink-0 text-sm font-medium">Notifications</span>
               <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
                 <SelectTrigger className="h-9 w-28">
-                  <SelectValue />
+                  <SelectValue>
+                    {STATUS_OPTIONS.find((o) => o.value === statusFilter)?.label}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {STATUS_OPTIONS.map((o) => (
@@ -1018,10 +1157,10 @@ export function InboxPage() {
                   size="icon"
                   onClick={() => setLeftCollapsed((v) => !v)}
                   aria-label={leftCollapsed ? "Expand panel" : "Collapse panel"}
-                  title={leftCollapsed ? "Expand" : "Collapse"}
+                  title={leftCollapsed ? "Expand panel" : "Collapse panel"}
                   className="hidden h-9 w-9 shrink-0 md:inline-flex"
                 >
-                  <PanelLeftClose className="h-4 w-4" />
+                  {leftCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
                 </Button>
               </div>
             </div>
@@ -1103,12 +1242,13 @@ export function InboxPage() {
                   </div>
                 </div>
                 <div className="prose prose-sm dark:prose-invert max-w-none flex-1">
+                  {/* ponytail: this panel can show a conversation other than the open one, so mentionPlugins — derived from the open conversation's participants — would style the wrong name set. */}
                   <Markdown components={markdownComponents}>{selectedNotif.body || ""}</Markdown>
                 </div>
                 <div className="border-border mt-6 flex items-center gap-2 border-t pt-4">
-                  {linkUrl(selectedNotif) && (
+                  {notificationLinkUrl(selectedNotif) && (
                     <Button size="sm" variant="outline" asChild>
-                      <a href={linkUrl(selectedNotif)} target="_blank" rel="noopener noreferrer">
+                      <a href={notificationLinkUrl(selectedNotif)} target="_blank" rel="noopener noreferrer">
                         <ExternalLink className="mr-1 h-3.5 w-3.5" />
                         Open link
                       </a>
@@ -1164,6 +1304,18 @@ export function InboxPage() {
           convQuery.refetch();
         }}
       />
+      {selectedConversation && (
+        <EditParticipantsDialog
+          open={editParticipantsOpen}
+          onOpenChange={setEditParticipantsOpen}
+          conversationId={selectedConversation.id}
+          participantIds={selectedConversation.participants.map((p) => p.id)}
+          onSaved={() => {
+            convQuery.refetch();
+            invalidate({ resource: "conversations", invalidates: ["list"] });
+          }}
+        />
+      )}
     </div>
   );
 }

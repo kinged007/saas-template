@@ -4,11 +4,13 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarSeparator,
   SidebarTrigger,
   SidebarRail,
 } from "@/components/ui/sidebar";
@@ -38,9 +40,11 @@ import {
   Building2,
   ChevronsUpDown,
   CircleUser,
+  FileText,
   Inbox,
   KeyRound,
   LayoutDashboard,
+  LifeBuoy,
   LogOut,
   Mail,
   Plus,
@@ -49,9 +53,11 @@ import {
   ShieldCheck,
   Users,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "../contexts/WorkspaceContext";
 import { activeWorkspacePermissions } from "../utils/permissions";
+import { isManagerRoleName } from "../pages/role-name";
 import { ThemeToggle } from "./refine-ui/theme/theme-toggle";
 import { NotificationCenter } from "./NotificationCenter";
 import { PendingInvitationsBadge } from "./PendingInvitations";
@@ -60,10 +66,41 @@ import { cn } from "@/lib/utils";
 import type { Identity } from "../types";
 import { getDisplayName } from "../types";
 
-const MENU_ITEMS = [
-  { key: "/", label: "Dashboard", icon: LayoutDashboard, permission: "workspace:read" },
-  { key: "/inbox", label: "Inbox", icon: Inbox, permission: null },
-  { key: "/members", label: "Members", icon: Users, permission: "member:read" },
+type MenuItem = {
+  key: string;
+  label: string;
+  icon: LucideIcon;
+  permission: string | null;
+};
+
+/**
+ * Sidebar groups, rendered in `position` order with a separator between the
+ * two sides. Omit `title` for an unlabelled group. Adding a group is a data
+ * change only; `SidebarNav` does not need to know about it.
+ */
+const SIDEBAR_GROUPS: { id: string; title?: string; position: "top" | "bottom"; items: MenuItem[] }[] = [
+  {
+    id: "main",
+    position: "top",
+    items: [
+      { key: "/", label: "Dashboard", icon: LayoutDashboard, permission: "workspace:read" },
+      { key: "/inbox", label: "Inbox", icon: Inbox, permission: null },
+    ],
+  },
+  {
+    id: "demo",
+    title: "Demo",
+    position: "top",
+    items: [
+      { key: "#", label: "Sample page", icon: FileText, permission: null },
+      { key: "#", label: "Support", icon: LifeBuoy, permission: null },
+    ],
+  },
+  {
+    id: "workspace",
+    position: "bottom",
+    items: [{ key: "/members", label: "Members", icon: Users, permission: "member:read" }],
+  },
 ];
 
 // GET /workspaces/search is gated by workspace:read, same as the Dashboard entry.
@@ -87,7 +124,6 @@ function SidebarNav({ openSearch }: { openSearch: () => void }) {
   const permissions = activeWorkspacePermissions(identity);
   const can = (p: string | null) =>
     p === null || permissions.includes("*") || permissions.includes(p);
-  const items = MENU_ITEMS.filter((i) => can(i.permission));
   const activeKey = `/${location.pathname.split("/")[1] || ""}`;
   const isActive = (key: string) => (key === "/" ? location.pathname === "/" : activeKey === key);
 
@@ -101,27 +137,30 @@ function SidebarNav({ openSearch }: { openSearch: () => void }) {
   const convUnreadCount =
     (convUnreadResult?.data as { count?: number } | undefined)?.count ?? 0;
 
-  return (
-    <SidebarGroup>
+  // A group whose items are all filtered out by permissions renders nothing,
+  // so a missing permission cannot leave an empty group or a dangling rule.
+  const visibleGroups = SIDEBAR_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((i) => can(i.permission)),
+  })).filter((group) => group.items.length > 0);
+
+  const renderGroup = (group: (typeof visibleGroups)[number]) => (
+    <SidebarGroup key={group.id}>
+      {/* The label element is the heading. The sidebar sits beside <main>, so
+          a group title is not subordinate to the page heading. */}
+      {group.title && (
+        <SidebarGroupLabel asChild>
+          <h2>{group.title}</h2>
+        </SidebarGroupLabel>
+      )}
       <SidebarMenu>
-        {/* Search sits above Dashboard, per the issue; it opens a modal rather
-            than navigating, so it is a real button and not a SidebarMenuButton link. */}
-        {can(SEARCH_PERMISSION) && (
-          <SidebarMenuItem>
-            <SidebarMenuButton onClick={openSearch} tooltip={`Search (${SEARCH_HOTKEY})`}>
-              <Search className="h-4 w-4 shrink-0" />
-              <span>Search</span>
-              <SearchShortcut />
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        )}
-        {items.map((item) => {
+        {group.items.map((item, index) => {
           const Icon = item.icon;
           const active = isActive(item.key);
           const isInbox = item.key === "/inbox";
           const badgeCount = isInbox ? convUnreadCount : 0;
           return (
-            <SidebarMenuItem key={item.key}>
+            <SidebarMenuItem key={`${group.id}-${item.key}-${index}`}>
               <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
                 <Link to={item.key}>
                   <span className="relative">
@@ -146,6 +185,35 @@ function SidebarNav({ openSearch }: { openSearch: () => void }) {
       </SidebarMenu>
     </SidebarGroup>
   );
+
+  const topGroups = visibleGroups.filter((g) => g.position === "top");
+  const bottomGroups = visibleGroups.filter((g) => g.position === "bottom");
+
+  // The landmark belongs at the call site, not in the shared shadcn primitive.
+  // It takes over the flex classes SidebarContent used to give the groups, so
+  // the scroll and collapsed layout are unchanged. Named because the settings
+  // pages render a nav of their own.
+  const canSearch = can(SEARCH_PERMISSION);
+  return (
+    <nav aria-label="Main" className="flex min-h-0 flex-1 flex-col gap-2">
+      {canSearch && (
+        <SidebarGroup>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton onClick={openSearch} tooltip={`Search (${SEARCH_HOTKEY})`}>
+                <Search className="h-4 w-4 shrink-0" />
+                <span>Search</span>
+                <SearchShortcut />
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroup>
+      )}
+      {topGroups.map(renderGroup)}
+      {topGroups.length > 0 && bottomGroups.length > 0 && <SidebarSeparator />}
+      {bottomGroups.map(renderGroup)}
+    </nav>
+  );
 }
 
 const CREATE_WORKSPACE_VALUE = "__create_workspace__";
@@ -158,9 +226,8 @@ function useSingleWorkspace(): boolean {
   return identity?.single_workspace === true;
 }
 
-function WorkspaceSwitcher() {
+function WorkspaceSwitcher({ single }: { single: boolean }) {
   const { workspaces, workspace, setWorkspace } = useWorkspace();
-  const single = useSingleWorkspace();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   if (workspaces.length === 0) return null;
@@ -233,15 +300,17 @@ function UserMenu() {
   const permissions = activeWorkspacePermissions(identity);
   const canViewApiKeys = permissions.includes("*") || permissions.includes("apikey:read");
 
-  // Workspace settings — only owners and admins may see this entry. The page
-  // itself re-checks this gate and renders an "Access denied" fallback if the
-  // role was downgraded after the menu rendered.
+  // Workspace settings — only owners and admins may see this entry, and
+  // SINGLE_WORKSPACE hides it entirely. The page itself re-checks the role gate
+  // and renders an "Access denied" fallback if the role was downgraded after
+  // the menu rendered; hiding the entry leaves the route itself reachable.
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
   const isWorkspaceAdmin =
     identity?.is_superuser === true ||
-    (myRole !== undefined && ["owner", "admin"].includes(myRole)) ||
+    isManagerRoleName(myRole) ||
     permissions.includes("*") ||
     permissions.includes("workspace:update");
+  const showWorkspaceSettings = isWorkspaceAdmin && identity?.single_workspace !== true;
 
   return (
     <DropdownMenu>
@@ -275,7 +344,7 @@ function UserMenu() {
           <Settings />
           Profile Settings
         </DropdownMenuItem>
-        {isWorkspaceAdmin && (
+        {showWorkspaceSettings && (
           <DropdownMenuItem onClick={() => navigate("/settings/workspace")}>
             <Building2 />
             Workspace Settings
@@ -312,6 +381,7 @@ function UserMenu() {
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const { workspaces } = useWorkspace();
+  const single = useSingleWorkspace();
   const [searchOpen, setSearchOpen] = useState(false);
   const openSearch = () => setSearchOpen(true);
 
@@ -319,8 +389,13 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.key.toLowerCase() !== "k" || !(e.metaKey || e.ctrlKey)) return;
       // Skip editable targets (Ctrl+K is kill-line in most editors) and any open
-      // dialog, so the palette never hijacks typing nor stacks over a modal.
-      if ((e.target as HTMLElement | null)?.closest("input, textarea, select, [contenteditable], [role=dialog]")) return;
+      // dialog/popover, so the palette never hijacks typing nor stacks over a modal.
+      if (
+        (e.target as HTMLElement | null)?.closest(
+          "input, textarea, select, [contenteditable], [role=dialog], [role=listbox], [role=menu]",
+        )
+      )
+        return;
       e.preventDefault();
       setSearchOpen(true);
     };
@@ -344,7 +419,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               className="hidden w-auto max-w-8 shrink-0 group-data-[collapsible=icon]:block"
             />
           </div>
-          <WorkspaceSwitcher />
+          <WorkspaceSwitcher single={single} />
         </SidebarHeader>
         <SidebarContent>
           {workspaces.length === 0 ? (
@@ -352,13 +427,17 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               <p className="text-muted-foreground text-sm">
                 You're not a member of any workspace yet.
               </p>
-              <Button
-                onClick={() => navigate("/workspaces/create")}
-                className="gap-2 justify-start"
-              >
-                <Building2 className="h-4 w-4" />
-                Create workspace
-              </Button>
+              {/* /workspaces/create redirects home while the flag is set, so the
+                  button would navigate nowhere. */}
+              {!single && (
+                <Button
+                  onClick={() => navigate("/workspaces/create")}
+                  className="gap-2 justify-start"
+                >
+                  <Building2 className="h-4 w-4" />
+                  Create workspace
+                </Button>
+              )}
             </div>
           ) : (
             <SidebarNav openSearch={openSearch} />

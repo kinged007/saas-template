@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useWorkspaceCustom } from "@/hooks/useWorkspaceQuery";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import type { WorkspaceSearchResponse, WorkspaceSearchResult } from "@/types";
 
 /** The endpoint rejects q outside 2-200 characters, so cap before sending. */
@@ -48,6 +49,7 @@ export function WorkspaceSearchDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const navigate = useNavigate();
+  const { workspace } = useWorkspace();
   const [input, setInput] = useState("");
   const [q, setQ] = useState("");
 
@@ -69,6 +71,7 @@ export function WorkspaceSearchDialog({
     url: "workspaces/search",
     method: "get",
     config: { query: { q } },
+    errorNotification: false,
     queryOptions: { enabled: q.length >= 2, retry: false },
   });
 
@@ -89,13 +92,16 @@ export function WorkspaceSearchDialog({
           className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-5 [&_[cmdk-item]_svg]:w-5"
         >
           <CommandInput
+            className="pr-12"
             placeholder="Search conversations, members, jobs, notifications…"
             value={input}
             onValueChange={setInput}
             aria-label="Search workspace"
           />
           <CommandList>
-            {q.length < 2 ? (
+            {!workspace ? (
+              <p className="text-muted-foreground p-4 text-center text-sm">Select a workspace to search.</p>
+            ) : q.length < 2 ? (
               <p className="text-muted-foreground p-4 text-center text-sm">
                 Type at least 2 characters to search.
               </p>
