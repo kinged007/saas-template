@@ -473,6 +473,8 @@ async def test_callback_failure_log_is_control_free(app_client, oauth_on, caplog
     # Starlette percent-decodes the path param, so CR/LF/ESC survive into
     # provider_id and into the OAuthError text the callback logs. The warning
     # must leave no Cc control behind (log forging / ANSI injection).
+    import src.api.routes.oauth as oauth_routes
+
     from src.main import app as fastapi_app
 
     provider_id = "bad\r\nidp\x1b[31m"
@@ -480,6 +482,7 @@ async def test_callback_failure_log_is_control_free(app_client, oauth_on, caplog
         oauth_svc.STATE_TTL_HINT + "s-forged",
         {"provider": provider_id, "redirect_uri": "http://test/cb", "code_verifier": "v"},
     )
+    app_client.cookies.set(oauth_routes.STATE_COOKIE, "s-forged")
     with caplog.at_level(logging.WARNING, logger="src.api.routes.oauth"):
         resp = await app_client.get(
             f"/api/v1/auth/oauth/{quote(provider_id)}/callback?code=x&state=s-forged",

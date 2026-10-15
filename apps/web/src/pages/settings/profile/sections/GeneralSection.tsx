@@ -536,45 +536,46 @@ export function GeneralSection() {
 
       {/* Export and account deletion act on the signed-in user only. */}
       {!targetId && (
-      <Card>
-        <CardHeader>
-          <CardTitle>Connected accounts</CardTitle>
-          <CardDescription>
-            Link a single sign-on provider. New providers sign you in with the same account.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ConnectedAccounts />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Data &amp; Account</CardTitle>
-          <CardDescription>Export or delete your account. Deletion is permanent.</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-medium">Export my data</p>
-              <p className="text-muted-foreground text-sm">Download a JSON bundle with your profile, workspaces and counts.</p>
-            </div>
-            <Button variant="outline" onClick={handleExport}>
-              Export
-            </Button>
-          </div>
-          <Separator />
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-medium text-destructive">Delete account</p>
-              <p className="text-muted-foreground text-sm">Hard-delete your user, profile, tokens and memberships.</p>
-            </div>
-            <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)}>
-              Delete account
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+        <>
+          <Card>
+            <CardHeader>
+              <CardTitle>Connected accounts</CardTitle>
+              <CardDescription>
+                Link a single sign-on provider. New providers sign you in with the same account.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ConnectedAccounts />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Data &amp; Account</CardTitle>
+              <CardDescription>Export or delete your account. Deletion is permanent.</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium">Export my data</p>
+                  <p className="text-muted-foreground text-sm">Download a JSON bundle with your profile, workspaces and counts.</p>
+                </div>
+                <Button variant="outline" onClick={handleExport}>
+                  Export
+                </Button>
+              </div>
+              <Separator />
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium text-destructive">Delete account</p>
+                  <p className="text-muted-foreground text-sm">Hard-delete your user, profile, tokens and memberships.</p>
+                </div>
+                <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)}>
+                  Delete account
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </>
       )}
 
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

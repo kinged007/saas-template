@@ -51,7 +51,11 @@ def _seed_state(state: str, *, link_user_id: str | None = None) -> None:
     to call the callback must also set it on the client (see `_link`)."""
     from src.main import app as fastapi_app
 
-    saved: dict = {"provider": "testidp", "redirect_uri": "http://test/cb"}
+    saved: dict = {
+        "provider": "testidp",
+        "redirect_uri": "http://test/cb",
+        "code_verifier": "verifier-abc",
+    }
     if link_user_id is not None:
         saved["link_user_id"] = link_user_id
     fastapi_app.state.container.cache.set(oauth_svc.STATE_TTL_HINT + state, saved)

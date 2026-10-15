@@ -149,7 +149,11 @@ def build_authorize_url(
         raise OAuthError(f"oauth provider '{provider.id}' has no authorize endpoint")
     state = secrets.token_urlsafe(32)
     verifier, challenge = _pkce_pair()
-    saved: dict[str, Any] = {"provider": provider.id, "redirect_uri": redirect_uri, "code_verifier": verifier}
+    saved: dict[str, Any] = {
+        "provider": provider.id,
+        "redirect_uri": redirect_uri,
+        "code_verifier": verifier,
+    }
     if link_user_id is not None:
         saved["link_user_id"] = link_user_id
     cache.set(STATE_TTL_HINT + state, saved)
