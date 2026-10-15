@@ -21,7 +21,8 @@ import {
   getActiveWorkspaceId,
   setActiveWorkspaceId,
 } from "../utils/storage";
-import { clearAllCaches, clearWorkspaceCaches } from "../providers/queryClient";
+import { clearAllCaches, clearWorkspaceCaches, shouldRetry } from "../providers/queryClient";
+import { errorMessage } from "../utils/errorMessage";
 import { API_URL, httpClient } from "../providers/dataProvider";
 
 type WorkspaceContextValue = {
@@ -39,13 +40,23 @@ const WorkspaceContext = createContext<WorkspaceContextValue>({
 
 export const useWorkspace = () => useContext(WorkspaceContext);
 
+/** refine's `useGetIdentity` query key — the cache entry this provider reads. */
+const IDENTITY_QUERY_KEY = ["auth", "identity"] as const;
+
 // refine's useGetIdentity defaults to retry: false; a transient /me failure
 // would otherwise settle with no identity and mount pages without a workspace.
 // Shared by every useGetIdentity observer so they don't override each other's
 // options on the shared query (react-query merges observer options).
+// This override exists because refine hardcodes `retry: false` on
+// useGetIdentity, and an explicit per-query value beats the client default —
+// so it is the only way the retry policy reaches /me. The refusal set is
+// the app-wide one (see shouldRetry in providers/queryClient): 4xx — a 401
+// from /me has already triggered forceLogout() in the response interceptor,
+// and its retries raced the redirect — and 5xx, matching the default's
+// fail-fast.
 export const IDENTITY_QUERY_OPTIONS = {
   staleTime: 30_000,
-  retry: 2,
+  retry: (failureCount: number, error: unknown) => shouldRetry(failureCount, error, 2),
   retryDelay: (attempt: number) => Math.min(500 * 2 ** attempt, 4000),
 };
 
@@ -63,10 +74,46 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // useSyncExternalStore subscription re-renders this provider whenever the
   // identity cache entry changes, so hydration propagates without an
   // observer of our own.
+
+  // react-query emits a cache event for the identity query from every
+  // QueryObserver.updateResult(), including the `new QueryObserver` that a
+  // useGetIdentity() consumer builds inside its OWN render. React compares the
+  // store snapshot against the value it committed last, which lags a render
+  // behind, so those observer-churn events made React schedule this provider's
+  // re-render while another component was rendering. Only a changed identity
+  // entry is news for this provider.
+  const subscribeToIdentity = useCallback(
+    (onChange: () => void) => {
+      let last = queryClient.getQueryData(IDENTITY_QUERY_KEY);
+      return queryClient.getQueryCache().subscribe((event) => {
+        if (
+          event.query.queryKey[0] !== "auth" ||
+          event.query.queryKey[1] !== "identity"
+        ) {
+          return;
+        }
+        const next = queryClient.getQueryData(IDENTITY_QUERY_KEY);
+        if (next === last) return;
+        last = next;
+        onChange();
+      });
+    },
+    [queryClient],
+  );
   const cachedIdentity = useSyncExternalStore(
-    (onChange) => queryClient.getQueryCache().subscribe(onChange),
-    () => queryClient.getQueryData<Identity & { workspaces: Workspace[] }>(["auth", "identity"]),
+    subscribeToIdentity,
+    () =>
+      queryClient.getQueryData<Identity & { workspaces: Workspace[] }>(IDENTITY_QUERY_KEY),
     () => undefined,
+  );
+  // The identity cache is written a round-trip after the token, so on its own
+  // this provider keeps its signed-out render (workspaces: [], workspace:
+  // undefined) while the route that just mounted paints the empty state.
+  // Re-rendering on the token lets the isLoading gate cover that gap.
+  const hasAccessToken = useSyncExternalStore(
+    tokenStore.onTokensChanged,
+    () => !!tokenStore.getAccess(),
+    () => false,
   );
   const storedIdentity = (identityStore.get() as (Identity & { workspaces: Workspace[] }) | null);
   const identity = cachedIdentity ?? storedIdentity ?? undefined;
@@ -89,7 +136,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         `${API_URL}/auth/me`,
       );
       identityStore.set(data);
-      queryClient.setQueryData(["auth", "identity"], data);
+      queryClient.setQueryData(IDENTITY_QUERY_KEY, data);
     } catch (e) {
       // 401s are handled by the httpClient interceptor (refresh, else clear
       // tokens + redirect to /login) — only surface non-auth failures here.
@@ -99,11 +146,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
   }, [queryClient]);
 
+  // hasAccessToken is a dependency because a sign-in can set the token while
+  // identity is already undefined — without it this effect never runs for that
+  // render and the provider stays on the loading branch with no observer left
+  // to deliver the identity (children are not mounted).
   useEffect(() => {
-    if (tokenStore.getAccess() && identity === undefined) {
+    if (hasAccessToken && identity === undefined) {
       void fetchIdentity();
     }
-  }, [identity, fetchIdentity]);
+  }, [identity, fetchIdentity, hasAccessToken]);
 
   const refetch = () => {
     queryClient.invalidateQueries({ queryKey: ["auth"] });
@@ -237,7 +288,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       selected.slug !== next.slug ||
       // permissions/role may have changed after a role update
       JSON.stringify(selected.permissions) !== JSON.stringify(next.permissions) ||
-      selected.role !== next.role
+      selected.role !== next.role ||
+      // onboarding_enabled is a PATCH-able field too: a flag-only patch
+      // changes nothing else, so without this the selected workspace would
+      // keep the pre-patch value and the toggle would look like it did nothing.
+      selected.onboarding_enabled !== next.onboarding_enabled
     ) {
       setSelected(next);
     }
@@ -296,10 +351,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [workspaces, selected, refetch, identityId],
   );
 
-  // Signed out (e.g. on /login): render children and let the Authenticated
-  // guard route to the login flow. Caches were already cleared synchronously
-  // in authProvider.logout / the 401 interceptor.
-  if (!tokenStore.getAccess()) {
+  // Signed out (e.g. /forgot-password on a cold load): render children and let
+  // the Authenticated guard route to the login flow. Caches were already
+  // cleared synchronously in authProvider.logout / the 401 interceptor.
+  if (!hasAccessToken) {
     return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
   }
 
@@ -319,7 +374,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           <p className="text-muted-foreground max-w-md text-center text-sm">
             Couldn't load your account
             {identityError
-              ? `: ${String((identityError as { message?: string }).message ?? identityError)}`
+              ? `: ${errorMessage(identityError)}`
               : ""}
           </p>
           <div className="flex gap-2">
@@ -347,6 +402,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }
 
   // Workspace known but not yet selected: block until the effect picks one.
+  // Zero workspaces is deliberately not this gate — RequireWorkspace in App.tsx
+  // owns it, because the provider also wraps the workspace-free routes.
   if (workspaces.length > 0 && !selected) {
     return null;
   }

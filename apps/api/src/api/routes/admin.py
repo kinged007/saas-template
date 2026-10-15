@@ -3,6 +3,10 @@
 Unlike workspace-scoped routes, these are gated on `require_superuser`,
 not on workspace RBAC — a superuser does not need membership in a
 workspace to inspect it here.
+
+Session-only: `require_superuser` rejects API keys, so every route here
+requires a superuser's session token. The same applies to the
+`/jobs/global*` family and the `/users/{id}` administration routes.
 """
 
 from __future__ import annotations
@@ -15,13 +19,15 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, apply_query, parse_query
-from src.api.deps import get_container, require_superuser
+from src.api.deps import get_container, require_superuser, uuid_or_404
+from src.core.dates import iso_or_none
 from src.db.session import get_db
 from src.events.publisher import publish_audit
 from src.models.audit import AuditLogEntry
 from src.models.user_profile import UserProfile
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.schemas.api import AdminUserUpdate, AdminWorkspaceFlags
+from src.services.audit import public_details
 from src.services.profile_helpers import escape_like, format_display_name
 from src.services.serializers import user_to_dict, workspace_to_dict
 
@@ -41,7 +47,7 @@ def _admin_user_dict(u: User) -> dict:
     return {
         **user_to_dict(u),
         "is_active": bool(u.is_active),
-        "created_at": u.created_at.isoformat() if u.created_at else None,
+        "created_at": iso_or_none(u.created_at),
     }
 
 
@@ -78,6 +84,8 @@ async def list_users(
         )
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(User.created_at.desc(), User.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
@@ -90,7 +98,7 @@ async def get_user(
     _=Depends(require_superuser),
     db: AsyncSession = Depends(get_db),
 ):
-    user = await db.get(User, user_id)
+    user = await db.get(User, uuid_or_404(user_id, "user"))
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     stmt = (
@@ -116,7 +124,7 @@ async def update_user(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    user = await db.get(User, user_id)
+    user = await db.get(User, uuid_or_404(user_id, "user"))
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     if user.id == admin.id and body.is_active is False:
@@ -154,6 +162,8 @@ async def list_all_workspaces(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(Workspace.created_at.desc(), Workspace.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     workspaces = rows.scalars().all()
@@ -178,7 +188,7 @@ async def update_workspace_flags(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    workspace = await db.get(Workspace, workspace_id)
+    workspace = await db.get(Workspace, uuid_or_404(workspace_id, "workspace"))
     if workspace is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
     merged = {**(workspace.flags or {}), **body.flags}
@@ -271,9 +281,9 @@ async def list_all_audit_logs(
                 "resource_type": entry.resource_type,
                 "resource_id": entry.resource_id,
                 "action": entry.action,
-                "details": entry.details,
+                "details": public_details(entry.details),
                 "ip_address": entry.ip_address,
-                "created_at": entry.created_at.isoformat() if entry.created_at else None,
+                "created_at": iso_or_none(entry.created_at),
             }
         )
     return out

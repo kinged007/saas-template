@@ -22,11 +22,7 @@ from src.events.publisher import publish_audit
 from src.models.core import Notification
 from src.models.workspace import Workspace
 from src.schemas.api import NotificationAck, NotificationPreferencesUpdate
-from src.services.notifications import (
-    CHANNELS,
-    DIGEST_TYPE,
-    NotificationService,
-)
+from src.services.notifications import NotificationService, preferences_response
 from src.services.serializers import notification_to_dict
 
 logger = logging.getLogger(__name__)
@@ -35,6 +31,8 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 _NOTIFICATION_FILTERABLE = {"type", "acknowledged_at", "acknowledged", "workspace_id"}
 _NOTIFICATION_SORTABLE = {"created_at", "type", "acknowledged_at"}
+# Newest first, id breaking created_at ties — see _MEMBER_DEFAULT_ORDER.
+_NOTIFICATION_DEFAULT_ORDER = (Notification.created_at.desc(), Notification.id.desc())
 
 
 def _row_dict(n: Notification, workspace_name: str | None = None) -> dict:
@@ -85,6 +83,8 @@ async def list_notifications(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(*_NOTIFICATION_DEFAULT_ORDER)
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
@@ -110,12 +110,7 @@ async def get_preferences(
     _=Depends(require_key_permission(NOTIFICATION_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    prefs = await NotificationService(db).get_preferences(user.id)
-    digest = next((p.digest_enabled for p in prefs if p.type == DIGEST_TYPE), False)
-    return {
-        "channels": {p.type: p.channel for p in prefs if p.type != DIGEST_TYPE},
-        "digest_enabled": digest,
-    }
+    return preferences_response(await NotificationService(db).get_preferences(user.id))
 
 
 @router.put("/preferences")
@@ -126,24 +121,16 @@ async def update_preferences(
     _=Depends(require_key_permission(NOTIFICATION_UPDATE)),
     db: AsyncSession = Depends(get_db),
 ):
-    for type, channel in body.channels.items():
-        if len(type) > 50:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"unknown type {type!r}")
-        if channel not in CHANNELS:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, f"invalid channel {channel!r}"
-            )
     service = NotificationService(db)
     if body.channels:
-        await service.upsert_channels(user.id, body.channels)
+        try:
+            await service.upsert_channels(user.id, body.channels)
+        except ValueError as exc:
+            # upsert_channels owns type/channel validation (see KNOWN_TYPES).
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     if body.digest_enabled is not None:
         await service.set_digest(user.id, body.digest_enabled)
-    prefs = await service.get_preferences(user.id)
-    digest = next((p.digest_enabled for p in prefs if p.type == DIGEST_TYPE), False)
-    return {
-        "channels": {p.type: p.channel for p in prefs if p.type != DIGEST_TYPE},
-        "digest_enabled": digest,
-    }
+    return preferences_response(await service.get_preferences(user.id))
 
 
 @router.get("/unsubscribe", response_class=PlainTextResponse)

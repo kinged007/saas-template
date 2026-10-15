@@ -1,5 +1,7 @@
 import * as React from "react";
-import type { Components } from "react-markdown";
+import { type Components } from "react-markdown";
+import { MENTION_SCHEME } from "./mentions";
+import { cn } from "./utils";
 
 /**
  * Strip markdown syntax so the preview shows only plain text.
@@ -81,10 +83,27 @@ function LinkBase({
   );
 }
 
+/** Shared render for a highlighted mention; not a real link. */
+function MentionSpan({ children, inverted }: { children?: React.ReactNode; inverted?: boolean }) {
+  return (
+    <span
+      className={cn(
+        "rounded px-1 py-0.5 font-medium",
+        inverted ? "bg-white/20 text-primary-foreground" : "bg-primary/10 text-primary"
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
 export const markdownComponents: Components = {
   a(props) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { children, href, node: _node, ...rest } = props as any;
+    if (typeof href === "string" && href.startsWith(MENTION_SCHEME)) {
+      return <MentionSpan>{children}</MentionSpan>;
+    }
     return (
       <LinkBase href={href} className="text-primary underline underline-offset-4 hover:text-primary/80" {...(rest as any)}>
         {children}
@@ -206,6 +225,9 @@ export const markdownComponentsInverted: Components = {
   a(props) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { children, href, node: _node, ...rest } = props as any;
+    if (typeof href === "string" && href.startsWith(MENTION_SCHEME)) {
+      return <MentionSpan inverted>{children}</MentionSpan>;
+    }
     return (
       <LinkBase href={href} className="text-primary-foreground underline decoration-primary-foreground/60 underline-offset-4 hover:opacity-90" {...(rest as any)}>
         {children}

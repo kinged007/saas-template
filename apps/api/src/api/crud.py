@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import Request
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select
 from sqlalchemy.sql import ColumnElement
 
 from src.services.profile_helpers import escape_like
@@ -59,6 +59,24 @@ class QuerySpec:
     sort_order: list[str] = field(default_factory=list)
     ids: list[str] = field(default_factory=list)
     filters: list[tuple[str, str, str]] = field(default_factory=list)  # (field, op, value)
+    # Which sort dialect the client used, recorded by `parse_query` when it
+    # detects it. Error messages name the parameters the client actually
+    # sent (#1134).
+    repeated_sort: bool = False
+
+    def _sort_param_names(self) -> tuple[str, str]:
+        return ("sort[]", "order[]") if self.repeated_sort else ("_sort", "_order")
+
+    def validate_sort(self) -> None:
+        """Reject a direction list that does not line up with the sort list.
+
+        Called by `apply_query` and by the routes that sort in their service
+        layer, so a malformed sort query answers the same on every route
+        whether the client wrote `sort[]`/`order[]` or `_sort`/`_order`.
+        """
+        if len(self.sort_by) != len(self.sort_order):
+            by, order = self._sort_param_names()
+            raise InvalidQuery(f"{by} and {order} must have the same number of entries")
 
 
 class InvalidQuery(Exception):
@@ -84,16 +102,50 @@ def parse_query(request: Request, *, max_limit: int = 100) -> QuerySpec:
     except ValueError:
         raise InvalidQuery("offset/limit must be integers") from None
     # simple-rest sorts with comma-joined `_sort`/`_order`; legacy uses
-    # repeated `sort[]`/`order[]`.
-    if "_sort" in q:
-        spec.sort_by = [s for s in q.get("_sort", "").split(",") if s]
-        orders = [s for s in q.get("_order", "").split(",") if s]
-        spec.sort_order = orders + ["asc"] * (len(spec.sort_by) - len(orders))
+    # repeated `sort[]`/`order[]`. The dialect is read from either of its
+    # parameters, so `_order` on its own is parsed (and rejected by the
+    # length guard) rather than falling through to the repeated style and
+    # being dropped.
+    #
+    # Dialect contract (#1059): the primary list path — refine's simple-rest
+    # data provider (apps/web) — sends the comma dialect (`_sort`/`_order`,
+    # e.g. `?_end=20&_order=desc&_sort=last_message_at&_start=0`). Only the
+    # admin provider (apps/web/src/providers/dataProvider.ts) appends
+    # repeated `sort[]`/`order[]`. The two spellings must be matched per
+    # request; the guards below name the dialect the client actually used.
+    repeated = "sort[]" in q or "order[]" in q
+    spec.repeated_sort = repeated
+    if repeated and ("_sort" in q or "_order" in q):
+        # Name the mix here. Falling through reads it as an order with no
+        # sort (or the reverse) and reports the length guard, whose message
+        # names `sort[]`/`order[]` even when the client sent `_sort`/`_order`.
+        raise InvalidQuery("mixing sort[]/order[] with _sort/_order is not supported")
+    if repeated:
+        sort_by, orders = q.getlist("sort[]"), q.getlist("order[]")
     else:
-        spec.sort_by = q.getlist("sort[]")
-        spec.sort_order = q.getlist("order[]")
-        if len(spec.sort_order) < len(spec.sort_by):
-            spec.sort_order.extend(["asc"] * (len(spec.sort_by) - len(spec.sort_order)))
+        sort_by = q.get("_sort", "").split(",")
+        orders = q.get("_order", "").split(",")
+    # An empty entry names no column, so it drops in both dialects: `_sort=,`
+    # and `?sort[]=` both mean no sort.
+    spec.sort_by = [s for s in sort_by if s]
+    spec.sort_order = [o for o in orders if o]
+    spec.sort_order.extend(["asc"] * (len(spec.sort_by) - len(spec.sort_order)))
+    # `apply_query` compares the direction against the literals "desc"/"asc",
+    # so normalize the client's value once here rather than at both call sites
+    # (the leading term and the `id` tiebreaker). `DESC` is the SQL convention a
+    # client may well send; unnormalized it took the `else` branch and sorted
+    # ascending, silently.
+    spec.sort_order = [o.strip().lower() for o in spec.sort_order]
+    # The length guard runs before the direction check so an order-only
+    # malformed query answers the length guard in both dialects regardless
+    # of the direction value (#1134). Service-layer routes re-run it after
+    # mutating the spec.
+    spec.validate_sort()
+    # `apply_query` reads anything but "desc" as ascending, so a misspelled
+    # direction would come back 200 and oldest-first with nothing to notice.
+    for o in spec.sort_order:
+        if o not in ("asc", "desc"):
+            raise InvalidQuery(f"sort order must be 'asc' or 'desc': {o}")
     spec.ids = q.getlist("ids[]")
     if not spec.ids and "id" in q:  # simple-rest getMany sends repeated `id=`
         spec.ids = q.getlist("id")
@@ -157,27 +209,15 @@ def apply_query(
         stmt = stmt.where(_COMPARATORS[op](column, _coerce(column, value)))
     if spec.ids:
         stmt = stmt.where(model.id.in_(spec.ids))
+    spec.validate_sort()
     for fname, order in zip(spec.sort_by, spec.sort_order, strict=True):
         if fname not in sortable:
             raise InvalidQuery(f"sort on unknown field: {fname}")
         column = getattr(model, fname)
         stmt = stmt.order_by(column.desc() if order == "desc" else column.asc())
+    # A unique column last makes the order total, so offset/limit paging can
+    # neither repeat nor skip a row when the leading terms tie.
+    if spec.sort_by:
+        last = spec.sort_order[-1]
+        stmt = stmt.order_by(model.id.desc() if last == "desc" else model.id.asc())
     return stmt
-
-
-async def run_list(
-    session,
-    stmt: Select,
-    model: type,
-    request: Request,
-    *,
-    sortable: set[str],
-    filterable: set[str],
-) -> tuple[list[Any], int]:
-    spec = parse_query(request)
-    stmt = apply_query(stmt, model, spec, sortable=sortable, filterable=filterable)
-    count = await session.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
-    total = count.scalar_one()
-    stmt = stmt.offset(spec.offset).limit(spec.limit)
-    result = await session.execute(stmt)
-    return list(result.scalars().all()), total

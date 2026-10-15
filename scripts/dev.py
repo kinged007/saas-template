@@ -24,7 +24,8 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 API_PORT = os.environ.get("API_PORT", "8000")
-WEB_PORT = os.environ.get("WEB_PORT", "5173")
+DEFAULT_WEB_PORT = "5173"
+WEB_PORT = os.environ.get("WEB_PORT", DEFAULT_WEB_PORT)
 
 SERVERS = [
     {
@@ -42,6 +43,46 @@ SERVERS = [
 GRACE_SECONDS = 3.0
 HANDLED = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
+
+def api_env_file(key: str) -> str:
+    """Value of `key` in apps/api/.env, or "" when absent (last line wins).
+
+    The API reads that file itself, but a real env var beats it — and dev.py
+    always sets CORS_ORIGINS / FRONTEND_URL, so without this the origins the
+    user configured in .env never reach the app. An exported shell variable
+    still wins; only the dev web origin is added on top."""
+    value = ""
+    try:
+        with open(os.path.join(ROOT, "apps", "api", ".env"), encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith(key + "="):
+                    value = line[len(key) + 1 :].strip().strip("\"'")
+    except OSError:
+        pass
+    return value
+
+def dev_allowed_origins(web_port: str = WEB_PORT) -> list[str]:
+    """Origins the API must accept for `make dev`.
+
+    The API's cookie endpoints allowlist the browser origin, so every web port
+    needs its own entries. Vite serves every loopback name (server.host: true),
+    so both names of the default port and of `web_port` are listed: a browser
+    opened on 127.0.0.1 sends that Origin and gets a 403 cross-origin on the
+    refresh call otherwise. Anything the user configured in .env is kept."""
+    return [
+        o
+        for o in dict.fromkeys(
+            [
+                *(
+                    f"http://{host}:{port}"
+                    for port in (DEFAULT_WEB_PORT, web_port)
+                    for host in ("localhost", "127.0.0.1")
+                ),
+                *(os.environ.get("CORS_ORIGINS") or api_env_file("CORS_ORIGINS")).split(","),
+            ]
+        )
+        if o
+    ]
 
 def main() -> int:
     stop_signal = None
@@ -61,16 +102,13 @@ def main() -> int:
     exit_code = None
     try:
         web_origin = f"http://localhost:{WEB_PORT}"
-        # The API's cookie endpoints allowlist the browser origin, so a
-        # non-default web port needs it too. Keep the default 5173 allowed so
-        # a later plain `make dev` in the same shell still authenticates.
-        allowed = dict.fromkeys(
-            ["http://localhost:5173", web_origin, *os.environ.get("CORS_ORIGINS", "").split(",")]
-        )
+        cors_origins = ",".join(dev_allowed_origins())
         for s in SERVERS:
             env = os.environ.copy()
-            env["CORS_ORIGINS"] = ",".join(o for o in allowed if o)
-            env["FRONTEND_URL"] = os.environ.get("FRONTEND_URL") or web_origin
+            env["CORS_ORIGINS"] = cors_origins
+            env["FRONTEND_URL"] = (
+                os.environ.get("FRONTEND_URL") or api_env_file("FRONTEND_URL") or web_origin
+            )
             if s["name"] == "web":
                 env["API_PORT"] = API_PORT
             procs[s["name"]] = subprocess.Popen(

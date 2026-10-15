@@ -12,7 +12,7 @@ export function useWebhookDeliveries(subscriptionId: string) {
   return { result, query };
 }
 
-export function useWebhookRedeliver() {
+export function useWebhookRedeliver(onQueued?: () => void) {
   const invalidate = useInvalidate();
   const { mutate, mutation } = useCustomMutation();
   return {
@@ -30,8 +30,12 @@ export function useWebhookRedeliver() {
           },
         },
         {
-          onSuccess: () =>
-            invalidate({ resource: "webhooks", invalidates: ["list"] }),
+          onSuccess: () => {
+            invalidate({ resource: "webhooks", invalidates: ["list"] });
+            // The log is a `useCustom` query, whose key is not the `webhooks`
+            // list key above, so the caller refetches it explicitly.
+            onQueued?.();
+          },
         },
       ),
   };

@@ -6,17 +6,24 @@ from typing import Literal
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.dates import now_utc
+from src.core.dates import iso_or_none, now_utc
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
 from src.models.conversation import Conversation, ConversationParticipant, Message
 from src.models.user_profile import UserProfile
-from src.models.workspace import User, Workspace, WorkspaceMember
+from src.models.workspace import (
+    ACTIVE_MEMBERSHIP_STATUSES,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
 from src.services.notifications import NotificationService
 from src.services.profile_helpers import escape_like, format_display_name
 
 logger = logging.getLogger(__name__)
+
+MAX_PARTICIPANTS = 20
 
 
 class ConversationError(Exception):
@@ -77,7 +84,7 @@ def _message_event_payload(
         "body": message.body,
         "body_preview": preview,
         "title": conversation.title,
-        "created_at": message.created_at.isoformat() if message.created_at else None,
+        "created_at": iso_or_none(message.created_at),
         "participant_user_ids": participant_ids,
     }
 
@@ -94,7 +101,7 @@ class ConversationService:
             select(WorkspaceMember).where(
                 WorkspaceMember.workspace_id == workspace_id,
                 WorkspaceMember.user_id == user_id,
-                WorkspaceMember.status == "active",
+                WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
             )
         )
         if result.scalar_one_or_none() is None:
@@ -114,6 +121,48 @@ class ConversationService:
 
     async def _get_conversation(self, conversation_id: str) -> Conversation | None:
         return await self._session.get(Conversation, conversation_id)
+
+    async def _require_active_members(self, workspace_id: str, user_ids: list[str]) -> None:
+        """Reject ids that are not active members of the workspace."""
+        if not user_ids:
+            return
+        result = await self._session.execute(
+            select(WorkspaceMember.user_id).where(
+                WorkspaceMember.workspace_id == workspace_id,
+                WorkspaceMember.user_id.in_(user_ids),
+                WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
+            )
+        )
+        if set(user_ids) - {row[0] for row in result.all()}:
+            raise ConversationError("one or more participants are not members of this workspace")
+
+    async def _add_user_participants(self, conv: Conversation, user_ids: list[str]) -> list[str]:
+        """Join users to the conversation, skipping the ones already on it.
+        Non-user participants (agents) are left alone."""
+        if not user_ids:
+            return []
+        result = await self._session.execute(
+            select(ConversationParticipant.participant_id).where(
+                ConversationParticipant.conversation_id == conv.id,
+                ConversationParticipant.participant_type == "user",
+                ConversationParticipant.participant_id.in_(user_ids),
+            )
+        )
+        existing = {row[0] for row in result.all()}
+        added = [uid for uid in dict.fromkeys(user_ids) if uid not in existing]
+        joined_at = now_utc()
+        for uid in added:
+            self._session.add(
+                ConversationParticipant(
+                    conversation_id=conv.id,
+                    participant_type="user",
+                    participant_id=uid,
+                    user_id=uid,
+                    agent_id=None,
+                    joined_at=joined_at,
+                )
+            )
+        return added
 
     async def _participants_with_users(
         self, conversation_id: str
@@ -291,13 +340,13 @@ class ConversationService:
             "workspace_id": conv.workspace_id,
             "title": conv.title,
             "created_by_user_id": conv.created_by_user_id,
-            "last_message_at": conv.last_message_at.isoformat() if conv.last_message_at else None,
+            "last_message_at": iso_or_none(conv.last_message_at),
             "last_message_preview": conv.last_message_preview,
             "unread_count": unread_count,
             "is_archived": is_archived,
             "participants": part_list,
-            "created_at": conv.created_at.isoformat() if conv.created_at else None,
-            "updated_at": conv.updated_at.isoformat() if conv.updated_at else None,
+            "created_at": iso_or_none(conv.created_at),
+            "updated_at": iso_or_none(conv.updated_at),
         }
         if message_count is not None:
             data["message_count"] = message_count
@@ -320,8 +369,8 @@ class ConversationService:
             "sender_email": sender_email,
             "body": msg.body,
             "body_html": msg.body_html,
-            "created_at": msg.created_at.isoformat() if msg.created_at else None,
-            "updated_at": msg.updated_at.isoformat() if msg.updated_at else None,
+            "created_at": iso_or_none(msg.created_at),
+            "updated_at": iso_or_none(msg.updated_at),
         }
 
     # ---------------------------------------------------------------- create
@@ -359,26 +408,12 @@ class ConversationService:
         # Need at least 1 other (so total >=2)
         if len(others) < 1:
             raise ConversationError("at least one other participant is required")
-        total = len(others) + 1
-        if total > 20:
-            raise ConversationError("too many participants (max 20)")
+        if len(others) + 1 > MAX_PARTICIPANTS:
+            raise ConversationError(f"too many participants (max {MAX_PARTICIPANTS})")
         # Workspace membership check for creator
         await self._ensure_membership(workspace_id, creator.id)
         # Validate each other participant is active member
-        if others:
-            result = await self._session.execute(
-                select(WorkspaceMember.user_id).where(
-                    WorkspaceMember.workspace_id == workspace_id,
-                    WorkspaceMember.user_id.in_(others),
-                    WorkspaceMember.status == "active",
-                )
-            )
-            found = {row[0] for row in result.all()}
-            missing = set(others) - found
-            if missing:
-                raise ConversationError(
-                    "one or more participants are not members of this workspace"
-                )
+        await self._require_active_members(workspace_id, others)
 
         # Resolve title
         clean_title = title.strip() if title and title.strip() else None
@@ -734,6 +769,44 @@ class ConversationService:
         mcount = (await self._message_counts([conversation_id])).get(conversation_id, 0)
         return self._conversation_to_dict(conv, participants, 0, False, mcount)
 
+    # ---------------------------------------------------------------- participants
+
+    async def set_participants(
+        self,
+        *,
+        workspace_id: str,
+        conversation_id: str,
+        actor_user_id: str,
+        participant_user_ids: list[str],
+    ) -> dict:
+        """Replace the conversation's user participants.
+
+        The actor must stay on the conversation: removing yourself would make it
+        unreachable and its access rules meaningless.
+        """
+        await self._ensure_membership(workspace_id, actor_user_id)
+        conv = await self._get_conversation(conversation_id)
+        if conv is None or conv.workspace_id != workspace_id:
+            raise ConversationNotFound("conversation not found")
+        if await self._get_participant(conversation_id, actor_user_id) is None:
+            raise ConversationForbidden("you are not a participant of this conversation")
+
+        wanted = list(dict.fromkeys(uid.strip() for uid in participant_user_ids if uid.strip()))
+        if actor_user_id not in wanted:
+            raise ConversationError("you cannot remove yourself from a conversation")
+        if len(wanted) > MAX_PARTICIPANTS:
+            raise ConversationError(f"too many participants (max {MAX_PARTICIPANTS})")
+        await self._require_active_members(workspace_id, wanted)
+
+        for p, _user, _profile in await self._participants_with_users(conversation_id):
+            if p.participant_type == "user" and p.participant_id not in wanted:
+                await self._session.delete(p)
+        await self._add_user_participants(conv, wanted)
+        await self._session.commit()
+        return await self.get_conversation(
+            workspace_id=workspace_id, conversation_id=conversation_id, user_id=actor_user_id
+        )
+
     # ---------------------------------------------------------------- read / archive
 
     async def mark_read(
@@ -784,7 +857,7 @@ class ConversationService:
             )
         return {
             "success": True,
-            "last_read_at": part.last_read_at.isoformat(),
+            "last_read_at": iso_or_none(part.last_read_at),
             "last_read_message_id": part.last_read_message_id,
         }
 
@@ -826,7 +899,7 @@ class ConversationService:
         await self._session.commit()
         return {
             "success": True,
-            "last_read_at": part.last_read_at.isoformat() if part.last_read_at else None,
+            "last_read_at": iso_or_none(part.last_read_at),
             "last_read_message_id": part.last_read_message_id,
         }
 
@@ -852,7 +925,7 @@ class ConversationService:
         await self._session.commit()
         return {
             "archived": archived,
-            "archived_at": part.archived_at.isoformat() if part.archived_at else None,
+            "archived_at": iso_or_none(part.archived_at),
         }
 
     # ---------------------------------------------------------------- messages
@@ -915,6 +988,7 @@ class ConversationService:
         conversation_id: str,
         sender: User,
         body: str,
+        mentioned_user_ids: list[str] | None = None,
         ip_address: str | None = None,
     ) -> dict:
         clean = body.strip()
@@ -929,6 +1003,10 @@ class ConversationService:
         part = await self._get_participant(conversation_id, sender.id)
         if part is None:
             raise ConversationForbidden("you are not a participant of this conversation")
+        # A mention pulls the user into the conversation so they get the message.
+        mentions = [uid.strip() for uid in (mentioned_user_ids or []) if uid.strip()]
+        await self._require_active_members(workspace_id, mentions)
+        await self._add_user_participants(conv, mentions)
         now = now_utc()
         preview = _plain_preview(clean)
         msg = Message(

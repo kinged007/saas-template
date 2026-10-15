@@ -11,21 +11,31 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from datetime import UTC, datetime
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.dates import iso_or_none
 from src.core.permissions import JOB_READ
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
 from src.models.api_key import ApiKey
+from src.models.audit import AuditLogEntry
 from src.models.conversation import Conversation, ConversationParticipant, Message
 from src.models.core import Invitation, Notification
 from src.models.jobs import JobDefinition
 from src.models.user_profile import UserProfile
 from src.models.webhook import WebhookSubscription
-from src.models.workspace import Role, User, Workspace, WorkspaceMember
+from src.models.workspace import (
+    ACTIVE_MEMBERSHIP_STATUSES,
+    Role,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
+from src.services.audit import public_details
 from src.services.jobs import _mask_params
 from src.services.profile_helpers import escape_like
 from src.services.serializers import (
@@ -45,14 +55,53 @@ _EXPORT_MESSAGES_CAP = 5000
 _EXPORT_NOTIFICATIONS_CAP = 5000
 
 
+_EXPORT_AUDIT_CAP = 5000
+
+
+# Profile fields mirrored into the members CSV. Prefixed because the profile
+# projection also carries display_name/email/avatar_url, which would otherwise
+# shadow the user columns. phone_number and date_of_birth are left out: the
+# projection redacts both, and a permanently empty column reads as data loss.
+_MEMBER_PROFILE_COLUMNS = [
+    "first_name",
+    "last_name",
+    "bio",
+    "timezone",
+    "locale",
+    "website_url",
+    "location",
+    "custom_data",
+]
+
 # resource -> tabular CSV columns for ?format=csv&resource=<name>
+# Single source of truth: GET /workspaces/export/resources serves these keys so
+# the frontend selector never carries its own copy of the list.
 CSV_RESOURCES: dict[str, list[str]] = {
-    "members": ["email", "display_name", "role", "status", "joined_at"],
+    "members": [
+        "id",
+        "email",
+        "display_name",
+        "avatar_url",
+        "email_verified",
+        "role",
+        "status",
+        "joined_at",
+    ]
+    + [f"profile_{c}" for c in _MEMBER_PROFILE_COLUMNS],
     "invitations": ["email", "status", "expires_at", "created_at"],
     "api_keys": ["name", "key_prefix", "permissions", "revoked_at", "created_at"],
     "jobs": ["key", "name", "enabled", "cron_schedule", "next_run_at"],
     "conversations": ["title", "last_message_preview", "last_message_at", "created_at"],
     "notifications": ["type", "title", "acknowledged_at", "created_at"],
+    "audit": [
+        "id",
+        "created_at",
+        "actor_email",
+        "action",
+        "resource_type",
+        "resource_id",
+        "ip_address",
+    ],
 }
 
 
@@ -77,11 +126,28 @@ async def _ensure_membership(session: AsyncSession, workspace_id: str, user_id: 
         select(WorkspaceMember).where(
             WorkspaceMember.workspace_id == workspace_id,
             WorkspaceMember.user_id == user_id,
-            WorkspaceMember.status == "active",
+            WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
         )
     )
     if result.scalar_one_or_none() is None:
         raise ConversationForbidden("you are not a member of this workspace")
+
+
+# Excel and LibreOffice evaluate a cell starting with one of these as a formula
+# on open, so an exported name or email runs on whoever opens the file. TAB, CR
+# and LF start a formula too: the spreadsheet drops the control character and
+# reads the formula behind it. The "'" prefix is a convention, not a guarantee —
+# Excel can strip it on save-and-reopen, so an edited file can reactivate.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
+def _csv_cell(value: object) -> object:
+    """Encode one CSV cell: structured values as JSON, formulas defused."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + value
+    return value
 
 
 class SearchExportService:
@@ -165,7 +231,7 @@ class SearchExportService:
                 .outerjoin(UserProfile, UserProfile.user_id == User.id)
                 .where(
                     WorkspaceMember.workspace_id == workspace_id,
-                    WorkspaceMember.status == "active",
+                    WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
                     or_(
                         User.email.ilike(like, escape="\\"),
                         User.display_name.ilike(like, escape="\\"),
@@ -288,11 +354,12 @@ class SearchExportService:
                     "membership_id": m.id,
                     "role": r.name,
                     "status": m.status,
-                    "joined_at": m.created_at.isoformat() if m.created_at else None,
+                    "joined_at": iso_or_none(m.created_at),
                 }
             )
-            if p is not None:
-                entry["profile"] = public_projection(p, u)
+            # Key stays present even without a profile row, so importers see a
+            # uniform member shape.
+            entry["profile"] = public_projection(p, u) if p is not None else None
             members.append(entry)
 
         roles = (
@@ -365,6 +432,18 @@ class SearchExportService:
         if len(notifs) > _EXPORT_NOTIFICATIONS_CAP:
             notifs = notifs[:_EXPORT_NOTIFICATIONS_CAP]
             truncated = True
+        audit_rows = (
+            await self._session.execute(
+                select(AuditLogEntry, User.email)
+                .outerjoin(User, User.id == AuditLogEntry.actor_user_id)
+                .where(AuditLogEntry.workspace_id == workspace_id)
+                .order_by(AuditLogEntry.created_at.asc())
+                .limit(_EXPORT_AUDIT_CAP + 1)
+            )
+        ).all()
+        if len(audit_rows) > _EXPORT_AUDIT_CAP:
+            audit_rows = audit_rows[:_EXPORT_AUDIT_CAP]
+            truncated = True
         subs = (
             (
                 await self._session.execute(
@@ -396,8 +475,8 @@ class SearchExportService:
                 {
                     "email": i.email,
                     "status": i.status,
-                    "expires_at": i.expires_at.isoformat() if i.expires_at else None,
-                    "created_at": i.created_at.isoformat() if i.created_at else None,
+                    "expires_at": iso_or_none(i.expires_at),
+                    "created_at": iso_or_none(i.created_at),
                 }
                 for i in invites
             ],
@@ -409,8 +488,8 @@ class SearchExportService:
                     "name": k.name,
                     "key_prefix": k.key_prefix,
                     "permissions": k.permissions,
-                    "revoked_at": k.revoked_at.isoformat() if k.revoked_at else None,
-                    "created_at": k.created_at.isoformat() if k.created_at else None,
+                    "revoked_at": iso_or_none(k.revoked_at),
+                    "created_at": iso_or_none(k.created_at),
                 }
                 for k in keys
             ],
@@ -422,7 +501,7 @@ class SearchExportService:
                     "cron_schedule": j.cron_schedule,
                     "params": _mask_params(j.params_schema or {}, j.params or {}),
                     "enabled": j.enabled,
-                    "next_run_at": j.next_run_at.isoformat() if j.next_run_at else None,
+                    "next_run_at": iso_or_none(j.next_run_at),
                 }
                 for j in jobs
             ],
@@ -431,9 +510,9 @@ class SearchExportService:
                     "id": c.id,
                     "title": c.title,
                     "created_by_user_id": c.created_by_user_id,
-                    "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
+                    "last_message_at": iso_or_none(c.last_message_at),
                     "last_message_preview": c.last_message_preview,
-                    "created_at": c.created_at.isoformat() if c.created_at else None,
+                    "created_at": iso_or_none(c.created_at),
                 }
                 for c in convs
             ],
@@ -444,11 +523,28 @@ class SearchExportService:
                     "sender_type": m.sender_type,
                     "sender_id": m.sender_id,
                     "body": m.body,
-                    "created_at": m.created_at.isoformat() if m.created_at else None,
+                    "created_at": iso_or_none(m.created_at),
                 }
                 for m in messages
             ],
             "notifications": [notification_to_dict(n) for n in notifs],
+            "audit": [
+                {
+                    "id": e.id,
+                    "actor_user_id": e.actor_user_id,
+                    "actor_email": email,
+                    "resource_type": e.resource_type,
+                    "resource_id": e.resource_id,
+                    "action": e.action,
+                    # Same shape GET /audit returns: this is a downloadable
+                    # compliance artifact, so it drops the internal
+                    # `source_event_id` too.
+                    "details": public_details(e.details),
+                    "ip_address": e.ip_address,
+                    "created_at": iso_or_none(e.created_at),
+                }
+                for e, email in audit_rows
+            ],
             "webhook_subscriptions": [
                 {"url": s.url, "events": s.events or [], "active": s.active} for s in subs
             ],
@@ -464,7 +560,8 @@ class SearchExportService:
         )
         return bundle
 
-    def export_csv(self, bundle: dict, resource: str) -> str:
+    @staticmethod
+    def export_csv(bundle: dict, resource: str) -> str:
         columns = CSV_RESOURCES.get(resource)
         if columns is None:
             raise ValueError(
@@ -474,11 +571,21 @@ class SearchExportService:
         if resource == "members":
             flat = [
                 {
+                    "id": r.get("id"),
                     "email": r.get("email"),
                     "display_name": r.get("display_name"),
+                    "avatar_url": r.get("avatar_url"),
+                    "email_verified": r.get("email_verified"),
                     "role": r.get("role"),
                     "status": r.get("status"),
                     "joined_at": r.get("joined_at"),
+                    # Read back from the bundle, so the CSV carries exactly what
+                    # the JSON export carries: the redacted public projection,
+                    # and empty cells when the member has no profile row.
+                    **{
+                        f"profile_{c}": (r.get("profile") or {}).get(c)
+                        for c in _MEMBER_PROFILE_COLUMNS
+                    },
                 }
                 for r in rows
             ]
@@ -524,6 +631,19 @@ class SearchExportService:
                 }
                 for r in rows
             ]
+        elif resource == "audit":
+            flat = [
+                {
+                    "id": r.get("id"),
+                    "created_at": r.get("created_at"),
+                    "actor_email": r.get("actor_email"),
+                    "action": r.get("action"),
+                    "resource_type": r.get("resource_type"),
+                    "resource_id": r.get("resource_id"),
+                    "ip_address": r.get("ip_address"),
+                }
+                for r in rows
+            ]
         else:  # invitations
             flat = [
                 {
@@ -537,5 +657,6 @@ class SearchExportService:
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=columns)
         writer.writeheader()
-        writer.writerows(flat)
+        # One choke point, so a new resource is covered by construction.
+        writer.writerows({k: _csv_cell(v) for k, v in row.items()} for row in flat)
         return buf.getvalue()

@@ -9,6 +9,8 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.dates import iso_or_none
+from src.core.permissions import SUPERUSER_ACCESS_REQUIRED
 from src.core.security.password import PasswordHasher
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
@@ -17,7 +19,14 @@ from src.models.audit import AuditLogEntry
 from src.models.core import Invitation, Notification
 from src.models.oauth import OAuthAccount
 from src.models.user_profile import UserProfile
-from src.models.workspace import RefreshToken, Role, User, Workspace, WorkspaceMember
+from src.models.workspace import (
+    ACTIVE_MEMBERSHIP_STATUSES,
+    RefreshToken,
+    Role,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
 from src.services.profile_helpers import (
     format_display_name,
     merge_custom_data,
@@ -65,6 +74,7 @@ class ProfileService:
         is_put: bool,
         ip_address: str | None = None,
         actor_user_id: str | None = None,
+        workspace_id: str | None = None,
     ) -> UserProfile:
         """
         Update profile. `data` is the validated payload dict (exclude_unset semantics
@@ -183,7 +193,7 @@ class ProfileService:
         try:
             await publish_audit(
                 self._bus,
-                workspace_id=None,
+                workspace_id=workspace_id,
                 resource_type="user_profile",
                 resource_id=user_id,
                 action="profile.updated",
@@ -199,17 +209,23 @@ class ProfileService:
 
         return profile
 
-    async def get_public_projection(self, target_user_id: str, viewer: User) -> dict | None:
+    async def get_public_projection(
+        self, target_user_id: str, viewer: User, *, is_deployment_admin: bool
+    ) -> dict | None:
         """
-        Returns redacted projection if viewer is co-member or superuser, else None.
-        Caller should return 404 when None (to avoid enumeration).
+        Returns redacted projection if viewer is co-member or deployment admin,
+        else None. Caller should return 404 when None (to avoid enumeration).
+
+        `is_deployment_admin` is passed in rather than read off `viewer`: the
+        viewer may be an API key's creator, and a key never carries superuser
+        power. The route derives it from `principal.is_deployment_admin`.
         """
         # Check target exists
         target_user = await self._session.get(User, target_user_id)
         if target_user is None:
             return None
-        # Superuser bypass
-        if viewer.is_superuser:
+        # Deployment-admin bypass
+        if is_deployment_admin:
             pass
         else:
             if viewer.id == target_user_id:
@@ -219,7 +235,8 @@ class ProfileService:
             else:
                 # Check co-membership: share at least one active workspace
                 viewer_stmt = select(WorkspaceMember.workspace_id).where(
-                    WorkspaceMember.user_id == viewer.id, WorkspaceMember.status == "active"
+                    WorkspaceMember.user_id == viewer.id,
+                    WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
                 )
                 v_result = await self._session.execute(viewer_stmt)
                 viewer_wids = [row[0] for row in v_result.all()]
@@ -230,7 +247,7 @@ class ProfileService:
                     .where(
                         WorkspaceMember.user_id == target_user_id,
                         WorkspaceMember.workspace_id.in_(viewer_wids),
-                        WorkspaceMember.status == "active",
+                        WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
                     )
                     .limit(1)
                 )
@@ -252,7 +269,10 @@ class ProfileService:
             select(Workspace, Role, WorkspaceMember)
             .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
             .join(Role, Role.id == WorkspaceMember.role_id)
-            .where(WorkspaceMember.user_id == user_id, WorkspaceMember.status == "active")
+            .where(
+                WorkspaceMember.user_id == user_id,
+                WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
+            )
         )
         result = await self._session.execute(stmt)
         rows = result.all()
@@ -263,7 +283,7 @@ class ProfileService:
                     "workspace_id": w.id,
                     "workspace_name": w.name,
                     "role": role.name if role else None,
-                    "joined_at": member.created_at.isoformat() if member.created_at else None,
+                    "joined_at": iso_or_none(member.created_at),
                 }
             )
         # Counts
@@ -393,7 +413,7 @@ class ProfileService:
         self, target_user_id: str, actor: User, ip_address: str | None = None
     ) -> None:
         if not actor.is_superuser:
-            raise HTTPException(status_code=403, detail="superuser access required")
+            raise HTTPException(status_code=403, detail=SUPERUSER_ACCESS_REQUIRED)
         target = await self._session.get(User, target_user_id)
         if target is None:
             raise HTTPException(status_code=404, detail="user not found")

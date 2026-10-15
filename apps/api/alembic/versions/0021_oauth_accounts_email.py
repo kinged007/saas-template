@@ -1,7 +1,7 @@
 """oauth_accounts.email (which linked account is this)
 
-Revision ID: 0017
-Revises: 0016
+Revision ID: 0021
+Revises: 0020
 Create Date: 2026-09-25 00:00:00.000000
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0017"
-down_revision: str | None = "0016"
+revision: str = "0021"
+down_revision: str | None = "0020"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -9,6 +9,11 @@ export type Workspace = {
   permissions?: string[];
   created_by_user_id?: string;
   created_at?: string;
+  /**
+   * Workspace-wide "Get set up" card. Default-on server side, so it is only
+   * ever false when an owner or admin turned it off.
+   */
+  onboarding_enabled?: boolean;
 };
 
 export type UserProfile = {
@@ -74,26 +79,23 @@ export function getDisplayName(identity?: Identity | null): string {
   return identity.email?.split("@")[0] ?? "U";
 }
 
-export function getMemberDisplayName(member: { display_name: string; first_name?: string | null; last_name?: string | null; email?: string }): string {
-  const anyM = member as { first_name?: string | null; last_name?: string | null };
-  if (anyM.first_name || anyM.last_name) return formatDisplayName(anyM.first_name, anyM.last_name, member.display_name);
+/** Display name for any row carrying a legacy display_name plus optional first/last names (members, conversation participants). */
+type DisplayNameRow = { display_name: string; first_name?: string | null; last_name?: string | null };
+
+export function getDisplayNameFromRow(row: DisplayNameRow): string {
+  if (row.first_name || row.last_name) return formatDisplayName(row.first_name, row.last_name, row.display_name);
   // Fallback: convert legacy "First Last" display_name to "First L." for consistency
-  if (member.display_name) {
-    const parts = member.display_name.trim().split(/\s+/);
-    if (parts.length >= 2) return formatDisplayName(parts[0], parts.slice(1).join(" "), member.display_name);
-    return member.display_name;
+  if (row.display_name) {
+    const parts = row.display_name.trim().split(/\s+/);
+    if (parts.length >= 2) return formatDisplayName(parts[0], parts.slice(1).join(" "), row.display_name);
+    return row.display_name;
   }
-  return member.display_name;
+  return row.display_name;
 }
 
-export function getParticipantDisplayName(participant: { display_name: string; first_name?: string | null; last_name?: string | null }): string {
-  if (participant.first_name || participant.last_name) return formatDisplayName(participant.first_name, participant.last_name, participant.display_name);
-  if (participant.display_name) {
-    const parts = participant.display_name.trim().split(/\s+/);
-    if (parts.length >= 2) return formatDisplayName(parts[0], parts.slice(1).join(" "), participant.display_name);
-    return participant.display_name;
-  }
-  return participant.display_name;
+/** One shared `${name} (${email})` label for member pickers (trigger + options). */
+export function memberOptionLabel(member: DisplayNameRow & { email: string }): string {
+  return `${getDisplayNameFromRow(member)} (${member.email})`;
 }
 
 export type Identity = {
@@ -131,10 +133,29 @@ export type Role = {
   created_at?: string;
 };
 
+/**
+ * The domain `ck_workspace_members_status` in `apps/api/src/models/workspace.py`
+ * enforces, so it is copied off the constraint rather than enumerated. The API
+ * writes `active` and `suspended`; `invited` has no writer and survives only as
+ * a pre-0017 value, and is kept so narrowing does not strip the Suspend action
+ * from such a row.
+ */
+export type MemberStatus = "active" | "invited" | "suspended";
+
+/**
+ * What the admin users list shows for `AdminUser.is_active`; not a stored value.
+ *
+ * Its `"active"` collapses into `MemberStatus`'s `"active"` in
+ * `StatusBadgeStatus`, so the two meanings share one badge variant. They
+ * currently agree on `secondary`; a per-meaning variant needs a discriminated
+ * map, not a flat `Record`.
+ */
+export type AdminUserStatus = "active" | "disabled";
+
 export type Member = {
   id: string;
   email: string;
-  /** @deprecated — use first_name/last_name via getMemberDisplayName() */
+  /** @deprecated — use first_name/last_name via getDisplayNameFromRow() */
   display_name: string;
   first_name?: string | null;
   last_name?: string | null;
@@ -142,9 +163,16 @@ export type Member = {
   membership_id: string;
   role_id: string;
   role: string;
-  status: string;
+  status: MemberStatus;
   joined_at?: string;
 };
+
+export type InvitationStatus =
+  | "pending"
+  | "declined"
+  | "accepted"
+  | "revoked"
+  | "expired";
 
 export type Invitation = {
   id: string;
@@ -153,7 +181,7 @@ export type Invitation = {
   role_id: string;
   invited_by_user_id?: string;
   token: string;
-  status: string;
+  status: InvitationStatus;
   expires_at?: string;
   accepted_at?: string;
   created_at?: string;
@@ -234,9 +262,16 @@ export type ApiKey = {
   permissions: string[];
   created_by_user_id?: string;
   last_used_at?: string;
+  /** Optional hard expiry; the key is rejected once this passes. */
+  expires_at?: string | null;
   /** Lifetime authenticated uses; null usage_quota = unlimited. */
   usage_count?: number;
   usage_quota?: number | null;
+  /** Uses in the current calendar month — the window usage_quota caps. */
+  usage_window_count?: number;
+  /** First instant of the current calendar month (UTC), or null before first
+   *  use. It is the month boundary, so it can predate the key's own first use. */
+  usage_window_start?: string | null;
   revoked_at?: string;
   created_at?: string;
 };
