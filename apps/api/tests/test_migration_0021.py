@@ -1,7 +1,7 @@
-"""Covers the data migration in 0017_expire_invitations_global.
+"""Covers the data migration in 0021_expire_invitations_global.
 
 Every other DB test builds the schema from Base.metadata, so no test runs a
-migration's raw SQL. 0017 deletes rows, so a regression in it would only show
+migration's raw SQL. 0021 deletes rows, so a regression in it would only show
 up on a real deployment.
 """
 
@@ -20,7 +20,7 @@ from src import models as _models  # noqa: F401  (register tables on Base.metada
 from src.db.base import Base
 
 MIGRATION_PATH = (
-    Path(__file__).parents[1] / "alembic" / "versions" / "0017_expire_invitations_global.py"
+    Path(__file__).parents[1] / "alembic" / "versions" / "0021_expire_invitations_global.py"
 )
 JOB_KEY = "invitations.expire_stale"
 OTHER_KEY = "demo.workspace_report"
@@ -81,7 +81,7 @@ def test_upgrade_removes_workspace_scoped_definitions_and_their_history(conn):
     add_log(conn, "l-ws-1", "r-ws-1")
     add_log(conn, "l-other", "r-other")
 
-    spec = importlib.util.spec_from_file_location("mig_0017", MIGRATION_PATH)
+    spec = importlib.util.spec_from_file_location("mig_0021", MIGRATION_PATH)
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
     with Operations.context(MigrationContext.configure(conn)):

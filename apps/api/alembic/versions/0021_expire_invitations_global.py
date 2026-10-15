@@ -15,9 +15,18 @@ workspace's job list permanently. Run history goes with it, in the same order
 system.retention_cleanup uses, so no job_run is left pointing at a definition
 that no longer exists.
 
-Revision ID: 0017
-Revises: 0016
+Revision ID: 0021
+Revises: 0020
 Create Date: 2026-09-26 00:00:00.000000
+
+BREAKING CHANGE: this migration was originally shipped as 0017 on
+branch auto/162 and collided with 0017_member_suspension on main.
+It has been renumbered to 0021 so the merged history stays linear.
+Databases that already applied the old 0017 revision must force head
+before upgrading — see the PR body for the stamp command — otherwise
+`alembic upgrade head` will refuse to run with a duplicate revision id.
+No tables are lost: 0017-0020 from main are kept as-is and this
+migration is appended after 0020.
 """
 
 from collections.abc import Sequence
@@ -26,8 +35,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0017"
-down_revision: str | None = "0016"
+revision: str = "0021"
+down_revision: str | None = "0020"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
