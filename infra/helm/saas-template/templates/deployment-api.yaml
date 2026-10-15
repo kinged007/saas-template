@@ -28,6 +28,10 @@ spec:
           env:
             - name: ENVIRONMENT
               value: "production"
+            - name: APP_NAME
+              value: {{ include "saas-template.name" . | quote }}
+            - name: APP_SLUG
+              value: {{ include "saas-template.name" . | quote }}
             - name: EVENT_BUS_DRIVER
               value: {{ .Values.eventBusDriver | quote }}
             - name: CORS_ORIGINS

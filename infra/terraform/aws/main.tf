@@ -109,8 +109,8 @@ resource "kubernetes_secret" "app_secrets" {
   data = {
     SECRET_KEY   = var.secret_key
     FERNET_KEYS  = var.fernet_keys
-    DATABASE_URL = "postgresql+asyncpg://${var.project}:change-me@${var.project}-postgres.${var.project}.svc.cluster.local:5432/${var.project}"
-    NATS_URL     = "nats://${var.project}-nats.${var.project}.svc.cluster.local:4222"
+    DATABASE_URL = "postgresql+asyncpg://${var.project}:change-me@${var.project}-${var.project}-postgres.${var.project}.svc.cluster.local:5432/${var.project}"
+    NATS_URL     = "nats://${var.project}-${var.project}-nats.${var.project}.svc.cluster.local:4222"
   }
 }
 

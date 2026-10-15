@@ -54,7 +54,7 @@ services:
     environment:
       ENVIRONMENT: production
       DEBUG: "false"
-      APP_NAME: ${APP_NAME:-saas-template-api}
+      APP_NAME: ${APP_NAME:-SaaS Template API}
       APP_SLUG: ${APP_SLUG:-saas-template}
       DATABASE_URL: postgresql+asyncpg://${APP_SLUG:-saas-template}:${POSTGRES_PASSWORD}@postgres:5432/${APP_SLUG:-saas-template}
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in infra/docker/.env}
