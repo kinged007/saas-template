@@ -36,7 +36,7 @@ web:
 existingSecret: ""
 secretKey: "change-me"
 fernetKeys: "change-me"
-databaseUrl: "postgresql+asyncpg://my-app:change-me@postgres:5432/my-app"
+databaseUrl: ""
 natsUrl: "nats://nats:4222"
 eventBusDriver: "nats"
 corsOrigins: "https://app.example.com"

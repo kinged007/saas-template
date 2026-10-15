@@ -2,15 +2,17 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: ${APP_SLUG:-saas-template}
-      POSTGRES_PASSWORD: ${APP_SLUG:-saas-template}
-      POSTGRES_DB: ${APP_SLUG:-saas-template}
+      # Dev-only throwaway credential, not a secret. Customise via APP_SLUG
+      # only when you intend to rotate the throwaway dev DB identity.
+      POSTGRES_USER: ${APP_SLUG:-saas_template}
+      POSTGRES_PASSWORD: ${APP_SLUG:-saas_template}
+      POSTGRES_DB: ${APP_SLUG:-saas_template}
     ports:
       - "5432:5432"
     volumes:
-      - ${APP_SLUG:-saas-template}_pg:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${APP_SLUG:-saas-template}"]
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\""]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -23,4 +25,5 @@ services:
       - "8222:8222"
 
 volumes:
-  ${APP_SLUG:-saas-template}_pg:
+  pgdata:
+    name: "${APP_SLUG:-saas-template}_pg"

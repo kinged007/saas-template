@@ -16,7 +16,8 @@ export default defineConfig(({ mode }) => {
         // The document title is branding, not a Vite built-in: it needs a
         // default for the common case where VITE_APP_NAME is unset.
         name: "app-name",
-        transformIndexHtml: (html: string) => html.replaceAll("%APP_NAME%", appName),
+        transformIndexHtml: (html: string) =>
+          html.replaceAll("%APP_NAME%", () => appName.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")),
       },
     ],
     define: {

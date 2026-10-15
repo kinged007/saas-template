@@ -75,7 +75,7 @@ The product name is configuration, not code. Set these and nothing else needs ed
 | Variable | Where | Drives |
 | --- | --- | --- |
 | `APP_NAME` | `apps/api/.env` | OpenAPI title, TOTP issuer, `GET /` and `/healthz` `service` |
-| `APP_SLUG` | `apps/api/.env`; compose env; `scripts/nats.sh` | NATS stream + queue group, `~/.config/<slug>/.env`, embedded-Postgres data dir, compose project/volumes, NATS `--server_name` |
+| `APP_SLUG` | process env (compose env, `scripts/nats.sh`); `apps/api/.env` for NATS/stream/data-dir only | NATS stream + queue group, `~/.config/<slug>/.env`, embedded-Postgres data dir, compose project/volumes, NATS `--server_name` (shell scripts require a pre-slugified kebab value) |
 | `VITE_APP_NAME` | `apps/web/.env`, web build args | document title, logo `alt` text |
 | `VITE_STORAGE_PREFIX` | `apps/web/.env`, web build args | `localStorage` key prefix |
 | `nameOverride` | Helm values | chart fullname, `app.kubernetes.io/name`, postgres user/db, NATS `--server_name` |

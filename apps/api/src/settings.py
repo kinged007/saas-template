@@ -14,25 +14,27 @@ def slugify(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
 
 
-# The env-file location is fixed at class-creation time, so it cannot come from
-# a field. Both it and the app_slug default follow the process env; a project
-# .env is still read first and wins.
+# The env-file location is fixed at class-creation time, so it cannot come
+# from a field. APP_SLUG used in the path is read from the process
+# environment only — a value set in apps/api/.env does not relocate the home
+# config path (set APP_SLUG as a process env var when you need that). The
+# project .env is listed last so it wins over a stale ~/.config file.
 APP_SLUG = slugify(os.environ.get("APP_SLUG", "saas-template")) or "app"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=(".env", os.path.expanduser(f"~/.config/{APP_SLUG}/.env")),
+        env_file=(os.path.expanduser(f"~/.config/{APP_SLUG}/.env"), ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
 
     environment: str = "development"
     # Human-facing product name: OpenAPI title, TOTP issuer, GET / and /healthz.
-    app_name: str = "saas-template-api"
+    app_name: str = "SaaS Template API"
     # Machine identifier for everything that must be stable and lowercase:
     # NATS stream/queue group, the user config dir, the embedded-DB data dir.
-    app_slug: str = APP_SLUG
+    app_slug: str = Field(default=APP_SLUG, max_length=63)
     debug: bool = False
 
     @field_validator("app_slug", mode="after")

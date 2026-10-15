@@ -36,6 +36,25 @@ jobs:
       - run: cd apps/api && uv sync --extra dev
       - run: make db-check
 
+  infra-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose config (dev)
+        run: docker compose -f infra/docker/docker-compose.dev.yml config -q
+      - name: docker compose config (prod)
+        env:
+          SECRET_KEY: ci-placeholder
+          FERNET_KEYS: ci-placeholder
+          POSTGRES_PASSWORD: ci-placeholder
+        run: docker compose -f infra/docker/docker-compose.prod.yml config -q
+      - uses: azure/setup-helm@v4
+      - run: helm lint infra/helm/saas-template
+      - run: helm template test infra/helm/saas-template --set nameOverride=acme > /dev/null
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform -chdir=infra/terraform/aws init -backend=false
+      - run: terraform -chdir=infra/terraform/aws validate
+
   web-build:
     runs-on: ubuntu-latest
     steps:
