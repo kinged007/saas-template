@@ -77,8 +77,10 @@ def test_upgrade_removes_workspace_scoped_definitions_and_their_history(conn):
     add_definition(conn, "d-ws-other", OTHER_KEY, "ws-1")
     add_definition(conn, "d-global", JOB_KEY, None)
     add_run(conn, "r-ws-1", "d-ws-1")
+    add_run(conn, "r-global", "d-global")
     add_run(conn, "r-other", "d-ws-other")
     add_log(conn, "l-ws-1", "r-ws-1")
+    add_log(conn, "l-global", "r-global")
     add_log(conn, "l-other", "r-other")
 
     spec = importlib.util.spec_from_file_location("mig_0021", MIGRATION_PATH)
@@ -88,6 +90,8 @@ def test_upgrade_removes_workspace_scoped_definitions_and_their_history(conn):
         migration.upgrade()
 
     # The global row and the unrelated workspace job keep their rows and history.
+    # The global definition's own run/log must survive: an over-broad DELETE
+    # (e.g. dropping AND workspace_id IS NOT NULL) would wipe it as well.
     assert ids(conn, "job_definitions") == ["d-global", "d-ws-other"]
-    assert ids(conn, "job_runs") == ["r-other"]
-    assert ids(conn, "job_logs") == ["l-other"]
+    assert ids(conn, "job_runs") == ["r-global", "r-other"]
+    assert ids(conn, "job_logs") == ["l-global", "l-other"]
