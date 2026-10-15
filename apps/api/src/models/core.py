@@ -22,7 +22,7 @@ class Invitation(Base, TimestampMixin):
     token: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), default="pending", nullable=False
-    )  # pending|accepted|declined|revoked
+    )  # pending|accepted|declined|revoked|expired
     expires_at: Mapped[object] = mapped_column(DateTime(timezone=True), nullable=False)
     accepted_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

@@ -39,7 +39,9 @@ async def test_sessions_list_and_revoke(app_client):
     assert resp.status_code == 200
     sessions = resp.json()
     assert len(sessions) == 1
-    assert sessions[0]["ip_address"] is not None or True  # test client may lack IP
+    # httpx.ASGITransport defaults its client to ("127.0.0.1", 123): a transport
+    # default, not a peer address this code observed.
+    assert sessions[0]["ip_address"] == "127.0.0.1"
     assert sessions[0]["user_agent"] == "rotated-session-agent"
     assert sessions[0]["revoked_at"] is None
 
@@ -55,11 +57,15 @@ async def test_sessions_list_and_revoke(app_client):
     assert len(others) == 1
     resp = await client.delete(f"/api/v1/auth/sessions/{others[0]['id']}", headers=headers)
     assert resp.status_code == 204
-    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": other["refresh_token"]})
-    assert resp.status_code == 401
     # revoked sessions disappear from the list; the current one remains
     resp = await client.get("/api/v1/auth/sessions", headers=headers)
     assert [s["id"] for s in resp.json()] == [sessions[0]["id"]]
+    # replaying a token the user revoked by hand is not a compromise signal:
+    # the acting session survives, and the replay is a plain 401.
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": other["refresh_token"]})
+    assert resp.status_code == 401
+    resp = await client.get("/api/v1/auth/me", headers=headers)
+    assert resp.status_code == 200, resp.text
 
 
 async def test_revoked_session_access_token_rejected(app_client):
@@ -80,12 +86,12 @@ async def test_revoked_session_access_token_rejected(app_client):
     # The revoked session's access token is rejected on the next request.
     resp = await client.get("/api/v1/auth/me", headers=h1)
     assert resp.status_code == 401, resp.text
-    # And its refresh token no longer rotates.
-    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
-    assert resp.status_code == 401, resp.text
-    # The surviving session keeps working.
+    # The surviving session keeps working: t1 died by user action, not rotation,
+    # so replaying it is a stale cookie and must not arm the compromise path.
     resp = await client.get("/api/v1/auth/me", headers=h2)
     assert resp.status_code == 200, resp.text
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
+    assert resp.status_code == 401, resp.text
 
 
 async def test_revoke_all_sessions(app_client):
@@ -99,9 +105,10 @@ async def test_revoke_all_sessions(app_client):
     assert sum(s["current"] for s in listed) == 1
     resp = await client.delete("/api/v1/auth/sessions", headers=headers)
     assert resp.status_code == 204
-    # the other session is revoked; the current one keeps working
-    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
-    assert resp.status_code == 401
+    # the other session is revoked; its access token 401s on the next request
+    resp = await client.get("/api/v1/auth/me", headers=auth_headers(t1))
+    assert resp.status_code == 401, resp.text
+    # the current session survives and refreshes
     resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]})
     assert resp.status_code == 200, resp.text
     # refresh rotates: the current session id moves to the new row
@@ -110,6 +117,14 @@ async def test_revoke_all_sessions(app_client):
     remaining = resp.json()
     assert len(remaining) == 1
     assert remaining[0]["current"] is True
+    # t1 was revoked by the user, not by a rotation: stale cookie, not a replay.
+    # t2's live session is untouched.
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t1["refresh_token"]})
+    assert resp.status_code == 401
+    resp = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": rotated["refresh_token"]}
+    )
+    assert resp.status_code == 200, resp.text
 
 
 async def test_totp_enrol_login_disable(app_client):
@@ -177,6 +192,62 @@ async def test_totp_enrol_login_disable(app_client):
     await login(client, "totp@example.com")
 
 
+async def test_wrong_password_disabling_2fa_keeps_session(app_client):
+    """Issue #189: a wrong password answers 400, not 401.
+
+    The web client reads 401 as a dead session and force-logs out, so the
+    status code has to be the one that leaves the session alone."""
+    client = app_client
+    tokens = await register_user(client, "totp-wrong@example.com")
+    headers = auth_headers(tokens)
+    setup_token, code = await _totp_for(client, headers)
+    resp = await client.post(
+        "/api/v1/auth/2fa/enable", json={"setup_token": setup_token, "code": code}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = await client.post(
+        "/api/v1/auth/2fa/disable", json={"password": "Wrongpass1!"}, headers=headers
+    )
+    assert resp.status_code == 400, resp.text
+
+    # TOTP is still on — the rejected attempt did not disable it.
+    resp = await client.get("/api/v1/auth/2fa/status", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["enabled"] is True
+
+    # Same access token still authenticates, and a correct password works.
+    resp = await client.post(
+        "/api/v1/auth/2fa/disable", json={"password": "Password123!"}, headers=headers
+    )
+    assert resp.status_code == 204, resp.text
+
+
+async def test_wrong_password_regenerating_backup_codes_keeps_session(app_client):
+    client = app_client
+    tokens = await register_user(client, "totp-bak@example.com")
+    headers = auth_headers(tokens)
+    setup_token, code = await _totp_for(client, headers)
+    resp = await client.post(
+        "/api/v1/auth/2fa/enable", json={"setup_token": setup_token, "code": code}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = await client.post(
+        "/api/v1/auth/2fa/backup-codes", json={"password": "Wrongpass1!"}, headers=headers
+    )
+    assert resp.status_code == 400, resp.text
+
+    resp = await client.get("/api/v1/auth/2fa/status", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["enabled"] is True
+
+    resp = await client.post(
+        "/api/v1/auth/2fa/backup-codes", json={"password": "Password123!"}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+
+
 async def test_login_rate_limited(app_client, monkeypatch):
     from src.settings import settings
 
@@ -190,6 +261,33 @@ async def test_login_rate_limited(app_client, monkeypatch):
     resp = await client.post("/api/v1/auth/login", json=bad)
     assert resp.status_code == 429
     assert "Retry-After" in resp.headers
+
+
+async def test_login_2fa_required_does_not_charge_rate_limiter(app_client, monkeypatch):
+    # The 2FA challenge is deliberately uncharged (see the rule in
+    # src/core/security/ratelimit.py): the password was right, so a challenge
+    # is not a failed attempt and must not spend this key's budget. Every
+    # sibling 401 on /auth/login does charge.
+    from src.settings import settings
+
+    monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 1)
+    client = app_client
+    tokens = await register_user(client, "totp-nocharge@example.com")
+    setup_token, code = await _totp_for(client, auth_headers(tokens))
+    enabled = await client.post(
+        "/api/v1/auth/2fa/enable",
+        json={"setup_token": setup_token, "code": code},
+        headers=auth_headers(tokens),
+    )
+    assert enabled.status_code == 200, enabled.text
+
+    for _ in range(2):
+        resp = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "totp-nocharge@example.com", "password": "Password123!"},
+        )
+        assert resp.status_code == 401, resp.text
+        assert resp.json()["detail"]["code"] == "2fa_required"
 
 
 async def test_refresh_rate_limit_does_not_block_other_sessions(app_client, monkeypatch):

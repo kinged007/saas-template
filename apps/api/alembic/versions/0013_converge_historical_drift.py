@@ -131,6 +131,9 @@ def downgrade() -> None:
     if pg and "ix_stored_secrets_secret_key" in indexes:
         op.drop_index("ix_stored_secrets_secret_key", table_name="stored_secrets")
 
+    # Intentional divergence: the recreated UQs restore the pre-0013 schema but
+    # models no longer declare them (unique+index renders as unique index only),
+    # so autogenerate reports drift until re-upgrade.
     for table, (col, _unique_index) in _REDUNDANT_UQ.items():
         uq_name = f"uq_{table}_{col}"
         names = {u["name"] for u in insp.get_unique_constraints(table)}

@@ -6,7 +6,7 @@ This repo currently has zero milestones. There is no milestone ordering. Work di
 
 ## Process lifecycle and cleanup (MANDATORY)
 
-Never finish a run with a process started by the agent still running. This includes the API/frontend stack, supervisors, watchers, test servers, `obscura serve`, and CDP clients. Stop every owned process on success, failure, cancellation, timeout, and every early `STOP` path. A timeout is only a safety net, not cleanup.
+Never finish a run with a process started by the agent still running. This includes the API/frontend stack, supervisors, watchers, and test servers. Stop every owned process on success, failure, cancellation, timeout, and every early `STOP` path. A timeout is only a safety net, not cleanup.
 
 Run long-lived commands in the foreground when possible. If backgrounding is necessary, give the command a finite budget and record its PID. For example, on Linux:
 
@@ -14,40 +14,40 @@ Run long-lived commands in the foreground when possible. If backgrounding is nec
 timeout --signal=TERM --kill-after=15s 1h <command>
 ```
 
-`obscura serve` has no built-in duration option, so use a one-hour cap and a session-specific storage directory:
-
-```bash
-timeout --signal=TERM --kill-after=15s 1h \
-  obscura serve --allow-private-network --storage-dir <session-dir>
-```
+Browser automation is a separate concern: per `.agents/browser.md`, each script launches and closes its own chromium inside a `timeout`, so it leaves nothing behind.
 
 Use a task-appropriate cap for the application stack as well. At cleanup, send `SIGTERM` to the exact supervisor or process you started, wait for it, then use `SIGKILL` only if it remains alive. Verify its children and the ports it owns. Never kill an unknown process or clear a port you did not open. Remove temporary PID/log/browser files. If cleanup cannot be verified, do not report completion.
 
-## 1. List open issues
+## 1. List open issues, sorted by priority then age
+
+Priority comes from three labels: `p0` (highest), `p1`, `p2` (lowest). Highest priority wins; within one priority, the oldest issue wins. An issue with no priority label sorts after every `p0`/`p1`/`p2` issue, ordered among the unlabelled group by age. If an issue carries more than one priority label, the highest one counts. The agent only reads these labels and never adds or removes them.
+
+This single command returns the actionable issues already in that order:
 
 ```bash
-gh issue list --state open --limit 50 \
-  --json number,title,labels \
-  -q '.[] | "\(.number) | \(.title) | \([.labels[].name] | join(","))"'
+gh issue list --state open --limit 100 \
+  --json number,title,createdAt,labels \
+  -q 'map(select(([.labels[].name] | any(. == "wontfix" or . == "needs-human" or . == "in-progress" or . == "review-in-progress" or . == "invalid" or . == "duplicate" or . == "agent:done")) | not))
+      | map(. + {p: ([.labels[].name | select(. == "p0" or . == "p1" or . == "p2")] | sort | first // "UNSET")})
+      | sort_by((if .p=="p0" then 0 elif .p=="p1" then 1 elif .p=="p2" then 2 else 3 end), .createdAt)
+      | .[] | "#\(.number) | \(.p) | \(.createdAt) | \(.title)"'
 ```
+
+Two details matter. The skip filter uses `any(... or ...)`, not `inside(...)`: `inside` is fed the label array as input and does not do what it looks like here, so an issue carrying `needs-human` alongside another label slips through the filter. The priority lookup takes `sort | first` over the matched labels so that an issue tagged both `p2` and `p0` ranks as `p0`.
+
+If the three priority labels do not exist yet, every issue sorts as `UNSET` and the effective order is oldest first. That is correct but inert — ask the maintainer to label the backlog before relying on priority ordering.
 
 ## 2. Drop finished, invalid, or claimed issues
 
-Skip any issue labelled `wontfix`, `needs-human`, `in-progress`, `review-in-progress`, `invalid`, `duplicate`, or `agent:done` — never touch those, even if open. There is no `backlog` label. The listing query excludes them deterministically:
-
-```bash
-gh issue list --state open --limit 50 \
-  --json number,title,labels \
-  -q '.[] | select(([.labels[].name] | inside(["wontfix","needs-human","in-progress","review-in-progress","invalid","duplicate","agent:done"]) | not)) | "\(.number) | \(.title)"'
-```
-
-If `gh`'s `--jq`/`-q` dialect rejects `inside`, fall back to filtering client-side (fetch `--json number,title,labels` and drop any issue whose label set intersects the skip set above).
+The step 1 query already excludes every issue labelled `wontfix`, `needs-human`, `in-progress`, `review-in-progress`, `invalid`, `duplicate`, or `agent:done`. There is no `backlog` label. Never touch a skipped issue, even if open.
 
 ## 3. Find the next unblocked and related open issues
 
+Work the step 1 list top to bottom. Its first entries are the highest priority and the oldest, so the first unblocked candidate is the one to take.
+
 If a candidate carries the `agent:plan` label, post a brief issue comment saying planning is still pending and stop without making changes (the label was added after dispatch). Do not implement it.
 
-For each remaining candidate in listed order, check blockers:
+For each remaining candidate in step 1 order, check blockers:
 
 ```bash
 gh issue view <n> --json blockedBy \
@@ -56,6 +56,27 @@ gh issue view <n> --json blockedBy \
 
 Take issues with no blocker in `OPEN` state, that are related or similar to each other. Take on no more than 5 minor issues at a time. The more complex the issue, the fewer to claim at the same time. Only claim issues that are related or similar, otherwise just claim ONE issue.
 If every open issue is blocked by another open issue, stop and report that the backlog is drained or deadlocked.
+
+## 3a. Claim every selected issue before work (MANDATORY)
+
+The listing excludes `in-progress`, but re-check the selected issue immediately before claiming it. Once you select one or more issues, and before reading comments, posting a plan, starting the dev stack, or changing files, verify that `in-progress` is absent and add it to every issue you will work on:
+
+```bash
+gh issue view <n> --json labels -q '.labels[].name'
+gh issue edit <n> --add-label in-progress
+```
+
+Run the command once per selected issue. If `in-progress` is already present, do not work on that issue; choose another. If adding a label fails, release any labels successfully added by this run and stop.
+
+Keep the issue numbers that this run successfully claimed. On every exit path, release `in-progress` from each claimed issue. On a successful run, do not release it until the final commit and push have succeeded; on a blocked run, apply `needs-human` before releasing it:
+
+```bash
+gh issue edit <n> --remove-label in-progress
+```
+
+Never remove a label claimed by another agent. If no issue is claimed, there is nothing to release.
+
+Do not add `agent:done` when releasing early. It marks finished work and is applied once, on the success path in step 10. An issue that stops at `needs-human` is not done, and one abandoned mid-implementation is not done; both stay without it so they can be picked up again.
 
 ## 4. Read the issue threads first, then plan, then post the plan
 
@@ -68,7 +89,11 @@ gh issue view <n> --json title,body,comments,labels \
 
 Treat comments as authoritative over the body where they conflict (newest wins). Comments may contain corrections, reproduction details, or scope changes that override the description. If an approved plan was posted, follow it. If a comment already contains a plan, adopt it unless the codebase has moved on, and say so in the posted plan.
 
-If the task is already resolved, post an issue comment saying so and stop without making changes.
+If the task is already resolved, post an issue comment saying so, remove `in-progress` from every issue claimed by this run, and stop without making changes:
+
+```bash
+gh issue edit <n> --remove-label in-progress
+```
 
 Context to read:
 
@@ -89,13 +114,15 @@ gh issue comment <n> --body "## Plan
 ..."
 ```
 
-If the plan is straightforward and follows existing code structure and architecture patterns, proceed with auto-approval. If the plan contains architectural changes or a significant shift in design, request human approval. Apply the label `needs-human`, then STOP. Do not proceed.
+If the plan is straightforward and follows existing code structure and architecture patterns, proceed with auto-approval. If the plan contains architectural changes or a significant shift in design, request human approval. Apply `needs-human`, remove `in-progress` from every issue claimed by this run, then STOP. Do not proceed. Repeat both commands for each claimed issue.
 
 ```bash
 gh issue edit <n> --add-label needs-human
+gh issue edit <n> --remove-label in-progress
 ```
 
-## 0. Dev environment and seeded credentials (read first)
+
+## 5. Dev environment and seeded credentials
 
 Start the stack with the repo's own dev command (see README / AGENTS.md / Makefile — never leave it running orphaned). The dev command usually installs deps, migrates, and seeds automatically.
 
@@ -103,29 +130,31 @@ Discover the seeded credentials yourself — they show in the dev startup output
 
 Log in with a seeded account for manual/visual verification. If the task needs a different user shape, seed one following the repo's seed patterns or register through the UI — do not hardcode ad-hoc credentials in the codebase.
 
-Browser: Obscura only. Any browser use MUST be Obscura — never standalone Playwright or chrome-devtools (playwright-core is allowed only as a CDP client driving `obscura serve`). If `obscura` is not installed, install it from https://github.com/h4ckf0r0day/obscura. Always pass `--allow-private-network` (loopback is blocked without it). Use the `localhost` URL of the dev frontend, never its `127.0.0.1` equivalent — login can break on 127.x (dev CORS default, not a product bug; do not file it). For login-gated screenshots: `obscura serve --allow-private-network --storage-dir <dir>`, connect over CDP (`chromium.connectOverCDP`, install `playwright-core` if needed), fill the login form's email/password fields via pressSequentially, click submit — one-shot `obscura fetch -e` cannot do multi-step login. Screenshots MUST be taken logged in with a seeded account. Review each screenshot yourself; if it does not show the intended page, retry until it does. A login-screen screenshot when a logged-in page was intended is not acceptable.
+Browser: Playwright driving chromium, per `.agents/browser.md`. Read that file before any browser use. Any browser use MUST follow it — never obscura, never chrome-devtools. If `.agents/browser.md` is missing, follow the rules it would have contained: locate the frontend app and run from there, launch headless chromium per script inside a `timeout`, close it in the same script, and never install the browser globally. That file also covers the shared per-user browser cache, the seeded account, the observable-result assertion, and when a screenshot is not acceptable evidence.
+## 6. Implement (claim already held)
 
-## 5. Mark in-progress, then implement
-
-```bash
-gh issue edit <n> --add-label in-progress
-```
+Do not add the label again. The claim was acquired in step 3a before any work began.
 
 Implement the posted plan, then run the repo quality gate (resolve from README / AGENTS.md / Makefile / CI workflows — at minimum lint, tests, and a build of every area touched).
 
 Review your own diff (`git diff`) for correctness, regressions, and convention compliance before finishing.
 
-## 5b. Pre-PR testing gate (MANDATORY)
+## 7. Pre-PR testing gate (MANDATORY)
 
 Before opening the PR, the agent MUST prove the change does not break the pipeline. If CI workflows exist (`.github/workflows/`), read them and manually run every check they run (lint, typecheck, tests, build) before submitting. If no CI exists, run the repo's full quality gate instead (see README / AGENTS.md — at minimum lint, tests, and a build of every area touched) and make sure all tests pass.
 
-Do not open the PR while any of these fail. If a check fails, fix the cause (not the check) and re-run until green. Never submit a PR with a red gate and a promise to fix it after — the next session starts from pushed state, so a broken push poisons every session after it. If a check cannot be made green for reasons outside the change, document the failure in the PR body under Verification and apply the `needs-human` label instead of submitting.
+Do not open the PR while any of these fail. If a check fails, fix the cause (not the check) and re-run until green. Never submit a PR with a red gate and a promise to fix it after — the next session starts from pushed state, so a broken push poisons every session after it. If a check cannot be made green for reasons outside the change, document the failure in the PR body under Verification, apply `needs-human`, remove `in-progress` from every issue claimed by this run, and stop instead of submitting. Repeat both commands for each claimed issue:
+
+```bash
+gh issue edit <n> --add-label needs-human
+gh issue edit <n> --remove-label in-progress
+```
 
 If the plan proves wrong mid-implementation, update the issue comment with what changed and why.
 
-If implementation and testing succeed, submit a PR for the issue (push the branch first, see §6). Explain in detail what the problem was, what was implemented, and how correctness was verified.
+If implementation and testing succeed, submit a PR for the issue (push the branch first, see step 8). Explain in detail what the problem was, what was implemented, and how correctness was verified.
 
-## 7. Open the pull request
+## 8. Open the pull request
 
 Do not push directly to the PR's base branch. Resolve the base first (never assume) and open the PR from a per-issue branch against it:
 
@@ -156,7 +185,7 @@ Fixes #<n>.
 
 Every section is required. Do not apply `agent:review` to the PR yourself; the human triggers the deep review when ready.
 
-## 8. Post the closing issue comment
+## 9. Post the closing issue comment
 
 When done, post one detailed comment on the issue. A reader must understand what was done without reading the diff:
 
@@ -184,7 +213,9 @@ PR: [link]
 
 Every section is required; write "None" only when true. Do not compress this into a few lines.
 
-## 6. Commit and push before finishing (MANDATORY)
+Keep `in-progress` on every claimed issue until the final commit and push in step 10 succeed. Do not release the claim before then.
+
+## 10. Commit and push before finishing (MANDATORY)
 
 This overrides the `AGENTS.md` no-commit default: the agent MUST commit and push all work (code, tests, and the issue/PR comments are already remote) before finishing the session. Never leave work uncommitted or unpushed — the next session starts from the pushed state.
 
@@ -194,4 +225,13 @@ git add -A && git commit -m "<type(scope): summary>" && git push
 git push -u origin $(git branch --show-current)
 ```
 
-Verify the push landed (`git status -sb` shows clean, `gh pr view <n>` shows the new commits) before reporting done.
+After the final push succeeds, mark the work finished and release the claim. Run both commands for each issue claimed by this run:
+
+```bash
+gh issue edit <n> --add-label agent:done
+gh issue edit <n> --remove-label in-progress
+```
+
+`agent:done` is what stops the next run from re-implementing a finished issue: step 1 skips it, and only a human closes the issue when they are satisfied. Without this label the issue stays open, unclaimed, and becomes the next run's first candidate. Apply it only after the push has actually landed.
+
+Verify the push landed (`git status -sb` shows clean, `gh pr view <n>` shows the new commits). Before reporting done, verify that every claimed issue carries `agent:done` and no longer carries `in-progress`.
