@@ -4,16 +4,11 @@ Whole-repo static audit for bugs, design drift, and AI slop. Read-only: find, cl
 
 ## Process lifecycle and cleanup (MANDATORY)
 
-This workflow is static: do not start the application, a dev server, or Obscura. If a quality gate or helper starts a process anyway, the agent owns it and MUST stop it before the final report.
+This workflow is static: do not start the application, a dev server, or a browser. If a quality gate or helper starts a process anyway, the agent owns it and MUST stop it before the final report.
 
-Never finish a run with any process started by the agent still running. This includes background commands, test servers, watchers, and any browser or CDP process. Stop owned processes on success, failure, cancellation, timeout, and every early `STOP` path. A timeout is a safety net, not cleanup.
+Never finish a run with any process started by the agent still running. This includes background commands, test servers, watchers, and any browser process. Stop owned processes on success, failure, cancellation, timeout, and every early `STOP` path. A timeout is a safety net, not cleanup.
 
-Prefer a foreground supervisor. If a long-lived command must run in the background, use a finite `timeout` budget and record its PID. `obscura serve` has no built-in duration flag; if browser verification is required, use a one-hour cap and a session-specific storage directory:
-
-```bash
-timeout --signal=TERM --kill-after=15s 1h \
-  obscura serve --allow-private-network --storage-dir <session-dir>
-```
+Prefer a foreground supervisor. If a long-lived command must run in the background, use a finite `timeout` budget and record its PID. Browser work follows `.agents/browser.md`: each script launches and closes its own chromium inside a `timeout`, so it leaves nothing running.
 
 Use a task-appropriate cap for the application stack as well. On cleanup, send `SIGTERM` to the exact process or supervisor you started, wait for it, and use `SIGKILL` only if it is still alive. Check its children and the ports it owns. Never kill an unknown process or clear a port you did not open. Remove temporary PID/log/browser files. If cleanup cannot be verified, do not report the run as complete.
 

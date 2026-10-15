@@ -1,6 +1,56 @@
 import { QueryClient } from "@tanstack/react-query";
 
 /**
+ * True when the server answered with a 4xx. `statusCode` is stamped on every
+ * error by `normalizeError` (dataProvider); 0 is its "no HTTP response"
+ * sentinel (see `isNoResponseError`).
+ */
+export function isClientError(error: unknown): boolean {
+  const status = (error as { statusCode?: number } | null | undefined)?.statusCode;
+  return typeof status === "number" && status >= 400 && status < 500;
+}
+
+/**
+ * True when the server answered with a 5xx.
+ */
+export function isServerError(error: unknown): boolean {
+  const status = (error as { statusCode?: number } | null | undefined)?.statusCode;
+  return typeof status === "number" && status >= 500 && status < 600;
+}
+
+/**
+ * True when no HTTP response arrived. `normalizeError` (dataProvider)
+ * stamps `statusCode: 0` for an abort, a cancel and a dropped connection
+ * alike. A retry may well succeed for a dropped connection — it is a
+ * brand-new request — so the honest reason not to retry one is fail-fast
+ * UX: the budget's backoff holds "Loading…" in front of the error branch
+ * that exists to report the failure.
+ */
+export function isNoResponseError(error: unknown): boolean {
+  return (error as { statusCode?: number } | null | undefined)?.statusCode === 0;
+}
+
+/**
+ * The app-wide retry predicate: the QueryClient default (budget 3) and the
+ * /me identity override (budget 2, see WorkspaceContext) share this refusal
+ * set and differ only in `max`. Refused: a 4xx (a retry cannot succeed), a
+ * 5xx (same server, same request — the retry does not heal it), and no HTTP
+ * response (see isNoResponseError). Everything else rides the budget.
+ */
+export function shouldRetry(
+  failureCount: number,
+  error: unknown,
+  max: number,
+): boolean {
+  return (
+    failureCount < max &&
+    !isClientError(error) &&
+    !isNoResponseError(error) &&
+    !isServerError(error)
+  );
+}
+
+/**
  * Singleton QueryClient for the app.
  *
  * Providing an explicit instance to <Refine> lets non-React code
@@ -16,12 +66,26 @@ import { QueryClient } from "@tanstack/react-query";
  * workspace switch or a logout→login as a different user, the stale
  * rows are kept as placeholder until the new workspace/user fetch
  * resolves. Disabling it forces a loading/empty state instead of stale.
+ *
+ * `retry` is react-query's own default budget (3 retries — 4 requests —
+ * 1s + 2s + 4s) unless it is set here. Retrying a 4xx cannot succeed and
+ * spent ~7s of "Loading…" in front of every refusal, so 4xx now fails on
+ * the first attempt. A request that produced no HTTP response fails on the
+ * first attempt too — a retry may well succeed for a dropped connection,
+ * but the backoff would hold ~7s of "Loading…" in front of the error branch
+ * that exists to report it (see isNoResponseError). Since then 5xx joins
+ * them and fails on the first attempt as well: four
+ * identical requests against a 5xx-ing server cost ~7s of "Loading…", the
+ * retry did not heal it anyway (same server, same request), and every error
+ * state now surfaces a visible failure the user can re-run by hand (e.g. the
+ * audit log's Try again).
  */
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
       placeholderData: undefined,
+      retry: (failureCount, error) => shouldRetry(failureCount, error, 3),
     },
   },
 });

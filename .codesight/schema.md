@@ -9,9 +9,12 @@
 - permissions: JSON (default)
 - created_by_user_id: str (index)
 - last_used_at: DateTime (nullable)
+- expires_at: DateTime (nullable, index)
 - revoked_at: DateTime (nullable)
 - usage_count: Integer (default)
 - usage_quota: Integer (nullable)
+- usage_window_count: Integer (default)
+- usage_window_start: DateTime (nullable)
 
 ### AuditLogEntry
 - id: str (pk, default)

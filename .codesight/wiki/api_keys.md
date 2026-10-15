@@ -6,7 +6,7 @@ The Api_keys subsystem handles **5 routes** and touches: db.
 
 ## Routes
 
-- `GET` `` [db]
+- `GET` ``
   `apps/api/src/api/routes/api_keys.py`
 - `GET` `/effective-permissions`
   `apps/api/src/api/routes/api_keys.py`

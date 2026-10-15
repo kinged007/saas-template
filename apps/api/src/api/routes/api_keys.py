@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, apply_query, parse_query
@@ -14,7 +14,13 @@ from src.api.deps import (
     require_permission,
     resolve_auth_principal,
 )
-from src.core.permissions import APIKEY_CREATE, APIKEY_DELETE, APIKEY_READ
+from src.core.dates import iso_or_none
+from src.core.permissions import (
+    APIKEY_CREATE,
+    APIKEY_DELETE,
+    APIKEY_READ,
+    KEY_ONLY_PERMISSIONS,
+)
 from src.db.session import get_db
 from src.models.api_key import ApiKey
 from src.schemas.api import ApiKeyCreate, ApiKeyQuotaUpdate
@@ -26,7 +32,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api-keys", tags=["api-keys"])
 
 _APIKEY_FILTERABLE = {"name"}
-_APIKEY_SORTABLE = {"name", "created_at", "last_used_at"}
+_APIKEY_SORTABLE = {"name", "created_at", "last_used_at", "expires_at"}
+# offset/limit page stably only against a total order. created_at is
+# server_default=now() (second granularity on SQLite), so keys minted in the
+# same second tie and id breaks it. An explicit client sort replaces this.
+_APIKEY_DEFAULT_ORDER = (ApiKey.created_at.desc(), ApiKey.id.desc())
 
 
 def _key_dict(k: ApiKey) -> dict:
@@ -39,9 +49,12 @@ def _key_dict(k: ApiKey) -> dict:
         "created_by_user_id": k.created_by_user_id,
         "usage_count": k.usage_count,
         "usage_quota": k.usage_quota,
-        "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
-        "revoked_at": k.revoked_at.isoformat() if k.revoked_at else None,
-        "created_at": k.created_at.isoformat() if k.created_at else None,
+        "usage_window_count": k.usage_window_count,
+        "usage_window_start": iso_or_none(k.usage_window_start),
+        "last_used_at": iso_or_none(k.last_used_at),
+        "expires_at": iso_or_none(k.expires_at),
+        "revoked_at": iso_or_none(k.revoked_at),
+        "created_at": iso_or_none(k.created_at),
     }
 
 
@@ -54,25 +67,28 @@ async def list_api_keys(
     _=Depends(require_permission(APIKEY_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    # API keys are personal credentials: each caller sees exactly their own
-    # keys, never another member's — regardless of role or "*" permission.
-    stmt = select(ApiKey).where(
-        ApiKey.workspace_id == workspace_id,
-        ApiKey.created_by_user_id == user.id,
-    )
+    # Query parsing is the HTTP layer's job; the service runners own the
+    # personal scope predicate, so no filter or sort can widen it.
+    service = ApiKeyService(db)
     try:
         spec = parse_query(request)
         stmt = apply_query(
-            stmt, ApiKey, spec, sortable=_APIKEY_SORTABLE, filterable=_APIKEY_FILTERABLE
+            select(ApiKey),
+            ApiKey,
+            spec,
+            sortable=_APIKEY_SORTABLE,
+            filterable=_APIKEY_FILTERABLE,
+        )
+        total = await service.count_for_user(workspace_id, user.id, stmt)
+        if not spec.sort_by:
+            stmt = stmt.order_by(*_APIKEY_DEFAULT_ORDER)
+        rows = await service.list_for_user(
+            workspace_id, user.id, stmt.offset(spec.offset).limit(spec.limit)
         )
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
-    count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
-    total = count.scalar_one()
-    stmt = stmt.offset(spec.offset).limit(spec.limit)
-    rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
-    return [_key_dict(k) for k in rows.scalars().all()]
+    return [_key_dict(k) for k in rows]
 
 
 @router.get("/effective-permissions")
@@ -82,12 +98,15 @@ async def effective_permissions(
     _=Depends(require_permission(APIKEY_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    """Permissions this user can assign to an API key in the active workspace."""
+    """Permissions this user can assign to an API key in the active workspace.
+
+    Key-only scopes (notification:*) are always offerable: any member may hold
+    them on a key (notifications are personal), mirroring ApiKeyService."""
     membership = await WorkspaceService(db).get_membership(workspace_id, user.id)
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership
-    return {"permissions": sorted(role.permissions)}
+    return {"permissions": sorted(set(role.permissions) | set(KEY_ONLY_PERMISSIONS))}
 
 
 @router.post("", status_code=201)
@@ -107,6 +126,7 @@ async def create_api_key(
             name=body.name,
             permissions=body.permissions,
             usage_quota=body.usage_quota,
+            expires_at=body.expires_at,
             actor=user,
             ip_address=request.client.host if request.client else None,
             # When the caller is itself an API key, the new key's permissions
@@ -121,6 +141,7 @@ async def create_api_key(
     return {**_key_dict(key), "key": raw}
 
 
+# APIKEY_DELETE is the key-lifecycle guard: it covers quota changes and revoke.
 @router.patch("/{api_key_id}")
 async def set_api_key_quota(
     api_key_id: str,
