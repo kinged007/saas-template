@@ -62,4 +62,64 @@ test.describe("sign-in steps", () => {
 
     await expect(page.getByRole("button", { name: "Sign in another way" })).toBeHidden();
   });
+
+  test("a mapped domain jumps straight to its provider", async ({ page }) => {
+    await mockApi(page, { signedIn: false });
+    // Registered after mockApi, so they take precedence over its catch-all.
+    await page.route("**/api/v1/auth/config", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          registration_enabled: true,
+          password_enabled: true,
+          oauth_enabled: true,
+          providers: [{ id: "testidp", display_name: "Test IdP" }],
+        }),
+      }),
+    );
+    await page.route("**/api/v1/auth/sign-in/method", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ provider: "testidp" }),
+      }),
+    );
+    await page.goto("/login");
+
+    await page.getByLabel("Email").fill("newhire@corp.example");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+
+    // A real redirect leaves the SPA for the provider's authorize URL.
+    await page.waitForURL(/\/api\/v1\/auth\/oauth\/testidp\/authorize/);
+  });
+
+  test("an unmapped domain falls through to the password step", async ({ page }) => {
+    await mockApi(page, { signedIn: false });
+    await page.route("**/api/v1/auth/config", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          registration_enabled: true,
+          password_enabled: true,
+          oauth_enabled: true,
+          providers: [{ id: "testidp", display_name: "Test IdP" }],
+        }),
+      }),
+    );
+    await page.route("**/api/v1/auth/sign-in/method", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ provider: null }),
+      }),
+    );
+    await page.goto("/login");
+
+    await page.getByLabel("Email").fill("someone@example.com");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+
+    await expect(page.getByLabel("Password")).toBeVisible();
+  });
 });

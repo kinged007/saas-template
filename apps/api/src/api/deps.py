@@ -388,7 +388,7 @@ async def _require_mfa_satisfied(db: AsyncSession, workspace_id: str, user: User
     if settings.mfa_required:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "mfa required for this workspace")
     workspace = await db.get(Workspace, workspace_id)
-    if workspace is not None and workspace.mfa_required:
+    if workspace is not None and workspace.require_mfa:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "mfa required for this workspace")
 
 

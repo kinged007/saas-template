@@ -18,7 +18,7 @@ export type Workspace = {
    * Members without TOTP enrolled are refused workspace access while true.
    * Default-off; the global MFA_REQUIRED setting overrides it per workspace.
    */
-  mfa_required?: boolean;
+  require_mfa?: boolean;
 };
 
 export type UserProfile = {

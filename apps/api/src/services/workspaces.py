@@ -285,7 +285,7 @@ class WorkspaceService:
         name: str | None = None,
         description: str | None = None,
         onboarding_enabled: bool | None = None,
-        mfa_required: bool | None = None,
+        require_mfa: bool | None = None,
         # Required: every write names its actor for the audit trail; a system
         # caller passes an explicit actor instead (see create_custom_role).
         actor: User,
@@ -318,9 +318,9 @@ class WorkspaceService:
                 if not onboarding_enabled:
                     flags[ONBOARDING_ENABLED_FLAG] = False
                 workspace.flags = flags
-        if mfa_required is not None and mfa_required != workspace.mfa_required:
-            changes["mfa_required"] = {"from": workspace.mfa_required, "to": mfa_required}
-            workspace.mfa_required = mfa_required
+        if require_mfa is not None and require_mfa != workspace.require_mfa:
+            changes["require_mfa"] = {"from": workspace.require_mfa, "to": require_mfa}
+            workspace.require_mfa = require_mfa
         await self._session.commit()
         if changes:
             await publish_audit(
@@ -736,9 +736,9 @@ class WorkspaceService:
             workspace_id=workspace_id,
             resource_type="member",
             resource_id=member.id,
-            action="member.mfa_reset",
+            action="mfa.reset",
             actor_user_id=actor.id,
-            details={"user_id": member.user_id},
+            details={"reset_by_user_id": actor.id, "target_user_id": member.user_id},
             ip_address=ip_address,
         )
         return member

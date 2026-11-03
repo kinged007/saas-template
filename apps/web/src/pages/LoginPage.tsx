@@ -71,8 +71,37 @@ export function LoginPage() {
   // Call authProvider directly instead of useLogin: refine's useLogin shows
   // an error toast for every success:false result, which would leak the
   // challenge token and never reach a per-call onError branch.
-  const submit = async (e: React.FormEvent) => {
+  // Email-first routing: when OAuth providers are configured, the domain
+  // decides — a mapped domain jumps straight to its provider, anything else
+  // falls through to the password step (a failed lookup degrades to it too,
+  // since the lookup is an enhancement and its budget is separate).
+  const continueWithEmail = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
+    if (!email.trim()) return;
+    if (ssoProviders.length === 0) {
+      setStep("password");
+      return;
+    }
+    setPending(true);
+    try {
+      const { data } = await httpClient.post<{ provider: string | null }>(
+        `${API_URL}/auth/sign-in/method`,
+        { email: email.trim() },
+      );
+      if (data.provider) {
+        window.location.assign(`${API_URL}/auth/oauth/${data.provider}/authorize`);
+        return;
+      }
+      setStep("password");
+    } catch {
+      setStep("password");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const submit = async (e: React.FormEvent) => {    e.preventDefault();
     setError(null);
     if (challenge) {
       setPending(true);
@@ -124,7 +153,7 @@ export function LoginPage() {
   const registrationEnabled = config?.registration_enabled ?? true;
 
   return (
-    <div className="bg-gradient-to-br from-primary/10 via-background to-secondary/30 dark:from-primary/25 dark:via-background dark:to-secondary/20 flex min-h-screen items-center justify-center p-4">
+    <div className="bg-gradient-to-br from-primary/10 via-background to-muted flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <img src="/logo.svg" alt="SaaS Template" className="mx-auto mb-2 w-48" />
@@ -170,14 +199,7 @@ export function LoginPage() {
               </Button>
             </form>
           ) : step === "email" ? (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                setError(null);
-                if (email.trim()) setStep("password");
-              }}
-              className="flex flex-col gap-4"
-            >
+            <form onSubmit={continueWithEmail} className="flex flex-col gap-4">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="email">Email</Label>
                 <Input
@@ -191,7 +213,9 @@ export function LoginPage() {
                 />
               </div>
               {error && <p className="text-destructive text-sm">{error}</p>}
-              <Button type="submit">Continue</Button>
+              <Button type="submit" disabled={pending}>
+                {pending ? "Checking…" : "Continue"}
+              </Button>
             </form>
           ) : (
             <form onSubmit={submit} className="flex flex-col gap-4">

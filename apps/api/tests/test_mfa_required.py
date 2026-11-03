@@ -20,7 +20,7 @@ async def _enroll_totp(client, headers):
 
 async def _patch_mfa(client, ws_id, headers, value):
     return await client.patch(
-        f"/api/v1/workspaces/{ws_id}", json={"mfa_required": value}, headers=headers
+        f"/api/v1/workspaces/{ws_id}", json={"require_mfa": value}, headers=headers
     )
 
 
@@ -31,10 +31,10 @@ async def test_mfa_off_by_default(app_client):
     ws = await create_workspace(client, owner)
     headers = ws_headers(owner, ws["id"])
 
-    assert ws["mfa_required"] is False
+    assert ws["require_mfa"] is False
     me = (await client.get("/api/v1/auth/me", headers=headers)).json()
     entry = next(w for w in me["workspaces"] if w["id"] == ws["id"])
-    assert entry["mfa_required"] is False
+    assert entry["require_mfa"] is False
     # unenrolled access works while nothing requires MFA
     assert (await client.get("/api/v1/members", headers=headers)).status_code == 200
 
@@ -91,7 +91,7 @@ async def test_workspace_flag_scopes_enforcement_to_that_workspace(app_client):
 
     resp = await _patch_mfa(client, ws["id"], headers, True)
     assert resp.status_code == 200, resp.text
-    assert resp.json()["mfa_required"] is True
+    assert resp.json()["require_mfa"] is True
 
     assert (await client.get("/api/v1/members", headers=headers)).status_code == 403
     # the sibling workspace is unaffected
@@ -118,7 +118,7 @@ async def test_workspace_flag_scopes_enforcement_to_that_workspace(app_client):
     )
     member_headers = ws_headers(member, ws["id"])
     assert (await client.get("/api/v1/members", headers=member_headers)).status_code == 403
-    assert (await _patch_mfa(client, ws["id"], headers, False)).json()["mfa_required"] is False
+    assert (await _patch_mfa(client, ws["id"], headers, False)).json()["require_mfa"] is False
     assert (await client.get("/api/v1/members", headers=member_headers)).status_code == 200
 
 

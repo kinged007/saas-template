@@ -208,13 +208,13 @@ export function GeneralSection() {
   };
 
   // Toggles immediately on change so the switch never waits on a Save click.
-  const setMfaRequired = (enabled: boolean) => {
+  const setRequireMfa = (enabled: boolean) => {
     if (!workspace) return;
     mutate(
       {
         url: `workspaces/${workspace.id}`,
         method: "patch",
-        values: { mfa_required: enabled },
+        values: { require_mfa: enabled },
         successNotification: false,
         errorNotification: false,
       },
@@ -319,9 +319,9 @@ export function GeneralSection() {
             <input
               type="checkbox"
               className="h-3.5 w-3.5 accent-primary"
-              checked={workspace.mfa_required === true}
+              checked={workspace.require_mfa === true}
               disabled={isSaving || !canUpdate?.can}
-              onChange={(e) => setMfaRequired(e.target.checked)}
+              onChange={(e) => setRequireMfa(e.target.checked)}
             />
             Require two-factor for this workspace
           </label>

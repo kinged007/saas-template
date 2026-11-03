@@ -58,7 +58,7 @@ def workspace_to_dict(
         "created_at": iso_or_none(w.created_at),
         # MFA gate state travels with the workspace so the UI can prompt
         # enrollment before the first gated request fails.
-        "mfa_required": bool(w.mfa_required),
+        "require_mfa": bool(w.require_mfa),
         # Default-on: only an explicit False disables it (FEATURE_FLAGS.md).
         ONBOARDING_ENABLED_FLAG: (w.flags or {}).get(ONBOARDING_ENABLED_FLAG) is not False,
     }

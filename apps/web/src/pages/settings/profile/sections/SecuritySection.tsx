@@ -99,7 +99,7 @@ export function SecuritySection() {
   const enabled = (status.result?.data as { enabled?: boolean } | undefined)?.enabled ?? false;
   // The deployment or the active workspace can require MFA; either one blocks
   // workspace access for accounts without an enrolled authenticator.
-  const mfaRequired = config?.mfa_required === true || workspace?.mfa_required === true;
+  const mfaRequired = config?.mfa_required === true || workspace?.require_mfa === true;
 
   const [setupUri, setSetupUri] = useState<string | null>(null);
   const [setupSecret, setSetupSecret] = useState<string | null>(null);

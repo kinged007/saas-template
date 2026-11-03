@@ -102,9 +102,9 @@ async def test_admin_resets_member_mfa(app_client):
     ).status_code == 200
     await _enroll(client, auth_headers(member))
 
-    entry = await _wait_for_audit(row["membership_id"], "member.mfa_reset")
+    entry = await _wait_for_audit(row["membership_id"], "mfa.reset")
     assert entry.workspace_id == ws["id"]
-    assert entry.details["user_id"] == row["id"]
+    assert entry.details["target_user_id"] == row["id"]
 
 
 async def test_reset_is_idempotent_without_enrollment(app_client):

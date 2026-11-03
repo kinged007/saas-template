@@ -191,7 +191,7 @@ async def reset_member_mfa(
 ):
     """Clear a member's TOTP enrollment (account recovery, manager-only).
 
-    Audited as member.mfa_reset. Self-reset is refused — disabling your own
+    Audited as mfa.reset. Self-reset is refused — disabling your own
     second factor goes through POST /auth/2fa/disable, which re-checks the
     password.
     """

@@ -106,8 +106,8 @@ class Workspace(Base, TimestampMixin):
     created_by_user_id: Mapped[str] = mapped_column(StringUUID(), index=True, nullable=False)
     # Members without TOTP enrolled are refused workspace access while true.
     # The global MFA_REQUIRED setting overrides this per workspace: when the
-    # setting is on, every workspace requires MFA regardless of this flag.
-    mfa_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # setting is on, every workspace requires MFA whatever this flag says.
+    require_mfa: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Workspace-level feature flags: {key: bool}. Absent key = default-on.
     # See docs/FEATURE_FLAGS.md for the registry.
     flags: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
