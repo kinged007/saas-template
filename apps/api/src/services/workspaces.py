@@ -701,6 +701,48 @@ class WorkspaceService:
         )
         return member
 
+    async def reset_member_mfa(
+        self,
+        workspace_id: str,
+        member_id: str,
+        *,
+        actor: User,
+        ip_address: str | None = None,
+    ) -> WorkspaceMember:
+        """Clear a member's TOTP enrollment (account recovery).
+
+        Manager-only (owner/admin), audited as member.mfa_reset. Idempotent:
+        resetting a member with nothing enrolled still succeeds. Self-reset is
+        refused — use POST /auth/2fa/disable, which re-checks the password.
+        """
+        from src.models.two_factor import UserTotpCredential
+
+        await self._require_manager(workspace_id, actor)
+        member = await self._session.get(WorkspaceMember, member_id)
+        if member is None or member.workspace_id != workspace_id:
+            raise WorkspaceError("member not found in workspace")
+        if member.user_id == actor.id:
+            raise WorkspaceConflict("cannot reset your own MFA, disable it instead")
+        target = await self._session.get(User, member.user_id)
+        if target is None:
+            raise WorkspaceError("member not found in workspace")
+        cred = await self._session.get(UserTotpCredential, member.user_id)
+        if cred is not None:
+            await self._session.delete(cred)
+        target.totp_enabled = False
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="member",
+            resource_id=member.id,
+            action="member.mfa_reset",
+            actor_user_id=actor.id,
+            details={"user_id": member.user_id},
+            ip_address=ip_address,
+        )
+        return member
+
     async def reactivate_member(
         self,
         workspace_id: str,

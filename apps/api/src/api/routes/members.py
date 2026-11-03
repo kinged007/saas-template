@@ -179,6 +179,38 @@ async def reactivate_member(
     return {"id": member.id, "status": member.status}
 
 
+@router.post("/{membership_id}/reset-mfa")
+async def reset_member_mfa(
+    membership_id: str,
+    request: Request,
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    _=Depends(require_permission(MEMBER_UPDATE)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    """Clear a member's TOTP enrollment (account recovery, manager-only).
+
+    Audited as member.mfa_reset. Self-reset is refused — disabling your own
+    second factor goes through POST /auth/2fa/disable, which re-checks the
+    password.
+    """
+    try:
+        member = await WorkspaceService(db, container.bus).reset_member_mfa(
+            workspace_id,
+            membership_id,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    except WorkspaceConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    except WorkspaceError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    return {"id": member.id, "user_id": member.user_id, "totp_enabled": False}
+
+
 @router.delete("/{membership_id}", status_code=204)
 async def remove_member(
     membership_id: str,
