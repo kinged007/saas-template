@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 
@@ -8,15 +9,22 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, apply_query, parse_query
-from src.api.deps import get_current_workspace_id, require_permission
-from src.core.dates import iso_or_none
+from src.api.deps import (
+    get_container,
+    get_current_user,
+    get_current_workspace_id,
+    require_permission,
+)
+from src.core.dates import iso_or_none, now_utc
 from src.core.permissions import AUDIT_READ
 from src.db.session import get_db
+from src.events.publisher import publish_audit
 from src.models.audit import AuditLogEntry
 from src.models.user_profile import UserProfile
 from src.models.workspace import User
 from src.services.audit import public_details
 from src.services.profile_helpers import format_display_name
+from src.services.search_export import SearchExportService
 
 logger = logging.getLogger(__name__)
 
@@ -107,3 +115,75 @@ async def list_audit_logs(
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
     return [_audit_to_dict(entry, user, profile) for entry, user, profile in rows.all()]
+
+
+@router.get("/export")
+async def export_audit_logs(
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    _=Depends(require_permission(AUDIT_READ)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+    format: str = "json",
+    action: str | None = None,
+    resource_type: str | None = None,
+    actor_user_id: str | None = None,
+    q: str | None = None,
+):
+    """Downloadable audit dump: the workspace export's audit section without
+    the rest of the bundle, filterable like the list (action, resource type,
+    actor, free-text search). Capped at the export cap; `truncated` flags a
+    cut, so a compliance pull can page on created_at instead of assuming
+    completeness."""
+    if format not in ("json", "csv"):
+        raise HTTPException(422, f"unknown format: {format} (choose from csv, json)")
+    from src.services.conversations import ConversationForbidden
+
+    service = SearchExportService(db, container.bus)
+    try:
+        rows, truncated = await service.export_audit(
+            workspace_id=workspace_id,
+            user_id=user.id,
+            action=action or None,
+            resource_type=resource_type or None,
+            actor_user_id=actor_user_id or None,
+            q=q or None,
+        )
+    except ConversationForbidden as exc:
+        raise HTTPException(403, str(exc)) from None
+    await publish_audit(
+        container.bus,
+        workspace_id=workspace_id,
+        resource_type="audit",
+        resource_id=workspace_id,
+        action="audit.exported",
+        actor_user_id=user.id,
+        details={
+            "format": format,
+            "count": len(rows),
+            "truncated": truncated,
+            "action": action,
+            "resource_type": resource_type,
+            "actor_user_id": actor_user_id,
+            "q": q,
+        },
+    )
+    if format == "csv":
+        return Response(
+            content=SearchExportService.export_csv({"audit": rows}, "audit"),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f'attachment; filename="audit-{workspace_id}.csv"',
+                "X-Truncated": str(truncated).lower(),
+            },
+        )
+    return Response(
+        content=json.dumps(
+            {"exported_at": now_utc().isoformat(), "truncated": truncated, "audit": rows}
+        ),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="audit-{workspace_id}.json"',
+            "X-Truncated": str(truncated).lower(),
+        },
+    )

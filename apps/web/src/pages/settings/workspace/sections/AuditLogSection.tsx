@@ -11,6 +11,7 @@ export function AuditLogSection() {
         searchPlaceholder="Search user, action…"
         searchEnabled
         showWorkspace={false}
+        exportUrl="audit/export"
       />
     </AuditLogCard>
   );

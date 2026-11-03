@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import or_, select
@@ -150,10 +151,86 @@ def _csv_cell(value: object) -> object:
     return value
 
 
+def _audit_export_row(entry: AuditLogEntry, actor_email: str | None) -> dict:
+    """One audit row in bundle shape: compliance artifact, so the internal
+    `source_event_id` and raw details stay out (GET /audit shape)."""
+    return {
+        "id": entry.id,
+        "actor_user_id": entry.actor_user_id,
+        "actor_email": actor_email,
+        "resource_type": entry.resource_type,
+        "resource_id": entry.resource_id,
+        "action": entry.action,
+        "details": public_details(entry.details),
+        "ip_address": entry.ip_address,
+        "created_at": iso_or_none(entry.created_at),
+    }
+
+
 class SearchExportService:
     def __init__(self, session: AsyncSession, bus: EventBus | None = None) -> None:
         self._session = session
         self._bus = bus
+
+    async def export_audit(
+        self,
+        *,
+        workspace_id: str,
+        user_id: str,
+        action: str | None = None,
+        resource_type: str | None = None,
+        actor_user_id: str | None = None,
+        q: str | None = None,
+    ) -> tuple[list[dict], bool]:
+        """Filtered audit dump for GET /audit/export.
+
+        Same row shape as export_json's audit section; oldest first so
+        repeated dumps diff stably. Capped at _EXPORT_AUDIT_CAP, oldest-first:
+        `truncated` flags a cut. Does not audit-log itself — the route owns
+        its `audit.exported` entry with the format and filter details.
+        """
+        await _ensure_membership(self._session, workspace_id, user_id)
+        stmt = (
+            select(AuditLogEntry, User.email)
+            .outerjoin(User, User.id == AuditLogEntry.actor_user_id)
+            .where(AuditLogEntry.workspace_id == workspace_id)
+        )
+        if action:
+            stmt = stmt.where(AuditLogEntry.action == action)
+        if resource_type:
+            stmt = stmt.where(AuditLogEntry.resource_type == resource_type)
+        if actor_user_id:
+            stmt = stmt.where(AuditLogEntry.actor_user_id == actor_user_id)
+        if q:
+            # Same cross-field match as GET /audit: substring on user
+            # name/email or action, exact match on id columns for UUIDs.
+            like = f"%{q}%"
+            clauses = [
+                AuditLogEntry.action.ilike(like),
+                User.display_name.ilike(like),
+                User.email.ilike(like),
+            ]
+            try:
+                uuid.UUID(q)
+            except ValueError:
+                pass
+            else:
+                clauses.extend(
+                    (
+                        AuditLogEntry.id == q,
+                        AuditLogEntry.actor_user_id == q,
+                        AuditLogEntry.resource_id == q,
+                    )
+                )
+            stmt = stmt.where(or_(*clauses))
+        rows = (
+            await self._session.execute(
+                stmt.order_by(AuditLogEntry.created_at.asc()).limit(_EXPORT_AUDIT_CAP + 1)
+            )
+        ).all()
+        truncated = len(rows) > _EXPORT_AUDIT_CAP
+        rows = rows[:_EXPORT_AUDIT_CAP]
+        return [_audit_export_row(e, email) for e, email in rows], truncated
 
     async def search(self, *, workspace_id: str, user_id: str, q: str) -> dict:
         await _ensure_membership(self._session, workspace_id, user_id)
@@ -432,17 +509,8 @@ class SearchExportService:
         if len(notifs) > _EXPORT_NOTIFICATIONS_CAP:
             notifs = notifs[:_EXPORT_NOTIFICATIONS_CAP]
             truncated = True
-        audit_rows = (
-            await self._session.execute(
-                select(AuditLogEntry, User.email)
-                .outerjoin(User, User.id == AuditLogEntry.actor_user_id)
-                .where(AuditLogEntry.workspace_id == workspace_id)
-                .order_by(AuditLogEntry.created_at.asc())
-                .limit(_EXPORT_AUDIT_CAP + 1)
-            )
-        ).all()
-        if len(audit_rows) > _EXPORT_AUDIT_CAP:
-            audit_rows = audit_rows[:_EXPORT_AUDIT_CAP]
+        audit, audit_truncated = await self.export_audit(workspace_id=workspace_id, user_id=user_id)
+        if audit_truncated:
             truncated = True
         subs = (
             (
@@ -528,23 +596,7 @@ class SearchExportService:
                 for m in messages
             ],
             "notifications": [notification_to_dict(n) for n in notifs],
-            "audit": [
-                {
-                    "id": e.id,
-                    "actor_user_id": e.actor_user_id,
-                    "actor_email": email,
-                    "resource_type": e.resource_type,
-                    "resource_id": e.resource_id,
-                    "action": e.action,
-                    # Same shape GET /audit returns: this is a downloadable
-                    # compliance artifact, so it drops the internal
-                    # `source_event_id` too.
-                    "details": public_details(e.details),
-                    "ip_address": e.ip_address,
-                    "created_at": iso_or_none(e.created_at),
-                }
-                for e, email in audit_rows
-            ],
+            "audit": audit,
             "webhook_subscriptions": [
                 {"url": s.url, "events": s.events or [], "active": s.active} for s in subs
             ],

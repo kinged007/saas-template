@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useList, type CrudFilters } from "@refinedev/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +17,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EmptyRow, formatDate } from "@/components/ui";
 import { errorMessage } from "@/utils/errorMessage";
+import { API_URL, httpClient } from "@/providers/dataProvider";
 import type { AuditLogEntry } from "@/types";
 
 export type AuditEntry = AuditLogEntry & {
@@ -55,16 +57,49 @@ export function AuditLogTable({
   searchPlaceholder,
   searchEnabled,
   showWorkspace,
+  exportUrl,
 }: {
   resource: string;
   searchPlaceholder: string;
   searchEnabled: boolean;
   showWorkspace: boolean;
+  /** Custom download endpoint for a CSV dump (e.g. "audit/export"); absent = no button. */
+  exportUrl?: string;
 }) {
   const [search, setSearch] = useState("");
   const [submitted, setSubmitted] = useState("");
   const [current, setCurrent] = useState(1);
   const [viewing, setViewing] = useState<AuditEntry | null>(null);
+  const [exporting, setExporting] = useState(false);
+
+  // The dump carries the submitted search so the file matches the table, not
+  // the whole log.
+  const downloadExport = async () => {
+    if (!exportUrl) return;
+    setExporting(true);
+    try {
+      const params = new URLSearchParams({ format: "csv" });
+      if (submitted) params.set("q", submitted);
+      const resp = await httpClient.get(`${API_URL}/${exportUrl}?${params}`, {
+        responseType: "blob",
+      });
+      const disposition = String(resp.headers["content-disposition"] ?? "");
+      const match = disposition.match(/filename="?([^"]+)"?/);
+      const url = window.URL.createObjectURL(resp.data as Blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = match?.[1] ?? "audit-export.csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success("Export downloaded");
+    } catch (e: unknown) {
+      toast.error((e as { message?: string })?.message ?? "Export failed");
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const filters: CrudFilters =
     searchEnabled && submitted
@@ -96,7 +131,7 @@ export function AuditLogTable({
 
   return (
     <>
-      {searchEnabled && (
+      {(searchEnabled || exportUrl) && (
         <form
           className="flex gap-2 px-4"
           onSubmit={(e) => {
@@ -105,12 +140,26 @@ export function AuditLogTable({
             setCurrent(1);
           }}
         >
-          <Input
-            placeholder={searchPlaceholder}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <Button type="submit">Search</Button>
+          {searchEnabled && (
+            <>
+              <Input
+                placeholder={searchPlaceholder}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <Button type="submit">Search</Button>
+            </>
+          )}
+          {exportUrl && (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={exporting}
+              onClick={() => void downloadExport()}
+            >
+              {exporting ? "Exporting…" : "Export CSV"}
+            </Button>
+          )}
         </form>
       )}
       <div className="overflow-x-auto">
