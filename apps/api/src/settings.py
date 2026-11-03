@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     # Secret store driver: "db" (encrypted table) | "vault" (future adapter)
     secret_store_driver: str = "db"
 
+    # bcrypt cost factor for password hashing. Higher is slower to brute-force
+    # and slower to verify; 12 is the current default. Range is bcrypt's 4..31.
+    password_hash_rounds: int = Field(default=12, ge=4, le=31)
+
     # Events
     event_bus_driver: EventBusDriver = EventBusDriver.INPROCESS
     nats_url: str = "nats://localhost:4222"
