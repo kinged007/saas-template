@@ -1,4 +1,4 @@
-import { NavLink } from "react-router";
+import { NavLink, useLocation } from "react-router";
 import { cn } from "@/lib/utils";
 import type { SettingsSection } from "../types";
 
@@ -12,6 +12,12 @@ export function SettingsNav({
   /** Landmark name, passed by every shell so it matches that shell's <h1>. */
   label: string;
 }) {
+  // Preserve an entry-point return target (e.g. ?from=/admin/users on the
+  // member editor) across tab switches; each tab re-attaches it.
+  const { search } = useLocation();
+  const from = new URLSearchParams(search).get("from");
+  const tabTo = (key: string) =>
+    from ? `${basePath}/${key}?from=${encodeURIComponent(from)}` : `${basePath}/${key}`;
   return (
     <nav aria-label={label} className="flex flex-col gap-1">
       {sections.map((section) => {
@@ -19,7 +25,7 @@ export function SettingsNav({
         return (
           <NavLink
             key={section.key}
-            to={`${basePath}/${section.key}`}
+            to={tabTo(section.key)}
             className={({ isActive }) =>
               cn(
                 "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",

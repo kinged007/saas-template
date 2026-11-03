@@ -291,6 +291,12 @@ class AdminWorkspaceFlags(BaseModel):
     flags: dict[str, StrictBool]
 
 
+class AdminWorkspaceUpdate(BaseModel):
+    name: StrippedName | None = Field(default=None, max_length=150)
+    slug: StrippedName | None = Field(default=None, max_length=100)
+    description: str | None = Field(default=None, max_length=500)
+
+
 class JobUpdate(BaseModel):
     """Editable job configuration. All fields optional (partial patch)."""
 

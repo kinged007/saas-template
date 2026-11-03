@@ -1,4 +1,6 @@
 import { Link, Navigate, Outlet, useLocation } from "react-router";
+import { useGo } from "@refinedev/core";
+import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { SettingsRegistry } from "../types";
@@ -29,6 +31,8 @@ export function GenericSettingsLayout({
   subtitle,
   can,
   guard,
+  backTo,
+  backLabel,
 }: {
   registry: SettingsRegistry;
   basePath: string;
@@ -38,9 +42,13 @@ export function GenericSettingsLayout({
   can: (permission?: string) => boolean;
   /** Optional gate — when false shows access-denied instead of the shell. */
   guard?: { allowed: boolean; deniedTitle?: string; deniedMessage?: string };
+  /** Optional back navigation above the title (e.g. member editor → users list). */
+  backTo?: string;
+  backLabel?: string;
   className?: string;
 }) {
   const location = useLocation();
+  const go = useGo();
   const visible = registry.getVisible(can);
 
   if (guard && !guard.allowed) {
@@ -65,6 +73,17 @@ export function GenericSettingsLayout({
   return (
     <div className={cn("mx-auto flex w-full max-w-6xl flex-col gap-6")}>
       <div>
+        {backTo && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="-ml-2 mb-1"
+            onClick={() => go({ to: backTo })}
+          >
+            <ArrowLeft className="h-4 w-4" />
+            {backLabel ?? "Back"}
+          </Button>
+        )}
         <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
         {subtitle && <p className="text-muted-foreground text-sm">{subtitle}</p>}
       </div>

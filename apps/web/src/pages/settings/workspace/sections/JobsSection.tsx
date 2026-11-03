@@ -13,8 +13,21 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { EmptyRow, formatDate } from "@/components/ui";
+import { EmptyRow } from "@/components/ui";
 import type { Identity, ScheduledJob } from "@/types";
+
+function JobDateCell({ value }: { value?: string | null }) {
+  if (!value) return <>—</>;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return <>—</>;
+  return (
+    <span>
+      <span className="whitespace-nowrap">{date.toLocaleDateString()}</span>
+      <br />
+      <span className="whitespace-nowrap">{date.toLocaleTimeString()}</span>
+    </span>
+  );
+}
 
 function JobTable({
   jobs,
@@ -46,26 +59,33 @@ function JobTable({
         {jobs.map((job) => (
           <TableRow key={job.id}>
             <TableCell>
-              <button className="max-w-md text-left" onClick={() => go({ to: `/jobs/${job.id}` })}>
+              <button className="max-w-48 text-left" onClick={() => go({ to: `/jobs/${job.id}` })}>
                 <p className="flex items-center gap-2 font-medium hover:underline">
                   <Clock className="text-muted-foreground h-4 w-4 shrink-0" />
                   {job.name}
                 </p>
-                <p className="text-muted-foreground truncate text-xs">{job.description}</p>
+                <p className="text-muted-foreground line-clamp-2 text-xs">{job.description}</p>
               </button>
             </TableCell>
-            <TableCell className="font-mono text-xs">{job.cron_schedule}</TableCell>
+            <TableCell className="whitespace-nowrap font-mono text-xs">{job.cron_schedule}</TableCell>
             <TableCell>
               {job.enabled ? <Badge variant="success">enabled</Badge> : <Badge variant="warning">disabled</Badge>}
             </TableCell>
-            <TableCell className="text-muted-foreground whitespace-nowrap">{formatDate(job.next_run_at)}</TableCell>
-            <TableCell className="text-muted-foreground whitespace-nowrap">{formatDate(job.last_run_at)}</TableCell>
+            <TableCell className="text-muted-foreground text-xs">
+              <JobDateCell value={job.next_run_at} />
+            </TableCell>
+            <TableCell className="text-muted-foreground text-xs">
+              <JobDateCell value={job.last_run_at} />
+            </TableCell>
             <TableCell className="text-right">
               <div className="flex items-center justify-end gap-1">
                 {canExecute && (
                   <Button
                     variant="ghost"
-                    size="sm"
+                    size="icon"
+                    className="h-8 w-8"
+                    title="Execute now"
+                    aria-label="Execute now"
                     disabled={mutation.isPending}
                     onClick={() =>
                       execute({
@@ -81,12 +101,17 @@ function JobTable({
                     }
                   >
                     <Play className="h-4 w-4" />
-                    Execute now
                   </Button>
                 )}
-                <Button variant="ghost" size="sm" onClick={() => go({ to: `/jobs/${job.id}` })}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  title="Configure"
+                  aria-label="Configure"
+                  onClick={() => go({ to: `/jobs/${job.id}` })}
+                >
                   <Settings2 className="h-4 w-4" />
-                  Configure
                 </Button>
               </div>
             </TableCell>

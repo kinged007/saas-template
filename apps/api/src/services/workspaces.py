@@ -283,6 +283,7 @@ class WorkspaceService:
         workspace_id: str,
         *,
         name: str | None = None,
+        slug: str | None = None,
         description: str | None = None,
         onboarding_enabled: bool | None = None,
         # Required: every write names its actor for the audit trail; a system
@@ -299,6 +300,14 @@ class WorkspaceService:
         if name is not None and name != workspace.name:
             changes["name"] = {"from": workspace.name, "to": name}
             workspace.name = name
+        if slug is not None and slug != workspace.slug:
+            exists = await self._session.execute(
+                select(Workspace).where(Workspace.slug == slug, Workspace.id != workspace_id)
+            )
+            if exists.scalar_one_or_none() is not None:
+                raise WorkspaceError("a workspace with that slug already exists")
+            changes["slug"] = {"from": workspace.slug, "to": slug}
+            workspace.slug = slug
         if description is not None and description != workspace.description:
             changes["description"] = {"from": workspace.description, "to": description}
             workspace.description = description

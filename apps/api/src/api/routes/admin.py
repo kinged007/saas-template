@@ -26,10 +26,11 @@ from src.events.publisher import publish_audit
 from src.models.audit import AuditLogEntry
 from src.models.user_profile import UserProfile
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
-from src.schemas.api import AdminUserUpdate, AdminWorkspaceFlags
+from src.schemas.api import AdminUserUpdate, AdminWorkspaceFlags, AdminWorkspaceUpdate
 from src.services.audit import public_details
 from src.services.profile_helpers import escape_like, format_display_name
 from src.services.serializers import user_to_dict, workspace_to_dict
+from src.services.workspaces import WorkspaceError, WorkspaceService
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +205,63 @@ async def update_workspace_flags(
         details={"flags": body.flags},
         ip_address=request.client.host if request.client else None,
     )
+    return _workspace_dict(workspace)
+
+
+@router.get("/workspaces/{workspace_id}")
+async def get_workspace_as_admin(
+    workspace_id: str,
+    _=Depends(require_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    workspace = await db.get(Workspace, uuid_or_404(workspace_id, "workspace"))
+    if workspace is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
+    stmt = (
+        select(User, Role)
+        .join(WorkspaceMember, WorkspaceMember.user_id == User.id)
+        .join(Role, Role.id == WorkspaceMember.role_id)
+        .where(WorkspaceMember.workspace_id == workspace_id)
+        .order_by(User.created_at.asc())
+    )
+    rows = await db.execute(stmt)
+    members = [
+        {
+            "id": u.id,
+            "email": u.email,
+            "display_name": u.display_name,
+            "role": r.name,
+            "is_active": bool(u.is_active),
+        }
+        for u, r in rows.all()
+    ]
+    return {**_workspace_dict(workspace), "member_count": len(members), "members": members}
+
+
+@router.patch("/workspaces/{workspace_id}")
+async def update_workspace_as_admin(
+    workspace_id: str,
+    body: AdminWorkspaceUpdate,
+    request: Request,
+    admin=Depends(require_superuser),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    if body.name is None and body.slug is None and body.description is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "no editable fields supplied")
+    if await db.get(Workspace, uuid_or_404(workspace_id, "workspace")) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
+    try:
+        workspace = await WorkspaceService(db, container.bus).update_workspace(
+            workspace_id,
+            name=body.name,
+            slug=body.slug,
+            description=body.description,
+            actor=admin,
+            ip_address=request.client.host if request.client else None,
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
     return _workspace_dict(workspace)
 
 

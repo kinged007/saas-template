@@ -270,17 +270,19 @@ function UserMenu() {
   const permissions = activeWorkspacePermissions(identity);
   const canViewApiKeys = permissions.includes("*") || permissions.includes("apikey:read");
 
-  // Workspace settings — only owners and admins may see this entry, and
-  // SINGLE_WORKSPACE hides it entirely. The page itself re-checks the role gate
-  // and renders an "Access denied" fallback if the role was downgraded after
-  // the menu rendered; hiding the entry leaves the route itself reachable.
+  // Workspace settings — only owners and admins may see this entry. The
+  // page itself re-checks the role gate and renders an "Access denied"
+  // fallback if the role was downgraded after the menu rendered; hiding the
+  // entry leaves the route itself reachable. SINGLE_WORKSPACE keeps the route
+  // reachable too — GeneralSection hides workspace deletion there instead of
+  // hiding the whole entry.
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
   const isWorkspaceAdmin =
     identity?.is_superuser === true ||
     isManagerRoleName(myRole) ||
     permissions.includes("*") ||
     permissions.includes("workspace:update");
-  const showWorkspaceSettings = isWorkspaceAdmin && identity?.single_workspace !== true;
+  const showWorkspaceSettings = isWorkspaceAdmin;
 
   return (
     <DropdownMenu>
@@ -310,7 +312,7 @@ function UserMenu() {
           <CircleUser className="h-4 w-4" />
           {displayName}
         </DropdownMenuLabel>
-        <DropdownMenuItem onClick={() => navigate("/settings/profile/security")}>
+        <DropdownMenuItem onClick={() => navigate("/settings/profile/general")}>
           <Settings />
           Profile Settings
         </DropdownMenuItem>

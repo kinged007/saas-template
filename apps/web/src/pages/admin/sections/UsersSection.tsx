@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   useCustom,
   useCustomMutation,
+  useGo,
   useList,
   type CrudFilters,
 } from "@refinedev/core";
@@ -27,6 +28,7 @@ import { errorMessage } from "@/utils/errorMessage";
 
 export function UsersSection() {
   const { identity, isSuperuser } = useAdminGuard();
+  const go = useGo();
   const [search, setSearch] = useState("");
   const [submitted, setSubmitted] = useState("");
   const [current, setCurrent] = useState(1);
@@ -158,16 +160,30 @@ export function UsersSection() {
                 <h3 className="font-medium">
                   {detail.email} — {detail.workspaces.length} workspace(s)
                 </h3>
-                {canToggleUser(detail, identity?.id) && (
+                <div className="flex items-center gap-2">
                   <Button
-                    variant={detail.is_active ? "destructive" : "default"}
+                    variant="outline"
                     size="sm"
-                    disabled={mutation.isPending}
-                    onClick={() => toggle(detail, !detail.is_active)}
+                    onClick={() =>
+                      go({
+                        to: `/users/${detail.id}/settings/general`,
+                        query: { from: "/admin/users" },
+                      })
+                    }
                   >
-                    {detail.is_active ? "Disable access" : "Re-enable"}
+                    Edit profile
                   </Button>
-                )}
+                  {canToggleUser(detail, identity?.id) && (
+                    <Button
+                      variant={detail.is_active ? "destructive" : "default"}
+                      size="sm"
+                      disabled={mutation.isPending}
+                      onClick={() => toggle(detail, !detail.is_active)}
+                    >
+                      {detail.is_active ? "Disable access" : "Re-enable"}
+                    </Button>
+                  )}
+                </div>
               </div>
               <ul className="text-sm">
                 {detail.workspaces.map((w) => (
