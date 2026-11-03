@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SsoButtons, fetchAuthConfig } from "@/components/AuthConfig";
+import { Separator } from "@/components/ui/separator";
+import { SsoButtons, fetchAuthConfig, type AuthConfig } from "@/components/AuthConfig";
 
 export function RegisterPage() {
   const { mutate: register, isPending } = useRegister();
@@ -15,7 +16,8 @@ export function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [config, setConfig] = useState<{ registration_enabled: boolean; password_enabled: boolean; providers: Array<{ id: string; display_name: string }> } | null>(null);
+  const [showAlt, setShowAlt] = useState(false);
+  const [config, setConfig] = useState<AuthConfig | null>(null);
   useEffect(() => {
     fetchAuthConfig().then(setConfig);
   }, []);
@@ -31,18 +33,13 @@ export function RegisterPage() {
   };
 
   return (
-    <div className="bg-background flex min-h-screen items-center justify-center p-4">
+    <div className="bg-gradient-to-br from-primary/10 via-background to-secondary/30 dark:from-primary/25 dark:via-background dark:to-secondary/20 flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-2xl">Create account</CardTitle>
           <CardDescription>Create your account</CardDescription>
         </CardHeader>
         <CardContent>
-          {(config?.providers?.length ?? 0) > 0 && (
-            <div className="mb-4">
-              <SsoButtons providers={config?.providers ?? []} disabled={isPending} />
-            </div>
-          )}
           {(config?.password_enabled ?? true) && (
           <form onSubmit={submit} className="flex flex-col gap-4">
             <div className="grid grid-cols-2 gap-4">
@@ -97,6 +94,34 @@ export function RegisterPage() {
               {isPending ? "Creating account…" : "Register"}
             </Button>
           </form>
+          )}
+          {(config?.password_enabled ?? true) && (config?.providers?.length ?? 0) > 0 && (
+            <div className="mt-4">
+              <div className="flex items-center gap-3">
+                <Separator className="flex-1" />
+                <span className="text-muted-foreground text-xs">or</span>
+                <Separator className="flex-1" />
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-4 w-full"
+                disabled={isPending}
+                onClick={() => setShowAlt((v) => !v)}
+              >
+                {showAlt ? "Back to email registration" : "Register another way"}
+              </Button>
+              {showAlt && (
+                <div className="mt-4">
+                  <SsoButtons providers={config?.providers ?? []} disabled={isPending} />
+                </div>
+              )}
+            </div>
+          )}
+          {!(config?.password_enabled ?? true) && (config?.providers?.length ?? 0) > 0 && (
+            <div className="mb-4">
+              <SsoButtons providers={config?.providers ?? []} disabled={isPending} />
+            </div>
           )}
         </CardContent>
         <CardFooter className="justify-center">

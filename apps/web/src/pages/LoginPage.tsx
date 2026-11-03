@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
 import { SsoButtons, fetchAuthConfig, type AuthConfig } from "@/components/AuthConfig";
 import { afterAuthRedirect, authProvider, seedWorkspace } from "@/providers/authProvider";
 import { API_URL, httpClient } from "@/providers/dataProvider";
@@ -15,6 +16,8 @@ import { clearAllCaches, queryClient } from "@/providers/queryClient";
 
 export function LoginPage() {
   const [pending, setPending] = useState(false);
+  const [step, setStep] = useState<"email" | "password">("email");
+  const [showAlt, setShowAlt] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -23,6 +26,7 @@ export function LoginPage() {
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const [passwordChanged, setPasswordChanged] = useState(false);
   const codeRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
   // Client-side on purpose: the access token exists only in module memory
   // (tokenStore), so a hard load would drop it and make the new document
   // re-authenticate through /auth/refresh.
@@ -43,6 +47,10 @@ export function LoginPage() {
   useEffect(() => {
     if (challenge) codeRef.current?.focus();
   }, [challenge]);
+
+  useEffect(() => {
+    if (step === "password" && !challenge) passwordRef.current?.focus();
+  }, [step, challenge]);
 
   // Same reset + workspace seed as authProvider.login, except the reset runs in
   // postCredentials() ahead of the POST, so the verify request is not scoped to
@@ -102,6 +110,8 @@ export function LoginPage() {
         setChallenge(msg.slice(prefix.length));
         setError(null);
       } else {
+        // Stay on the password step so the email is kept and only the
+        // password needs retyping.
         setError(msg || "Login failed");
       }
     } finally {
@@ -114,7 +124,7 @@ export function LoginPage() {
   const registrationEnabled = config?.registration_enabled ?? true;
 
   return (
-    <div className="bg-background flex min-h-screen items-center justify-center p-4">
+    <div className="bg-gradient-to-br from-primary/10 via-background to-secondary/30 dark:from-primary/25 dark:via-background dark:to-secondary/20 flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <img src="/logo.svg" alt="SaaS Template" className="mx-auto mb-2 w-48" />
@@ -126,7 +136,7 @@ export function LoginPage() {
           )}
         </CardHeader>
         <CardContent>
-          {ssoProviders.length > 0 && !challenge && (
+          {ssoProviders.length > 0 && !passwordEnabled && !challenge && (
             <div className="mb-4">
               <SsoButtons providers={ssoProviders} disabled={pending} />
             </div>
@@ -159,8 +169,15 @@ export function LoginPage() {
                 Back
               </Button>
             </form>
-          ) : (
-            <form onSubmit={submit} className="flex flex-col gap-4">
+          ) : step === "email" ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setError(null);
+                if (email.trim()) setStep("password");
+              }}
+              className="flex flex-col gap-4"
+            >
               <div className="flex flex-col gap-2">
                 <Label htmlFor="email">Email</Label>
                 <Input
@@ -173,10 +190,24 @@ export function LoginPage() {
                   required
                 />
               </div>
+              {error && <p className="text-destructive text-sm">{error}</p>}
+              <Button type="submit">Continue</Button>
+            </form>
+          ) : (
+            <form onSubmit={submit} className="flex flex-col gap-4">
+              <div className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm">
+                <span className="text-muted-foreground truncate">
+                  Signing in as <span className="text-foreground font-medium">{email}</span>
+                </span>
+                <Button type="button" variant="ghost" size="sm" onClick={() => { setStep("email"); setError(null); }}>
+                  Change
+                </Button>
+              </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="password">Password</Label>
                 <Input
                   id="password"
+                  ref={passwordRef}
                   type="password"
                   placeholder="••••••••"
                   value={password}
@@ -194,6 +225,29 @@ export function LoginPage() {
                 </Link>
               </p>
             </form>
+          )}
+          {passwordEnabled && ssoProviders.length > 0 && !challenge && (
+            <div className="mt-4">
+              <div className="flex items-center gap-3">
+                <Separator className="flex-1" />
+                <span className="text-muted-foreground text-xs">or</span>
+                <Separator className="flex-1" />
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-4 w-full"
+                disabled={pending}
+                onClick={() => setShowAlt((v) => !v)}
+              >
+                {showAlt ? "Back to email sign-in" : "Sign in another way"}
+              </Button>
+              {showAlt && (
+                <div className="mt-4">
+                  <SsoButtons providers={ssoProviders} disabled={pending} />
+                </div>
+              )}
+            </div>
           )}
           </>
           )}
