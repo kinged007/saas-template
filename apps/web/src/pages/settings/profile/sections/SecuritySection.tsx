@@ -30,6 +30,7 @@ import { EmptyRow, formatDate } from "@/components/ui";
 import { useAuthConfig } from "@/components/AuthConfig";
 import { errorMessage } from "@/utils/errorMessage";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { MFA_NOTICE_KEY, MFA_REQUIRED_MESSAGE } from "@/utils/mfaRequired";
 
 export type AuthSession = {
   id: string;
@@ -97,6 +98,19 @@ export function SecuritySection() {
 
   const list: AuthSession[] = Array.isArray(sessions.result?.data) ? (sessions.result.data as AuthSession[]) : [];
   const enabled = (status.result?.data as { enabled?: boolean } | undefined)?.enabled ?? false;
+  // The MFA gate redirects here with the reason stashed in sessionStorage
+  // (the redirect is a hard navigation, so the toast cannot be shown from
+  // the failing page). Consume it once, on arrival.
+  useEffect(() => {
+    let flagged = false;
+    try {
+      flagged = window.sessionStorage.getItem(MFA_NOTICE_KEY) === "1";
+      if (flagged) window.sessionStorage.removeItem(MFA_NOTICE_KEY);
+    } catch {
+      flagged = false;
+    }
+    if (flagged) toast.error(MFA_REQUIRED_MESSAGE);
+  }, []);
   // The deployment or the active workspace can require MFA; either one blocks
   // workspace access for accounts without an enrolled authenticator.
   const mfaRequired = config?.mfa_required === true || workspace?.require_mfa === true;

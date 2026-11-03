@@ -9,6 +9,7 @@ import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import dataProviderModule from "@refinedev/simple-rest";
 
 import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId, sessionHint, returnToStore } from "../utils/storage";
+import { MFA_NOTICE_KEY, MFA_REQUIRED_MESSAGE, MFA_SETUP_PATH } from "../utils/mfaRequired";
 import { adminListQuery } from "./adminListQuery";
 import { clearAllCaches, queryClient } from "./queryClient";
 import { hasReadById, resourcePath } from "./resourcePaths";
@@ -182,6 +183,22 @@ httpClient.interceptors.response.use(
     normalizeError(error);
     const original = error.config as RetriableRequest | undefined;
     const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail;
+    if (error.response?.status === 403 && detail === MFA_REQUIRED_MESSAGE) {
+      // The account must enroll before touching workspace data: bounce to the
+      // security page. The reason toast is shown from that page itself (the
+      // redirect is a hard navigation, so an in-memory toast would die with
+      // this document). Already there — just record the notice, never reload.
+      try {
+        window.sessionStorage.setItem(MFA_NOTICE_KEY, "1");
+      } catch {
+        // Storage unavailable (private mode): the banner on the security
+        // page still states the requirement.
+      }
+      if (!window.location.pathname.startsWith(MFA_SETUP_PATH)) {
+        window.location.assign(MFA_SETUP_PATH);
+      }
+      return Promise.reject(error);
+    }
     if (error.response?.status === 401 && original && !original._retried) {
       // The session row is gone — no refresh token can resurrect it.
       // Skip the doomed refresh round-trip and log out immediately.
