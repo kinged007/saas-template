@@ -125,6 +125,7 @@ async def auth_config() -> dict:
     return {
         "registration_enabled": settings.auth_allow_registration,
         "password_enabled": settings.auth_password_enabled,
+        "mfa_required": settings.mfa_required,
         "oauth_enabled": bool(settings.oauth_provider_list),
         "providers": [
             {

@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     # Auth methods: registration kill-switch and password kill-switch (SSO-only mode).
     auth_allow_registration: bool = True
     auth_password_enabled: bool = True
+    # Global MFA requirement: when true, every workspace-scoped request needs
+    # the caller to have TOTP enrolled, whatever the workspace's own
+    # mfa_required flag says. Enrollment itself stays reachable: login and the
+    # /auth/2fa/* setup routes are not workspace-scoped and are never gated.
+    mfa_required: bool = False
     # Generic OIDC/OAuth2 providers as a JSON list. Each entry:
     # {id, display_name?, discovery_url?, issuer?, authorize_url?, token_url?,
     #  userinfo_url?, jwks_uri?, client_id, client_secret, scopes?}.

@@ -207,6 +207,30 @@ export function GeneralSection() {
     );
   };
 
+  // Toggles immediately on change so the switch never waits on a Save click.
+  const setMfaRequired = (enabled: boolean) => {
+    if (!workspace) return;
+    mutate(
+      {
+        url: `workspaces/${workspace.id}`,
+        method: "patch",
+        values: { mfa_required: enabled },
+        successNotification: false,
+        errorNotification: false,
+      },
+      {
+        onSuccess: () => {
+          toast.success(enabled ? "Two-factor required" : "Two-factor no longer required");
+          refresh();
+        },
+        onError: (err: unknown) => {
+          const msg = (err as { message?: string })?.message || "Failed to update MFA setting";
+          toast.error(msg);
+        },
+      },
+    );
+  };
+
   if (!workspace) {
     return <p className="text-muted-foreground text-sm">No workspace selected.</p>;
   }
@@ -275,6 +299,31 @@ export function GeneralSection() {
               onChange={(e) => setOnboardingEnabled(e.target.checked)}
             />
             Show onboarding card
+          </label>
+          {!canUpdate?.can && (
+            <p className="text-muted-foreground text-xs">You need owner or admin permission.</p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Two-factor authentication</CardTitle>
+          <CardDescription>
+            Require every member to enroll a TOTP authenticator. Members without
+            one lose workspace access until they enroll.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex items-center justify-between gap-4">
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 accent-primary"
+              checked={workspace.mfa_required === true}
+              disabled={isSaving || !canUpdate?.can}
+              onChange={(e) => setMfaRequired(e.target.checked)}
+            />
+            Require two-factor for this workspace
           </label>
           {!canUpdate?.can && (
             <p className="text-muted-foreground text-xs">You need owner or admin permission.</p>

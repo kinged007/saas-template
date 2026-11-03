@@ -285,6 +285,7 @@ class WorkspaceService:
         name: str | None = None,
         description: str | None = None,
         onboarding_enabled: bool | None = None,
+        mfa_required: bool | None = None,
         # Required: every write names its actor for the audit trail; a system
         # caller passes an explicit actor instead (see create_custom_role).
         actor: User,
@@ -317,6 +318,9 @@ class WorkspaceService:
                 if not onboarding_enabled:
                     flags[ONBOARDING_ENABLED_FLAG] = False
                 workspace.flags = flags
+        if mfa_required is not None and mfa_required != workspace.mfa_required:
+            changes["mfa_required"] = {"from": workspace.mfa_required, "to": mfa_required}
+            workspace.mfa_required = mfa_required
         await self._session.commit()
         if changes:
             await publish_audit(

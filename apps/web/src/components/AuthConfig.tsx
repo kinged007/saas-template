@@ -13,6 +13,7 @@ import { clearAllCaches, queryClient } from "@/providers/queryClient";
 export type AuthConfig = {
   registration_enabled: boolean;
   password_enabled: boolean;
+  mfa_required: boolean;
   oauth_enabled: boolean;
   providers: Array<{ id: string; display_name: string }>;
 };
@@ -25,7 +26,7 @@ export async function fetchAuthConfig(): Promise<AuthConfig> {
     const { data } = await httpClient.get<AuthConfig>(`${API_URL}/auth/config`);
     cached = data;
   } catch {
-    cached = { registration_enabled: false, password_enabled: false, oauth_enabled: false, providers: [] };
+    cached = { registration_enabled: false, password_enabled: false, mfa_required: false, oauth_enabled: false, providers: [] };
   }
   return cached;
 }

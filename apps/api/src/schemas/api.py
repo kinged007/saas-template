@@ -186,6 +186,8 @@ class WorkspaceUpdate(BaseModel):
     # StrictBool so a string/int is rejected with 422 rather than coerced.
     # None = leave the flag alone; the flag itself is default-on.
     onboarding_enabled: StrictBool | None = None
+    # Same strictness; None = leave alone. Default-off, unlike onboarding.
+    mfa_required: StrictBool | None = None
 
 
 class InvitationCreate(BaseModel):

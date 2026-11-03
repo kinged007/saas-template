@@ -20,6 +20,7 @@ from src.models.workspace import User, Workspace
 from src.services.api_keys import ApiKeyService
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
+from src.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -345,6 +346,7 @@ def require_permission(permission: str):
                 raise HTTPException(
                     status.HTTP_403_FORBIDDEN, "you are not a member of this workspace"
                 )
+            await _require_mfa_satisfied(db, workspace_id, principal.user)
             if "*" in api_key.permissions or permission in api_key.permissions:
                 await record_key_use(api_key, db, response)
                 return None
@@ -355,6 +357,7 @@ def require_permission(permission: str):
         membership = await service.get_membership(workspace_id, principal.user.id)
         if membership is None:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
+        await _require_mfa_satisfied(db, workspace_id, principal.user)
         _, role = membership
         if "*" in role.permissions or permission in role.permissions:
             return None
@@ -363,6 +366,30 @@ def require_permission(permission: str):
         ) from None
 
     return checker
+
+
+async def _require_mfa_satisfied(db: AsyncSession, workspace_id: str, user: User) -> None:
+    """Refuse workspace access while MFA is required but not enrolled.
+
+    Effective requirement is the global MFA_REQUIRED setting or the
+    workspace's own mfa_required flag. Enrolled callers pay no extra query;
+    the workspace row is only loaded for unenrolled callers when the global
+    switch is off. Runs after the membership check, so non-members still get
+    the membership 403 and learn nothing about the MFA flag.
+
+    Login and the /auth/2fa/* setup routes are not workspace-scoped and never
+    reach this gate, so a blocked user can always enroll to unblock
+    themselves. API keys are gated on their owner's enrollment like sessions:
+    a key never proves a second factor, but an unenrolled owner must not hold
+    working automation while the deployment requires MFA.
+    """
+    if user.totp_enabled:
+        return
+    if settings.mfa_required:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "mfa required for this workspace")
+    workspace = await db.get(Workspace, workspace_id)
+    if workspace is not None and workspace.mfa_required:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "mfa required for this workspace")
 
 
 async def can_target_profile_update(

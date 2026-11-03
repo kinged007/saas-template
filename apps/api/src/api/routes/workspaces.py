@@ -245,6 +245,7 @@ async def update_workspace(
             name=body.name,
             description=body.description,
             onboarding_enabled=body.onboarding_enabled,
+            mfa_required=body.mfa_required,
             actor=user,
             ip_address=request.client.host if request.client else None,
         )
