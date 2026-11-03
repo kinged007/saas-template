@@ -11,6 +11,28 @@ from html import escape
 from src.email.base import EmailMessage
 
 
+def _brand(inner_html: str) -> str:
+    """Branded mail layout: logo header plus a sent-by footer.
+
+    The logo resolves against FRONTEND_URL (where /logo.svg is served), so
+    self-hosted deployments brand mail automatically. Read at call time so
+    tests can monkeypatch settings without reimporting this module.
+    """
+    from src.settings import settings
+
+    base = (settings.frontend_url or "").rstrip("/")
+    logo = f"{base}/logo.svg" if base else "/logo.svg"
+    name = settings.app_name or "SaaS Template"
+    return (
+        '<div style="font-family:sans-serif;max-width:560px;margin:0 auto;">'
+        f'<p><img src="{escape(logo, quote=True)}" alt="{escape(name)}" '
+        'width="120" style="max-width:120px;"></p>'
+        f"{inner_html}"
+        f'<p style="color:#888888;font-size:12px;">Sent by {escape(name)}.</p>'
+        "</div>"
+    )
+
+
 def invitation(
     to: str,
     *,
@@ -44,7 +66,7 @@ def invitation(
         to=to,
         subject=f"You're invited to {workspace_name}",
         text_body=text,
-        html_body=html,
+        html_body=_brand(html),
     )
 
 
@@ -79,7 +101,7 @@ def notification_email(
         to=to,
         subject=title[:200],
         text_body=text,
-        html_body=html,
+        html_body=_brand(html),
     )
 
 
@@ -117,7 +139,7 @@ def digest_email(
         to=to,
         subject=f"Your daily digest: {len(items)} unread notification(s)",
         text_body=text,
-        html_body=html,
+        html_body=_brand(html),
     )
 
 
@@ -130,7 +152,7 @@ def email_verification(to: str, *, verify_url: str) -> EmailMessage:
             f"Verify your email:\n{verify_url}\n\n"
             "If you didn't create this account, you can safely ignore this email.\n"
         ),
-        html_body=(
+        html_body=_brand(
             "<p>Hi there,</p>"
             "<p>Thanks for registering — please confirm this email address.</p>"
             f'<p><a href="{escape(verify_url, quote=True)}">Verify your email</a></p>'
@@ -149,7 +171,7 @@ def password_reset(to: str, *, reset_url: str) -> EmailMessage:
             "If you didn't request this, you can safely ignore this email; "
             "your password won't change.\n"
         ),
-        html_body=(
+        html_body=_brand(
             "<p>Hi there,</p>"
             "<p>We received a request to reset your password.</p>"
             f'<p><a href="{escape(reset_url, quote=True)}">Choose a new password</a></p>'

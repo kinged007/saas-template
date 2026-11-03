@@ -327,3 +327,25 @@ def test_templates_build_valid_messages():
     reset = templates.password_reset("u@example.com", reset_url="https://x/reset/abc")
     reset.validate()
     assert "https://x/reset/abc" in reset.text_body
+
+
+def test_templates_carry_brand_header_and_footer(monkeypatch):
+    from src.email import templates
+    from src.settings import settings
+
+    monkeypatch.setattr(settings, "app_name", "Acme Mail")
+    monkeypatch.setattr(settings, "frontend_url", "https://app.example.com")
+
+    bodies = [
+        templates.invitation(
+            "i@example.com", workspace_name="W", invite_url="https://x/i", invited_by="A"
+        ).html_body,
+        templates.notification_email("n@example.com", title="T").html_body,
+        templates.digest_email("d@example.com", items=[{"title": "T"}]).html_body,
+        templates.email_verification("v@example.com", verify_url="https://x/v").html_body,
+        templates.password_reset("p@example.com", reset_url="https://x/p").html_body,
+    ]
+    for html in bodies:
+        assert html is not None
+        assert '<img src="https://app.example.com/logo.svg"' in html
+        assert "Acme Mail" in html
