@@ -37,6 +37,11 @@ class ApiKeyNotFound(ApiKeyError):
     pass
 
 
+# Sentinel default for update_api_key: an omitted field (leave alone) must
+# differ from an explicit null (clear quota/expiry).
+_UNSET: object = object()
+
+
 def _quota(usage_quota: int | None) -> int | None:
     """Strict-type then range-check a service-side quota.
 
@@ -454,13 +459,65 @@ class ApiKeyService:
 
         Personal scope, like revoke: only the key's owner may change its
         quota (404, not 403, so another user's key id is not leaked)."""
+        return await self.update_api_key(
+            workspace_id,
+            api_key_id,
+            usage_quota=usage_quota,
+            actor=actor,
+            ip_address=ip_address,
+        )
+
+    async def update_api_key(
+        self,
+        workspace_id: str,
+        api_key_id: str,
+        *,
+        name: str | None = None,
+        usage_quota: int | None | object = _UNSET,
+        expires_at: datetime | None | object = _UNSET,
+        actor: User | None = None,
+        ip_address: str | None = None,
+    ) -> ApiKey:
+        """Edit a key's name, quota and expiry. Only called-out fields change:
+        the route passes the sentinel default for omitted fields, while an
+        explicit null clears quota/expiry. A null name is rejected.
+
+        Personal scope, like revoke: only the key's owner may edit it (404,
+        not 403, so another user's key id is not leaked). Publishes only when
+        something actually changed."""
         key = await self._session.get(ApiKey, api_key_id)
         if key is None or key.workspace_id != workspace_id:
             raise ApiKeyNotFound("api key not found")
         if actor is not None and key.created_by_user_id != actor.id:
             raise ApiKeyNotFound("api key not found")
-        usage_quota = _quota(usage_quota)
-        key.usage_quota = usage_quota
+        changes: dict = {}
+        if name is not None:
+            name = name.strip()
+            if not name:
+                raise ApiKeyError("name is required")
+            if name != key.name:
+                changes["name"] = {"from": key.name, "to": name}
+                key.name = name
+        if usage_quota is not _UNSET:
+            quota = _quota(usage_quota)  # type: ignore[arg-type]
+            if quota != key.usage_quota:
+                changes["usage_quota"] = {"from": key.usage_quota, "to": quota}
+                key.usage_quota = quota
+        if expires_at is not _UNSET:
+            if expires_at is not None and ensure_utc(expires_at) <= now_utc():
+                raise ApiKeyError("expiry must be in the future")
+            # Normalize to UTC on write: SQLite's DateTime drops the offset and
+            # stores the wall clock, which would shift the instant auth compares.
+            new_expiry = ensure_utc(expires_at) if expires_at is not None else None
+            old_expiry = ensure_utc(key.expires_at) if key.expires_at is not None else None
+            if new_expiry != old_expiry:
+                changes["expires_at"] = {
+                    "from": iso_or_none(key.expires_at),
+                    "to": iso_or_none(new_expiry),
+                }
+                key.expires_at = new_expiry
+        if not changes:
+            return key
         await self._session.commit()
         await publish_event(
             self._bus,
@@ -470,7 +527,8 @@ class ApiKeyService:
                 "workspace_id": workspace_id,
                 "name": key.name,
                 "key_prefix": key.key_prefix,
-                "usage_quota": usage_quota,
+                "usage_quota": key.usage_quota,
+                "expires_at": iso_or_none(key.expires_at),
                 "updated_by_user_id": actor.id if actor else None,
             },
         )
@@ -484,7 +542,7 @@ class ApiKeyService:
             details={
                 "name": key.name,
                 "key_prefix": key.key_prefix,
-                "usage_quota": usage_quota,
+                **changes,
             },
             ip_address=ip_address,
         )
