@@ -559,7 +559,18 @@ async def _gone_user_is_gone(app_client, monkeypatch, entry: str):
         # resetting the window. On login that is the whole point: the key is
         # ip:email and stays reusable, so a reset would leave it unthrottled.
         # /register meters on its own per-IP limiter, not this one (#1343).
-        assert [op for op, _ in calls] == ["check", "fail"], calls
+        # Login charges the (IP, email) key and the account key together, so
+        # distributed guessing against one inbox shares a budget.
+        if entry == "login":
+            assert [op for op, _ in calls] == ["check", "check", "fail", "fail"], calls
+            assert sorted(key for _, key in calls) == [
+                "127.0.0.1:newcomer@example.com",
+                "127.0.0.1:newcomer@example.com",
+                "account:newcomer@example.com",
+                "account:newcomer@example.com",
+            ], calls
+        else:
+            assert [op for op, _ in calls] == ["check", "fail"], calls
 
 
 @pytest.mark.parametrize("entry", ["login", "refresh"])

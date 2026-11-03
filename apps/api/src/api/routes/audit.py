@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,8 +16,9 @@ from src.api.deps import (
     get_current_workspace_id,
     require_permission,
 )
-from src.core.dates import iso_or_none, now_utc
+from src.core.dates import ensure_utc, iso_or_none, now_utc
 from src.core.permissions import AUDIT_READ
+from src.core.security.ratelimit import get_export_limiter
 from src.db.session import get_db
 from src.events.publisher import publish_audit
 from src.models.audit import AuditLogEntry
@@ -129,14 +131,22 @@ async def export_audit_logs(
     resource_type: str | None = None,
     actor_user_id: str | None = None,
     q: str | None = None,
+    from_: datetime | None = Query(default=None, alias="from"),
+    to: datetime | None = Query(default=None, alias="to"),
 ):
     """Downloadable audit dump: the workspace export's audit section without
-    the rest of the bundle, filterable like the list (action, resource type,
-    actor, free-text search). Capped at the export cap; `truncated` flags a
-    cut, so a compliance pull can page on created_at instead of assuming
-    completeness."""
+    the bundle, filterable like the list (action, resource type, actor,
+    free-text search, created-at range). Capped at the export cap;
+    `truncated` flags a cut, so a compliance pull can page on created_at
+    instead of assuming completeness. Throttled per workspace."""
     if format not in ("json", "csv"):
         raise HTTPException(422, f"unknown format: {format} (choose from csv, json)")
+    if from_ is not None and to is not None and ensure_utc(to) < ensure_utc(from_):
+        raise HTTPException(422, "to must not be earlier than from")
+    limiter = get_export_limiter()
+    export_key = f"audit-export:{workspace_id}"
+    limiter.check(export_key)
+    limiter.fail(export_key)
     from src.services.conversations import ConversationForbidden
 
     service = SearchExportService(db, container.bus)
@@ -148,6 +158,8 @@ async def export_audit_logs(
             resource_type=resource_type or None,
             actor_user_id=actor_user_id or None,
             q=q or None,
+            created_from=from_,
+            created_to=to,
         )
     except ConversationForbidden as exc:
         raise HTTPException(403, str(exc)) from None
@@ -166,6 +178,8 @@ async def export_audit_logs(
             "resource_type": resource_type,
             "actor_user_id": actor_user_id,
             "q": q,
+            "from": iso_or_none(from_) if from_ else None,
+            "to": iso_or_none(to) if to else None,
         },
     )
     if format == "csv":

@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.dates import iso_or_none
+from src.core.dates import ensure_utc, iso_or_none
 from src.core.permissions import JOB_READ
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
@@ -181,6 +181,8 @@ class SearchExportService:
         resource_type: str | None = None,
         actor_user_id: str | None = None,
         q: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
     ) -> tuple[list[dict], bool]:
         """Filtered audit dump for GET /audit/export.
 
@@ -201,6 +203,10 @@ class SearchExportService:
             stmt = stmt.where(AuditLogEntry.resource_type == resource_type)
         if actor_user_id:
             stmt = stmt.where(AuditLogEntry.actor_user_id == actor_user_id)
+        if created_from is not None:
+            stmt = stmt.where(AuditLogEntry.created_at >= ensure_utc(created_from))
+        if created_to is not None:
+            stmt = stmt.where(AuditLogEntry.created_at <= ensure_utc(created_to))
         if q:
             # Same cross-field match as GET /audit: substring on user
             # name/email or action, exact match on id columns for UUIDs.

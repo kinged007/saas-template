@@ -154,3 +154,72 @@ async def test_export_writes_audit_entry(app_client):
     assert entry.details["format"] == "csv"
     assert entry.details["count"] >= 1
     assert entry.details["truncated"] is False
+
+
+async def test_export_rate_limit_is_per_workspace(app_client, monkeypatch):
+    from src.settings import settings
+
+    monkeypatch.setattr(settings, "audit_exports_per_hour", 2)
+    client, headers, ws, key = await _setup(app_client)
+
+    assert (
+        await client.get("/api/v1/audit/export?format=json", headers=headers)
+    ).status_code == 200
+    assert (
+        await client.get("/api/v1/audit/export?format=json", headers=headers)
+    ).status_code == 200
+    capped = await client.get("/api/v1/audit/export?format=json", headers=headers)
+    assert capped.status_code == 429, capped.text
+    assert "Retry-After" in capped.headers
+
+    # the sibling workspace has its own budget
+    owner2 = await register_user(client, "rl-owner2@example.com")
+    ws2 = await create_workspace(client, owner2, name="Second Corp")
+    assert (
+        await client.get("/api/v1/audit/export?format=json", headers=ws_headers(owner2, ws2["id"]))
+    ).status_code == 200
+
+
+async def test_export_from_to_filters(app_client):
+    from datetime import timedelta
+
+    from src.core.dates import now_utc
+
+    client, headers, ws, key = await _setup(app_client)
+    now = now_utc()
+
+    windowed = (
+        await client.get(
+            "/api/v1/audit/export",
+            params={"format": "json", "from": (now - timedelta(hours=1)).isoformat()},
+            headers=headers,
+        )
+    ).json()
+    assert len(windowed["audit"]) >= 1
+
+    future = (
+        await client.get(
+            "/api/v1/audit/export",
+            params={"format": "json", "from": (now + timedelta(hours=1)).isoformat()},
+            headers=headers,
+        )
+    ).json()
+    assert future["audit"] == []
+
+    reversed_bounds = await client.get(
+        "/api/v1/audit/export",
+        params={
+            "format": "json",
+            "from": now.isoformat(),
+            "to": (now - timedelta(hours=1)).isoformat(),
+        },
+        headers=headers,
+    )
+    assert reversed_bounds.status_code == 422
+
+    invalid = await client.get(
+        "/api/v1/audit/export",
+        params={"format": "json", "from": "not-a-date"},
+        headers=headers,
+    )
+    assert invalid.status_code == 422

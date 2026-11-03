@@ -152,6 +152,9 @@ class Settings(BaseSettings):
     jobs_log_retention_days: int = Field(default=90, ge=0)
     notifications_retention_days: int = Field(default=90, ge=0)
     audit_log_retention_days: int = Field(default=0, ge=0)
+    # Audit export requests per workspace per hour. A request rate, not a cap
+    # on what one export returns.
+    audit_exports_per_hour: int = Field(default=10, ge=1)
     # Days a revoked or expired API key is kept before the apikeys.cleanup job
     # hard-deletes it. 0 disables deletion.
     api_key_retention_days: int = Field(default=30, ge=0)
