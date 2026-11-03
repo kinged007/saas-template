@@ -170,6 +170,34 @@ async def set_api_key_quota(
     return _key_dict(key)
 
 
+# APIKEY_DELETE is the key-lifecycle guard: it covers quota changes, rotation,
+# and revoke.
+@router.post("/{api_key_id}/rotate", status_code=201)
+async def rotate_api_key(
+    api_key_id: str,
+    request: Request,
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    _=Depends(require_permission(APIKEY_DELETE)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    # Personal scope is owned by the service (404, not 403, so another
+    # user's key id is not leaked) — same as the revoke route below.
+    try:
+        key, raw = await ApiKeyService(db, container.bus).rotate_api_key(
+            workspace_id,
+            api_key_id,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
+    except ApiKeyNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    except ApiKeyError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    return {**_key_dict(key), "key": raw}
+
+
 @router.delete("/{api_key_id}", status_code=204)
 async def revoke_api_key(
     api_key_id: str,

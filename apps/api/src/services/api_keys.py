@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import operator
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import Select, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +22,7 @@ from src.models.api_key import (
 )
 from src.models.workspace import User
 from src.services.workspaces import WorkspaceService
+from src.settings import settings
 
 
 class ApiKeyError(Exception):
@@ -138,6 +139,10 @@ class ApiKeyService:
         usage_quota = _quota(usage_quota)
         if expires_at is not None and ensure_utc(expires_at) <= now_utc():
             raise ApiKeyError("expiry must be in the future")
+        # Server-side default expiry (api_key_default_expire_days): an
+        # explicit expires_at always wins; 0 disables the default.
+        if expires_at is None and settings.api_key_default_expire_days > 0:
+            expires_at = now_utc() + timedelta(days=settings.api_key_default_expire_days)
 
         raw = self.generate()
         key = ApiKey(
@@ -269,6 +274,61 @@ class ApiKeyService:
             ip_address=ip_address,
         )
         return key
+
+    async def rotate_api_key(
+        self,
+        workspace_id: str,
+        api_key_id: str,
+        *,
+        actor: User | None = None,
+        ip_address: str | None = None,
+    ) -> tuple[ApiKey, str]:
+        """Mint a fresh secret for a live key, invalidating the old one.
+
+        The row (name, permissions, quota, expiry) is unchanged — only the
+        secret rolls, so callers can rotate on a schedule without recreating
+        grants. The raw secret is only ever returned once.
+
+        Personal scope, like revoke: only the key's owner may rotate it (404,
+        not 403, so another user's key id is not leaked). Rotating a revoked
+        or expired key is a 409: the key is dead, revoke semantics apply.
+        """
+        key = await self._session.get(ApiKey, api_key_id)
+        if key is None or key.workspace_id != workspace_id:
+            raise ApiKeyNotFound("api key not found")
+        if actor is not None and key.created_by_user_id != actor.id:
+            raise ApiKeyNotFound("api key not found")
+        if key.revoked_at is not None:
+            raise ApiKeyError("api key is revoked")
+        if key.expires_at is not None and ensure_utc(key.expires_at) <= now_utc():
+            raise ApiKeyError("api key is expired")
+        old_prefix = key.key_prefix
+        raw = self.generate()
+        key.key_hash = self._hash(raw)
+        key.key_prefix = self._prefix(raw)
+        await self._session.commit()
+        await publish_event(
+            self._bus,
+            Subjects.APIKEY_UPDATED,
+            {
+                "apikey_id": key.id,
+                "workspace_id": workspace_id,
+                "name": key.name,
+                "key_prefix": key.key_prefix,
+                "rotated_by_user_id": actor.id if actor else None,
+            },
+        )
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="apikey",
+            resource_id=key.id,
+            action="apikey.rotated",
+            actor_user_id=actor.id if actor else None,
+            details={"name": key.name, "old_key_prefix": old_prefix},
+            ip_address=ip_address,
+        )
+        return key, raw
 
     async def authenticate(self, raw: str) -> ApiKey | None:
         """Resolve a raw bearer secret to an active key, or None.
