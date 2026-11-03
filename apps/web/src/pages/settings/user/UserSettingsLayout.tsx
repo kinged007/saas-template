@@ -49,12 +49,12 @@ export function UserSettingsLayout() {
       registry={userSettings}
       basePath={`/users/${id}/settings`}
       title="Member Settings"
-      subtitle="Edit this member's profile, notifications and security. Workspace memberships are not editable here."
+      subtitle="Edit this member's profile, notifications and security. Workspace memberships are moderated on the Membership tab."
       can={can}
       guard={{
-        allowed: identity.is_superuser === true || can("profile:update"),
+        allowed: identity.is_superuser === true || can("profile:update") || can("member:update"),
         deniedTitle: "Access denied",
-        deniedMessage: "Editing another member requires the profile:update permission.",
+        deniedMessage: "Editing another member requires the profile:update or member:update permission.",
       }}
     />
   );

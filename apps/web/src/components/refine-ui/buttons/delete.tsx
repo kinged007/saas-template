@@ -33,18 +33,26 @@ type DeleteButtonProps = {
    * `meta` property is used when creating the URL for the related action and path.
    */
   meta?: Record<string, unknown>;
+  /**
+   * Overrides for the trigger label and the confirmation copy. The hook's
+   * defaults say "Delete"; pass e.g. label "Remove" for workspace membership,
+   * where nothing is destroyed — the member only loses this workspace.
+   */
+  label?: string;
+  confirmTitle?: string;
+  confirmOkLabel?: string;
 } & React.ComponentProps<typeof Button>;
 
 export const DeleteButton = React.forwardRef<
   React.ComponentRef<typeof Button>,
   DeleteButtonProps
->(({ resource, recordItemId, accessControl, meta, children, ...rest }, ref) => {
+>(({ resource, recordItemId, accessControl, meta, label, confirmTitle, confirmOkLabel, children, ...rest }, ref) => {
   const {
     hidden,
     disabled,
     loading,
     onConfirm,
-    label,
+    label: defaultLabel,
     confirmTitle: defaultConfirmTitle,
     confirmOkLabel: defaultConfirmOkLabel,
     cancelLabel: defaultCancelLabel,
@@ -62,8 +70,8 @@ export const DeleteButton = React.forwardRef<
   if (isHidden) return null;
 
   const confirmCancelText = defaultCancelLabel;
-  const confirmOkText = defaultConfirmOkLabel;
-  const confirmTitle = defaultConfirmTitle;
+  const confirmOkText = confirmOkLabel ?? defaultConfirmOkLabel;
+  const confirmTitleText = confirmTitle ?? defaultConfirmTitle;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -79,7 +87,7 @@ export const DeleteButton = React.forwardRef<
             {children ?? (
               <div className="flex items-center gap-2 font-semibold">
                 <Trash className="h-4 w-4" />
-                <span>{label}</span>
+                <span>{label ?? defaultLabel}</span>
               </div>
             )}
           </Button>
@@ -87,7 +95,7 @@ export const DeleteButton = React.forwardRef<
       </PopoverTrigger>
       <PopoverContent className="w-auto" align="start">
         <div className="flex flex-col gap-2">
-          <p className="text-sm">{confirmTitle}</p>
+          <p className="text-sm">{confirmTitleText}</p>
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => setOpen(false)}>
               {confirmCancelText}
