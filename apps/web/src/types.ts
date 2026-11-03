@@ -281,6 +281,13 @@ export type ApiKeyCreated = ApiKey & {
   key: string;
 };
 
+/** POST /api-keys/{id}/rotate response — the new row plus its raw secret. */
+export type ApiKeyRotated = ApiKeyCreated & {
+  /** Id of the previous row, which keeps working until `grace_expires_at`. */
+  rotated_from: string;
+  grace_expires_at: string;
+};
+
 export type AuditLogEntry = {
   id: string;
   workspace_id: string;

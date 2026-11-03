@@ -152,7 +152,12 @@ async def test_expired_key_is_rejected_before_the_job_runs(app_client):
         assert row.revoked_at is None
 
 
-async def test_key_without_expiry_is_unaffected(app_client):
+async def test_key_without_expiry_is_unaffected(app_client, monkeypatch):
+    """With the default expiry disabled, a key carries no expiry and the
+    cleanup job leaves it alone."""
+    from src.settings import settings
+
+    monkeypatch.setattr(settings, "api_key_expire_days", 0)
     client = app_client
     owner = await register_user(client, "vera@example.com")
     ws = await create_workspace(client, owner)

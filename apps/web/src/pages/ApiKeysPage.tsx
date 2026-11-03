@@ -33,7 +33,7 @@ import {
 import { EmptyRow, formatDate } from "../components/ui";
 import { API_URL, httpClient } from "../providers/dataProvider";
 import { errorMessage } from "@/utils/errorMessage";
-import type { ApiKey, ApiKeyCreated } from "../types";
+import type { ApiKey, ApiKeyRotated } from "../types";
 
 /** Past its expiry the key already fails auth, before the job revokes it. */
 function isExpired(key: ApiKey): boolean {
@@ -48,7 +48,7 @@ export function ApiKeysPage() {
   const [rotatingId, setRotatingId] = useState<string | null>(null);
   // The raw secret is only returned once, so it lives here until the dialog
   // closes — then it is dropped and can never be rendered again.
-  const [rotated, setRotated] = useState<ApiKeyCreated | null>(null);
+  const [rotated, setRotated] = useState<ApiKeyRotated | null>(null);
   const [copied, setCopied] = useState(false);
   // One timer owns the 1.5 s confirmation: a second click restarts it instead
   // of stacking one that ends it early, and it dies with the component.
@@ -87,7 +87,7 @@ export function ApiKeysPage() {
     setRotatingId(key.id);
     try {
       const { data } = await httpClient.post(`${API_URL}/api-keys/${key.id}/rotate`, {});
-      setRotated(data as ApiKeyCreated);
+      setRotated(data as ApiKeyRotated);
       invalidate({ resource: "api-keys", invalidates: ["list"] });
     } catch (err) {
       toast.error("Could not rotate API key", {
@@ -208,7 +208,8 @@ export function ApiKeysPage() {
             <DialogTitle>API key rotated</DialogTitle>
             <DialogDescription>
               Copy the new secret now — for security it won't be shown again.
-              The previous secret no longer works.
+              The previous secret keeps working until {formatDate(rotated?.grace_expires_at)},
+              then stops.
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-2">

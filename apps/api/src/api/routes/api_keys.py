@@ -185,7 +185,7 @@ async def rotate_api_key(
     # Personal scope is owned by the service (404, not 403, so another
     # user's key id is not leaked) — same as the revoke route below.
     try:
-        key, raw = await ApiKeyService(db, container.bus).rotate_api_key(
+        new, raw, grace_expires_at = await ApiKeyService(db, container.bus).rotate_api_key(
             workspace_id,
             api_key_id,
             actor=user,
@@ -195,7 +195,12 @@ async def rotate_api_key(
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     except ApiKeyError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
-    return {**_key_dict(key), "key": raw}
+    return {
+        **_key_dict(new),
+        "key": raw,
+        "rotated_from": api_key_id,
+        "grace_expires_at": iso_or_none(grace_expires_at),
+    }
 
 
 @router.delete("/{api_key_id}", status_code=204)
