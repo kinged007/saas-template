@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.dates import iso_or_none
 from src.core.permissions import JOB_READ
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
@@ -27,7 +28,14 @@ from src.models.core import Invitation, Notification
 from src.models.jobs import JobDefinition
 from src.models.user_profile import UserProfile
 from src.models.webhook import WebhookSubscription
-from src.models.workspace import Role, User, Workspace, WorkspaceMember
+from src.models.workspace import (
+    ACTIVE_MEMBERSHIP_STATUSES,
+    Role,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
+from src.services.audit import public_details
 from src.services.jobs import _mask_params
 from src.services.profile_helpers import escape_like
 from src.services.serializers import (
@@ -96,6 +104,36 @@ CSV_RESOURCES: dict[str, list[str]] = {
     ],
 }
 
+# resource -> keys each export_csv projection arm emits. Checked against
+# CSV_RESOURCES on every export, including empty ones.
+_PROJECTION_COLUMNS: dict[str, tuple[str, ...]] = {
+    "members": (
+        "id",
+        "email",
+        "display_name",
+        "avatar_url",
+        "email_verified",
+        "role",
+        "status",
+        "joined_at",
+        *(f"profile_{c}" for c in _MEMBER_PROFILE_COLUMNS),
+    ),
+    "invitations": ("email", "status", "expires_at", "created_at"),
+    "api_keys": ("name", "key_prefix", "permissions", "revoked_at", "created_at"),
+    "jobs": ("key", "name", "enabled", "cron_schedule", "next_run_at"),
+    "conversations": ("title", "last_message_preview", "last_message_at", "created_at"),
+    "notifications": ("type", "title", "acknowledged_at", "created_at"),
+    "audit": (
+        "id",
+        "created_at",
+        "actor_email",
+        "action",
+        "resource_type",
+        "resource_id",
+        "ip_address",
+    ),
+}
+
 
 def _snippet(text: str | None, q: str, width: int = 120) -> str | None:
     if not text:
@@ -118,7 +156,7 @@ async def _ensure_membership(session: AsyncSession, workspace_id: str, user_id: 
         select(WorkspaceMember).where(
             WorkspaceMember.workspace_id == workspace_id,
             WorkspaceMember.user_id == user_id,
-            WorkspaceMember.status == "active",
+            WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
         )
     )
     if result.scalar_one_or_none() is None:
@@ -128,10 +166,12 @@ async def _ensure_membership(session: AsyncSession, workspace_id: str, user_id: 
 # Excel and LibreOffice evaluate a cell starting with one of these as a formula
 # on open, so an exported name or email runs on whoever opens the file. TAB, CR
 # and LF start a formula too: the spreadsheet drops the control character and
-# reads the formula behind it. The full-width forms are the same characters from
-# a CJK IME, which produces them while the user types an ASCII payload. The "'"
-# prefix is a convention, not a guarantee — Excel can strip it on
-# save-and-reopen, so an edited file can reactivate.
+# reads the formula behind it. The "'" prefix is a convention, not a guarantee —
+# Excel can strip it on save-and-reopen, so an edited file can reactivate.
+# The full-width forms of = + - @ are a deliberate widening past the OWASP list.
+# Only the first character is checked, so a legitimate value starting with one
+# of them gains one recoverable "'". The text is never normalised: NFKC would
+# turn CJK text into ASCII and could create formulas.
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n", "＝", "＋", "－", "＠")
 
 
@@ -225,7 +265,7 @@ class SearchExportService:
                 .outerjoin(UserProfile, UserProfile.user_id == User.id)
                 .where(
                     WorkspaceMember.workspace_id == workspace_id,
-                    WorkspaceMember.status == "active",
+                    WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
                     or_(
                         User.email.ilike(like, escape="\\"),
                         User.display_name.ilike(like, escape="\\"),
@@ -348,7 +388,7 @@ class SearchExportService:
                     "membership_id": m.id,
                     "role": r.name,
                     "status": m.status,
-                    "joined_at": m.created_at.isoformat() if m.created_at else None,
+                    "joined_at": iso_or_none(m.created_at),
                 }
             )
             # Key stays present even without a profile row, so importers see a
@@ -469,8 +509,8 @@ class SearchExportService:
                 {
                     "email": i.email,
                     "status": i.status,
-                    "expires_at": i.expires_at.isoformat() if i.expires_at else None,
-                    "created_at": i.created_at.isoformat() if i.created_at else None,
+                    "expires_at": iso_or_none(i.expires_at),
+                    "created_at": iso_or_none(i.created_at),
                 }
                 for i in invites
             ],
@@ -482,8 +522,8 @@ class SearchExportService:
                     "name": k.name,
                     "key_prefix": k.key_prefix,
                     "permissions": k.permissions,
-                    "revoked_at": k.revoked_at.isoformat() if k.revoked_at else None,
-                    "created_at": k.created_at.isoformat() if k.created_at else None,
+                    "revoked_at": iso_or_none(k.revoked_at),
+                    "created_at": iso_or_none(k.created_at),
                 }
                 for k in keys
             ],
@@ -495,7 +535,7 @@ class SearchExportService:
                     "cron_schedule": j.cron_schedule,
                     "params": _mask_params(j.params_schema or {}, j.params or {}),
                     "enabled": j.enabled,
-                    "next_run_at": j.next_run_at.isoformat() if j.next_run_at else None,
+                    "next_run_at": iso_or_none(j.next_run_at),
                 }
                 for j in jobs
             ],
@@ -504,9 +544,9 @@ class SearchExportService:
                     "id": c.id,
                     "title": c.title,
                     "created_by_user_id": c.created_by_user_id,
-                    "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
+                    "last_message_at": iso_or_none(c.last_message_at),
                     "last_message_preview": c.last_message_preview,
-                    "created_at": c.created_at.isoformat() if c.created_at else None,
+                    "created_at": iso_or_none(c.created_at),
                 }
                 for c in convs
             ],
@@ -517,7 +557,7 @@ class SearchExportService:
                     "sender_type": m.sender_type,
                     "sender_id": m.sender_id,
                     "body": m.body,
-                    "created_at": m.created_at.isoformat() if m.created_at else None,
+                    "created_at": iso_or_none(m.created_at),
                 }
                 for m in messages
             ],
@@ -530,11 +570,12 @@ class SearchExportService:
                     "resource_type": e.resource_type,
                     "resource_id": e.resource_id,
                     "action": e.action,
-                    # `details` is already readable through GET /audit by anyone
-                    # holding audit:read, which gates this export too.
-                    "details": e.details,
+                    # Same shape GET /audit returns: this is a downloadable
+                    # compliance artifact, so it drops the internal
+                    # `source_event_id` too.
+                    "details": public_details(e.details),
                     "ip_address": e.ip_address,
-                    "created_at": e.created_at.isoformat() if e.created_at else None,
+                    "created_at": iso_or_none(e.created_at),
                 }
                 for e, email in audit_rows
             ],
@@ -560,6 +601,9 @@ class SearchExportService:
             raise ValueError(
                 f"unknown resource: {resource} (choose from {', '.join(sorted(CSV_RESOURCES))})"
             )
+        diff = set(columns) ^ set(_PROJECTION_COLUMNS[resource])
+        if diff:
+            raise ValueError(f"{resource} projection and columns differ: {sorted(diff)}")
         rows = bundle.get(resource, [])
         if resource == "members":
             flat = [
@@ -650,14 +694,6 @@ class SearchExportService:
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=columns)
         writer.writeheader()
-        # DictWriter raises on a key the columns do not declare, but writes an
-        # empty cell for a column the projection does not produce, so that drift
-        # ships as a blank column. One row is enough: every row of a resource
-        # comes from the same projection arm.
-        if flat and set(flat[0]) != set(columns):
-            raise ValueError(
-                f"{resource} projection and columns differ: {sorted(set(columns) ^ set(flat[0]))}"
-            )
         # One choke point, so a new resource is covered by construction.
         writer.writerows({k: _csv_cell(v) for k, v in row.items()} for row in flat)
         return buf.getvalue()

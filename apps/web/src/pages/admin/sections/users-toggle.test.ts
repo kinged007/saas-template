@@ -49,6 +49,33 @@ test("asAdminUserDetail rejects a payload without a workspaces array", () => {
   assert.deepEqual(asAdminUserDetail(detail()), detail());
 });
 
+test("asAdminUserDetail rejects a workspaces payload with no usable id", () => {
+  const { id: _dropped, ...noId } = detail();
+  assert.equal(asAdminUserDetail({ ...noId, workspaces: [] }), undefined);
+  assert.equal(asAdminUserDetail({ ...detail(), id: 42 }), undefined);
+  assert.equal(asAdminUserDetail({ ...detail(), id: "" }), undefined);
+});
+
+test("asAdminUserDetail validates every AdminUserDetail field, not just id and workspaces", () => {
+  const { email: _droppedEmail, ...noEmail } = detail();
+  assert.equal(asAdminUserDetail(noEmail), undefined);
+  const { display_name: _droppedName, ...noName } = detail();
+  assert.equal(asAdminUserDetail(noName), undefined);
+  const { is_active: _droppedActive, ...noActive } = detail();
+  assert.equal(asAdminUserDetail(noActive), undefined);
+  const { is_superuser: _droppedSuper, ...noSuper } = detail();
+  assert.equal(asAdminUserDetail(noSuper), undefined);
+});
+
+test("asAdminUserDetail accepts an optional created_at only when it is a string", () => {
+  const withDate = detail({ created_at: "2024-01-01T00:00:00Z" });
+  const withNoDate = detail({ created_at: undefined });
+  assert.equal(asAdminUserDetail(withDate), withDate);
+  assert.equal(asAdminUserDetail(withNoDate), withNoDate);
+  const { created_at: _droppedDate, ...badDate } = detail();
+  assert.equal(asAdminUserDetail({ ...badDate, created_at: 42 as unknown as string }), undefined);
+});
+
 test("pageRange clamps the visible window and never reports zero pages", () => {
   assert.deepEqual(pageRange(1, 0), { from: 0, to: 0, totalPages: 1 });
   assert.deepEqual(pageRange(1, 25), { from: 1, to: 20, totalPages: 2 });
@@ -57,6 +84,8 @@ test("pageRange clamps the visible window and never reports zero pages", () => {
   assert.deepEqual(pageRange(1, 41), { from: 1, to: 20, totalPages: 3 });
   // A page that empties out after a refetch must not invert the range.
   assert.deepEqual(pageRange(3, 5), { from: 5, to: 5, totalPages: 1 });
+  // A current page below 1 must not report a negative start or invert the range.
+  assert.deepEqual(pageRange(0, 10), { from: 1, to: 10, totalPages: 1 });
 });
 
 test("adminUserPatch's url is built from a row typed as the list item, not the detail", () => {

@@ -21,7 +21,7 @@ from src.api.deps import (
 )
 from src.core.permissions import AUDIT_READ, WORKSPACE_DELETE, WORKSPACE_READ, WORKSPACE_UPDATE
 from src.db.session import get_db
-from src.models.workspace import Workspace, WorkspaceMember
+from src.models.workspace import ACTIVE_MEMBERSHIP_STATUSES, Workspace, WorkspaceMember
 from src.schemas.api import OwnershipTransfer, WorkspaceCreate, WorkspaceUpdate
 from src.services.conversations import ConversationForbidden
 from src.services.search_export import CSV_RESOURCES, SearchExportService
@@ -114,6 +114,8 @@ async def export_workspace(
 
 _WORKSPACE_SORTABLE = {"name", "slug", "created_at"}
 _WORKSPACE_FILTERABLE = {"name", "slug"}
+# Newest first, id breaking created_at ties — see _MEMBER_DEFAULT_ORDER.
+_WORKSPACE_DEFAULT_ORDER = (Workspace.created_at.desc(), Workspace.id.desc())
 
 
 @router.get("", response_model=list[dict])
@@ -132,14 +134,23 @@ async def list_workspaces(
         workspace = await service.get_workspace(workspace_id)
         if workspace is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
-        membership = await service.get_membership(workspace_id, user.id, active_only=True)
+        membership = await service.get_membership(workspace_id, user.id)
         role = membership[1] if membership else None
         response.headers["X-Total-Count"] = "1"
-        return [workspace_to_dict(workspace, role=role.name if role else None)]
+        return [
+            workspace_to_dict(
+                workspace,
+                role=role.name if role else None,
+                permissions=sorted(principal.api_key.permissions) if role else [],
+            )
+        ]
     stmt = (
         select(Workspace)
         .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
-        .where(WorkspaceMember.user_id == user.id, WorkspaceMember.status == "active")
+        .where(
+            WorkspaceMember.user_id == user.id,
+            WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
+        )
     )
     try:
         spec = parse_query(request)
@@ -150,14 +161,22 @@ async def list_workspaces(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(*_WORKSPACE_DEFAULT_ORDER)
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     memberships = await service.list_workspaces(user.id)
     roles_by_ws = {w.id: role.name for w, role, _ in memberships}
     joined_by_ws = {w.id: m.created_at for w, _, m in memberships}
+    perms_by_ws = {w.id: role.permissions for w, role, _ in memberships}
     response.headers["X-Total-Count"] = str(total)
     return [
-        workspace_to_dict(w, role=roles_by_ws.get(w.id), joined_at=joined_by_ws.get(w.id))
+        workspace_to_dict(
+            w,
+            role=roles_by_ws.get(w.id),
+            permissions=perms_by_ws.get(w.id),
+            joined_at=joined_by_ws.get(w.id),
+        )
         for w in rows.scalars().all()
     ]
 
@@ -203,7 +222,7 @@ async def get_workspace(
     workspace = await service.get_workspace(workspace_id)
     if workspace is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
-    membership = await service.get_membership(workspace_id, user.id, active_only=True)
+    membership = await service.get_membership(workspace_id, user.id)
     role = membership[1] if membership else None
     return workspace_to_dict(workspace, role=role.name if role else None)
 
