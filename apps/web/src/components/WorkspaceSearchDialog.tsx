@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router";
+import { useGo } from "@refinedev/core";
 
 import {
   Command,
@@ -48,7 +48,7 @@ export function WorkspaceSearchDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const navigate = useNavigate();
+  const go = useGo();
   const { workspace } = useWorkspace();
   const [input, setInput] = useState("");
   const [q, setQ] = useState("");
@@ -122,7 +122,7 @@ export function WorkspaceSearchDialog({
                     value={`${r.type}-${r.id}`}
                     onSelect={() => {
                       onOpenChange(false);
-                      navigate(resultLink(r));
+                      go({ to: resultLink(r) });
                     }}
                   >
                     <span className="min-w-0 flex-1 truncate font-medium">{resultLabel(r)}</span>
