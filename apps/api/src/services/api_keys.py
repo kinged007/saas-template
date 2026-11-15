@@ -367,7 +367,7 @@ class ApiKeyService:
                 "key_prefix": new.key_prefix,
                 "rotated_from": key.id,
                 "previous_key_prefix": key.key_prefix,
-                "grace_expires_at": grace_expires_at.isoformat(),
+                "grace_expires_at": iso_or_none(grace_expires_at),
             },
             ip_address=ip_address,
         )
