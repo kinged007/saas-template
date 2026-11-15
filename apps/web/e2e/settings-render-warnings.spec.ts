@@ -5,7 +5,8 @@ import { mockApi } from "./mock-api";
 
 /**
  * `/settings/workspace/general` must not log `Cannot update a component while
- * rendering a different component`. The transfer block's truncated empty state
+ * rendering a different component` for the `WorkspaceProvider`/`GeneralSection`
+ * pair. The transfer block's truncated empty state
  * (no eligible member in the loaded window) is the state the warning was
  * reported against; the assertion is what locks the cross-component write out
  * of `WorkspaceProvider`'s identity subscription in `WorkspaceContext.tsx`.
@@ -48,14 +49,11 @@ const members = Array.from({ length: 100 }, (_, i) => ({
 
 test("the truncated empty state writes no state across components", async ({ page }) => {
   const crossComponentWrites: string[] = [];
-  page.on("console", async (msg) => {
+  page.on("console", (msg) => {
     if (!/Cannot update a component/.test(msg.text())) return;
-    // React logs the component names as separate console args behind a `%s`
-    // format string, so `msg.text()` still carries the placeholders. Resolve
-    // every arg and join, so a captured write names the component pair instead
-    // of an opaque template.
-    const parts = await Promise.all(msg.args().map((arg) => arg.jsonValue()));
-    crossComponentWrites.push(parts.join(" "));
+    // msg.text() already renders React's console args inline, so a captured
+    // write names the component pair; the filter below needs that naming.
+    crossComponentWrites.push(msg.text());
   });
   await page.addInitScript(
     (seed) => window.localStorage.setItem("tf_identity", JSON.stringify(seed)),
@@ -70,8 +68,8 @@ test("the truncated empty state writes no state across components", async ({ pag
   // moves. Served by mockApi, so this waits for the response rather than
   // holding it — holding it would block the settings layout from mounting the
   // section the anchors assert on.
-  const authMeResponse = page.waitForResponse((response) =>
-    new URL(response.url()).pathname.endsWith("/api/v1/auth/me"),
+  const authMeResponse = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/v1/auth/me",
   );
 
   await page.route(
@@ -99,7 +97,7 @@ test("the truncated empty state writes no state across components", async ({ pag
 
   // Match the component pair, not every cross-component write: an unrelated
   // warning elsewhere on the page must not fail this test pointing at the
-  // provider, and the resolved message names the pair so a real failure reads
+  // provider, and the captured text names the pair so a real failure reads
   // as which components instead of an opaque template.
   expect(
     crossComponentWrites.filter(
@@ -134,7 +132,7 @@ test("a genuine identity change still propagates to the provider", async ({ page
   const authMeHeld = new Promise<void>((resolve) => {
     releaseAuthMe = resolve;
   });
-  await page.route((url) => url.pathname.endsWith("/api/v1/auth/me"), async (route) => {
+  await page.route((url) => url.pathname === "/api/v1/auth/me", async (route) => {
     await authMeHeld;
     await route.fulfill({
       status: 200,
@@ -144,6 +142,7 @@ test("a genuine identity change still propagates to the provider", async ({ page
   });
 
   await page.goto("/");
+  // first() is the sidebar switcher; the only non-dialog combobox on `/`.
   const switcher = page.getByRole("combobox").first();
   // Settled on the seeded workspace before the change is delivered — holding
   // `/auth/me` keeps the provider on the stored identity.
