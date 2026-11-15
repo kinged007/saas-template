@@ -218,7 +218,9 @@ class ApiKeyCreate(BaseModel):
     permissions: list[str] = Field(default_factory=list)
     usage_quota: QuotaAtLeastOne = Field(default=None, ge=1, le=MAX_QUOTA)
     # Optional hard expiry. Naive input is rejected: without an offset the
-    # instant is ambiguous, and the service compares against UTC.
+    # instant is ambiguous, and the service compares against UTC. An explicit
+    # null is the same as omitting: the API_KEY_EXPIRE_DAYS default still
+    # applies — clear it after create via PATCH for a never-expiring key.
     expires_at: datetime | None = Field(default=None, examples=["2027-01-01T00:00:00Z"])
 
     @field_validator("expires_at")
