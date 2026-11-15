@@ -323,9 +323,9 @@ export function GeneralSection() {
                 <div>
                   <h4 className="font-semibold text-destructive">Transfer ownership</h4>
                   <p className="text-muted-foreground mt-1 text-sm">
-                    Hand this workspace to another active member. You are demoted to admin — the workspace
-                    is never left without an owner. Requires an interactive session: API keys cannot
-                    transfer ownership.
+                    Hand this workspace to another active member. You are demoted to admin — only the new
+                    owner can transfer it back; the system will not reverse it for you. Requires an
+                    interactive session: API keys cannot transfer ownership.
                   </p>
                 </div>
                 {transferCandidates.length > 0 && (
