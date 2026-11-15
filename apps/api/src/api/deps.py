@@ -283,7 +283,8 @@ def require_key_permission(permission: str):
     Session-user flows that are naturally user-scoped (notifications, received
     invitations, workspace listing) keep their existing behavior; API-key
     requests are always workspace-scoped and must prove the permission against
-    the key's own permission list — never the key owner's role.
+    the key's own permission list — never the key owner's role. Both branches
+    enforce the MFA gate once workspace membership is established.
     """
 
     async def checker(
@@ -293,6 +294,12 @@ def require_key_permission(permission: str):
         workspace_id: str | None = Depends(get_optional_workspace_id),
     ):
         if principal.api_key is None:
+            if workspace_id is None:
+                return None
+            membership = await WorkspaceService(db).get_membership(workspace_id, principal.user.id)
+            if membership is None:
+                return None
+            await _require_mfa_satisfied(db, workspace_id, principal.user)
             return None
         api_key = principal.api_key
         if not workspace_id:
@@ -304,6 +311,7 @@ def require_key_permission(permission: str):
         membership = await WorkspaceService(db).get_membership(workspace_id, principal.user.id)
         if membership is None:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
+        await _require_mfa_satisfied(db, workspace_id, principal.user)
         if "*" in api_key.permissions or permission in api_key.permissions:
             await record_key_use(api_key, db, response)
             return None
