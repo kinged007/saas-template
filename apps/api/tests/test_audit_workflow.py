@@ -910,6 +910,10 @@ async def test_dedupe_lookup_orders_a_created_at_tie_on_id():
     up to the planner. The tied rows are inserted high-id-first so rowid order
     (the pre-fix read) disagrees with id order; only the `id` tiebreaker
     returns the low id.
+
+    The `id` tie-break is deterministic but carries no insertion-order
+    meaning: ids are random uuid4s, so the winner of a tie is arbitrary,
+    not the first-inserted row.
     """
     from src.events.bus import SOURCE_EVENT_KEY
     from src.services.audit import AuditService
@@ -938,6 +942,53 @@ async def test_dedupe_lookup_orders_a_created_at_tie_on_id():
     async with SessionFactory() as session:
         found = await AuditService(session).record(source_event_id="evt-tie", **fields)
     assert found.id == low
+
+
+async def test_dedupe_lookup_returns_earliest_created_at():
+    """The dedupe read resolves duplicates to the earliest row (#1200).
+
+    `record` promises an already-recorded source event returns "that entry
+    ... unchanged", i.e. the first delivery is the one of record. The later
+    row is inserted first so rowid order disagrees with timestamp order;
+    only the ascending `created_at` order returns the early row.
+    """
+    from src.events.bus import SOURCE_EVENT_KEY
+    from src.services.audit import AuditService
+
+    fields = {
+        "workspace_id": None,
+        "resource_type": "invitation",
+        "resource_id": str(uuid.uuid4()),
+        "action": "invitation.email_failed",
+    }
+    async with SessionFactory() as session:
+        session.add_all(
+            [
+                AuditLogEntry(
+                    details={"email": "unreachable@example.com", SOURCE_EVENT_KEY: "evt-early"},
+                    created_at=created_at,
+                    **fields,
+                )
+                for created_at in (
+                    datetime(2026, 2, 1, tzinfo=UTC),
+                    datetime(2026, 1, 1, tzinfo=UTC),
+                )
+            ]
+        )
+        await session.commit()
+        early_id = (
+            await session.execute(
+                select(AuditLogEntry.id).where(
+                    AuditLogEntry.resource_id == fields["resource_id"],
+                    AuditLogEntry.created_at == datetime(2026, 1, 1, tzinfo=UTC),
+                )
+            )
+        ).scalar_one()
+
+    async with SessionFactory() as session:
+        found = await AuditService(session).record(source_event_id="evt-early", **fields)
+    assert found.id == early_id
+    assert found.created_at.replace(tzinfo=UTC) == datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def test_every_workflow_audit_publish_carries_a_source_event_id():
