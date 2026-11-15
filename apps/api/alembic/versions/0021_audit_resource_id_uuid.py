@@ -1,7 +1,7 @@
 """audit resource_id to native UUID on postgres
 
-Revision ID: 0023
-Revises: 0022
+Revision ID: 0021
+Revises: 0020
 Create Date: 2026-11-04 00:00:00.000000
 
 `AuditLogEntry.resource_id` is a StringUUID in the model (native UUID on
@@ -22,8 +22,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0023"
-down_revision: str | None = "0022"
+revision: str = "0021"
+down_revision: str | None = "0020"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -44,6 +44,9 @@ def upgrade() -> None:
         f"WHERE resource_type = 'notification' AND action = 'notifications.acknowledged' "
         f"AND resource_id = 'all' AND workspace_id IS NOT NULL"
     )
+    # Any sentinel left (e.g. NULL-workspace rows) cannot cast to UUID, so
+    # remove it before the type change rather than failing the migration.
+    op.execute(f"DELETE FROM {_TABLE} WHERE resource_id = 'all'")
     op.execute(f"ALTER TABLE {_TABLE} ALTER COLUMN resource_id TYPE UUID USING resource_id::uuid")
 
 
