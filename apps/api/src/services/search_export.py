@@ -210,11 +210,11 @@ class SearchExportService:
         if q:
             # Same cross-field match as GET /audit: substring on user
             # name/email or action, exact match on id columns for UUIDs.
-            like = f"%{q}%"
+            like = f"%{escape_like(q)}%"
             clauses = [
-                AuditLogEntry.action.ilike(like),
-                User.display_name.ilike(like),
-                User.email.ilike(like),
+                AuditLogEntry.action.ilike(like, escape="\\"),
+                User.display_name.ilike(like, escape="\\"),
+                User.email.ilike(like, escape="\\"),
             ]
             try:
                 uuid.UUID(q)

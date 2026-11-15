@@ -152,7 +152,5 @@ def get_export_limiter() -> SlidingWindowLimiter:
     wanted = (settings.audit_exports_per_hour, 3600)
     current = (export_limiter.max_attempts, export_limiter.window_seconds)
     if wanted != current:
-        export_limiter = SlidingWindowLimiter(
-            max_attempts=wanted[0], window_seconds=wanted[1]
-        )
+        export_limiter = SlidingWindowLimiter(max_attempts=wanted[0], window_seconds=wanted[1])
     return export_limiter

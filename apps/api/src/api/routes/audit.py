@@ -25,7 +25,8 @@ from src.models.audit import AuditLogEntry
 from src.models.user_profile import UserProfile
 from src.models.workspace import User
 from src.services.audit import public_details
-from src.services.profile_helpers import format_display_name
+from src.services.conversations import ConversationForbidden
+from src.services.profile_helpers import escape_like, format_display_name
 from src.services.search_export import SearchExportService
 
 logger = logging.getLogger(__name__)
@@ -86,11 +87,11 @@ async def list_audit_logs(
             # Cross-field search scoped to this workspace: substring match on
             # user name/email or action, plus exact match on id columns
             # (guarded: non-UUID terms must not reach UUID comparisons).
-            like = f"%{q}%"
+            like = f"%{escape_like(q)}%"
             clauses = [
-                AuditLogEntry.action.ilike(like),
-                User.display_name.ilike(like),
-                User.email.ilike(like),
+                AuditLogEntry.action.ilike(like, escape="\\"),
+                User.display_name.ilike(like, escape="\\"),
+                User.email.ilike(like, escape="\\"),
             ]
             try:
                 uuid.UUID(q)
@@ -146,8 +147,6 @@ async def export_audit_logs(
     limiter = get_export_limiter()
     export_key = f"audit-export:{workspace_id}"
     limiter.check(export_key)
-    limiter.fail(export_key)
-    from src.services.conversations import ConversationForbidden
 
     service = SearchExportService(db, container.bus)
     try:
@@ -163,6 +162,7 @@ async def export_audit_logs(
         )
     except ConversationForbidden as exc:
         raise HTTPException(403, str(exc)) from None
+    limiter.fail(export_key)
     await publish_audit(
         container.bus,
         workspace_id=workspace_id,
