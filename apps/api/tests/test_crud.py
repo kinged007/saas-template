@@ -33,20 +33,98 @@ def _read(path):
 
 
 def _referenced(tree):
-    """Every name a module mentions as an attribute or an import target."""
-    found = set()
+    """Crud helpers a module actually calls or type-uses through a resolved crud import."""
+    direct = {}
+    crud_mods = set()
+    import_alias = {}
+    plain = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute):
-            found.add(node.attr)
-        elif isinstance(node, ast.Import | ast.ImportFrom):
+        if isinstance(node, ast.Import):
             for alias in node.names:
-                found.add(alias.name.split(".")[-1])
-                found.add(alias.asname or alias.name)
+                if alias.asname:
+                    import_alias[alias.asname] = alias.name
+                    if alias.name.split(".")[-2:] == ["api", "crud"]:
+                        crud_mods.add(alias.asname)
+                else:
+                    plain.add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level or not node.module:
+                continue
+            parts = node.module.split(".")
+            if len(parts) >= 2 and parts[-2:] == ["api", "crud"]:
+                for alias in node.names:
+                    if alias.name == "*":
+                        continue
+                    direct[alias.asname or alias.name] = alias.name
+            elif parts[-1] == "api":
+                for alias in node.names:
+                    if alias.name == "crud":
+                        local = alias.asname or alias.name
+                        crud_mods.add(local)
+                        import_alias[local] = node.module + ".crud"
+    found = set()
+
+    def _note(ref):
+        if isinstance(ref, ast.Name):
+            if ref.id in direct:
+                found.add(direct[ref.id])
+        elif isinstance(ref, ast.Attribute):
+            chain = [ref.attr]
+            cur = ref.value
+            while isinstance(cur, ast.Attribute):
+                chain.append(cur.attr)
+                cur = cur.value
+            if not isinstance(cur, ast.Name):
+                return
+            chain.append(cur.id)
+            chain.reverse()
+            if len(chain) < 2:
+                return
+            helper, mod_chain = chain[-1], chain[:-1]
+            base = mod_chain[0]
+            resolved = import_alias.get(base, base).split(".") + mod_chain[1:]
+            if len(resolved) >= 2 and resolved[-2:] == ["api", "crud"]:
+                if base in crud_mods or base in import_alias or ".".join(mod_chain) in plain:
+                    found.add(helper)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name):
+            if func.id in direct:
+                found.add(direct[func.id])
+        elif isinstance(func, ast.Attribute):
+            _note(func)
+    for node in ast.walk(tree):
+        subtrees = []
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            subtrees.append(node.returns)
+            for arg in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs):
+                subtrees.append(arg.annotation)
+            if node.args.vararg is not None:
+                subtrees.append(node.args.vararg.annotation)
+            if node.args.kwarg is not None:
+                subtrees.append(node.args.kwarg.annotation)
+        elif isinstance(node, ast.AnnAssign):
+            subtrees.append(node.annotation)
+        elif isinstance(node, ast.ExceptHandler):
+            subtrees.append(node.type)
+        elif isinstance(node, ast.Raise):
+            subtrees.append(node.exc)
+        elif isinstance(node, ast.ClassDef):
+            subtrees.extend(node.bases)
+        for sub in subtrees:
+            if sub is None:
+                continue
+            for ref in ast.walk(sub):
+                if isinstance(ref, ast.Name | ast.Attribute):
+                    _note(ref)
     return found
 
 
 def uncalled(src, crud):
-    """Public names `crud` defines that no other module under `src` reaches by import."""
+    """Public names `crud` defines that no other module under `src` calls or type-uses."""
     defined = {
         node.name
         for node in ast.parse(_read(crud)).body
@@ -57,11 +135,11 @@ def uncalled(src, crud):
     for path in src.rglob("*.py"):
         if path != crud:
             callers |= _referenced(ast.parse(_read(path)))
-    # ponytail: an import counts even when the module never calls it, because ruff's
-    # F401 fails an import the module never uses, so a bare name that shadows a crud
-    # helper (a local or a parameter) is not a caller. Ceiling: a name reached only
-    # through a string, getattr, a star import (ruff's F403 fails those) or locals().
-    # Upgrade path: resolve the imports and require an `ast.Call`.
+    # ponytail: only a call or a type use (annotation, except/raise, base class)
+    # through a resolved crud import counts, so a bare import, a value alias or
+    # `__all__` re-export, a bare name without an import, and an unrelated
+    # same-named attribute are not callers. Ceiling: a name reached only through
+    # a string, getattr, a star import (ruff's F403 fails those) or locals().
     return {name for name in defined if name not in callers}
 
 
@@ -121,6 +199,20 @@ def test_helper_called_only_inside_crud_is_reported(tmp_path):
 def test_bare_name_without_an_import_is_not_a_caller(tmp_path):
     """A local named like a crud helper is not that helper: only imports and attributes count."""
     routes = "def helper():\n    return 1\n\n\ndef route(helper):\n    return helper()\n"
+    src = _tree(tmp_path, "def helper():\n    return 1\n", {"routes": routes})
+    assert uncalled(src, src / "api" / "crud.py") == {"helper"}
+
+
+def test_import_without_a_call_is_not_a_caller(tmp_path):
+    """An import the module never calls (even re-exported via `__all__`) is not a caller."""
+    routes = 'from src.api.crud import apply_query\n__all__ = ["apply_query"]\n'
+    src = _tree(tmp_path, "def apply_query():\n    return 1\n", {"routes": routes})
+    assert uncalled(src, src / "api" / "crud.py") == {"apply_query"}
+
+
+def test_unrelated_attribute_is_not_a_caller(tmp_path):
+    """An unrelated same-named attribute (`Thing.helper()`) is not a crud caller."""
+    routes = "class Thing:\n    pass\n\n\ndef helper():\n    return 2\n\n\nx = Thing.helper()\n"
     src = _tree(tmp_path, "def helper():\n    return 1\n", {"routes": routes})
     assert uncalled(src, src / "api" / "crud.py") == {"helper"}
 
