@@ -95,7 +95,18 @@ export function AuditLogTable({
       window.URL.revokeObjectURL(url);
       toast.success("Export downloaded");
     } catch (e: unknown) {
-      toast.error((e as { message?: string })?.message ?? "Export failed");
+      const resp = (e as { response?: { status?: number; headers?: Record<string, string> } })
+        ?.response;
+      if (resp?.status === 429) {
+        const retry = resp.headers?.["retry-after"];
+        toast.error(
+          retry
+            ? `Too many exports, try again in ${retry}s`
+            : "Too many exports, try again later",
+        );
+      } else {
+        toast.error(errorMessage(e));
+      }
     } finally {
       setExporting(false);
     }
