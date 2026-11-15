@@ -4,7 +4,7 @@
 
 | Workflow | Triggers | Jobs | Deploy | Environments |
 |---|---|---|---|---|
-| ci | pull_request, push | 6 | — | — |
+| ci | pull_request, push | 7 | — | — |
 
 ### ci
 
@@ -26,6 +26,9 @@
   - `actions/checkout@v4`
   - `actions/setup-node@v4`
 - **web-e2e** on `ubuntu-latest` — 5 steps
+  - `actions/checkout@v4`
+  - `actions/setup-node@v4`
+- **codesight-map** on `ubuntu-latest` — 4 steps
   - `actions/checkout@v4`
   - `actions/setup-node@v4`
 

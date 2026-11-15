@@ -79,3 +79,16 @@ jobs:
       - run: cd apps/web && npm ci
       - run: cd apps/web && npx playwright install --with-deps chromium
       - run: cd apps/web && npm run test:e2e
+
+  # .codesight is read by every agent session (see AGENTS.md), so it must track the source.
+  codesight-map:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # codesight runs through npx, not a package.json dependency, so there is nothing to cache.
+      # Pinned to the version that produced the committed map.
+      - run: npx --yes codesight@1.19.0 --wiki
+      - run: bash scripts/codesight-check.sh

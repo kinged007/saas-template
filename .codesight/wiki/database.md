@@ -273,6 +273,7 @@ pk: `id` (str)
 - `token_hash`: String _(unique, index)_
 - `expires_at`: DateTime
 - `revoked_at`: DateTime _(nullable)_
+- `revoke_reason`: String _(nullable)_
 - `ip_address`: String _(nullable)_
 - `user_agent`: String _(nullable)_
 
@@ -312,14 +313,13 @@ pk: `id` (str)
 
 Read and edit these files when adding columns, creating migrations, or changing relations:
 
-- `apps/api/src/db/session.py` — imported by **53** files
-- `apps/api/src/models/workspace.py` — imported by **36** files
-- `apps/api/src/models/core.py` — imported by **23** files
-- `apps/api/src/models/api_key.py` — imported by **16** files
+- `apps/api/src/db/session.py` — imported by **66** files
+- `apps/api/src/models/workspace.py` — imported by **47** files
+- `apps/api/src/models/core.py` — imported by **29** files
+- `apps/api/src/models/api_key.py` — imported by **19** files
+- `apps/api/src/models/audit.py` — imported by **17** files
+- `apps/api/src/db/base.py` — imported by **16** files
 - `apps/api/src/models/jobs.py` — imported by **16** files
-- `apps/api/src/models/audit.py` — imported by **15** files
-- `apps/api/src/db/base.py` — imported by **14** files
-- `apps/api/src/schemas/api.py` — imported by **12** files
 
 ---
 _Back to [overview.md](./overview.md)_

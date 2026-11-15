@@ -2,25 +2,39 @@
 
 > **Navigation aid.** Route list and file locations extracted via AST. Read the source files listed below before implementing or modifying this subsystem.
 
-The Profiles subsystem handles **8 routes** and touches: db, auth.
+The Profiles subsystem handles **15 routes** and touches: db, auth.
 
 ## Routes
 
-- `GET` `/me/profile` → in: Use
+- `GET` `/me/profile` → in: Use, out: list
   `apps/api/src/api/routes/profiles.py`
-- `PUT` `/me/profile` → in: ProfileUpdate [db]
+- `PUT` `/me/profile` → in: ProfileUpdate, out: list [db]
   `apps/api/src/api/routes/profiles.py`
-- `PATCH` `/me/profile` → in: ProfileUpdate [db]
+- `PATCH` `/me/profile` → in: ProfileUpdate, out: list [db]
   `apps/api/src/api/routes/profiles.py`
-- `GET` `/users/{user_id}/profile` params(user_id) → in: Use [auth]
+- `GET` `/users/{user_id}/profile` params(user_id) → in: Use, out: list [auth]
   `apps/api/src/api/routes/profiles.py`
-- `GET` `/me/export` → in: Use
+- `PATCH` `/users/{user_id}/profile` params(user_id) → in: ProfileUpdate, out: list [auth, db]
   `apps/api/src/api/routes/profiles.py`
-- `GET` `/users/{user_id}/export` params(user_id) → in: Use
+- `PUT` `/users/{user_id}/profile` params(user_id) → in: ProfileUpdate, out: list [auth, db]
   `apps/api/src/api/routes/profiles.py`
-- `DELETE` `/me` → in: DeleteMeRequest [db]
+- `GET` `/users/{user_id}/notification-preferences` params(user_id) → in: Use, out: list
   `apps/api/src/api/routes/profiles.py`
-- `DELETE` `/users/{user_id}` params(user_id) → in: DeleteMeRequest [db]
+- `PUT` `/users/{user_id}/notification-preferences` params(user_id) → in: ProfileUpdate, out: list
+  `apps/api/src/api/routes/profiles.py`
+- `GET` `/users/{user_id}/sessions` params(user_id) → in: Use, out: list [auth]
+  `apps/api/src/api/routes/profiles.py`
+- `DELETE` `/users/{user_id}/sessions` params(user_id) → out: list [auth, db]
+  `apps/api/src/api/routes/profiles.py`
+- `DELETE` `/users/{user_id}/sessions/{session_id}` params(user_id, session_id) → out: list [auth, db]
+  `apps/api/src/api/routes/profiles.py`
+- `GET` `/me/export` → in: Use, out: list
+  `apps/api/src/api/routes/profiles.py`
+- `GET` `/users/{user_id}/export` params(user_id) → in: Use, out: list
+  `apps/api/src/api/routes/profiles.py`
+- `DELETE` `/me` → out: list [db]
+  `apps/api/src/api/routes/profiles.py`
+- `DELETE` `/users/{user_id}` params(user_id) → out: list [db]
   `apps/api/src/api/routes/profiles.py`
 
 ## Source Files
