@@ -48,9 +48,18 @@ test("a non-string direction is stringified, not thrown", () => {
     { field: "b", order: 0 },
     { field: "c", order: 5 },
     { field: "d", order: true },
+    { field: "e", order: false },
+    { field: "f", order: NaN },
   ] as unknown as Parameters<typeof normalizeSorters>[0];
   const orders = normalizeSorters(junk).map((s) => s.order);
-  assert.deepEqual(orders, ["[object Object]", "0", "5", "true"]);
+  assert.deepEqual(orders, [
+    "[object Object]",
+    "0",
+    "5",
+    "true",
+    "false",
+    "NaN",
+  ]);
   assert.ok(orders.every((order) => typeof order === "string"));
 });
 
