@@ -162,7 +162,6 @@ async def test_config_reflects_flags(app_client, oauth_on, monkeypatch):
     body = resp.json()
     assert body["registration_enabled"] is True
     assert body["password_enabled"] is True
-    assert body["mfa_required"] is False
     assert body["oauth_enabled"] is True
     assert body["providers"] == [{"id": "testidp", "display_name": "Test IdP"}]
     monkeypatch.setattr(settings, "auth_allow_registration", False)
@@ -173,7 +172,6 @@ async def test_config_reflects_flags(app_client, oauth_on, monkeypatch):
     assert body == {
         "registration_enabled": False,
         "password_enabled": False,
-        "mfa_required": False,
         "oauth_enabled": False,
         "providers": [],
     }
