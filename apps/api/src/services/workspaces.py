@@ -711,7 +711,7 @@ class WorkspaceService:
     ) -> WorkspaceMember:
         """Clear a member's TOTP enrollment (account recovery).
 
-        Manager-only (owner/admin), audited as member.mfa_reset. Idempotent:
+        Manager-only (owner/admin), audited as mfa.reset. Idempotent:
         resetting a member with nothing enrolled still succeeds. Self-reset is
         refused — use POST /auth/2fa/disable, which re-checks the password.
         """
