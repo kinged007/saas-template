@@ -132,6 +132,9 @@ async def test_empty_patch_and_blank_name_rejected(app_client):
     resp = await client.patch(f"/api/v1/api-keys/{key['id']}", json={"name": "  "}, headers=headers)
     assert resp.status_code == 422, resp.text
 
+    resp = await client.patch(f"/api/v1/api-keys/{key['id']}", json={"name": None}, headers=headers)
+    assert resp.status_code == 422, resp.text
+
 
 async def test_edit_another_users_key_is_not_leaked(app_client):
     from tests.conftest import auth_headers

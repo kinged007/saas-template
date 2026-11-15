@@ -472,7 +472,7 @@ class ApiKeyService:
         workspace_id: str,
         api_key_id: str,
         *,
-        name: str | None = None,
+        name: str | None | object = _UNSET,
         usage_quota: int | None | object = _UNSET,
         expires_at: datetime | None | object = _UNSET,
         actor: User | None = None,
@@ -491,7 +491,9 @@ class ApiKeyService:
         if actor is not None and key.created_by_user_id != actor.id:
             raise ApiKeyNotFound("api key not found")
         changes: dict = {}
-        if name is not None:
+        if name is not _UNSET:
+            if name is None:
+                raise ApiKeyError("name is required")
             name = name.strip()
             if not name:
                 raise ApiKeyError("name is required")
