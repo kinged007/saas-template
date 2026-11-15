@@ -49,7 +49,7 @@ async def test_global_mfa_blocks_workspace_access_until_enrolled(app_client, mon
 
     resp = await client.get("/api/v1/members", headers=headers)
     assert resp.status_code == 403
-    assert "mfa required" in resp.json()["detail"]
+    assert resp.json()["detail"] == "mfa required for this workspace"
 
     # enrollment itself stays reachable while enforced
     assert (await client.get("/api/v1/auth/me", headers=session_headers)).status_code == 200
@@ -143,3 +143,21 @@ async def test_mfa_flag_rejects_coerced_types(app_client):
 
     resp = await _patch_mfa(client, ws["id"], headers, "yes")
     assert resp.status_code == 422
+
+
+async def test_global_mfa_blocks_key_permission_routes(app_client, monkeypatch):
+    """Session reads via require_key_permission are gated like the rest."""
+    monkeypatch.setattr(settings, "mfa_required", True)
+    client = app_client
+    owner = await register_user(client, "mfa-keyperm@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    for path in ("/api/v1/conversations", "/api/v1/notifications"):
+        resp = await client.get(path, headers=headers)
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "mfa required for this workspace"
+
+    await _enroll_totp(client, auth_headers(owner))
+    for path in ("/api/v1/conversations", "/api/v1/notifications"):
+        assert (await client.get(path, headers=headers)).status_code == 200
