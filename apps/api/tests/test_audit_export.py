@@ -223,3 +223,17 @@ async def test_export_from_to_filters(app_client):
         headers=headers,
     )
     assert invalid.status_code == 422
+
+
+async def test_export_truncated_flag_when_over_cap(app_client, monkeypatch):
+    """Over-cap pulls flag truncation so callers page on created_at (AC-4)."""
+    import src.services.search_export as se
+
+    monkeypatch.setattr(se, "_EXPORT_AUDIT_CAP", 1)
+    client, headers, ws, key = await _setup(app_client)
+    resp = await client.get("/api/v1/audit/export?format=json", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["X-Truncated"] == "true"
+    body = resp.json()
+    assert body["truncated"] is True
+    assert len(body["audit"]) == 1
