@@ -111,8 +111,9 @@ class Settings(BaseSettings):
     auth_rate_limit_max_attempts: int = 10
     auth_rate_limit_window_seconds: int = 300
     # Lockout after the window budget is spent (seconds; 0 disables, the
-    # Retry-After falls back to the window). Also gates the register limiter,
-    # which shares the auth family's lockout rather than growing its own knob.
+    # Retry-After falls back to the window). Also sets the register limiter's
+    # lockout duration; register keeps a separate per-IP budget and never
+    # shares login's account:<email> budget.
     auth_rate_limit_lockout_seconds: int = Field(default=900, ge=0)
     # Registration mail budget (#1343), keyed on the IP alone: distinct from
     # auth_rate_limit_* because the registrant owns every fresh address, and

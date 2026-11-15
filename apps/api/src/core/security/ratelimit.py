@@ -22,6 +22,9 @@ from many addresses shares one budget. Exhausting the window budget locks the
 key for `lockout_seconds` (0 disables, pure sliding window); a success
 `reset`s both keys.
 
+Locking the account key can lock the real owner out; intentional
+brute-force vs. availability tradeoff.
+
 Read the route, not this list, before adding a `fail`.
 # ponytail: ceiling is one replica; move to Redis when the API scales out.
 """
@@ -156,7 +159,8 @@ register_limiter = SlidingWindowLimiter()
 
 def get_register_limiter() -> SlidingWindowLimiter:
     """Per-IP cap on POST /auth/register (#1343): a separate instance and key
-    space, with its own settings pair so tightening the auth brute-force budget
+    space (IP alone, never the login account:<email> key), with its own
+    settings pair so tightening the auth brute-force budget
     in a test cannot strangle this window (register_user is universal setup).
 
     The registrant owns every fresh address, so per-(IP, email) keying cannot
@@ -164,6 +168,7 @@ def get_register_limiter() -> SlidingWindowLimiter:
     instance keeps that window out of login/forgot/resend's (IP, email) budget
     and vice versa; conftest clears it per test so the universal `register_user`
     setup path is never throttled by another test's spend.
+    Shares only the auth lockout-duration setting.
     """
     from src.settings import settings
 
