@@ -41,6 +41,7 @@ function isExpired(key: ApiKey): boolean {
 }
 
 export function ApiKeysPage() {
+  // shortcut: key edits are PATCH backend-only; the Edit dialog lands as a follow-up.
   const { result } = useWorkspaceList<ApiKey>({ resource: "api-keys" });
   const { data: canManage } = useCan({ resource: "api-keys", action: "delete" });
   const invalidate = useInvalidate();
