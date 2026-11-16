@@ -304,3 +304,102 @@ async def test_admin_self_reenable_200(app_client):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["is_active"] is True
+
+
+async def test_admin_workspace_detail_and_update(app_client):
+    import asyncio
+
+    from sqlalchemy import select
+
+    from src.db.session import SessionFactory
+    from src.models.audit import AuditLogEntry
+
+    client, tokens = await _superuser_client(app_client)
+    ws = await create_workspace(client, tokens, "Acme")
+
+    # GET detail returns the workspace with members (role, active flag) and count.
+    resp = await client.get(f"/api/v1/admin/workspaces/{ws['id']}", headers=auth_headers(tokens))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["id"] == ws["id"]
+    assert body["member_count"] == 1
+    assert len(body["members"]) == 1
+    member = body["members"][0]
+    assert member["email"] == "root@example.com"
+    assert member["role"] == "owner"
+    assert member["is_active"] is True
+
+    # Unknown and malformed ids 404.
+    for bad_id in ("00000000-0000-0000-0000-000000000000", "not-a-uuid"):
+        resp = await client.get(
+            f"/api/v1/admin/workspaces/{bad_id}", headers=auth_headers(tokens)
+        )
+        assert resp.status_code == 404, (bad_id, resp.text)
+
+    # Non-superusers are denied on both routes.
+    plain = await login(client, "plain@example.com")
+    resp = await client.get(f"/api/v1/admin/workspaces/{ws['id']}", headers=auth_headers(plain))
+    assert resp.status_code == 403, resp.text
+    resp = await client.patch(
+        f"/api/v1/admin/workspaces/{ws['id']}",
+        json={"name": "Nope"},
+        headers=auth_headers(plain),
+    )
+    assert resp.status_code == 403, resp.text
+
+    # PATCH updates name, slug and description.
+    resp = await client.patch(
+        f"/api/v1/admin/workspaces/{ws['id']}",
+        json={"name": "Acme Inc", "slug": "acme-inc", "description": "New blurb"},
+        headers=auth_headers(tokens),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["name"] == "Acme Inc"
+    assert resp.json()["slug"] == "acme-inc"
+    assert resp.json()["description"] == "New blurb"
+
+    # Empty patch is rejected before touching the DB.
+    resp = await client.patch(
+        f"/api/v1/admin/workspaces/{ws['id']}", json={}, headers=auth_headers(tokens)
+    )
+    assert resp.status_code == 422, resp.text
+
+    # Blank and over-long values are rejected.
+    for bad in ({"name": "  "}, {"slug": ""}, {"name": "x" * 151}):
+        resp = await client.patch(
+            f"/api/v1/admin/workspaces/{ws['id']}", json=bad, headers=auth_headers(tokens)
+        )
+        assert resp.status_code == 422, (bad, resp.text)
+
+    # Duplicate slug conflicts, and PATCH 404s on unknown/malformed ids.
+    other = await create_workspace(client, tokens, "Beta")
+    resp = await client.patch(
+        f"/api/v1/admin/workspaces/{other['id']}",
+        json={"slug": "acme-inc"},
+        headers=auth_headers(tokens),
+    )
+    assert resp.status_code == 409, resp.text
+    for bad_id in ("00000000-0000-0000-0000-000000000000", "not-a-uuid"):
+        resp = await client.patch(
+            f"/api/v1/admin/workspaces/{bad_id}",
+            json={"name": "Ghost"},
+            headers=auth_headers(tokens),
+        )
+        assert resp.status_code == 404, (bad_id, resp.text)
+
+    # The rename is audited as a workspace operation.
+    deadline = asyncio.get_running_loop().time() + 3.0
+    rows: list = []
+    while asyncio.get_running_loop().time() < deadline:
+        async with SessionFactory() as session:
+            result = await session.execute(
+                select(AuditLogEntry).where(
+                    AuditLogEntry.action == "workspace.updated",
+                    AuditLogEntry.resource_id == ws["id"],
+                )
+            )
+            rows = list(result.scalars().all())
+            if rows:
+                break
+        await asyncio.sleep(0.05)
+    assert rows, "workspace.updated audit entry missing"
