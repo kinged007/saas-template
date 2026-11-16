@@ -249,8 +249,9 @@ async def update_workspace_as_admin(
 ):
     if body.name is None and body.slug is None and body.description is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "no editable fields supplied")
-    if await db.get(Workspace, uuid_or_404(workspace_id, "workspace")) is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
+    # Validate the id shape up front; the service owns the 404 for a
+    # well-formed but unknown id (mapped below) so the row is read once.
+    uuid_or_404(workspace_id, "workspace")
     try:
         workspace = await WorkspaceService(db, container.bus).update_workspace(
             workspace_id,
@@ -261,6 +262,8 @@ async def update_workspace_as_admin(
             ip_address=request.client.host if request.client else None,
         )
     except WorkspaceError as exc:
+        if str(exc) == "workspace not found":
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
     return _workspace_dict(workspace)
 
