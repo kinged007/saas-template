@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/table";
 import { EmptyRow, formatDate } from "@/components/ui";
 import { errorMessage } from "@/utils/errorMessage";
+import { SessionRevokeButton } from "../../components/SessionRevokeButton";
 
 export type AuthSession = {
   id: string;
@@ -38,42 +39,6 @@ export type AuthSession = {
   user_agent?: string | null;
   current?: boolean;
 };
-
-/**
- * One row's Revoke button. It owns the request itself (hooks cannot live in
- * the .map loop), so a pending revoke disables only its own row instead of
- * every other row's — the per-row pending fix #1354 shipped in the member
- * editor.
- */
-function SessionRevokeButton({
-  base,
-  sessionId,
-  onRevoked,
-}: {
-  base: string;
-  sessionId: string;
-  onRevoked: () => void;
-}) {
-  const { mutateAsync, mutation } = useCustomMutation();
-  const revoke = async () => {
-    try {
-      await (mutateAsync({
-        url: `${base}/sessions/${sessionId}`,
-        method: "delete",
-        errorNotification: false,
-      } as never) as Promise<{ data: unknown }>);
-      toast.success("Session revoked");
-      onRevoked();
-    } catch (e) {
-      toast.error((e as Error)?.message ?? "Revoke failed");
-    }
-  };
-  return (
-    <Button variant="outline" size="sm" onClick={revoke} disabled={mutation.isPending}>
-      Revoke
-    </Button>
-  );
-}
 
 export function SecuritySection() {
   const sessions = useCustom<AuthSession[]>({ url: "auth/sessions", method: "get" });

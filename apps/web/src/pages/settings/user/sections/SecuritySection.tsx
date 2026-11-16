@@ -17,6 +17,7 @@ import {
 import { EmptyRow, formatDate } from "@/components/ui";
 import { useTargetUserId } from "@/hooks/useProfile";
 import type { AuthSession } from "../../profile/sections/SecuritySection";
+import { SessionRevokeButton } from "../../components/SessionRevokeButton";
 import { sessionsEmptyMessage } from "./sessions-empty";
 
 /**
@@ -35,32 +36,6 @@ const call = (
   mutate({ url, method, values, errorNotification: false } as never) as Promise<{
     data: unknown;
   }>;
-
-function SessionRevokeButton({
-  base,
-  sessionId,
-  onRevoked,
-}: {
-  base: string;
-  sessionId: string;
-  onRevoked: () => void;
-}) {
-  const { mutateAsync, mutation } = useCustomMutation();
-  const revoke = async () => {
-    try {
-      await call(mutateAsync, `${base}/sessions/${sessionId}`, "delete");
-      toast.success("Session revoked");
-      onRevoked();
-    } catch (e) {
-      toast.error((e as Error)?.message ?? "Revoke failed");
-    }
-  };
-  return (
-    <Button variant="outline" size="sm" onClick={revoke} disabled={mutation.isPending}>
-      Revoke
-    </Button>
-  );
-}
 
 export function SecuritySection() {
   const userId = useTargetUserId();

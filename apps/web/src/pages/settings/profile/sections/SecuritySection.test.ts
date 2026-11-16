@@ -9,24 +9,45 @@ const source = readFileSync(
   fileURLToPath(new URL("./SecuritySection.tsx", import.meta.url)),
   "utf8",
 );
+const shared = readFileSync(
+  fileURLToPath(new URL("../../components/SessionRevokeButton.tsx", import.meta.url)),
+  "utf8",
+);
+const memberSource = readFileSync(
+  fileURLToPath(new URL("../../user/sections/SecuritySection.tsx", import.meta.url)),
+  "utf8",
+);
 
 // Row-level spec: a pending revoke must disable only its own row. The button
-// therefore lives in the SessionRevokeButton child, which owns the mutation
-// for exactly one session id (hooks cannot live in the .map loop), the same
-// pattern the member editor ships since #1354.
-const child = source.slice(
-  source.indexOf("function SessionRevokeButton"),
-  source.indexOf("export function SecuritySection"),
-);
+// therefore lives in the shared SessionRevokeButton child, which owns the
+// mutation for exactly one session id (hooks cannot live in the .map loop).
+const child = shared;
 const parent = source.slice(source.indexOf("export function SecuritySection"));
 
 test("the row Revoke action lives in a child owning its own mutation", () => {
-  assert.ok(child.startsWith("function SessionRevokeButton"), "SessionRevokeButton child missing");
+  assert.ok(child.includes("function SessionRevokeButton"), "SessionRevokeButton child missing");
   assert.ok(child.includes("useCustomMutation()"), "child does not own a mutation");
   assert.ok(child.includes("mutation.isPending"), "child does not bind its own isPending");
   assert.ok(child.includes('method: "delete"'), "child does not send the revoke request");
   assert.ok(child.includes("errorNotification: false"), "child does not suppress generic toasts");
   assert.ok(child.includes("onRevoked()"), "child does not notify after revoking");
+});
+
+test("both sections share that child instead of a file-local copy", () => {
+  for (const [name, text] of [
+    ["profile", source],
+    ["member", memberSource],
+  ] as const) {
+    assert.ok(!text.includes("function SessionRevokeButton"), `${name} still carries a file-local copy`);
+    assert.ok(
+      text.includes('from "../../components/SessionRevokeButton"'),
+      `${name} does not import the shared SessionRevokeButton`,
+    );
+    assert.ok(
+      text.includes("<SessionRevokeButton") && text.includes("sessionId={s.id}"),
+      `${name} rows do not render SessionRevokeButton with the row's session id`,
+    );
+  }
 });
 
 test("each row renders that child keyed by its session id", () => {
