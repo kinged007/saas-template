@@ -326,7 +326,16 @@ class WorkspaceService:
                 if not onboarding_enabled:
                     flags[ONBOARDING_ENABLED_FLAG] = False
                 workspace.flags = flags
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except IntegrityError as exc:
+            # Concurrent renames can both pass the SELECT check above; the
+            # loser hits UNIQUE on workspaces.slug. Slug is the only unique
+            # column this method writes, so map slug violations to 409.
+            await self._session.rollback()
+            if "slug" in str(getattr(exc, "orig", exc)).lower():
+                raise WorkspaceError("a workspace with that slug already exists") from None
+            raise
         if changes:
             await publish_audit(
                 self._bus,
