@@ -32,7 +32,11 @@ def _check_node(tmp_path, version=None):
     env = {**os.environ, "PATH": path, "MAKELEVEL": "0"}
     env.pop("MAKEFLAGS", None)
     return subprocess.run(
-        [MAKE, "--no-print-directory", "check-node"], cwd=ROOT, env=env, capture_output=True, text=True
+        [MAKE, "--no-print-directory", "check-node"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
     )
 
 
