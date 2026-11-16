@@ -239,7 +239,9 @@ class SearchExportService:
             stmt = stmt.where(or_(*clauses))
         rows = (
             await self._session.execute(
-                stmt.order_by(AuditLogEntry.created_at.asc()).limit(_EXPORT_AUDIT_CAP + 1)
+                stmt.order_by(AuditLogEntry.created_at.asc(), AuditLogEntry.id.asc()).limit(
+                    _EXPORT_AUDIT_CAP + 1
+                )
             )
         ).all()
         truncated = len(rows) > _EXPORT_AUDIT_CAP
