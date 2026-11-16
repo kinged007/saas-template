@@ -1,4 +1,4 @@
-import { expect } from "playwright/test";
+import { expect, type Page } from "playwright/test";
 
 import { test } from "./fixtures";
 import { mockApi } from "./mock-api";
@@ -40,7 +40,7 @@ const MESSAGE_ROWS = Array.from({ length: 25 }, (_, i) => ({
  * absence: settle past the mount window first. Sonner keeps a mounted toast
  * up ~4s, so an absence measured after this wait holds for its lifetime.
  */
-async function expectNoRefineToast(page: import("playwright/test").Page) {
+async function expectNoRefineToast(page: Page) {
   await page.waitForTimeout(2_000);
   // Refine's error notifications go through sonner's `toast.error`, which
   // renders the toast with `data-type="error"`, so scope the check to error
