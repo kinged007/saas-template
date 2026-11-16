@@ -93,7 +93,8 @@ function MemberSettingsFallback() {
  * misleading empty list. DashboardPage already carries the "No workspace yet"
  * card and the create CTA, so send them there. This lives in the router rather
  * than in WorkspaceProvider because the provider also wraps the workspace-free
- * routes (workspaces/create, settings/profile, admin, invitations).
+ * routes (settings/profile, users/:id/settings, workspaces/create, admin,
+ * invitations).
  *
  * WorkspaceProvider renders nothing until the identity settles, so `workspaces`
  * is empty only once the identity is known to hold none: the guard never fires
