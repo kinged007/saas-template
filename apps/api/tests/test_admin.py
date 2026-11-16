@@ -331,9 +331,7 @@ async def test_admin_workspace_detail_and_update(app_client):
 
     # Unknown and malformed ids 404.
     for bad_id in ("00000000-0000-0000-0000-000000000000", "not-a-uuid"):
-        resp = await client.get(
-            f"/api/v1/admin/workspaces/{bad_id}", headers=auth_headers(tokens)
-        )
+        resp = await client.get(f"/api/v1/admin/workspaces/{bad_id}", headers=auth_headers(tokens))
         assert resp.status_code == 404, (bad_id, resp.text)
 
     # Non-superusers are denied on both routes.
