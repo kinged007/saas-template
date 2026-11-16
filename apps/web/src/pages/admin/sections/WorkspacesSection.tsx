@@ -11,37 +11,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EmptyRow, StatusBadge, formatDate } from "@/components/ui";
 import { useAdminGuard } from "./AdminLayout";
+import {
+  adminWorkspacePatch,
+  asAdminWorkspaceDetail,
+  type AdminWorkspace,
+  type AdminWorkspaceDetail,
+} from "./workspaces-form.ts";
 import { errorMessage } from "@/utils/errorMessage";
 
-export type AdminWorkspace = {
-  id: string;
-  name: string;
-  slug: string;
-  description?: string | null;
-  member_count: number;
-  created_at?: string;
-};
-
-export type AdminWorkspaceMember = {
-  id: string;
-  email: string;
-  display_name: string;
-  role: string;
-  is_active: boolean;
-};
-
-export type AdminWorkspaceDetail = AdminWorkspace & {
-  members: AdminWorkspaceMember[];
-};
-
 const PAGE_SIZE = 20;
-
-function asAdminWorkspaceDetail(raw: unknown): AdminWorkspaceDetail | undefined {
-  const { id, members } = (raw ?? {}) as Partial<AdminWorkspaceDetail>;
-  return typeof id === "string" && id.length > 0 && Array.isArray(members)
-    ? (raw as AdminWorkspaceDetail)
-    : undefined;
-}
 
 function WorkspaceEditForm({
   detail,
@@ -54,16 +32,12 @@ function WorkspaceEditForm({
   const [slug, setSlug] = useState(detail.slug);
   const [description, setDescription] = useState(detail.description ?? "");
   const { mutate, mutation } = useCustomMutation();
+  const patch = adminWorkspacePatch(detail, { name, slug, description });
+  const unchanged = Object.keys(patch.values).length === 0;
 
   const save = () => {
     mutate(
-      {
-        url: `admin/workspaces/${detail.id}`,
-        method: "patch",
-        values: { name: name.trim(), slug: slug.trim(), description },
-        successNotification: { message: "Workspace updated", type: "success" },
-        errorNotification: false,
-      } as never,
+      patch as never,
       {
         onSuccess: onSaved,
         onError: (e) => {
@@ -105,7 +79,11 @@ function WorkspaceEditForm({
         />
       </div>
       <div className="flex justify-end">
-        <Button size="sm" disabled={mutation.isPending || !name.trim() || !slug.trim()} onClick={save}>
+        <Button
+          size="sm"
+          disabled={mutation.isPending || !name.trim() || !slug.trim() || unchanged}
+          onClick={save}
+        >
           {mutation.isPending ? "Saving…" : "Save changes"}
         </Button>
       </div>
