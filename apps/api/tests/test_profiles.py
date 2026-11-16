@@ -702,3 +702,24 @@ async def test_delete_cascade_clears_api_keys_and_notifications(app_client):
         assert result.scalar_one_or_none() is None
         result = await session.execute(select(Notification).where(Notification.user_id == user_id))
         assert result.scalar_one_or_none() is None
+
+
+async def test_delegated_profile_read_includes_readonly_email(app_client):
+    client = app_client
+    # root@example.com is superuser per conftest, which passes the delegated
+    # can_target_profile_update gate without a shared workspace.
+    super_tokens = await register_user(client, "root@example.com")
+    other = await register_user(client, "emreadonly@example.com")
+    other_me = await client.get("/api/v1/auth/me", headers=auth_headers(other))
+    other_id = other_me.json()["id"]
+
+    # Delegated read exposes the member email for display.
+    resp = await client.get(f"/api/v1/users/{other_id}/profile", headers=auth_headers(super_tokens))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["email"] == "emreadonly@example.com"
+
+    # Email is read-only: profile writes reject it as an unknown field.
+    resp = await client.patch(
+        "/api/v1/me/profile", json={"email": "new@example.com"}, headers=auth_headers(other)
+    )
+    assert resp.status_code == 422, resp.text
