@@ -21,7 +21,10 @@ def _brand(inner_html: str) -> str:
     from src.settings import settings
 
     base = (settings.frontend_url or "").rstrip("/")
-    logo = f"{base}/logo.svg" if base else "/logo.svg"
+    # Scheme-check the admin-controlled base: escape() stops attribute
+    # breakout but a javascript: base would survive into the src. Fall back
+    # to the relative logo path for anything that is not http(s).
+    logo = f"{base}/logo.svg" if base.startswith(("http://", "https://")) else "/logo.svg"
     name = settings.app_name or "SaaS Template"
     return (
         '<div style="font-family:sans-serif;max-width:560px;margin:0 auto;">'
