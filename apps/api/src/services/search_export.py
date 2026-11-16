@@ -202,6 +202,14 @@ class SearchExportService:
         if resource_type:
             stmt = stmt.where(AuditLogEntry.resource_type == resource_type)
         if actor_user_id:
+            try:
+                uuid.UUID(actor_user_id)
+            except (ValueError, AttributeError, TypeError):
+                from fastapi import HTTPException
+
+                raise HTTPException(
+                    status_code=422, detail="invalid actor_user_id: must be a UUID"
+                ) from None
             stmt = stmt.where(AuditLogEntry.actor_user_id == actor_user_id)
         if created_from is not None:
             stmt = stmt.where(AuditLogEntry.created_at >= ensure_utc(created_from))
