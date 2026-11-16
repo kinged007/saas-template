@@ -138,3 +138,51 @@ async def test_renamed_explicit_empty_list_is_not_treated_as_malformed():
     )
 
     assert cm.calls == []
+
+
+async def test_renamed_absent_participants_fall_back_to_db():
+    """Absent/None participant list resolves participants from the DB."""
+    handler, cm = _wired()
+    conversation_id = str(uuid.uuid4())
+    user_a, user_b = str(uuid.uuid4()), str(uuid.uuid4())
+    async with SessionFactory() as session:
+        session.add_all(
+            [
+                ConversationParticipant(
+                    conversation_id=conversation_id,
+                    participant_type="user",
+                    participant_id=user_a,
+                    user_id=user_a,
+                    joined_at=datetime.now(UTC),
+                ),
+                ConversationParticipant(
+                    conversation_id=conversation_id,
+                    participant_type="user",
+                    participant_id=user_b,
+                    user_id=user_b,
+                    joined_at=datetime.now(UTC),
+                ),
+                ConversationParticipant(
+                    conversation_id=conversation_id,
+                    participant_type="agent",
+                    participant_id=str(uuid.uuid4()),
+                    joined_at=datetime.now(UTC),
+                ),
+            ]
+        )
+        await session.commit()
+
+    for payload in (
+        {"conversation_id": conversation_id},
+        {"conversation_id": conversation_id, "participant_user_ids": None},
+    ):
+        await handler(payload, EventMetadata(subject=Subjects.CONVERSATION_RENAMED))
+
+    assert [sorted(user_ids) for user_ids, _ in cm.calls] == [
+        sorted([user_a, user_b]),
+        sorted([user_a, user_b]),
+    ]
+    assert [event for _, event in cm.calls] == [
+        "conversation.renamed",
+        "conversation.renamed",
+    ]
