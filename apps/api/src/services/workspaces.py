@@ -16,7 +16,7 @@ from src.core.permissions import (
 )
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
-from src.events.subjects import Subjects
+from src.events.subjects import OWNERSHIP_TRANSFER_REASON, Subjects
 from src.models.core import Invitation
 from src.models.workspace import (
     ACTIVE_MEMBERSHIP_STATUSES,
@@ -285,7 +285,9 @@ class WorkspaceService:
         name: str | None = None,
         description: str | None = None,
         onboarding_enabled: bool | None = None,
-        actor: User | None = None,
+        # Required: every write names its actor for the audit trail; a system
+        # caller passes an explicit actor instead (see create_custom_role).
+        actor: User,
         ip_address: str | None = None,
     ) -> Workspace:
         workspace = await self._session.get(Workspace, workspace_id)
@@ -323,7 +325,7 @@ class WorkspaceService:
                 resource_type="workspace",
                 resource_id=workspace_id,
                 action="workspace.updated",
-                actor_user_id=actor.id if actor else None,
+                actor_user_id=actor.id,
                 details=changes,
                 ip_address=ip_address,
             )
@@ -333,7 +335,8 @@ class WorkspaceService:
         self,
         workspace_id: str,
         *,
-        actor: User | None = None,
+        # Required: see update_workspace.
+        actor: User,
         ip_address: str | None = None,
     ) -> None:
         workspace = await self._session.get(Workspace, workspace_id)
@@ -427,7 +430,7 @@ class WorkspaceService:
             resource_type="workspace",
             resource_id=workspace_id,
             action="workspace.deleted",
-            actor_user_id=actor.id if actor else None,
+            actor_user_id=actor.id,
             details={"name": name},
             ip_address=ip_address,
         )
@@ -450,13 +453,13 @@ class WorkspaceService:
         return await self._session.get(Workspace, workspace_id)
 
     async def get_membership(
-        self, workspace_id: str, user_id: str, *, active_only: bool = True
+        self, workspace_id: str, user_id: str
     ) -> tuple[WorkspaceMember, Role] | None:
         """Resolve (member, role) for a user in a workspace.
 
-        Defaults to active rows only, so a caller that forgets the flag cannot
-        read a suspended member as active. A caller asking about the row itself
-        rather than about access must pass `active_only=False`.
+        Active rows only: a suspended member reads as no membership, so an
+        authorization guard cannot admit them. A caller asking whether the row
+        itself exists, regardless of status, uses `has_member_row`.
         """
         stmt = (
             select(WorkspaceMember, Role)
@@ -464,12 +467,32 @@ class WorkspaceService:
             .where(
                 WorkspaceMember.workspace_id == workspace_id,
                 WorkspaceMember.user_id == user_id,
+                WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
             )
         )
-        if active_only:
-            stmt = stmt.where(WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES))
         result = await self._session.execute(stmt)
         return result.first()
+
+    async def has_member_row(self, workspace_id: str, user_id: str) -> bool:
+        """Whether a member row exists at all, regardless of its status."""
+        stmt = (
+            select(WorkspaceMember.id)
+            .where(
+                WorkspaceMember.workspace_id == workspace_id,
+                WorkspaceMember.user_id == user_id,
+            )
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.first() is not None
+
+    async def _require_active_member(
+        self, workspace_id: str, actor: User
+    ) -> tuple[WorkspaceMember, Role]:
+        membership = await self.get_membership(workspace_id, actor.id)
+        if membership is None:
+            raise WorkspaceForbidden("you are not a member of this workspace")
+        return membership
 
     # ---------------------------------------------------------------- members
 
@@ -493,10 +516,7 @@ class WorkspaceService:
         actor: User,
         ip_address: str | None = None,
     ) -> WorkspaceMember:
-        membership = await self.get_membership(workspace_id, actor.id, active_only=True)
-        if membership is None:
-            raise WorkspaceForbidden("you are not a member of this workspace")
-        _, actor_role = membership
+        _, actor_role = await self._require_active_member(workspace_id, actor)
         if not is_manager_role_name(actor_role.name):
             raise WorkspaceForbidden("only the workspace owner or an admin can change roles")
         member = await self._session.get(WorkspaceMember, member_id)
@@ -637,12 +657,10 @@ class WorkspaceService:
     async def _require_manager(
         self, workspace_id: str, actor: User
     ) -> tuple[WorkspaceMember, Role]:
-        membership = await self.get_membership(workspace_id, actor.id, active_only=True)
-        if membership is None:
-            raise WorkspaceForbidden("you are not a member of this workspace")
-        if not is_manager_role_name(membership[1].name):
+        member, actor_role = await self._require_active_member(workspace_id, actor)
+        if not is_manager_role_name(actor_role.name):
             raise WorkspaceForbidden("only the workspace owner or an admin can manage members")
-        return membership
+        return member, actor_role
 
     async def suspend_member(
         self,
@@ -715,7 +733,7 @@ class WorkspaceService:
         actor: User,
         ip_address: str | None = None,
     ) -> WorkspaceMember:
-        membership = await self.get_membership(workspace_id, actor.id, active_only=True)
+        membership = await self.get_membership(workspace_id, actor.id)
         if membership is None or not is_owner_role_name(membership[1].name):
             raise WorkspaceForbidden("only the workspace owner can transfer ownership")
         actor_member, _ = membership
@@ -743,7 +761,7 @@ class WorkspaceService:
             "changed_by_name": actor.display_name,
             # Both role changes are the transfer, said so on the event rather
             # than left for the subscriber to infer from the role names.
-            "reason": "ownership_transfer",
+            "reason": OWNERSHIP_TRANSFER_REASON,
         }
         # The actor is the current owner (checked above), so both role changes
         # belong to a user: the promotion and the owner's own demotion. One
@@ -1206,10 +1224,7 @@ class WorkspaceService:
         ip_address: str | None = None,
     ) -> Role:
         name = name.strip()
-        membership = await self.get_membership(workspace_id, actor.id, active_only=True)
-        if membership is None:
-            raise WorkspaceForbidden("you are not a member of this workspace")
-        _, actor_role = membership
+        _, actor_role = await self._require_active_member(workspace_id, actor)
         is_owner = "*" in actor_role.permissions
         assignable = set(actor_role.permissions)
         self._check_permissions_assignable(permissions, assignable, owner=is_owner)
@@ -1254,13 +1269,9 @@ class WorkspaceService:
         # Resolve the actor once, before any mutation: a name-only or
         # description-only edit carries no permission set to cap, so without
         # this it wrote — and flipped `system` below — for a suspended caller.
-        # Same shape and message as `set_member_role` and `_require_manager`.
         # ponytail: ROLE_CREATE stays the route's guard; add the service-side
         # check when a caller outside the route needs it.
-        membership = await self.get_membership(workspace_id, actor.id, active_only=True)
-        if membership is None:
-            raise WorkspaceForbidden("you are not a member of this workspace")
-        _, actor_role = membership
+        _, actor_role = await self._require_active_member(workspace_id, actor)
         is_owner = "*" in actor_role.permissions
         assignable = set(actor_role.permissions)
         changed = False

@@ -26,4 +26,20 @@ test.describe("oauth callback escape", () => {
     // LoginPage renders the carried error back into the same message.
     await expect(page.getByText("Sign-in failed.")).toBeVisible();
   });
+
+  test("the callback page keeps rendering while the identity settles", async ({ page }) => {
+    await mockApi(page, { signedIn: false });
+    // Later handlers win over mockApi's catch-all: the /auth/me that
+    // exchangeOAuthCode sends after the token lands never answers, so the
+    // identity stays unsettled — exactly the window where the workspace gate
+    // used to return null and unmount this page mid-exchange.
+    await page.route("**/api/v1/auth/me", () => new Promise<void>(() => {}));
+
+    await page.goto("/oauth/callback?code=code-123");
+    // The token lands within milliseconds and (before the lift) the gate
+    // blanks the page at that moment, so the pending state has to be checked
+    // after that window, not during it.
+    await page.waitForTimeout(2_000);
+    await expect(page.getByText("Signing you in…")).toBeVisible();
+  });
 });

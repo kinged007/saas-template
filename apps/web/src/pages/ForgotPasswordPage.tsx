@@ -24,10 +24,10 @@ export function ForgotPasswordPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
-      if (!resp.ok) throw new Error(forgotPasswordError(resp.status));
+      if (!resp.ok) throw new Error(forgotPasswordError(resp.status, resp));
       setDone(true);
     } catch (err) {
-      setError((err as Error)?.message ?? "Request failed");
+      setError((err as Error)?.message ?? "request failed");
     } finally {
       setPending(false);
     }

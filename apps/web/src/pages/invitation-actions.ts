@@ -5,6 +5,10 @@ type InvitationRow = Pick<Invitation, "status" | "expired">;
 /** Delete maps to revoke, so it is offered on a live invitation only. */
 export const canRevokeInvitation = (i: InvitationRow) => i.status === "pending";
 
+/** Accept/Decline act on a live pending row; an expired one must be re-sent first. */
+export const isActionableInvitation = (i: InvitationRow) =>
+  i.status === "pending" && !i.expired;
+
 /**
  * A strict subset of the statuses `WorkspaceService.resend_invitation` in
  * `apps/api/src/services/workspaces.py` will act on: it resets `declined` and

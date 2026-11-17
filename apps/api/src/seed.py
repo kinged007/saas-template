@@ -343,14 +343,19 @@ async def main() -> None:
                 continue
             workspace = workspaces[slug]
             user = users[email]
+            # A name may label several rows (key rotation mints a new row
+            # carrying the old name), so the idempotency check reads the newest
+            # one instead of assuming the name is unique.
             existing = await session.execute(
-                select(ApiKey).where(ApiKey.workspace_id == workspace.id, ApiKey.name == name)
+                select(ApiKey)
+                .where(ApiKey.workspace_id == workspace.id, ApiKey.name == name)
+                .order_by(ApiKey.created_at.desc())
+                .limit(1)
             )
             if existing.scalar_one_or_none() is not None:
                 continue
-            # `active_only=False`: the question is whether a member row exists
-            # for the demo admin at all, and a suspended row is still a row.
-            if await ws_service.get_membership(workspace.id, user.id, active_only=False) is None:
+            # Row existence, not an active membership: a suspended row still counts.
+            if not await ws_service.has_member_row(workspace.id, user.id):
                 # The canonical workspace pre-existed and its owner is not the
                 # demo admin, who never auto-joins (no login event yet).
                 logger.info("skipped api key %s in %s: %s is not a member", name, slug, email)
@@ -369,12 +374,18 @@ async def main() -> None:
             if slug not in workspaces:
                 continue
             workspace = workspaces[slug]
+            # At most one pending invite is expected per address, but a
+            # re-invite can leave several rows behind; read the newest one so
+            # a repeat seed never trips on duplicates.
             existing = await session.execute(
-                select(Invitation).where(
+                select(Invitation)
+                .where(
                     Invitation.workspace_id == workspace.id,
                     Invitation.email == email,
                     Invitation.status == "pending",
                 )
+                .order_by(Invitation.created_at.desc())
+                .limit(1)
             )
             invite = existing.scalar_one_or_none()
             if invite is None:
@@ -395,11 +406,14 @@ async def main() -> None:
             user = users[email]
             workspace = workspaces[slug]
             existing = await session.execute(
-                select(Notification).where(
+                select(Notification)
+                .where(
                     Notification.user_id == user.id,
                     Notification.workspace_id == workspace.id,
                     Notification.title == title,
                 )
+                .order_by(Notification.created_at.desc())
+                .limit(1)
             )
             if existing.scalar_one_or_none() is not None:
                 continue

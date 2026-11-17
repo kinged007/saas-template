@@ -69,3 +69,48 @@ test("the 2FA setup-key clipboard catch renders through the shared errorMessage 
   assert.ok(source.includes("description: errorMessage("), "clipboard catch skips errorMessage");
   assert.ok(!source.includes('"Copy failed"'), "stale clipboard fallback still present");
 });
+
+test("the setup-key copy button goes through the shared CopyButton", () => {
+  assert.ok(
+    source.includes('<CopyButton'),
+    "inline copy button still hand-rolled in SecuritySection",
+  );
+  assert.ok(
+    source.includes('label="Copy setup key"'),
+    "CopyButton not given the setup-key label",
+  );
+  assert.ok(
+    !source.includes("const copyLabel"),
+    "local copyLabel still deriving the name CopyButton already derives",
+  );
+});
+
+// A session revoke cannot change 2FA state, so the revoke paths must refetch
+
+test("the row revoke refetch uses the sessions-only refetch", () => {
+  assert.ok(
+    /onRevoked=\{\(\)\s*=>\s*sessions\.query\.refetch\(\)\}/.test(parent),
+    "row revoke still wired to the dual refetch",
+  );
+});
+
+test("revoke-all refetches sessions only", () => {
+  const start = parent.indexOf("const revokeAll = async");
+  const end = parent.indexOf("const startSetup = async");
+  assert.ok(start >= 0 && end > start, "revokeAll body not found");
+  const body = parent.slice(start, end);
+  assert.ok(body.includes("sessions.query.refetch()"), "revokeAll does not refetch sessions");
+  assert.ok(body.includes("refresh()") === false, "revokeAll still triggers the dual refetch");
+});
+
+test("the dual refresh stays reserved for the 2FA actions", () => {
+  const enableCtx = parent.slice(parent.indexOf("const confirmSetup = async"), parent.indexOf("const disable = async"));
+  const disableCtx = parent.slice(parent.indexOf("const disable = async"), parent.indexOf("const changePassword = async"));
+  assert.ok(enableCtx.includes("refresh()"), "2FA enable no longer refreshes both queries");
+  assert.ok(disableCtx.includes("refresh()"), "2FA disable no longer refreshes both queries");
+  assert.equal(
+    parent.split("refresh()").length - 1,
+    2,
+    "refresh must have exactly the two 2FA call sites",
+  );
+});

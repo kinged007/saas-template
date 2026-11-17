@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyRow, formatDate } from "@/components/ui";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import type { Identity, Member } from "@/types";
-import { getMemberDisplayName } from "@/types";
+import { getDisplayNameFromRow } from "@/types";
 
 export function UsersSection() {
   const { result, query } = useWorkspaceList<Member>({ resource: "members" });
@@ -57,7 +57,7 @@ export function UsersSection() {
                     <EmptyRow colSpan={5}>Loading…</EmptyRow>
                   ) : (
                     rows.map((m) => {
-                      const name = getMemberDisplayName(m);
+                      const name = getDisplayNameFromRow(m);
                       return (
                         <TableRow key={m.membership_id}>
                           <TableCell>

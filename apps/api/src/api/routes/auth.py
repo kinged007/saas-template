@@ -20,7 +20,7 @@ from src.core.security.cookies import (
     require_csrf,
     set_refresh_cookie,
 )
-from src.core.security.ratelimit import get_auth_limiter
+from src.core.security.ratelimit import get_auth_limiter, get_register_limiter
 from src.core.security.tokens import OpaqueToken
 from src.db.session import get_db
 from src.email import factory as email_factory
@@ -155,6 +155,12 @@ async def register(
     # If only one of first/last provided without the other, still allow but derive
     if not settings.auth_allow_registration:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "registration is disabled")
+    # The verification mail needs a cap no per-(IP, email) key can dodge
+    # (#1343): the registrant owns every fresh address, so the key is the IP
+    # alone, spent out of the register limiter's own window — not the auth
+    # limiter's (IP, email) budget.
+    register_key = _limit_key(request)
+    get_register_limiter().check(register_key)
     try:
         user = await service.register(
             email=body.email,
@@ -180,6 +186,10 @@ async def register(
         await _send_verification(service, user)
     except Exception:
         logger.exception("failed to send verification email for user %s", user.id)
+    # Every send spends one unit of the register limiter's budget, which the
+    # window caps: like forgot-password there is no success reset, because the
+    # send (or its attempt) is the metered event, not a failure.
+    get_register_limiter().fail(register_key)
     if browser_flow(request, body):
         set_refresh_cookie(response, pair.refresh_token, request=request)
         return TokenResponse(
@@ -306,6 +316,9 @@ async def login(
         if msg in ("password login is disabled",):
             raise HTTPException(status.HTTP_403_FORBIDDEN, msg) from None
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, msg) from None
+    # Captured before the try: the helper's rollback expires the instance,
+    # so reading attributes in the handler would lazy-load.
+    user_id = user.id
     try:
         # The only HTTPException in here is the helper's account-gone guard, so
         # charging the limiter for it is always a 401 charge, nothing else.
@@ -313,6 +326,10 @@ async def login(
         # charge on it can actually throttle the caller.
         user = await _join_single_workspace_best_effort(db, container, user)
     except HTTPException:
+        # Error, not exception: the helper logged the fault with a traceback
+        # already; this is the login-level correlation (parity with the
+        # refresh flow's #714 fix).
+        logger.error("account gone on login (user %s)", user_id)
         get_auth_limiter().fail(key)
         raise
     get_auth_limiter().reset(key)
@@ -377,11 +394,17 @@ async def refresh(
         get_auth_limiter().fail(key)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, ACCOUNT_GONE_DETAIL)
     if settings.single_workspace:
+        # Captured before the try: the helper's rollback expires the instance,
+        # so reading attributes in the handler would lazy-load.
+        user_id = user.id
         try:
             # The only HTTPException in here is the helper's account-gone
             # guard, so this charge is always a 401 charge, nothing else.
             await _join_single_workspace_best_effort(db, container, user)
         except HTTPException:
+            # Error, not exception: the helper logged the fault with a
+            # traceback already; this is the refresh-level correlation (#714).
+            logger.error("account gone on refresh (user %s)", user_id)
             get_auth_limiter().fail(key)
             raise
         except Exception:
@@ -714,7 +737,12 @@ async def me(
             )
             for w, role, member in memberships
         ]
-        data["permissions"] = sorted({p for _, role, _ in memberships for p in role.permissions})
+        # Ordered dedup, not a sort: the union keeps each role's registry
+        # order (first occurrence wins across memberships), matching the
+        # nested entries which carry role.permissions verbatim.
+        data["permissions"] = list(
+            dict.fromkeys(p for _, role, _ in memberships for p in role.permissions)
+        )
     data["single_workspace"] = settings.single_workspace
     # Embed profile (lazy create)
     try:

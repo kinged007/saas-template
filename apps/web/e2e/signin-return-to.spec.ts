@@ -1,7 +1,7 @@
 import { expect, type Page } from "playwright/test";
 
 import { test } from "./fixtures";
-import { mockApi } from "./mock-api";
+import { mockApi, mockApiTwoFactor } from "./mock-api";
 
 /**
  * A deep link opened while signed out is denied by the `Authenticated` guard in
@@ -116,6 +116,56 @@ test.describe("sign-in return-to", () => {
     await page.getByRole("menuitem", { name: "Logout" }).click();
 
     await path(page).toBe("/login");
+    expect(await returnTo(page)).toBeNull();
+  });
+
+  test("a 401 mid-session records the current page and replays it after sign-in", async ({ page }) => {
+    const api = await mockApi(page, { signedIn: true, revokeOn: ["/api-keys"] });
+    await page.goto("/api-keys?page=2");
+
+    // The revoked session signs the user out with a hard navigation, which a
+    // router-state destination would not survive — hence storage.
+    await path(page).toBe("/login");
+    expect(await returnTo(page)).toBe("/api-keys?page=2");
+
+    api.signIn();
+    await signIn(page);
+
+    await page.waitForURL(/\/api-keys/);
+    expect(new URL(page.url()).pathname).toBe("/api-keys");
+    expect(new URL(page.url()).search).toBe("?page=2");
+    expect(await returnTo(page)).toBeNull();
+  });
+
+  test("a 2FA sign-in replays the destination a 401 recorded", async ({ page }) => {
+    await mockApiTwoFactor(page, { signedIn: true, revokeOn: ["/api-keys"] });
+    await page.goto("/api-keys?page=2");
+
+    await path(page).toBe("/login");
+    expect(await returnTo(page)).toBe("/api-keys?page=2");
+
+    await signIn(page);
+    await page.getByLabel("Two-factor code").fill("123456");
+    await page.getByRole("button", { name: "Verify" }).click();
+
+    await page.waitForURL(/\/api-keys/);
+    expect(new URL(page.url()).pathname).toBe("/api-keys");
+    expect(new URL(page.url()).search).toBe("?page=2");
+    expect(await returnTo(page)).toBeNull();
+  });
+
+  test("an OAuth callback replays the recorded destination", async ({ page }) => {
+    await mockApi(page, { signedIn: false });
+    await page.goto("/login");
+    // Seed what the guard records on a denial: the exchange POST does not
+    // know which URL was asked for, so the test stands in for the guard.
+    await page.evaluate(() => window.localStorage.setItem("tf_return_to", "/api-keys?page=2"));
+
+    await page.goto("/oauth/callback?code=e2e-code");
+
+    await page.waitForURL(/\/api-keys/);
+    expect(new URL(page.url()).pathname).toBe("/api-keys");
+    expect(new URL(page.url()).search).toBe("?page=2");
     expect(await returnTo(page)).toBeNull();
   });
 });

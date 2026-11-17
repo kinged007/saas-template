@@ -18,6 +18,7 @@ from src.services.api_keys import ApiKeyService
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
 from tests.bus_doubles import RecordingBus
+from tests.conftest import expire_invitation
 
 
 @pytest.fixture
@@ -49,18 +50,6 @@ async def _create_workspace(bus, owner_id, *, slug, name="Acme Corp"):
             description=None,
             owner=await AuthService(session, bus).get_user(owner_id),
         )
-
-
-async def _expire(invitation_id: str) -> None:
-    from datetime import timedelta
-
-    from src.core.dates import now_utc
-    from src.models.core import Invitation
-
-    async with SessionFactory() as session:
-        row = await session.get(Invitation, invitation_id)
-        row.expires_at = now_utc() - timedelta(minutes=5)
-        await session.commit()
 
 
 async def _invite_member(bus, owner_id, workspace, email, role_name="editor"):
@@ -157,6 +146,7 @@ async def test_workspace_update_emits_audit_only_when_changed(bus, owner):
     assert bus.actions() == ["workspace.updated"]
     assert bus.by_subject(Subjects.WORKSPACE_CREATED) == []
     audit = bus.audit()[0][0]
+    assert audit["actor_user_id"] == owner.id
     assert audit["details"]["name"] == {"from": "Acme Corp", "to": "Acme Renamed"}
 
     bus.events.clear()
@@ -175,6 +165,7 @@ async def test_workspace_delete_emits_audit(bus, owner):
         await WorkspaceService(session, bus).delete_workspace(workspace.id, actor=owner)
     assert bus.actions() == ["workspace.deleted"]
     assert bus.audit()[0][0]["resource_id"] == workspace.id
+    assert bus.audit()[0][0]["actor_user_id"] == owner.id
 
 
 # --------------------------------------------------------------- invitations
@@ -227,7 +218,7 @@ async def test_resend_invitation_emits_delivery_event(bus, owner):
     invite = await _invite_member(bus, owner.id, workspace, "stranger@example.com")
     bus.events.clear()
     async with SessionFactory() as session:
-        await _expire(invite.id)
+        await expire_invitation(invite.id)
         service = WorkspaceService(session, bus)
         await service.resend_invitation(workspace.id, invite.id, actor=owner)
 
@@ -473,6 +464,7 @@ async def test_custom_role_create_emits_audit(bus, owner):
     assert bus.actions() == ["role.created"]
     audit = bus.audit()[0][0]
     assert audit["workspace_id"] == workspace.id
+    assert audit["actor_user_id"] == owner.id
     assert audit["resource_type"] == "role"
     assert audit["details"]["name"] == "billing"
 

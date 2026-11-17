@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -149,8 +150,6 @@ async def test_fan_out_carries_correlation_id_into_payload(app):
 
 
 async def test_transfer_produces_two_paired_role_changed_deliveries(app_client):
-    import asyncio
-
     from tests.conftest import create_workspace, login, register_user, ws_headers
 
     await register_user(app_client, email="wh-owner@example.com")
@@ -429,6 +428,23 @@ async def test_get_subscription_by_id(app_client):
         f"/api/v1/webhooks/subscriptions/{uuid.uuid4()}", headers=ws_headers(tokens, wid)
     )
     assert resp.status_code == 404
+
+    # Malformed (non-UUID) id 404s too, not 500, so callers cannot probe
+    # route shape by id validity.
+    resp = await app_client.get(
+        "/api/v1/webhooks/subscriptions/not-a-uuid", headers=ws_headers(tokens, wid)
+    )
+    assert resp.status_code == 404, resp.text
+
+    # Delivery-id lookups get the same treatment: malformed id 404s, not 500.
+    resp = await app_client.get(
+        "/api/v1/webhooks/deliveries/not-a-uuid", headers=ws_headers(tokens, wid)
+    )
+    assert resp.status_code == 404, resp.text
+    resp = await app_client.post(
+        "/api/v1/webhooks/deliveries/not-a-uuid/redeliver", headers=ws_headers(tokens, wid)
+    )
+    assert resp.status_code == 404, resp.text
 
 
 async def test_private_url_rejected(app_client):

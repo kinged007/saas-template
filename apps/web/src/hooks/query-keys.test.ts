@@ -4,6 +4,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
+import { countAuthInvalidations, stripComments, useUpdateProfileWindow } from "./query-keys-guard.ts";
+
 const srcDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function sources(dir: string): string[] {
@@ -31,15 +33,19 @@ test('useUpdateProfile refreshes identity through the ["auth"] prefix on its upd
   const source = read("hooks/useProfile.ts");
   // updateAsync was removed as an unused second copy of this topology:
   // update() is the only update path, so pin that it stays that way.
-  assert.ok(!/\bupdateAsync\b/.test(source), "no updateAsync: update() is the only update path");
+  assert.ok(
+    !/\bupdateAsync\b/.test(stripComments(source)),
+    "no updateAsync: update() is the only update path",
+  );
   // Scope the count to the hook, not the file, so other hooks in this file
   // (e.g. useDeleteAccount) can gain their own invalidations freely.
-  const start = source.indexOf("export function useUpdateProfile");
-  const end = source.indexOf("export function useExportProfile");
-  assert.ok(start >= 0 && end > start, "useUpdateProfile body found");
-  const invalidatesAuth =
-    source.slice(start, end).match(/invalidateQueries\(\{\s*queryKey:\s*\[\s*"auth"\s*\]\s*\}\)/g) ?? [];
-  assert.equal(invalidatesAuth.length, 1, 'exactly one ["auth"] invalidation in useUpdateProfile().update()');
+  const region = useUpdateProfileWindow(source);
+  assert.ok(region !== null, "useUpdateProfile body found");
+  assert.equal(
+    countAuthInvalidations(region),
+    1,
+    'exactly one ["auth"] invalidation in useUpdateProfile().update()',
+  );
   assert.ok(
     IDENTITY_KEY.test(read("contexts/WorkspaceContext.tsx")),
     'the identity query is registered as ["auth", "identity"], which the ["auth"] invalidation prefix-matches',

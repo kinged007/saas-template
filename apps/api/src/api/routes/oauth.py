@@ -110,9 +110,9 @@ async def oauth_callback(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    get_auth_limiter().check(f"oauth:{_client_ip(request) or 'unknown'}:{provider_id}")
     # Checks a bucket this module never charges; see the rule in
     # src/core/security/ratelimit.py.
+    get_auth_limiter().check(f"oauth:{_client_ip(request) or 'unknown'}:{provider_id}")
     container = get_container(request)
     code = request.query_params.get("code")
     state = request.query_params.get("state")
@@ -164,7 +164,11 @@ async def oauth_callback(
             last_name=identity["last_name"],
         )
     except AuthError as exc:
-        logger.info("oauth signup rejected provider=%s: %s", provider_id, exc)
+        logger.info(
+            "oauth signup rejected provider=%s: %s",
+            _single_line(provider_id),
+            _single_line(exc),
+        )
         return _error_redirect("registration is disabled")
     # Join before the 2FA branch and before issue_tokens, as POST /auth/login
     # does. A failed join stays log-only and the 302 happens either way; the

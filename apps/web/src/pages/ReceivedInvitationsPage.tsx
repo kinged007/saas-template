@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/table";
 import { ListView, ListViewHeader } from "../components/refine-ui/views/list-view";
 import { EmptyRow, StatusBadge, formatDate } from "../components/ui";
-import { invitationStatus } from "./invitation-actions";
+import { invitationStatus, isActionableInvitation } from "./invitation-actions";
 import { useWorkspace } from "../contexts/WorkspaceContext";
 import { errorMessage } from "@/utils/errorMessage";
 import type { Invitation } from "../types";
@@ -106,7 +106,7 @@ export function ReceivedInvitationsPage() {
           </TableHeader>
           <TableBody>
             {rows.map((inv) => {
-              const actionable = inv.status === "pending" && !inv.expired;
+              const actionable = isActionableInvitation(inv);
               return (
                 <TableRow key={inv.id}>
                   <TableCell className="font-medium">{inv.workspace_name ?? "—"}</TableCell>

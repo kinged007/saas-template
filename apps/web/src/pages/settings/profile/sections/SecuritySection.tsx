@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useCustom, useCustomMutation } from "@refinedev/core";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/CopyButton";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -117,10 +117,6 @@ export function SecuritySection() {
   };
   useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
-  // The copy icon flips to a check, so its accessible name follows; the pair the
-  // button keeps is `title` + `aria-label`, equal to each other (#332).
-  const copyLabel = copied ? "Copied" : "Copy setup key";
-
   const refresh = () => {
     sessions.query.refetch();
     status.query.refetch();
@@ -130,7 +126,7 @@ export function SecuritySection() {
     try {
       await call(revokeAllMutate, "auth/sessions", "delete");
       toast.success("All other sessions revoked");
-      refresh();
+      sessions.query.refetch();
     } catch (e) {
       toast.error((e as Error)?.message ?? "Revoke failed");
     }
@@ -265,11 +261,9 @@ export function SecuritySection() {
                 <p className="text-sm text-muted-foreground">Can&apos;t scan? Enter this key manually:</p>
                 <div className="flex items-center gap-2">
                   <code className="bg-muted block flex-1 rounded p-2 font-mono text-xs break-all">{setupSecret}</code>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    title={copyLabel}
-                    aria-label={copyLabel}
+                  <CopyButton
+                    copied={copied}
+                    label="Copy setup key"
                     onClick={async () => {
                       if (!setupSecret) return;
                       // Clear before the write so the previous window dies even if
@@ -288,9 +282,7 @@ export function SecuritySection() {
                         });
                       }
                     }}
-                  >
-                    {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  </Button>
+                  />
                 </div>
               </div>
               <div className="flex flex-col gap-2">
@@ -349,7 +341,10 @@ export function SecuritySection() {
                     </TableCell>
                     <TableCell className="text-right">
                       {!s.current && (
-                        <SessionRevokeButton base="auth" sessionId={s.id} onRevoked={refresh} />
+                        // Revoking a session cannot change 2FA state, so the
+                        // refetch here is sessions-only; the dual refresh
+                        // stays with the 2FA actions (#1391).
+                        <SessionRevokeButton base="auth" sessionId={s.id} onRevoked={() => sessions.query.refetch()} />
                       )}
                     </TableCell>
                   </TableRow>

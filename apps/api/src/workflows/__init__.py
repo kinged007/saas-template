@@ -39,7 +39,7 @@ from src.db.session import SessionFactory
 from src.events.bus import EventBus
 from src.events.factory import WorkflowRegistry
 from src.events.publisher import publish_audit
-from src.events.subjects import Subjects
+from src.events.subjects import OWNERSHIP_TRANSFER_REASON, Subjects
 from src.jobs.executor import execute_run
 from src.models.workspace import ACTIVE_MEMBERSHIP_STATUSES, WorkspaceMember
 from src.realtime.manager import ConnectionManager
@@ -52,6 +52,38 @@ logger = logging.getLogger(__name__)
 # Frontend route the invitation notification's "Open" button links to. The dev
 # seed (src/seed.py) imports it, so the two payload sides cannot drift.
 INVITATIONS_ROUTE = "/invitations"
+
+
+def _participant_user_ids(
+    payload: dict,
+    *,
+    subject: str | None = None,
+    correlation_id: str | None = None,
+) -> list[str] | None:
+    """Sanitized participant list for conversation event payloads.
+
+    None = field absent or malformed (non-list, bare string, any non-string,
+    empty, whitespace-only, or whitespace-padded item); [] = explicitly empty
+    list. Rejects instead of coercing so a bad publisher cannot make the
+    consumers fan out garbage ids. A present-but-malformed field logs a warning
+    (an absent field stays silent) so a publisher regression is diagnosable
+    instead of surfacing only as "users stopped getting notifications".
+    """
+    raw = payload.get("participant_user_ids")
+    if not isinstance(raw, list) or any(
+        not isinstance(x, str) or not x.strip() or x.strip() != x for x in raw
+    ):
+        if raw is not None:
+            logger.warning(
+                "malformed participant_user_ids on %s"
+                " (correlation_id=%s, conversation_id=%s, workspace_id=%s)",
+                subject,
+                correlation_id,
+                payload.get("conversation_id"),
+                payload.get("workspace_id"),
+            )
+        return None
+    return list(dict.fromkeys(raw))
 
 
 async def _audit_email_failure(
@@ -268,7 +300,7 @@ def build_workflows(
         # role". A transfer says so on the event; the role names carry no such
         # claim, since a workspace may rename or omit its owner role.
         if user_id == payload.get("changed_by_user_id"):
-            if payload.get("reason") == "ownership_transfer":
+            if payload.get("reason") == OWNERSHIP_TRANSFER_REASON:
                 # A null to_role names no new role, so the clause is dropped
                 # and the transfer itself is still reported.
                 body = (
@@ -430,10 +462,9 @@ def build_workflows(
                 # (the handler, not this publish, is what re-runs on a
                 # redelivery); otherwise this envelope's own id, which a direct
                 # producer's redelivery repeats unchanged.
-                # Server-set by construction: `audit_payload` builds every audit
-                # payload and derives this from the inbound event, so nothing
-                # outside the server picks the dedupe key. An endpoint that
-                # publishes audit events directly has to re-check that.
+                # Server-set: every producer goes through `audit_payload` (pinned by
+                # test_every_workflow_audit_publish_carries_a_source_event_id), so the
+                # dedupe key is never client-chosen.
                 source_event_id=payload.get("source_event_id") or metadata.event_id,
             )
         logger.debug("audit entry persisted: %s", payload.get("action"))
@@ -499,8 +530,9 @@ def build_workflows(
         conversation_id = payload.get("conversation_id")
         sender_id = payload.get("sender_id")
         sender_type = payload.get("sender_type", "user")
-        participant_ids: list[str] = payload.get("participant_user_ids") or []
-        participant_ids = list(dict.fromkeys(participant_ids))
+        participant_ids = _participant_user_ids(
+            payload, subject=metadata.subject, correlation_id=metadata.correlation_id
+        )
 
         if not workspace_id or not conversation_id or not participant_ids:
             return
@@ -562,7 +594,9 @@ def build_workflows(
         Registered in every replica, so users receive `message.created`
         regardless of which replica holds their WebSocket.
         """
-        participant_ids: list[str] = payload.get("participant_user_ids") or []
+        participant_ids = _participant_user_ids(
+            payload, subject=metadata.subject, correlation_id=metadata.correlation_id
+        )
         if not participant_ids:
             return
         await connection_manager.push_many(
@@ -574,11 +608,13 @@ def build_workflows(
     async def on_conversation_renamed(payload: dict, metadata) -> None:
         """Fan-out conversation rename to participants."""
 
-        participant_ids: list[str] | None = payload.get("participant_user_ids")
-        # If payload does not contain participant list (legacy service path
-        # with just workspace_id), fall back to no fan-out
-        # New service publishes without participant list for rename; we need
-        # to resolve participants from DB.
+        participant_ids = _participant_user_ids(
+            payload, subject=metadata.subject, correlation_id=metadata.correlation_id
+        )
+        # Malformed (non-list, bare string, non-string, empty, whitespace-only,
+        # or whitespace-padded item) is treated like an absent list: resolve
+        # participants from the DB instead of fanning out garbage. An explicit
+        # empty list keeps the no-fallback semantics.
         if participant_ids is None:
             conversation_id = payload.get("conversation_id")
             if not conversation_id:
@@ -594,6 +630,7 @@ def build_workflows(
                 )
                 participant_ids = [r[0] for r in result.all()]
 
+        participant_ids = list(dict.fromkeys(participant_ids))
         if not participant_ids:
             return
         await connection_manager.push_many(

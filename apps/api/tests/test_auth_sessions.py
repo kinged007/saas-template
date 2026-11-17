@@ -55,12 +55,6 @@ async def test_session_routes_reject_api_key_callers(app_client):
 
 
 async def test_reused_refresh_token_revokes_all_sessions(app_client):
-    from sqlalchemy import select
-
-    from src.core.security.tokens import OpaqueToken
-    from src.db.session import SessionFactory
-    from src.models.workspace import RefreshToken
-
     client = app_client
     t1 = await register_user(client, "reuse@example.com")
     t2 = await login(client, "reuse@example.com")
@@ -84,13 +78,32 @@ async def test_reused_refresh_token_revokes_all_sessions(app_client):
     resp = await client.get("/api/v1/auth/me", headers=auth_headers(rotated))
     assert resp.status_code == 401, resp.text
 
-    # the killed sessions carry the reason, so a reuse revocation is told apart
-    # from a password change or a logout in the audit trail
+
+async def test_reuse_marks_revoked_rows_with_the_reason(app_client):
+    """The reuse revocation stamps the rows it kills, so the audit trail can
+    tell a compromise apart from a password change or a logout."""
+    from sqlalchemy import select
+
+    from src.core.security.tokens import OpaqueToken
+    from src.db.session import SessionFactory
+    from src.models.workspace import RefreshToken
+
+    client = app_client
+    t1 = await register_user(client, "reuse-reason@example.com")
+    t2 = await login(client, "reuse-reason@example.com")
+
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]})
+    assert resp.status_code == 200, resp.text
+    rotated = resp.json()
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]})
+    assert resp.status_code == 401, resp.text
+
     hashes = [OpaqueToken.hash(t1["refresh_token"]), OpaqueToken.hash(rotated["refresh_token"])]
     async with SessionFactory() as session:
         stmt = select(RefreshToken.revoke_reason).where(RefreshToken.token_hash.in_(hashes))
         reasons = (await session.execute(stmt)).scalars().all()
-    assert reasons == ["reuse", "reuse"], reasons
+    assert len(reasons) == 2, reasons
+    assert set(reasons) == {"reuse"}, reasons
 
 
 async def test_unknown_refresh_token_revokes_nothing(app_client):
