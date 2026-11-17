@@ -28,7 +28,9 @@ USE_SQLITE=1 make dev API_PORT=8010 WEB_PORT=5273   # open http://localhost:5273
 `API_PORT` / `WEB_PORT` also work on `make api` and `make web`. `scripts/dev.py`
 passes the chosen web origin to the API as `CORS_ORIGINS` / `FRONTEND_URL` (the
 default :5173 stays allowed), and `apps/web/vite.config.ts` proxies `/api/` and
-`/ws` to `API_PORT`. No other port configuration is needed.
+`/ws` to `API_PORT`. No other port configuration is needed. The allowlisted dev
+origin is the web origin on both loopback names (`localhost` and `127.0.0.1`,
+since vite serves both) — open either and the session holds.
 
 ## Migrations
 
@@ -77,4 +79,4 @@ If any source file shows ⚠ in a wiki article, re-run `npx codesight --wiki` be
 
 **Not yet canonical (migrate to the patterns above when touched):** RolesPage, MembersPage, WorkspaceCreatePage, ReceivedInvitationsPage (use `PageHeader`/`useCreate`/dialogs instead of views + `useForm`).
 
-**Dev notes:** Vite's proxy rule is `"/api/"` (trailing slash) — a bare `"/api"` prefix would also swallow SPA routes like `/api-keys` and `/api-keys/create`, forwarding them to the backend as 404s on hard refresh. Frontend validation: `npm run build` (runs `tsc --noEmit` first). No web lint script.
+**Dev notes:** Vite's proxy rule is `"/api/"` (trailing slash) — a bare `"/api"` prefix would also swallow SPA routes like `/api-keys` and `/api-keys/create`, forwarding them to the backend as 404s on hard refresh. Frontend validation: `npm run build` (runs `tsc --noEmit` first) and `npm test` (`node --test`, stdlib only). Testable logic lives in a plain `.ts` module with no runtime imports — `node --test` cannot load `.tsx` or resolve the `@/` alias; share types with `import type`, which type stripping erases. CI runs both (`web-build`, `web-test` jobs) on Node 24. No web lint script.

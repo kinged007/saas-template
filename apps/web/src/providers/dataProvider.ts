@@ -1,9 +1,19 @@
-import type { DataProvider } from "@refinedev/core";
+import type {
+  BaseKey,
+  BaseRecord,
+  DataProvider,
+  DeleteManyParams,
+  DeleteManyResponse,
+} from "@refinedev/core";
 import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import dataProviderModule from "@refinedev/simple-rest";
 
-import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId, sessionHint } from "../utils/storage";
+import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId, sessionHint, returnToStore } from "../utils/storage";
+import { adminListQuery } from "./adminListQuery";
 import { clearAllCaches, queryClient } from "./queryClient";
+import { hasReadById, resourcePath } from "./resourcePaths";
+import { withRefreshLock } from "./refreshLock";
+import { normalizeSorters } from "./sorters";
 
 // Same-origin API path: the vite dev proxy (and nginx in production) forwards
 // /api → backend, so no CORS/absolute-URL issues regardless of how the app is
@@ -79,7 +89,7 @@ async function tryRefresh(): Promise<boolean> {
     // The refresh token travels in the HttpOnly cookie (withCredentials) —
     // JS never sees it.
     const capturedAccess = tokenStore.getAccess();
-    refreshPromise = (async () => {
+    refreshPromise = withRefreshLock(async () => {
       try {
         const { data } = await axios.post(
           `${API_URL}/auth/refresh`,
@@ -87,6 +97,10 @@ async function tryRefresh(): Promise<boolean> {
           {
             withCredentials: true,
             headers: { "X-Requested-With": "XMLHttpRequest" },
+            // The Web Lock is exclusive for this call's whole duration, and every
+            // request awaits tryRefresh() while the access token is expired, so a
+            // stalled POST would block every tab of the origin indefinitely.
+            timeout: 15_000,
           },
         );
         // Logout may have cleared tokens while refresh was in-flight —
@@ -100,7 +114,7 @@ async function tryRefresh(): Promise<boolean> {
       } finally {
         refreshPromise = null;
       }
-    })();
+    });
   }
   return refreshPromise;
 }
@@ -112,7 +126,12 @@ function normalizeError(error: AxiosError): AxiosError {
   // refine reads `statusCode` for its generic error notification and
   // authProvider.onError reads it to detect a 401; axios errors carry no such
   // field, so without this every notification says "status code: undefined".
-  Object.assign(error, { statusCode: error.response?.status });
+  // 0 is the "no HTTP response" sentinel (offline, DNS, CORS, abort). The
+  // notification helper (error-title.ts) is coupled to this value only by
+  // "not three digits": it drops the parenthetical unless the code is 100-599.
+  // Note 0 is a synthetic value, not absent — `err.statusCode ?? fallback`
+  // does not fall through on it.
+  Object.assign(error, { statusCode: error.response?.status ?? 0 });
   const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail;
   // 2FA challenge responses carry an object detail ({code: "2fa_required",
   // challenge_token}) — leave the message alone so the login page can branch
@@ -140,9 +159,19 @@ function forceLogout() {
   // queryClient listener notifies the live socket via onTokensChanged.
   // tokenStore.clear() also drops the signed-in marker.
   const hadSession = Boolean(tokenStore.getAccess());
+  // Several calls can be in flight when the session dies and each 401 lands
+  // here. Only the call that still sees a session acts: a second call would
+  // re-run the destructive clear and wipe the destination recorded below.
+  if (!hadSession) return;
   tokenStore.clear();
   clearAllCaches(queryClient);
-  if (hadSession && window.location.pathname !== "/login") {
+  if (window.location.pathname !== "/login") {
+    // The bounce is a full page load, so the destination must survive it:
+    // record it for afterAuthRedirect() to replay after the next sign-in.
+    // Recorded after tokenStore.clear() — the clear wipes tf_return_to.
+    returnToStore.set(
+      window.location.pathname + window.location.search + window.location.hash,
+    );
     window.location.assign("/login");
   }
 }
@@ -176,28 +205,30 @@ httpClient.interceptors.response.use(
 
 const baseDataProvider = dataProviderModule(API_URL, httpClient);
 
+// simple-rest v6 does not implement deleteMany at all (its return type is
+// `Omit<Required<DataProvider>, "createMany" | "updateMany" | "deleteMany">`),
+// so without this the verb is missing from the provider and useDeleteMany
+// throws. The API has no bulk delete endpoint, so fan out over deleteOne.
+async function bulkDelete<TData extends BaseRecord>(
+  resource: string,
+  ids: BaseKey[],
+  params: Pick<DeleteManyParams<any>, "variables" | "meta"> = {},
+): Promise<DeleteManyResponse<TData>> {
+  const results = await Promise.all(
+    ids.map((id) => baseDataProvider.deleteOne<TData>({ resource, id, ...params })),
+  );
+  return { data: results.map(({ data }) => data) };
+}
+
 // `admin-workspaces` / `admin-audit` are virtual resources: the list views
 // read from the superuser-only GET /admin/* endpoints, which speak the same
 // offset/limit + X-Total-Count dialect as every other list endpoint.
 // They are not real REST resources (detail/toggle use `custom`), so only
-// getList is overridden. (`admin-users` maps through RESOURCE_PATHS above.)
+// getList is overridden. (`admin-users` maps through `resourcePath()`.)
 function adminList(path: string): DataProvider["getList"] {
   return async ({ pagination, filters, sorters }) => {
     const { currentPage = 1, pageSize = 10 } = pagination ?? {};
-    const params = new URLSearchParams({
-      offset: String((currentPage - 1) * pageSize),
-      limit: String(pageSize),
-    });
-    for (const f of filters ?? []) {
-      if (!("field" in f)) continue;
-      // `q` is the cross-field search term (backend `?q=`), not a column.
-      params.append(f.field === "q" ? "q" : `${f.field}_like`, String(f.value));
-    }
-    for (const s of sorters ?? []) {
-      if (!s.field) continue;
-      params.append("sort[]", s.field);
-      params.append("order[]", s.order);
-    }
+    const params = adminListQuery({ currentPage, pageSize, filters, sorters });
     const { data, headers } = await httpClient.get(`${API_URL}${path}?${params}`);
     const total = Number(headers["x-total-count"]);
     return { data, total: Number.isFinite(total) ? total : data.length };
@@ -208,13 +239,6 @@ const adminLists = {
   "admin-workspaces": adminList("/admin/workspaces"),
   "admin-audit": adminList("/admin/audit"),
 } as const;
-
-// Refine resource name → backend path when they differ (hyphenated resource
-// names are not valid backend route prefixes).
-const RESOURCE_PATHS: Record<string, string> = {
-  "admin-users": "admin/users",
-};
-const resourcePath = (resource: string) => RESOURCE_PATHS[resource] ?? resource;
 
 /**
  * simple-rest's `custom` uses the url verbatim — it never prepends the API
@@ -227,12 +251,39 @@ export const dataProvider: DataProvider = {
   getList: ({ resource, ...params }) => {
     const admin = (adminLists as Record<string, DataProvider["getList"]>)[resource];
     if (admin) return admin({ resource, ...params });
-    return baseDataProvider.getList({ resource: resourcePath(resource), ...params });
+    // simple-rest's `generateSort` pushes `item.order` unconditionally, so
+    // a directionless sorter would serialise `_order=undefined` and the API
+    // answers 422. Fill the API default (`asc`) before delegating.
+    return baseDataProvider.getList({
+      resource: resourcePath(resource),
+      ...params,
+      sorters: normalizeSorters(params.sorters),
+    });
   },
-  getOne: ({ resource, ...params }) =>
-    baseDataProvider.getOne({ resource: resourcePath(resource), ...params }),
+  getOne: async ({ resource, ...params }) => {
+    if (!hasReadById(resource)) {
+      // `statusCode` is what queryClient.isClientError reads, so a 4xx stops
+      // react-query retrying a request that was never sent — the API would
+      // answer 405/404 for it anyway.
+      throw Object.assign(
+        new Error(
+          `getOne("${resource}") has no backend route: the API serves no GET /${resourcePath(resource)}/{id}. Fetch the collection with custom (GET /${resourcePath(resource)}) and filter instead.`,
+        ),
+        { statusCode: 405 },
+      );
+    }
+    return baseDataProvider.getOne({ resource: resourcePath(resource), ...params });
+  },
+  getMany: ({ resource, ...params }) =>
+    baseDataProvider.getMany({ resource: resourcePath(resource), ...params }),
   update: ({ resource, ...params }) =>
     baseDataProvider.update({ resource: resourcePath(resource), ...params }),
+  create: ({ resource, ...params }) =>
+    baseDataProvider.create({ resource: resourcePath(resource), ...params }),
+  deleteOne: ({ resource, ...params }) =>
+    baseDataProvider.deleteOne({ resource: resourcePath(resource), ...params }),
+  deleteMany: ({ resource, ids, ...params }) =>
+    bulkDelete(resourcePath(resource), ids, params),
   custom: async ({ url, ...params }) => {
     const resolved =
       !url || /^https?:\/\//.test(url) || url.startsWith("/")

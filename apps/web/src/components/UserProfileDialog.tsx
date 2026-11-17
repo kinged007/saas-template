@@ -1,4 +1,5 @@
 import { UserAvatar } from "@/components/ui/user-avatar";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -8,17 +9,20 @@ import {
 import { usePublicProfile } from "@/hooks/useProfile";
 import { formatDisplayName } from "@/types";
 import type { UserProfile } from "@/types";
+import { profileBodyState, type UserProfileFallback } from "./user-profile-dialog-state";
 
 type UserProfileDialogProps = {
   userId: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  fallback?: Pick<UserProfile, "first_name" | "last_name" | "display_name" | "email" | "avatar_url"> & { preloaded?: UserProfile | null };
+  fallback?: UserProfileFallback;
 };
 
 function ProfileBody({ userId, fallback }: { userId: string | null; fallback: UserProfileDialogProps["fallback"] }) {
-  const { data, isLoading, isError } = usePublicProfile(userId);
+  const { data, isLoading, isError, query } = usePublicProfile(userId);
   const p: UserProfile | null | undefined = data ?? fallback?.preloaded ?? null;
+  const state = profileBodyState({ isLoading, isError, profile: p, fallback });
+  const showRetry = state === "profile" && isError;
 
   const displayName = p
     ? formatDisplayName(p.first_name, p.last_name, (p as unknown as { display_name?: string | null }).display_name ?? (fallback?.display_name as string) ?? (fallback as unknown as { email?: string })?.email ?? "User")
@@ -29,10 +33,17 @@ function ProfileBody({ userId, fallback }: { userId: string | null; fallback: Us
   if (isLoading) {
     return <p className="text-muted-foreground py-8 text-center text-sm">Loading…</p>;
   }
-  if (isError) {
-    return <p className="text-destructive py-8 text-center text-sm">Could not load profile.</p>;
+  if (state === "dead-end") {
+    return (
+      <div className="flex flex-col items-center gap-2 py-8">
+        <p className="text-destructive text-center text-sm">Could not load profile.</p>
+        <Button variant="outline" size="sm" onClick={() => query.refetch()}>
+          Try again
+        </Button>
+      </div>
+    );
   }
-  if (!p && !fallback) {
+  if (state === "empty") {
     return <p className="text-muted-foreground py-8 text-center text-sm">No profile data.</p>;
   }
 
@@ -83,6 +94,14 @@ function ProfileBody({ userId, fallback }: { userId: string | null; fallback: Us
             </div>
           ) : null}
         </dl>
+      )}
+      {showRetry && (
+        <div className="flex flex-col items-center gap-2 border-destructive/40 border-t pt-3">
+          <p className="text-destructive text-center text-sm">Could not load profile.</p>
+          <Button variant="outline" size="sm" onClick={() => query.refetch()}>
+            Try again
+          </Button>
+        </div>
       )}
     </div>
   );
