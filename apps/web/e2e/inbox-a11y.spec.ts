@@ -82,7 +82,7 @@ async function expectButtonsNamed(scope: Locator) {
     await expect(button).toHaveAttribute("aria-label", /\S/);
     expect(
       await button.getAttribute("title"),
-      "title and aria-label disagree — align title to the accessible name",
+      `title and aria-label disagree — align title to the accessible name: ${await button.evaluate((el) => el.outerHTML)}`,
     ).toBe(await button.getAttribute("aria-label"));
   }
 }

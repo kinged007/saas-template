@@ -90,4 +90,22 @@ test.describe("member settings layout", () => {
     await page.goto("/users/user-3/settings/general");
     await expect(page.getByText("Access denied")).toBeVisible();
   });
+
+  test("the settings nav is named after the page heading", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    await mockTargetProfile(page);
+    await page.goto("/users/user-9/settings/general");
+
+    const heading = page.getByRole("heading", { level: 1 });
+    await expect(heading).toBeVisible();
+    const headingName = (await heading.textContent())?.trim() ?? "";
+    expect(headingName).not.toBe("");
+
+    // `exact` is what pins it: Playwright's default name match is substring,
+    // under which the old default label "Settings" also matched "Member
+    // Settings" and the assertion passed either way.
+    const settingsNav = page.getByRole("navigation", { name: headingName, exact: true });
+    await expect(settingsNav).toBeVisible();
+    await expect(settingsNav.getByRole("link", { name: "General" })).toBeVisible();
+  });
 });
