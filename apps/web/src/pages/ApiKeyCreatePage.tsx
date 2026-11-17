@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   useCan,
   useCustom,
@@ -9,10 +9,11 @@ import {
 import { useForm } from "@refinedev/react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Check, Copy } from "lucide-react";
 import { Navigate } from "react-router";
 import { toast } from "sonner";
 
+import { CopyButton } from "@/components/CopyButton";
+import { errorMessage } from "@/utils/errorMessage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -44,7 +45,8 @@ import type { ApiKeyCreated } from "../types";
 const apiKeySchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
   permissions: z.array(z.string()),
-  usage_quota: z.number().int().min(1).nullable().optional(),
+  // .max mirrors the backend MAX_QUOTA Integer column ceiling (apps/api/src/models/api_key.py).
+  usage_quota: z.number().int().min(1).max(2147483647).nullable().optional(),
   // datetime-local value ("2027-01-01T09:00"), empty = never expires.
   expires_at: z
     .string()
@@ -69,6 +71,14 @@ export function ApiKeyCreatePage() {
 
   const [created, setCreated] = useState<ApiKeyCreated | null>(null);
   const [copied, setCopied] = useState(false);
+  // One timer owns the 1.5 s confirmation: a second click restarts it instead of
+  // stacking one that ends it early, and it dies with the component.
+  const copyTimer = useRef<number | undefined>(undefined);
+  const clearCopied = () => {
+    window.clearTimeout(copyTimer.current);
+    setCopied(false);
+  };
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
   const {
     refineCore: { onFinish, formLoading },
@@ -110,16 +120,28 @@ export function ApiKeyCreatePage() {
       }
     } catch (err) {
       toast.error("Could not create API key", {
-        description: String((err as { message?: string })?.message ?? err),
+        description: errorMessage(err),
       });
     }
   };
 
   const copyKey = async () => {
     if (!created) return;
-    await navigator.clipboard.writeText(created.key);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    // Clear before the write so the previous window dies even if this one never
+    // reaches the clipboard.
+    window.clearTimeout(copyTimer.current);
+    try {
+      await navigator.clipboard.writeText(created.key);
+      setCopied(true);
+      copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      // A denied write must not leave a stale confirmation: the timer above
+      // was already cleared, so nothing would reset `copied` (#1216).
+      setCopied(false);
+      toast.error("Could not copy API key", {
+        description: errorMessage(err),
+      });
+    }
   };
 
   return (
@@ -250,7 +272,13 @@ export function ApiKeyCreatePage() {
 
       <Dialog
         open={created !== null}
-        onOpenChange={(open) => !open && setCreated(null)}
+        onOpenChange={(open) => {
+          if (open) return;
+          // The dialog goes away with the key it copies, so the confirmation
+          // must not outlive it and greet the next created key.
+          clearCopied();
+          setCreated(null);
+        }}
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -268,13 +296,12 @@ export function ApiKeyCreatePage() {
                 value={created?.key ?? ""}
                 className="font-mono"
               />
-              <Button type="button" onClick={copyKey} variant="outline">
-                {copied ? (
-                  <Check className="h-4 w-4" />
-                ) : (
-                  <Copy className="h-4 w-4" />
-                )}
-              </Button>
+              <CopyButton
+                type="button"
+                copied={copied}
+                label="Copy API key"
+                onClick={copyKey}
+              />
             </div>
             {created && created.permissions.length > 0 && (
               <div className="flex flex-wrap gap-1">

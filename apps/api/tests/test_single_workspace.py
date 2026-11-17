@@ -16,6 +16,7 @@ from tests.conftest import (
     create_workspace,
     login,
     register_user,
+    ws_headers,
 )
 
 
@@ -230,6 +231,53 @@ async def test_unknown_role_name_falls_back_to_viewer(app_client, single_workspa
         assert me.json()["workspaces"][0]["role"] == "viewer", value
 
 
+@pytest.mark.parametrize("legacy_pair", [False, True])
+async def test_auto_join_resolves_the_configured_role_through_the_fold(
+    app_client, single_workspace_on, monkeypatch, legacy_pair
+):
+    """The candidate chain and the owner filter have to fold alike.
+
+    `_single_workspace_role` drops owner rows through the folded
+    `is_owner_role_name` and then looked its candidates up by exact name, so a
+    workspace whose rows spell the role in another case missed the configured
+    one entirely and auto-joined the newcomer as `editor` instead.
+
+    `legacy_pair` puts a custom `viewer` beside the renamed seeded `Viewer`, the
+    indistinguishable pair a pre-#328 workspace holds: the map folds the key and
+    `setdefault` keeps the first row in `_ROLE_PICK_ORDER`, which has to be the
+    row `_role_by_name` picks for the same folded name.
+    """
+    from sqlalchemy import select
+
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    _, ws_id = await _first_workspace(app_client)
+    # A workspace created before the case-insensitive name check (#328).
+    async with SessionFactory() as session:
+        viewer = await session.scalar(
+            select(Role).where(Role.workspace_id == ws_id, Role.name == "viewer")
+        )
+        assert viewer is not None
+        viewer.name = "Viewer"
+        if legacy_pair:
+            session.add(
+                Role(
+                    workspace_id=ws_id,
+                    name="viewer",
+                    description=None,
+                    permissions=[],
+                    system=False,
+                )
+            )
+        await session.commit()
+
+    monkeypatch.setattr(settings, "single_workspace_default_role", "viewer")
+    tokens = await register_user(app_client, "cased@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert [(w["id"], w["role"]) for w in me.json()["workspaces"]] == [(ws_id, "Viewer")]
+
+
 async def test_relogin_keeps_existing_member_role(app_client, single_workspace_on, monkeypatch):
     await _first_workspace(app_client)
     second = await register_user(app_client, "second@example.com")
@@ -337,6 +385,14 @@ async def test_refresh_refuses_pair_when_account_deleted_mid_rotation(app_client
 
 
 async def test_refresh_fails_closed_when_the_owner_re_read_raises(app_client, monkeypatch):
+    """A raising owner re-read surfaces as a 500, not a 401, and that is deliberate
+    (in production; the test observes the raise directly via ASGITransport).
+
+    The RuntimeError escapes to Starlette's ServerErrorMiddleware: the re-read
+    is a security precondition, so the raise must fail closed instead of
+    falling through to set_refresh_cookie. Any refresh failure logs the client
+    out (dataProvider treats it as logged-out).
+    """
     # The existence check is a precondition for issuing a pair, so it cannot sit
     # under the join's best-effort handler: a re-read that raises used to be
     # logged and the caller still got 200 with a live pair.
@@ -379,6 +435,79 @@ async def test_refresh_account_gone_charges_rate_limiter(
         "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
     )
     assert again.status_code == 429, again.text
+
+
+async def test_refresh_account_gone_reraise_logs_refresh_level_signal(
+    app_client, single_workspace_on, monkeypatch, caplog
+):
+    # The helper logs the underlying join fault before its rollback; the
+    # re-raise added by #692 must keep its own correlated refresh-level record
+    # (#714) instead of vanishing between the helper's log and the access logs.
+    import logging
+
+    from src.services.auth import AuthService
+
+    await break_single_workspace_join(app_client)
+    tokens = await register_user(app_client, "newcomer@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    user_id = me.json()["id"]
+
+    async def _gone(self, user_id):
+        return None
+
+    monkeypatch.setattr(AuthService, "get_user", _gone)
+    with caplog.at_level(logging.ERROR, logger="src.api.routes.auth"):
+        resp = await app_client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+        )
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["detail"] == "account no longer exists"
+    gone_records = [
+        r
+        for r in caplog.records
+        if r.name == "src.api.routes.auth"
+        and r.getMessage() == f"account gone on refresh (user {user_id})"
+    ]
+    assert len(gone_records) == 1, caplog.text
+    assert gone_records[0].levelno == logging.ERROR
+
+
+async def test_login_account_gone_reraise_logs_login_level_signal(
+    app_client, single_workspace_on, monkeypatch, caplog
+):
+    # Same correlation the refresh flow got in #714: the helper logs the join
+    # fault before its rollback, so login's re-raise must keep its own
+    # login-level record instead of vanishing between the helper's log and the
+    # access logs. Filtered by logger name + exact message so the helper's own
+    # logger.exception record on the same logger cannot satisfy the count.
+    import logging
+
+    from src.services.auth import AuthService
+
+    await break_single_workspace_join(app_client)
+    tokens = await register_user(app_client, "newcomer@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    user_id = me.json()["id"]
+
+    async def _gone(self, user_id):
+        return None
+
+    monkeypatch.setattr(AuthService, "get_user", _gone)
+    with caplog.at_level(logging.ERROR, logger="src.api.routes.auth"):
+        resp = await app_client.post(
+            "/api/v1/auth/login",
+            json={"email": "newcomer@example.com", "password": "Password123!"},
+        )
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["detail"] == "account no longer exists"
+    gone_records = [
+        r
+        for r in caplog.records
+        if r.name == "src.api.routes.auth"
+        and r.getMessage() == f"account gone on login (user {user_id})"
+    ]
+    assert len(gone_records) == 1, caplog.text
+    assert gone_records[0].levelno == logging.ERROR
 
 
 async def _gone_user_is_gone(app_client, monkeypatch, entry: str):
@@ -429,7 +558,7 @@ async def _gone_user_is_gone(app_client, monkeypatch, entry: str):
         # Both throttled entry points charge the limiter on this 401 instead of
         # resetting the window. On login that is the whole point: the key is
         # ip:email and stays reusable, so a reset would leave it unthrottled.
-        # /register has no limiter at all.
+        # /register meters on its own per-IP limiter, not this one (#1343).
         assert [op for op, _ in calls] == ["check", "fail"], calls
 
 
@@ -519,3 +648,33 @@ async def test_oldest_workspace_wins(app_client, single_workspace_on, monkeypatc
     newcomer = await register_user(app_client, "newcomer@example.com")
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(newcomer))
     assert [w["id"] for w in me.json()["workspaces"]] == [ws1["id"]]
+
+
+async def test_auth_me_gives_a_key_its_own_workspace_in_single_mode(
+    app_client, single_workspace_on, monkeypatch
+):
+    """The single-workspace filter collapses the session user's UI; a key is
+    already pinned to one workspace, and its gate never reads the flag, so the
+    key keeps its own workspace instead of being filtered to the oldest one.
+    """
+    monkeypatch.setattr(settings, "single_workspace", False)
+    tokens = await register_user(app_client, "key-scope@example.com")
+    await create_workspace(app_client, tokens, "Key One")
+    ws2 = await create_workspace(app_client, tokens, "Key Two")
+    monkeypatch.setattr(settings, "single_workspace", True)
+
+    resp = await app_client.post(
+        "/api/v1/api-keys",
+        json={"name": "scoped", "permissions": ["member:read"]},
+        headers=ws_headers(tokens, ws2["id"]),
+    )
+    assert resp.status_code == 201, resp.text
+    key = resp.json()
+
+    me = await app_client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {key['key']}", "X-Workspace-ID": ws2["id"]},
+    )
+    assert me.status_code == 200, me.text
+    assert [w["id"] for w in me.json()["workspaces"]] == [ws2["id"]]
+    assert me.json()["permissions"] == sorted(key["permissions"])

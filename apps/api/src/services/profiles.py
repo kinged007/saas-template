@@ -9,6 +9,8 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.dates import iso_or_none
+from src.core.permissions import SUPERUSER_ACCESS_REQUIRED
 from src.core.security.password import PasswordHasher
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit
@@ -71,6 +73,7 @@ class ProfileService:
         is_put: bool,
         ip_address: str | None = None,
         actor_user_id: str | None = None,
+        workspace_id: str | None = None,
     ) -> UserProfile:
         """
         Update profile. `data` is the validated payload dict (exclude_unset semantics
@@ -189,7 +192,7 @@ class ProfileService:
         try:
             await publish_audit(
                 self._bus,
-                workspace_id=None,
+                workspace_id=workspace_id,
                 resource_type="user_profile",
                 resource_id=user_id,
                 action="profile.updated",
@@ -279,7 +282,7 @@ class ProfileService:
                     "workspace_id": w.id,
                     "workspace_name": w.name,
                     "role": role.name if role else None,
-                    "joined_at": member.created_at.isoformat() if member.created_at else None,
+                    "joined_at": iso_or_none(member.created_at),
                 }
             )
         # Counts
@@ -405,7 +408,7 @@ class ProfileService:
         self, target_user_id: str, actor: User, ip_address: str | None = None
     ) -> None:
         if not actor.is_superuser:
-            raise HTTPException(status_code=403, detail="superuser access required")
+            raise HTTPException(status_code=403, detail=SUPERUSER_ACCESS_REQUIRED)
         target = await self._session.get(User, target_user_id)
         if target is None:
             raise HTTPException(status_code=404, detail="user not found")

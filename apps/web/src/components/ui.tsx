@@ -41,9 +41,17 @@ export function PageHeader({
 }
 
 export function EmptyRow({ colSpan, children }: { colSpan: number; children: ReactNode }) {
+  // The role sits on the cell, not the row: a `status` row would lose its row
+  // semantics (and the `getByRole("row")` assertions). `status` carries an
+  // implicit polite live region, so the Loading → failure/empty swap is
+  // announced — the same idiom as the inbox stale-messages note.
   return (
     <tr>
-      <td colSpan={colSpan} className="text-muted-foreground h-24 text-center text-sm">
+      <td
+        colSpan={colSpan}
+        role="status"
+        className="text-muted-foreground h-24 text-center text-sm"
+      >
         {children}
       </td>
     </tr>

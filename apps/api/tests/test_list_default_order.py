@@ -75,6 +75,10 @@ async def _assert_client_sort_overrides(
     `else` branch and sorts ascending (#931). `asc` is the other half of #930:
     the two stamp groups make it disagree with the default desc read, so a
     route that ignored the client sort would fail here.
+
+    The repeated dialect (`sort[]`/`order[]`) shares the parse and the
+    normalization with the flat one; one uppercase case pins that spelling too
+    (#964), so normalizing inside a single branch cannot regress it unnoticed.
     """
     for direction, desc in (("DESC", True), ("asc", False)):
         resp = await client.get(
@@ -84,6 +88,14 @@ async def _assert_client_sort_overrides(
         rows = resp.json()
         expected = _order(rows, key=key, ts_key=ts_key, desc=desc)
         assert [r[key] for r in rows] == expected, f"{direction} read is not {expected}"
+
+    resp = await client.get(
+        path, params={"sort[]": sort_key, "order[]": "DESC", "limit": 50}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    expected = _order(rows, key=key, ts_key=ts_key, desc=True)
+    assert [r[key] for r in rows] == expected, f"sort[]/order[] DESC read is not {expected}"
 
 
 async def _assert_pages_partition(client, path, headers, ids, key="id") -> None:

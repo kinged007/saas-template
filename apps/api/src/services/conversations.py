@@ -6,7 +6,7 @@ from typing import Literal
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.dates import now_utc
+from src.core.dates import iso_or_none, now_utc
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
@@ -84,7 +84,7 @@ def _message_event_payload(
         "body": message.body,
         "body_preview": preview,
         "title": conversation.title,
-        "created_at": message.created_at.isoformat() if message.created_at else None,
+        "created_at": iso_or_none(message.created_at),
         "participant_user_ids": participant_ids,
     }
 
@@ -340,13 +340,13 @@ class ConversationService:
             "workspace_id": conv.workspace_id,
             "title": conv.title,
             "created_by_user_id": conv.created_by_user_id,
-            "last_message_at": conv.last_message_at.isoformat() if conv.last_message_at else None,
+            "last_message_at": iso_or_none(conv.last_message_at),
             "last_message_preview": conv.last_message_preview,
             "unread_count": unread_count,
             "is_archived": is_archived,
             "participants": part_list,
-            "created_at": conv.created_at.isoformat() if conv.created_at else None,
-            "updated_at": conv.updated_at.isoformat() if conv.updated_at else None,
+            "created_at": iso_or_none(conv.created_at),
+            "updated_at": iso_or_none(conv.updated_at),
         }
         if message_count is not None:
             data["message_count"] = message_count
@@ -369,8 +369,8 @@ class ConversationService:
             "sender_email": sender_email,
             "body": msg.body,
             "body_html": msg.body_html,
-            "created_at": msg.created_at.isoformat() if msg.created_at else None,
-            "updated_at": msg.updated_at.isoformat() if msg.updated_at else None,
+            "created_at": iso_or_none(msg.created_at),
+            "updated_at": iso_or_none(msg.updated_at),
         }
 
     # ---------------------------------------------------------------- create
@@ -857,7 +857,7 @@ class ConversationService:
             )
         return {
             "success": True,
-            "last_read_at": part.last_read_at.isoformat(),
+            "last_read_at": iso_or_none(part.last_read_at),
             "last_read_message_id": part.last_read_message_id,
         }
 
@@ -899,7 +899,7 @@ class ConversationService:
         await self._session.commit()
         return {
             "success": True,
-            "last_read_at": part.last_read_at.isoformat() if part.last_read_at else None,
+            "last_read_at": iso_or_none(part.last_read_at),
             "last_read_message_id": part.last_read_message_id,
         }
 
@@ -925,7 +925,7 @@ class ConversationService:
         await self._session.commit()
         return {
             "archived": archived,
-            "archived_at": part.archived_at.isoformat() if part.archived_at else None,
+            "archived_at": iso_or_none(part.archived_at),
         }
 
     # ---------------------------------------------------------------- messages

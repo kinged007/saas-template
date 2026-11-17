@@ -50,7 +50,9 @@ async def test_committed_row_is_gone_after_the_reset():
     async with engine.begin() as conn:
         await conn.execute(text("CREATE TABLE reset_scratch (id INTEGER PRIMARY KEY)"))
         await conn.execute(text("INSERT INTO reset_scratch (id) VALUES (1)"))
-    assert "reset_scratch" in await _table_names(), "the commit under test never landed"
+    async with engine.connect() as conn:
+        count = await conn.scalar(text("SELECT count(*) FROM reset_scratch"))
+    assert count == 1, "the committed row under test never landed"
 
     await _fresh_db()
-    assert "reset_scratch" not in await _table_names()
+    assert "reset_scratch" not in await _table_names(), "reset_scratch survived the database reset"
