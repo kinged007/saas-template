@@ -90,6 +90,92 @@ test("the window is missing when the hook is not a plain export function", () =>
   assert.equal(useUpdateProfileWindow("export const useUpdateProfile = makeHook();"), null);
 });
 
+test("a preceding hook whose name extends the needle cannot anchor the window", () => {
+  const source = [
+    "export function useUpdateProfileAvatar() {",
+    `  queryClient.${AUTH_HIT};`,
+    `  queryClient.${AUTH_HIT};`,
+    "}",
+    "",
+    "export function useUpdateProfile() {",
+    `  queryClient.${AUTH_HIT};`,
+    "}",
+    "",
+    "export function useFollower() {",
+    `  queryClient.${AUTH_HIT};`,
+    "}",
+  ].join("\n");
+  const region = useUpdateProfileWindow(source);
+  assert.ok(region !== null);
+  assert.ok(region.startsWith("export function useUpdateProfile("), "window starts at the hook itself");
+  assert.equal(countAuthInvalidations(region), 1);
+});
+
+test("an invalidation carrying extra options is still counted", () => {
+  const source = [
+    "export function useUpdateProfile() {",
+    `  queryClient.${AUTH_HIT};`,
+    '  queryClient.invalidateQueries({ queryKey: ["auth"], refetchType: "none" });',
+    "  queryClient.invalidateQueries({",
+    '    queryKey: ["auth"],',
+    '    refetchType: "none",',
+    "  });",
+    "}",
+  ].join("\n");
+  const region = useUpdateProfileWindow(source);
+  assert.ok(region !== null);
+  assert.equal(countAuthInvalidations(region), 3);
+});
+
+test("a longer key sharing the [\"auth\"] prefix is still not counted", () => {
+  const source = [
+    "export function useUpdateProfile() {",
+    '  queryClient.invalidateQueries({ queryKey: ["auth", "identity"] });',
+    '  queryClient.invalidateQueries({ queryKey: ["auth"], refetchType: "none" });',
+    "}",
+  ].join("\n");
+  const region = useUpdateProfileWindow(source);
+  assert.ok(region !== null);
+  assert.equal(countAuthInvalidations(region), 1);
+});
+
+test("a commented-out export at line start inside the hook cannot truncate the window", () => {
+  const source = [
+    "export function useUpdateProfile() {",
+    "/*",
+    "export const useGhost = () => {",
+    `  queryClient.${AUTH_HIT};`,
+    "};",
+    "*/",
+    `  queryClient.${AUTH_HIT};`,
+    "}",
+  ].join("\n");
+  const region = useUpdateProfileWindow(source);
+  assert.ok(region !== null);
+  assert.equal(countAuthInvalidations(region), 1);
+  assert.ok(!region.includes("useGhost"), "the ghost comment is not part of the window");
+});
+
+test("a commented-out export between the hook and the next hook cannot widen the window", () => {
+  const source = [
+    "export function useUpdateProfile() {",
+    `  queryClient.${AUTH_HIT};`,
+    "}",
+    "/*",
+    "export const useGhost = () => {",
+    `  queryClient.${AUTH_HIT};`,
+    "};",
+    "*/",
+    "export function useFollower() {",
+    `  queryClient.${AUTH_HIT};`,
+    "}",
+  ].join("\n");
+  const region = useUpdateProfileWindow(source);
+  assert.ok(region !== null);
+  assert.equal(countAuthInvalidations(region), 1);
+  assert.ok(!region.includes("useGhost"), "the ghost comment is not part of the window");
+});
+
 test("stripComments keeps https:// while dropping comments", () => {
   assert.equal(stripComments('/* a */ const u = "https://x"; // b'), ' const u = "https://x"; ');
 });

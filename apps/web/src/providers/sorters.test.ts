@@ -28,6 +28,22 @@ test("null, undefined and empty directions all degrade to asc", () => {
   );
 });
 
+test("a whitespace-only direction degrades to asc like an empty one", () => {
+  assert.deepEqual(
+    normalizeSorters([
+      { field: "a", order: " " },
+      { field: "b", order: "\t" },
+    ]).map((s) => s.order),
+    ["asc", "asc"],
+  );
+});
+
+test("a real direction keeps only itself, so serialization stays clean", () => {
+  const out = normalizeSorters([{ field: "a", order: " desc " }]);
+  assert.equal(out[0].order, "desc");
+  assert.ok(!JSON.stringify(out).includes(" \""));
+});
+
 test("defined directions pass through and stay on their own column", () => {
   const out = normalizeSorters([
     { field: "a", order: "desc" },
