@@ -53,7 +53,7 @@ async def test_owner_can_create_list_and_use_api_key(app_client):
     item = next(k for k in keys.json() if k["id"] == key["id"])
     assert "key" not in item
     assert item["key_prefix"].startswith("sk_live_")
-    assert item["last_used_at"] is not None  # touch() ran on the members call
+    assert item["last_used_at"] is not None  # record_use ran on the members call
 
 
 async def test_api_key_timestamps_are_offset_aware(app_client):
@@ -73,7 +73,7 @@ async def test_api_key_timestamps_are_offset_aware(app_client):
         permissions=["member:read"],
         body={"expires_at": "2027-01-01T00:00:00Z"},
     )
-    # a real call so touch() populates last_used_at, then revoke
+    # a real call so record_use populates last_used_at, then revoke
     key_headers = {"Authorization": f"Bearer {key['key']}", "X-Workspace-ID": ws["id"]}
     assert (await client.get("/api/v1/members", headers=key_headers)).status_code == 200
     resp = await client.delete(f"/api/v1/api-keys/{key['id']}", headers=headers)

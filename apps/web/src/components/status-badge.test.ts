@@ -28,9 +28,9 @@ test("member, invitation and account statuses keep rendering as secondary", () =
   }
 });
 
-test("an unknown status is a compile error and has no variant", () => {
+test("a runtime-unknown status falls back to secondary", () => {
   // @ts-expect-error the badge only accepts the statuses the API documents.
-  assert.equal(statusBadgeVariant("archived"), undefined);
+  assert.equal(statusBadgeVariant("archived"), "secondary");
 });
 
 test("every job run status keeps its variant", () => {
@@ -46,7 +46,7 @@ test("every job run status keeps its variant", () => {
   }
 });
 
-test("an unknown job run status is a compile error and has no variant", () => {
+test("a runtime-unknown job run status falls back to secondary", () => {
   // @ts-expect-error the badge only accepts the statuses the API documents.
-  assert.equal(jobRunBadgeVariant("retrying"), undefined);
+  assert.equal(jobRunBadgeVariant("retrying"), "secondary");
 });
