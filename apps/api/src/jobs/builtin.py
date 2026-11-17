@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from src.core.dates import ensure_utc, now_utc
 from src.jobs.registry import JobContext, JobSpec, job_registry
+from src.models.api_key import ApiKey
 from src.models.core import Invitation, Notification, NotificationPreference
 
 logger = logging.getLogger(__name__)
@@ -263,6 +264,135 @@ async def retention_cleanup(ctx: JobContext) -> None:
         f"retention cleanup — {runs_removed} run(s), "
         f"{notifs_removed} notification(s), {audit_removed} audit entr(ies) removed"
     )
+
+
+@job_registry.register(
+    JobSpec(
+        key="apikeys.cleanup",
+        name="API key expiry cleanup",
+        description=(
+            "Revokes API keys whose expires_at has passed and hard-deletes keys "
+            "revoked more than the retention window ago. Expired keys already "
+            "fail authentication immediately, so revoking them here keeps the "
+            "stored state honest rather than gating access."
+        ),
+        scope="global",
+        schedule="0 5 * * *",
+        params_schema={},
+        default_enabled=True,
+        missed_policy="single",
+        timeout_seconds=300,
+    )
+)
+async def api_key_cleanup(ctx: JobContext) -> None:
+    from datetime import timedelta
+
+    from src.events.publisher import publish_audit, publish_event
+    from src.events.subjects import Subjects
+    from src.settings import settings
+
+    now = now_utc()
+    async with ctx.session() as session:
+        # Only the keys that actually expired are read — the id and label
+        # columns the audit trail needs — so a large table is never
+        # materialized. The mutation itself is a set-based UPDATE.
+        expired = (
+            (
+                await session.execute(
+                    select(ApiKey.id, ApiKey.workspace_id, ApiKey.name, ApiKey.key_prefix).where(
+                        ApiKey.revoked_at.is_(None),
+                        ApiKey.expires_at.is_not(None),
+                        ApiKey.expires_at <= now,
+                    )
+                )
+            )
+            .tuples()
+            .all()
+        )
+        revoked = 0
+        revoked_ids: set[str] = set()
+        if expired:
+            # `revoked_at IS NULL` is re-asserted: a key the user revoked between the
+            # SELECT and this UPDATE keeps its own revoked_at, so its retention clock is
+            # not restarted. The returned ids are exactly the rows the audit trail below
+            # describes — `rowcount` is -1 on aiosqlite once RETURNING is used, so the
+            # count comes from the returned ids.
+            result = await session.execute(
+                update(ApiKey)
+                .where(
+                    ApiKey.id.in_([e[0] for e in expired]),
+                    ApiKey.revoked_at.is_(None),
+                )
+                .values(revoked_at=now)
+                .execution_options(synchronize_session=False)
+                .returning(ApiKey.id)
+            )
+            revoked_ids = {row[0] for row in result.all()}
+            revoked = len(revoked_ids)
+
+        removed = 0
+        if settings.api_key_retention_days > 0:
+            cutoff = now - timedelta(days=settings.api_key_retention_days)
+            # Keys the UPDATE above just revoked carry revoked_at == now, so
+            # they never match this cutoff: expiry starts the retention clock,
+            # it does not end the key.
+            result = await session.execute(delete(ApiKey).where(ApiKey.revoked_at <= cutoff))
+            removed = result.rowcount or 0
+        await session.commit()
+
+    unpublished: list[str] = []
+    for key_id, workspace_id, name, key_prefix in expired:
+        if key_id not in revoked_ids:
+            continue
+        try:
+            await publish_event(
+                ctx.bus,
+                Subjects.APIKEY_REVOKED,
+                {
+                    "apikey_id": key_id,
+                    "workspace_id": workspace_id,
+                    "name": name,
+                    "key_prefix": key_prefix,
+                    "revoked_by_user_id": None,
+                },
+            )
+            await publish_audit(
+                ctx.bus,
+                workspace_id=workspace_id,
+                resource_type="apikey",
+                resource_id=key_id,
+                action="apikey.revoked",
+                actor_user_id=None,
+                details={"name": name, "key_prefix": key_prefix, "reason": "expired"},
+            )
+        except Exception:
+            # The commit is not transactional with the bus, so a failed publish leaves a
+            # revoked key with no event and no audit entry. Record it and keep going; the
+            # run fails below with the count of what was lost.
+            # ponytail: the gap is permanent — nothing retries a FAILED run and the key
+            # now carries revoked_at, so the next run's SELECT will never select it again.
+            # Repair is manual. Upgrade path: a backfill job re-publishing audit entries
+            # for keys revoked with reason "expired" that have no audit row.
+            log = logger.exception if len(unpublished) == 0 else logger.warning
+            log("api key cleanup — audit publish failed for key %s", key_id)
+            unpublished.append(key_id)
+
+    logger.info(
+        "api key cleanup — %d key(s) revoked as expired, %d key(s) deleted",
+        revoked,
+        removed,
+    )
+    print(f"api key cleanup — {revoked} key(s) revoked as expired, {removed} key(s) deleted")
+    if unpublished:
+        # Cap the id list: job_runs.error is unbounded Text and a bus outage during a
+        # large cleanup would otherwise write one id per revoked key into the row.
+        listed = unpublished[:10]
+        more = len(unpublished) - len(listed)
+        raise RuntimeError(
+            f"api key cleanup — {revoked} key(s) revoked as expired, but the event or audit "
+            f"entry was not published for {len(unpublished)} of them: {', '.join(listed)}"
+            f"{f' (+{more} more)' if more else ''}"
+        )
 
 
 @job_registry.register(
