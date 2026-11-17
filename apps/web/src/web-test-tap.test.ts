@@ -31,18 +31,16 @@ const globOf = (script: string): { dir: string; suffix: string } => {
 // The patterns `node --test` picks up without arguments. A file they match that
 // the "test" glob misses runs nowhere, so the run is not the full suite.
 const defaultDiscovery = (path: string) =>
-  /(^test[-_.]|[-_.]test)\.[cm]?[jt]sx?$|(^|\/)tests?\//.test(path);
+  /(^|\/)test[-_.][^/]*\.[cm]?[jt]sx?$|[-_.]test\.[cm]?[jt]sx?$|(^|\/)tests?\//.test(path);
 
 test('every tracked web unit test file is covered by the "test" glob', () => {
   const scripts: { test: string } = JSON.parse(
     readFileSync(join(repoRoot, "apps", "web", "package.json"), "utf8"),
   ).scripts;
   const { dir, suffix } = globOf(scripts.test);
-  const files = spawnSync("git", ["ls-files", "apps/web"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-  })
-    .stdout.split("\n")
+  const files = git(["ls-files", "apps/web"])
+    .stdout.toString()
+    .split("\n")
     .filter(Boolean);
   const uncovered = files.filter(
     (path) =>
