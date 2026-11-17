@@ -9,11 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.crud import InvalidQuery, apply_query, parse_query
 from src.api.deps import get_current_workspace_id, require_permission
+from src.core.dates import iso_or_none
 from src.core.permissions import AUDIT_READ
 from src.db.session import get_db
 from src.models.audit import AuditLogEntry
 from src.models.user_profile import UserProfile
 from src.models.workspace import User
+from src.services.audit import public_details
 from src.services.profile_helpers import format_display_name
 
 logger = logging.getLogger(__name__)
@@ -44,9 +46,9 @@ def _audit_to_dict(
         "resource_type": entry.resource_type,
         "resource_id": entry.resource_id,
         "action": entry.action,
-        "details": entry.details,
+        "details": public_details(entry.details),
         "ip_address": entry.ip_address,
-        "created_at": entry.created_at.isoformat() if entry.created_at else None,
+        "created_at": iso_or_none(entry.created_at),
     }
 
 
