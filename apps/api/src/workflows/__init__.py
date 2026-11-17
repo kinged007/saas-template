@@ -462,10 +462,9 @@ def build_workflows(
                 # (the handler, not this publish, is what re-runs on a
                 # redelivery); otherwise this envelope's own id, which a direct
                 # producer's redelivery repeats unchanged.
-                # Server-set by construction: `audit_payload` builds every audit
-                # payload and derives this from the inbound event, so nothing
-                # outside the server picks the dedupe key. An endpoint that
-                # publishes audit events directly has to re-check that.
+                # Server-set: every producer goes through `audit_payload` (pinned by
+                # test_every_workflow_audit_publish_carries_a_source_event_id), so the
+                # dedupe key is never client-chosen.
                 source_event_id=payload.get("source_event_id") or metadata.event_id,
             )
         logger.debug("audit entry persisted: %s", payload.get("action"))
