@@ -113,9 +113,16 @@ type Props = {
   mentions?: MentionTarget[];
   /** Ids of the users currently mentioned in the draft, in document order. */
   onMention?: (userIds: string[]) => void;
+  /**
+   * Controlled link-popover open state. ComposeDialog controls it so its own
+   * Escape handling can close the popover instead of the whole dialog.
+   * Omit it (like the thread composer does) for internal state.
+   */
+  linkOpen?: boolean;
+  onLinkOpenChange?: (open: boolean) => void;
 };
 
-export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€¦", className, minHeight = "80px", mentions, onMention }: Props) {
+export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€¦", className, minHeight = "80px", mentions, onMention, linkOpen: linkOpenProp, onLinkOpenChange: onLinkOpenChangeProp }: Props) {
   const mentionKey = useMemo(() => (mentions ?? []).map((m) => m.id).join(","), [mentions]);
   // The picker reads the latest list without the extension being rebuilt for it.
   const mentionsRef = useRef(mentions);
@@ -125,7 +132,11 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [toolbarIndex, setToolbarIndex] = useState(0);
 
-  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkOpenInternal, setLinkOpenInternal] = useState(false);
+  // ComposeDialog controls the popover so its dialog-level Escape handling
+  // can close it; everywhere else the state stays internal.
+  const linkOpen = linkOpenProp ?? linkOpenInternal;
+  const setLinkOpen = onLinkOpenChangeProp ?? setLinkOpenInternal;
   const [linkUrl, setLinkUrl] = useState("");
   const [linkError, setLinkError] = useState<string | null>(null);
   const linkInputRef = useRef<HTMLInputElement>(null);
@@ -284,7 +295,7 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
     if (index >= 0) setToolbarIndex(index);
   };
 
-  const onLinkOpenChange = (open: boolean) => {
+  const handleLinkOpenChange = (open: boolean) => {
     setLinkOpen(open);
     if (open) {
       setLinkUrl((editor.getAttributes("link").href as string | undefined) ?? "");
@@ -433,7 +444,7 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
         >
           <Quote className="h-3.5 w-3.5" />
         </Button>
-        <Popover open={linkOpen} onOpenChange={onLinkOpenChange}>
+        <Popover open={linkOpen} onOpenChange={handleLinkOpenChange}>
           <PopoverTrigger asChild>
             <Button
               ref={linkTriggerRef}
@@ -477,8 +488,11 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
             }}
             onEscapeKeyDown={() => {
               // Escape is its own dismissal path: the caret goes back to the
-              // document being edited, exactly as in onCloseAutoFocus below.
+              // document being edited. Focus before Radix unmounts the popover
+              // (like Apply does): a focus issued during the unmount loses the
+              // race with the focus restore, exactly as in onCloseAutoFocus.
               linkDismissedOutside.current = false;
+              editor.commands.focus();
             }}
             onCloseAutoFocus={(e) => {
               // Radix would otherwise park focus on the trigger.

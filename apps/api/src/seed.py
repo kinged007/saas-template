@@ -343,8 +343,14 @@ async def main() -> None:
                 continue
             workspace = workspaces[slug]
             user = users[email]
+            # A name may label several rows (key rotation mints a new row
+            # carrying the old name), so the idempotency check reads the newest
+            # one instead of assuming the name is unique.
             existing = await session.execute(
-                select(ApiKey).where(ApiKey.workspace_id == workspace.id, ApiKey.name == name)
+                select(ApiKey)
+                .where(ApiKey.workspace_id == workspace.id, ApiKey.name == name)
+                .order_by(ApiKey.created_at.desc())
+                .limit(1)
             )
             if existing.scalar_one_or_none() is not None:
                 continue
@@ -378,12 +384,18 @@ async def main() -> None:
             if slug not in workspaces:
                 continue
             workspace = workspaces[slug]
+            # At most one pending invite is expected per address, but a
+            # re-invite can leave several rows behind; read the newest one so
+            # a repeat seed never trips on duplicates.
             existing = await session.execute(
-                select(Invitation).where(
+                select(Invitation)
+                .where(
                     Invitation.workspace_id == workspace.id,
                     Invitation.email == email,
                     Invitation.status == "pending",
                 )
+                .order_by(Invitation.created_at.desc())
+                .limit(1)
             )
             invite = existing.scalar_one_or_none()
             if invite is None:
@@ -404,11 +416,14 @@ async def main() -> None:
             user = users[email]
             workspace = workspaces[slug]
             existing = await session.execute(
-                select(Notification).where(
+                select(Notification)
+                .where(
                     Notification.user_id == user.id,
                     Notification.workspace_id == workspace.id,
                     Notification.title == title,
                 )
+                .order_by(Notification.created_at.desc())
+                .limit(1)
             )
             if existing.scalar_one_or_none() is not None:
                 continue
