@@ -39,7 +39,7 @@ function backendMaxQuota(source: string): number {
 
 function webQuotaMax(source: string): number {
   const max = source.match(
-    /usage_quota:\s*z\.number\(\)\.int\(\)\.min\(1\)\.max\((\d+)\)/,
+    /usage_quota:\s*z\.number\(\)\.int\(\)\.min\(1\)\.max\(\s*(\d+)\s*\)/,
   )?.[1];
   assert.ok(max, "usage_quota zod .max() bound not found in ApiKeyCreatePage");
   return Number(max);
