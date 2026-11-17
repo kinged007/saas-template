@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
-import { useCan, useCreate, useCustomMutation, useGetIdentity, useInvalidate, useUpdate } from "@refinedev/core";
+import { useEffect, useState, type ReactElement } from "react";
+import { useCan, useCreate, useCustomMutation, useGetIdentity, useGo, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Link } from "react-router";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 
 import { Button } from "@/components/ui/button";
@@ -29,11 +30,13 @@ import { UserProfileDialog } from "@/components/UserProfileDialog";
 
 import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceContext";
 import { canResendInvitation, canRevokeInvitation, invitationStatus } from "./invitation-actions";
-import { rolePickerCapNotice } from "./role-picker-cap";
+import { resolveInviteRole } from "./invite-role";
+import { canReactivateMember, canSuspendMember } from "./member-actions";
+import { assignableRoles, rolePickerCapNotice } from "./role-picker-cap";
+import { isWorkspaceAdmin } from "./settings/workspace/WorkspaceSettingsLayout";
+import { isManagerRoleName, isOwnerRoleName } from "./role-name";
 import type { Identity, Invitation, Member, Role } from "../types";
-import { getMemberDisplayName } from "../types";
-
-const MANAGER_ROLES = ["owner", "admin"];
+import { getDisplayNameFromRow } from "../types";
 
 const PAGE_SIZE = 10;
 // The role pickers need every role, ordered by the endpoint. Capped at the
@@ -41,8 +44,47 @@ const PAGE_SIZE = 10;
 // carrying a picker disclose it via rolePickerCapNotice.
 const ROLES_PAGE_SIZE = 100;
 
-const RoleCapNotice = ({ text }: { text: string | null }) =>
-  text && <p className="text-muted-foreground text-sm">{text}</p>;
+// One notice per picker, so one id each: aria-describedby resolves to the
+// element carrying the id, and a shared id would point both pickers at the
+// first paragraph.
+const MEMBERS_ROLE_CAP_ID = "members-role-cap";
+const INVITE_ROLE_CAP_ID = "invite-role-cap";
+
+// The explicit return type keeps the annotation honest: a `text && <p>` body
+// would widen it to `string | ReactElement | null` and fail the typecheck.
+// The id sits on the span, not the paragraph, so the triggers' aria-describedby
+// resolves to the notice sentence without the link appended to it.
+// `listUrl("roles")` is the settings route holding the role list and the
+// create-role dialog. `link` is its label, or null when the caller may not open
+// that route: the roles settings layout guards itself, so a link there is a dead
+// end, and a label promising the dropped roles is false because that list caps
+// at one page too. The two notices label it differently so a links list can tell
+// them apart.
+const RoleCapNotice = ({
+  id,
+  text,
+  link,
+}: {
+  id: string;
+  text: string | null;
+  link: string | null;
+}): ReactElement | null => {
+  const { listUrl } = useNavigation();
+  if (!text) return null;
+  return (
+    <p className="text-muted-foreground text-sm">
+      <span id={id}>{text}</span>
+      {link && (
+        <>
+          {" "}
+          <Link className="underline" to={listUrl("roles")}>
+            {link}
+          </Link>
+        </>
+      )}
+    </p>
+  );
+};
 
 export function MembersPage() {
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
@@ -67,6 +109,9 @@ export function MembersPage() {
   // which leaves the canRevoke gate below unreachable for it.
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
   const { data: canRevoke } = useCan({ resource: "invitations", action: "delete" });
+  // Profile editing is a distinct scope from role management (member:update).
+  const { data: canEditProfiles } = useCan({ resource: "member-profiles", action: "edit" });
+  const go = useGo();
   const { result: invitationsResult } = useWorkspaceList<Invitation>({
     resource: "invitations",
     pagination: { currentPage: invitesPage, pageSize: PAGE_SIZE },
@@ -88,9 +133,10 @@ export function MembersPage() {
   const invitations = invitationsResult?.data ?? [];
   const invitesTotal = invitationsResult?.total ?? 0;
   const invitesTotalPages = Math.max(1, Math.ceil(invitesTotal / PAGE_SIZE));
-  const assignableRoles = roleOptions.filter((r) => r.name !== "owner");
-  // total counts every role, including the owner the pickers filter out.
-  const roleCapNotice = rolePickerCapNotice(rolesResult?.total ?? 0, roleOptions.length);
+  // The pickers and the notice count this one list, so the notice can never
+  // claim a role the dropdown does not offer.
+  const assignable = assignableRoles(roleOptions);
+  const roleCapNotice = rolePickerCapNotice(rolesResult?.total ?? 0, roleOptions);
 
   useEffect(() => {
     if (membersPage > membersTotalPages) setMembersPage(membersTotalPages);
@@ -100,7 +146,16 @@ export function MembersPage() {
   }, [invitesPage, invitesTotalPages]);
 
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
-  const canManageRoles = !!canManage?.can && MANAGER_ROLES.includes(myRole ?? "");
+  const canManageRoles = !!canManage?.can && isManagerRoleName(myRole);
+  // The roles settings route guards itself with isWorkspaceAdmin, so the link is
+  // gated on that predicate and not on the notice's own gate: member:create
+  // alone lets a non-admin inviter read the notice and reach only "Access
+  // denied". Using that predicate is also why no permission logic is duplicated.
+  const canOpenRolesSettings = isWorkspaceAdmin(identity, workspace?.id);
+  // Describe by the notice only where it renders: it is gated per section, and
+  // it stays null until the role page is short.
+  const memberRoleCapId = canManageRoles && roleCapNotice ? MEMBERS_ROLE_CAP_ID : undefined;
+  const inviteRoleCapId = canInvite?.can && roleCapNotice ? INVITE_ROLE_CAP_ID : undefined;
   const { mutate: memberAction } = useCustomMutation();
 
   const suspend = (m: Member, suspendIt: boolean) => {
@@ -116,14 +171,18 @@ export function MembersPage() {
   };
 
   const roleName = (roleId: string) => roleOptions.find((r) => r.id === roleId)?.name;
+  // Resolved against the picker's own list: an id the picker no longer offers
+  // leaves the submit blocked rather than sending a role the server dropped,
+  // and the trigger label reads from it too, as in GeneralSection.
+  const inviteRole = resolveInviteRole(assignable, inviteRoleId);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim() || !inviteRoleId) return;
+    if (!email.trim() || !inviteRole) return;
     invite(
       {
         resource: "invitations",
-        values: { email, role_id: inviteRoleId },
+        values: { email, role_id: inviteRole.id },
         successNotification: { message: "Invitation sent", type: "success" },
       },
       {
@@ -139,7 +198,13 @@ export function MembersPage() {
   return (
     <ListView>
       <ListViewHeader title="Members" canCreate={false} />
-      {canManageRoles && <RoleCapNotice text={roleCapNotice} />}
+      {canManageRoles && (
+        <RoleCapNotice
+          id={MEMBERS_ROLE_CAP_ID}
+          text={roleCapNotice}
+          link={canOpenRolesSettings ? "Manage roles in settings" : null}
+        />
+      )}
       <div className="border-border overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>
@@ -154,7 +219,7 @@ export function MembersPage() {
           </TableHeader>
           <TableBody>
             {rows.map((m) => {
-              const name = getMemberDisplayName(m);
+              const name = getDisplayNameFromRow(m);
               return (
                 <TableRow key={m.membership_id}>
                   <TableCell>
@@ -177,7 +242,7 @@ export function MembersPage() {
                   </TableCell>
                 <TableCell>{m.role}</TableCell>
                 <TableCell>
-                  {canManageRoles && m.role !== "owner" ? (
+                  {canManageRoles && !isOwnerRoleName(m.role) ? (
                     <Select
                       value={m.role_id}
                       onValueChange={(roleId) =>
@@ -189,13 +254,13 @@ export function MembersPage() {
                         })
                       }
                     >
-                      <SelectTrigger className="w-36">
+                      <SelectTrigger className="w-36" aria-describedby={memberRoleCapId}>
                         <SelectValue>
-                          {assignableRoles.find((r) => r.id === m.role_id)?.name ?? m.role}
+                          {assignable.find((r) => r.id === m.role_id)?.name ?? m.role}
                         </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
-                        {assignableRoles.map((r) => (
+                        {assignable.map((r) => (
                           <SelectItem key={r.id} value={r.id}>
                             {r.name}
                           </SelectItem>
@@ -212,17 +277,29 @@ export function MembersPage() {
                 <TableCell className="text-muted-foreground">{formatDate(m.joined_at)}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-1">
-                    {canManageRoles && m.role !== "owner" && m.status !== "suspended" && (
+                    {/* The editor targets other members: your own profile lives
+                        in Settings → Profile, where the delegated session and
+                        password routes would refuse to act on you. */}
+                    {canEditProfiles?.can && m.id !== identity?.id && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => go({ to: `/users/${m.id}/settings` })}
+                      >
+                        Edit
+                      </Button>
+                    )}
+                    {canManageRoles && !isOwnerRoleName(m.role) && canSuspendMember(m) && (
                       <Button variant="ghost" size="sm" onClick={() => suspend(m, true)}>
                         Suspend
                       </Button>
                     )}
-                    {canManageRoles && m.status === "suspended" && (
+                    {canManageRoles && canReactivateMember(m) && (
                       <Button variant="ghost" size="sm" onClick={() => suspend(m, false)}>
                         Reactivate
                       </Button>
                     )}
-                    {canDelete?.can && m.role !== "owner" && (
+                    {canDelete?.can && !isOwnerRoleName(m.role) && (
                       <DeleteButton
                         resource="members"
                         recordItemId={m.membership_id}
@@ -294,20 +371,24 @@ export function MembersPage() {
             <div className="flex flex-col gap-2">
               <Label>Role</Label>
               <Select value={inviteRoleId} onValueChange={setInviteRoleId}>
-                <SelectTrigger className="w-40">
-                  <SelectValue placeholder="Role">{roleName(inviteRoleId)}</SelectValue>
+                <SelectTrigger className="w-40" aria-describedby={inviteRoleCapId}>
+                  <SelectValue placeholder="Role">{inviteRole?.name ?? ""}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {assignableRoles.map((r) => (
+                  {assignable.map((r) => (
                     <SelectItem key={r.id} value={r.id}>
                       {r.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <RoleCapNotice text={roleCapNotice} />
+              <RoleCapNotice
+                id={INVITE_ROLE_CAP_ID}
+                text={roleCapNotice}
+                link={canOpenRolesSettings ? "See roles in settings" : null}
+              />
             </div>
-            <Button type="submit" disabled={mutation.isPending || !email.trim() || !inviteRoleId}>
+            <Button type="submit" disabled={mutation.isPending || !email.trim() || !inviteRole}>
               {mutation.isPending ? "Sending…" : "Invite"}
             </Button>
           </form>
@@ -334,8 +415,9 @@ export function MembersPage() {
                     <TableCell className="text-muted-foreground">{formatDate(i.expires_at)}</TableCell>
                     <TableCell className="text-muted-foreground">{formatDate(i.created_at)}</TableCell>
                     <TableCell className="text-right">
+{/* revoke and resend are owner/admin role checks server-side */}
                       <div className="flex justify-end gap-1">
-                        {canRevoke?.can && canRevokeInvitation(i) && (
+                        {canManageRoles && canRevoke?.can && canRevokeInvitation(i) && (
                           <DeleteButton
                             resource="invitations"
                             recordItemId={i.id}
@@ -343,7 +425,7 @@ export function MembersPage() {
                             size="sm"
                           />
                         )}
-                        {canResendInvitation(i) && (
+                        {canManageRoles && canResendInvitation(i) && (
                           <Button
                             variant="ghost"
                             size="sm"
@@ -416,7 +498,7 @@ export function MembersPage() {
         fallback={
           selectedMember
             ? {
-                display_name: getMemberDisplayName(selectedMember),
+                display_name: getDisplayNameFromRow(selectedMember),
                 email: selectedMember.email,
                 avatar_url: selectedMember.avatar_url,
                 first_name: selectedMember.first_name,

@@ -1,5 +1,6 @@
-import { expect, test as base, type Page } from "playwright/test";
+import { expect, type Page } from "playwright/test";
 
+import { test } from "./fixtures";
 import { mockApi } from "./mock-api";
 
 /**
@@ -12,17 +13,6 @@ const path = (page: Page) => expect.poll(() => new URL(page.url()).pathname);
 
 // A redirect that lands correctly and then throws would still pass a URL-only
 // assertion, so every spec also fails on an uncaught page error.
-const test = base.extend<{ pageerrors: Error[] }>({
-  pageerrors: [
-    async ({ page }, use) => {
-      const errors: Error[] = [];
-      page.on("pageerror", (error) => errors.push(error));
-      await use(errors);
-      expect(errors).toEqual([]);
-    },
-    { auto: true },
-  ],
-});
 
 test.describe("routing", () => {
   test("signed-out visitor on an unknown URL lands on the login page", async ({ page }) => {

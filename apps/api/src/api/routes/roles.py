@@ -13,6 +13,7 @@ from src.api.deps import (
     get_current_workspace_id,
     require_permission,
 )
+from src.core.dates import iso_or_none
 from src.core.permissions import ALL_PERMISSIONS, ROLE_CREATE, ROLE_READ
 from src.db.session import get_db
 from src.models.workspace import Role
@@ -34,11 +35,13 @@ _ROLE_SORTABLE = {"name", "created_at"}
 
 # Rank: a role whose lower-cased name is a DEFAULT_ROLES entry gets that
 # entry's index, everything else ranks last. Ordering here rather than on the
-# client so it holds across a page boundary: the system block cannot be split,
-# and every role *list* surface agrees by construction (the export orders
-# roles on its own). Names are unique only by exact match, so a custom role
-# differing from a system name in case alone joins that rank group; #257
-# re-keys the rank on Role.system.
+# client so it holds across a page boundary: the system block keeps its default
+# roles contiguous, and every role *list* surface agrees by construction (the
+# export orders roles on its own). Contiguity comes from the rank, not from the
+# order key — the sort and the row lock in `update_role` are separate steps, so
+# a concurrent rename can still interleave. Names are unique only by exact
+# match, so a custom role differing from a system name in case alone joins that
+# rank group; #257 re-keys the rank on Role.system.
 _ROLE_RANK = case(
     {name: i for i, name in enumerate(WorkspaceService.DEFAULT_ROLES)},
     value=func.lower(Role.name),
@@ -54,7 +57,7 @@ def _role_dict(r: Role) -> dict:
         "description": r.description,
         "permissions": r.permissions,
         "system": r.system,
-        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "created_at": iso_or_none(r.created_at),
     }
 
 
@@ -96,7 +99,7 @@ async def permission_catalog(
     (`"*"` implies the full catalog) — same capping semantics as
     `GET /api-keys/effective-permissions`. The single source for the roles
     matrix and the New/Edit role dialogs."""
-    membership = await WorkspaceService(db).get_membership(workspace_id, user.id, active_only=True)
+    membership = await WorkspaceService(db).get_membership(workspace_id, user.id)
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership

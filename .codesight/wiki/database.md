@@ -16,9 +16,12 @@ pk: `id` (str)
 - `permissions`: JSON _(default)_
 - `created_by_user_id`: str _(index)_
 - `last_used_at`: DateTime _(nullable)_
+- `expires_at`: DateTime _(nullable, index)_
 - `revoked_at`: DateTime _(nullable)_
 - `usage_count`: Integer _(default)_
 - `usage_quota`: Integer _(nullable)_
+- `usage_window_count`: Integer _(default)_
+- `usage_window_start`: DateTime _(nullable)_
 
 ### AuditLogEntry
 
@@ -309,14 +312,14 @@ pk: `id` (str)
 
 Read and edit these files when adding columns, creating migrations, or changing relations:
 
-- `apps/api/src/db/session.py` — imported by **44** files
-- `apps/api/src/models/workspace.py` — imported by **30** files
-- `apps/api/src/models/core.py` — imported by **19** files
+- `apps/api/src/db/session.py` — imported by **53** files
+- `apps/api/src/models/workspace.py` — imported by **36** files
+- `apps/api/src/models/core.py` — imported by **23** files
+- `apps/api/src/models/api_key.py` — imported by **16** files
+- `apps/api/src/models/jobs.py` — imported by **16** files
+- `apps/api/src/models/audit.py` — imported by **15** files
 - `apps/api/src/db/base.py` — imported by **14** files
-- `apps/api/src/models/jobs.py` — imported by **13** files
-- `apps/api/src/models/api_key.py` — imported by **12** files
 - `apps/api/src/schemas/api.py` — imported by **12** files
-- `apps/api/src/models/audit.py` — imported by **11** files
 
 ---
 _Back to [overview.md](./overview.md)_

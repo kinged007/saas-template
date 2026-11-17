@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio  # noqa: E402
+import inspect  # noqa: E402
 import os  # noqa: E402
 from datetime import timedelta  # noqa: E402
 from typing import TYPE_CHECKING  # noqa: E402
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_saas_template.db"
+_TEST_DB_NAME = "test_saas_template.db"
+os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///./{_TEST_DB_NAME}"
 os.environ["SECRET_KEY"] = "test-secret-key-not-for-production"
 os.environ["FERNET_KEYS"] = "test-fernet-key-value"
 os.environ["EVENT_BUS_DRIVER"] = "inprocess"
@@ -13,14 +15,15 @@ os.environ["ENVIRONMENT"] = "test"
 os.environ["CORS_ORIGINS"] = "http://localhost:5173"
 os.environ["SUPERADMIN_EMAIL"] = "root@example.com"
 
-import warnings  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 import pytest  # noqa: E402
 from asgi_lifespan import LifespanManager  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
-from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
+from sqlalchemy.engine import make_url  # noqa: E402
 
 from src import models as _models  # noqa: E402,F401  (register tables on Base.metadata)
+from src.core.security.ratelimit import get_register_limiter  # noqa: E402
 from src.db.base import Base  # noqa: E402
 from src.db.session import engine  # noqa: E402
 from src.settings import settings  # noqa: E402
@@ -29,56 +32,60 @@ if TYPE_CHECKING:  # noqa: E402
     from src.models.jobs import JobRun
 
 
-async def _drop_all_with_retry(tries: int = 24, delay: float = 0.25) -> None:
-    """Drop all tables, retrying transient sqlite locks.
+def _db_path() -> Path:
+    """Filesystem path of the sqlite file the suite shares.
 
-    Background bus workers may still be draining their last transactions when a
-    test ends; a fresh engine connection then blocks on the file lock. Dispose
-    pooled connections first, then retry briefly.
-
-    The drop runs on a dedicated engine with a *short* busy timeout: the
-    background worker holding the lock always finishes within a few seconds, so
-    waiting 30s (the app engine's timeout) per attempt only turns a transient
-    contention into a multi-minute stall.
-
-    The budget is ~6s: workspace provisioning (workspaces.created workflow)
-    and scheduled-job workers add a little more post-test drain time than the
-    notification workflows alone.
+    sqlite resolves a relative URL against the cwd, so the unlink must use the
+    same path the engine opens. The name is pinned to the suite's scratch file:
+    if DATABASE_URL is ever pointed at a real database, this fails loudly here
+    instead of silently deleting it.
     """
-    drop_engine = create_async_engine(settings.resolved_database_url, connect_args={"timeout": 2})
-    try:
-        for attempt in range(tries):
-            try:
-                await engine.dispose()  # force-close any leaked pooled connections
-                await drop_engine.dispose()
-                async with drop_engine.begin() as conn:
-                    await conn.run_sync(Base.metadata.drop_all)
-                return
-            except Exception as exc:
-                if attempt == tries - 1:
-                    raise
-                # ponytail: warn (not log — no logger configured in tests) so the next
-                # flake shows it was lock contention and how many retries it took.
-                msg = f"db drop attempt {attempt + 1}/{tries} failed, retrying: {exc}"
-                warnings.warn(msg, stacklevel=2)
-                await asyncio.sleep(delay)
-    finally:
-        await drop_engine.dispose()
+    url = make_url(settings.resolved_database_url)
+    assert url.get_backend_name() == "sqlite", f"expected a sqlite test database, got {url}"
+    path = Path(url.database or "")
+    assert path.name == _TEST_DB_NAME, f"refusing to unlink {path}"
+    return path
+
+
+async def _discard_db_file() -> None:
+    """Take the sqlite file away from every connection that is still open."""
+    await engine.dispose()  # close this suite's pooled connections first
+    path = _db_path()
+    path.unlink(missing_ok=True)
+    for suffix in ("-journal", "-wal", "-shm"):  # sidecars outlive the db file
+        path.with_name(path.name + suffix).unlink(missing_ok=True)
+
+
+async def _fresh_db() -> None:
+    """Hand the test a database no other connection can be looking at.
+
+    # ponytail: unlink rather than drop_all, so a background bus worker or job
+    # task still draining at the end of a test keeps its lock and its stale
+    # read snapshot on an inode nobody else can open. Ceiling: POSIX-only (a
+    # Windows box cannot unlink a file sqlite has open). Upgrade path: a
+    # per-test path plus rebinding `engine`, which needs the >=8 src modules
+    # that bind `SessionFactory` by name at import.
+    """
+    await _discard_db_file()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
 
 @pytest.fixture(autouse=True)
 async def _clean_db():
-    await _drop_all_with_retry()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await _fresh_db()
     yield
-    await _drop_all_with_retry()
+    await _discard_db_file()
 
 
 @pytest.fixture
 async def app():
     from src.main import app as fastapi_app
 
+    # /auth/register meters mail per IP on the register limiter; spent keys are
+    # process-wide, so a test's registrations must not throttle the next test's
+    # register_user setup (#1343).
+    get_register_limiter().clear()
     async with LifespanManager(fastapi_app):
         yield fastapi_app
 
@@ -164,41 +171,67 @@ def ws_headers(tokens: dict, workspace_id: str) -> dict:
     return headers
 
 
+async def expire_invitation(invitation_id: str) -> None:
+    """Backdate an invitation's expiry for expired-invite test paths.
+
+    The assert pins the helper's preconditions: a stale id must fail the
+    calling test naming the row, and the row must still carry an expiry (the
+    column is NOT NULL, so a NULL here means the fixture wrote something else).
+    """
+    from datetime import timedelta
+
+    from src.core.dates import now_utc
+    from src.db.session import SessionFactory
+    from src.models.core import Invitation
+
+    async with SessionFactory() as session:
+        row = await session.get(Invitation, invitation_id)
+        assert row is not None and row.expires_at is not None, invitation_id
+        row.expires_at = now_utc() - timedelta(minutes=5)
+        await session.commit()
+
+
 async def run_job_via_scheduler(
     key: str,
     *,
+    workspace_id: str | None = None,
     missed_by: timedelta = timedelta(hours=3),
     timeout_s: float = 10.0,
 ) -> tuple[JobRun, list[str]]:
-    """Drive a global job through the real scheduler -> bus -> executor path.
+    """Drive a job through the real scheduler -> bus -> executor path.
 
     Backdates the provisioned definition's `next_run_at` so a tick claims it as
     a missed occurrence, then waits for the durable worker to finish the run.
-    Returns the run plus its captured log messages.
+    Ticks the production `app.state.job_scheduler` built in `main.py`, so the
+    container -> scheduler wiring is under test too. Returns the run plus its
+    captured log messages.
+
+    A tick also runs housekeeping when due: `_last_housekeeping` starts at 0.0
+    while being compared against `loop.time()`, so on a host up longer than
+    HOUSEKEEPING_INTERVAL_SECONDS (1h) the first tick additionally runs
+    `fail_stale_runs` + `prune_history` across other jobs' run rows.
     """
     from sqlalchemy import select
 
     from src.core.dates import now_utc
     from src.db.session import SessionFactory
-    from src.jobs.scheduler import JobScheduler
     from src.main import app as fastapi_app
     from src.models.jobs import JobDefinition, JobLogEntry, JobRun
 
     async with SessionFactory() as session:
+        scope = (
+            JobDefinition.workspace_id == workspace_id
+            if workspace_id is not None
+            else JobDefinition.workspace_id.is_(None)
+        )
         definition = (
-            await session.execute(
-                select(JobDefinition).where(
-                    JobDefinition.key == key,
-                    JobDefinition.workspace_id.is_(None),
-                )
-            )
+            await session.execute(select(JobDefinition).where(JobDefinition.key == key, scope))
         ).scalar_one()
-        assert definition.enabled is True, f"{key} is not enabled"
         definition.next_run_at = now_utc() - missed_by
         definition_id = definition.id
         await session.commit()
 
-    await JobScheduler(bus=fastapi_app.state.container.bus).tick()
+    scheduled = await fastapi_app.state.job_scheduler.tick()
 
     for _ in range(int(timeout_s * 10)):
         async with SessionFactory() as session:
@@ -227,4 +260,22 @@ async def run_job_via_scheduler(
                 )
                 return run, list(messages)
         await asyncio.sleep(0.1)
-    raise AssertionError(f"job {key} did not finish within {timeout_s}s")
+    raise AssertionError(f"job {key} did not finish within {timeout_s}s (scheduled={scheduled})")
+
+
+async def wait_for(predicate, timeout_secs: float = 3.0, interval: float = 0.02) -> bool:
+    """Poll `predicate` until it returns truthy; False once the deadline passes.
+
+    `predicate` may be sync or async. Timeout reports False instead of raising so
+    every call site keeps its own failure message.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_secs
+    while loop.time() < deadline:
+        result = predicate()
+        if inspect.isawaitable(result):
+            result = await result
+        if result:
+            return True
+        await asyncio.sleep(interval)
+    return False

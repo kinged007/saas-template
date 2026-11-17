@@ -12,15 +12,33 @@ def _cookie_name() -> str:
     return settings.refresh_cookie_name
 
 
+def _attrs(raw: str) -> str:
+    """Attributes after the first ";": the JWT value can contain "Secure"."""
+    return raw.split(";", 1)[1] if ";" in raw else ""
+
+
 def _set_cookie(resp) -> str:
     raw = resp.headers.get("set-cookie", "")
     assert _cookie_name() in raw, f"refresh cookie missing: {raw!r}"
-    assert "HttpOnly" in raw, raw
+    assert "HttpOnly" in _attrs(raw), raw
     assert "SameSite=Lax" in raw or "SameSite=lax" in raw, raw
     assert "Path=/api/v1/auth" in raw, raw
     if settings.environment not in ("development", "test"):
-        assert "Secure" in raw, raw
+        assert "Secure" in _attrs(raw), raw
     return raw
+
+
+@pytest.mark.parametrize(
+    ("raw", "secure"),
+    [
+        ("st_refresh=eyJ.Secure.x; Path=/api/v1/auth; HttpOnly", False),
+        ("st_refresh=eyJ.x; Path=/api/v1/auth; HttpOnly; Secure", True),
+        ("st_refresh=eyJ.x; Path=/api/v1/auth; HttpOnly", False),
+        ("st_refresh=eyJ.x", False),
+    ],
+)
+def test_attrs_reads_attribute_section_only(raw: str, secure: bool) -> None:
+    assert ("Secure" in _attrs(raw)) is secure
 
 
 async def test_login_cookie_flow_sets_cookie_and_omits_json_refresh(app_client):
@@ -165,6 +183,28 @@ async def test_refresh_accepts_same_origin(app_client):
     assert r.status_code == 200, r.text
 
 
+async def test_refresh_accepts_proxied_dev_origin(app_client, monkeypatch):
+    """The vite proxy rewrites Host (changeOrigin) and sends the browser Origin
+    on through, so the API's check reads the web origin. Both loopback names have
+    to be allowlisted (`make dev` does it) or the refresh cookie is rejected as
+    cross-origin and the session dies on the next page load."""
+    monkeypatch.setattr(settings, "cors_origins", "http://localhost:5173,http://127.0.0.1:5173")
+    await register_user(app_client, "cookie5b@example.com")
+    resp = await app_client.post(
+        "/api/v1/auth/login",
+        json={"email": "cookie5b@example.com", "password": "Password123!", "use_cookies": True},
+    )
+    assert resp.status_code == 200
+    ok = {**CSRF, "Origin": "http://127.0.0.1:5173", "Host": "localhost:8000"}
+    r = await app_client.post("/api/v1/auth/refresh", json={}, headers=ok)
+    assert r.status_code == 200, r.text
+    assert r.json()["access_token"]
+    forged = {**ok, "Origin": "https://evil.test"}
+    r2 = await app_client.post("/api/v1/auth/refresh", json={}, headers=forged)
+    assert r2.status_code == 403
+    assert r2.json()["detail"] == "cross-origin request rejected"
+
+
 async def test_2fa_cookie_login_omits_json_refresh(app_client):
     from src.core.security.totp import current_code, secret_from_base32
 
@@ -250,7 +290,8 @@ async def test_oauth_token_cookie_flow_omits_json_refresh(app_client, monkeypatc
                 "userinfo_endpoint": provider.userinfo_url,
             }
 
-        async def fake_exchange(provider, doc, *, code, redirect_uri):
+        async def fake_exchange(provider, doc, *, code, redirect_uri, code_verifier):
+            assert code_verifier == "verifier-abc"
             return {"access_token": "at", "id_token": None}
 
         async def fake_userinfo(provider, doc, access_token):
@@ -262,7 +303,11 @@ async def test_oauth_token_cookie_flow_omits_json_refresh(app_client, monkeypatc
         monkeypatch.setattr(oauth_routes, "_redirect_uri", lambda req, pid: "http://test/cb")
         fastapi_app.state.container.cache.set(
             oauth_svc.STATE_TTL_HINT + "s-cookie",
-            {"provider": "testidp", "redirect_uri": "http://test/cb"},
+            {
+                "provider": "testidp",
+                "redirect_uri": "http://test/cb",
+                "code_verifier": "verifier-abc",
+            },
         )
         cb = await app_client.get(
             "/api/v1/auth/oauth/testidp/callback?code=authcode&state=s-cookie",
@@ -289,8 +334,9 @@ async def test_oauth_token_cookie_flow_omits_json_refresh(app_client, monkeypatc
         monkeypatch.setattr(settings, "oauth_providers", "")
 
 
-async def test_cookie_secure_follows_forwarded_proto(app_client):
+async def test_cookie_secure_follows_forwarded_proto(monkeypatch, app_client):
     """Secure set on https (forwarded-proto) even with ENVIRONMENT=development."""
+    monkeypatch.setattr(settings, "refresh_cookie_secure", None)
     await register_user(app_client, "fwdproto@example.com")
     resp = await app_client.post(
         "/api/v1/auth/login",
@@ -298,15 +344,15 @@ async def test_cookie_secure_follows_forwarded_proto(app_client):
         headers={"X-Forwarded-Proto": "https"},
     )
     assert resp.status_code == 200, resp.text
-    assert "Secure" in resp.headers.get("set-cookie", ""), resp.headers.get("set-cookie")
+    raw = _set_cookie(resp)
+    assert "Secure" in _attrs(raw), raw
     plain = await app_client.post(
         "/api/v1/auth/login",
         json={"email": "fwdproto@example.com", "password": "Password123!", "use_cookies": True},
     )
     assert plain.status_code == 200, plain.text
-    raw = plain.headers.get("set-cookie", "")
-    assert _cookie_name() in raw, raw
-    assert "Secure" not in raw, raw
+    raw = _set_cookie(plain)
+    assert "Secure" not in _attrs(raw), raw
 
 
 async def test_cookie_secure_explicit_override_wins(monkeypatch, app_client):
@@ -325,16 +371,16 @@ async def test_cookie_secure_explicit_override_wins(monkeypatch, app_client):
         "/api/v1/auth/login", json=body, headers={"X-Forwarded-Proto": "https"}
     )
     assert resp.status_code == 200, resp.text
-    raw = resp.headers.get("set-cookie", "")
-    # A login without use_cookies sets no cookie at all — pin that one is set,
-    # otherwise the "not Secure" assertion below passes on an empty header.
-    assert _cookie_name() in raw, raw
-    assert "Secure" not in raw, raw
+    # _set_cookie pins the cookie is present, otherwise the "not Secure"
+    # assertion below would pass on an empty header.
+    raw = _set_cookie(resp)
+    assert "Secure" not in _attrs(raw), raw
 
     monkeypatch.setattr(settings, "refresh_cookie_secure", True)
     plain = await app_client.post("/api/v1/auth/login", json=body)
     assert plain.status_code == 200, plain.text
-    assert "Secure" in plain.headers.get("set-cookie", ""), plain.headers.get("set-cookie")
+    raw = _set_cookie(plain)
+    assert "Secure" in _attrs(raw), raw
 
 
 async def test_cookie_secure_plain_http_in_production_is_secure(monkeypatch, app_client):
@@ -347,12 +393,13 @@ async def test_cookie_secure_plain_http_in_production_is_secure(monkeypatch, app
     """
     await register_user(app_client, "prodsec@example.com")
     monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings, "refresh_cookie_secure", None)
     resp = await app_client.post(
         "/api/v1/auth/login",
         json={"email": "prodsec@example.com", "password": "Password123!", "use_cookies": True},
     )
     assert resp.status_code == 200, resp.text
-    assert "Secure" in _set_cookie(resp)
+    assert "Secure" in _attrs(_set_cookie(resp))
 
 
 def _plain_request(headers: dict[str, str] | None = None, scheme: str = "http"):
@@ -383,13 +430,15 @@ async def test_cookie_secure_follows_forwarded_host_port(app_client):
         headers={"X-Forwarded-Host": "example.com:443"},
     )
     assert resp.status_code == 200, resp.text
-    assert "Secure" in resp.headers.get("set-cookie", ""), resp.headers.get("set-cookie")
+    raw = _set_cookie(resp)
+    assert "Secure" in _attrs(raw), raw
 
 
-def test_client_headers_can_only_add_secure():
+def test_client_headers_can_only_add_secure(monkeypatch):
     """The header reads are client-controlled: they must never strip Secure."""
     from src.core.security.cookies import cookie_secure_for
 
+    monkeypatch.setattr(settings, "refresh_cookie_secure", None)
     assert cookie_secure_for(_plain_request({"x-forwarded-proto": "http"}, scheme="https")) is True
     assert cookie_secure_for(_plain_request({"x-forwarded-proto": "https"})) is True
     assert cookie_secure_for(_plain_request({"host": "example.com:443"})) is True
@@ -403,3 +452,14 @@ def test_set_refresh_cookie_requires_request():
 
     with pytest.raises(TypeError):
         set_refresh_cookie(Response(), "token")
+
+
+def test_set_refresh_cookie_request_keyword_only():
+    """Positional request must be rejected so the safe form is the only form."""
+    from fastapi import Request, Response
+
+    from src.core.security.cookies import set_refresh_cookie
+
+    scope = {"type": "http", "method": "GET", "path": "/", "headers": []}
+    with pytest.raises(TypeError):
+        set_refresh_cookie(Response(), "token", Request(scope))

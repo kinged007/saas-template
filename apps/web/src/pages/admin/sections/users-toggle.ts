@@ -23,13 +23,27 @@ export const adminUserPatch = (user: AdminUser, next: boolean) => ({
 export const canToggleUser = (detail: AdminUserDetail, viewerId?: string | null) =>
   detail.id !== viewerId;
 
-export const asAdminUserDetail = (raw: unknown): AdminUserDetail | undefined =>
-  raw && Array.isArray((raw as AdminUserDetail).workspaces)
-    ? (raw as AdminUserDetail)
-    : undefined;
+export const asAdminUserDetail = (raw: unknown): AdminUserDetail | undefined => {
+  const u = (raw ?? {}) as Partial<AdminUserDetail>;
+  // Every field AdminUserDetail claims must clear the guard, or a payload that
+  // renders an empty heading (no email) reaches UsersSection.
+  const valid =
+    typeof u.id === "string" &&
+    u.id.length > 0 &&
+    typeof u.email === "string" &&
+    typeof u.display_name === "string" &&
+    typeof u.is_active === "boolean" &&
+    typeof u.is_superuser === "boolean" &&
+    (u.created_at === undefined || typeof u.created_at === "string") &&
+    Array.isArray(u.workspaces);
+  return valid ? (raw as AdminUserDetail) : undefined;
+};
 
-export const pageRange = (current: number, total: number, pageSize = PAGE_SIZE) => ({
-  from: total === 0 ? 0 : Math.min((current - 1) * pageSize + 1, total),
-  to: Math.min(current * pageSize, total),
-  totalPages: Math.max(1, Math.ceil(total / pageSize)),
-});
+export const pageRange = (current: number, total: number, pageSize = PAGE_SIZE) => {
+  const from = total === 0 ? 0 : Math.max(1, Math.min((current - 1) * pageSize + 1, total));
+  return {
+    from,
+    to: total === 0 ? 0 : Math.min(from + pageSize - 1, total),
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+  };
+};

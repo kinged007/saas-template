@@ -16,9 +16,9 @@ The Jobs subsystem handles **11 routes** and touches: auth.
   `apps/api/src/api/routes/jobs.py`
 - `GET` `/global/{definition_id}/runs` params(definition_id)
   `apps/api/src/api/routes/jobs.py`
-- `GET` `/runs/{run_id}` params(run_id)
+- `GET` `/runs/{run_id}` params(run_id) [auth]
   `apps/api/src/api/routes/jobs.py`
-- `GET` `/runs/{run_id}/logs` params(run_id)
+- `GET` `/runs/{run_id}/logs` params(run_id) [auth]
   `apps/api/src/api/routes/jobs.py`
 - `GET` `/{definition_id}` params(definition_id) [auth]
   `apps/api/src/api/routes/jobs.py`
