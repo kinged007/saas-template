@@ -16,6 +16,7 @@ import inspect
 import re
 from pathlib import Path
 
+import pytest
 from sqlalchemy import func, select
 
 from src.db.session import SessionFactory
@@ -30,6 +31,16 @@ SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
 # Set by the test before any helper reads it, so `_set_member_status` does not
 # have to thread the workspace through every call.
 _WS_ID = [None]
+
+
+@pytest.fixture
+def ws_slot():
+    """Hand the test the list `_set_member_status` reads, and put its entry back
+    when the test ends, so a failed assert cannot leak the id into the next one.
+    """
+    original = _WS_ID[0]
+    yield _WS_ID
+    _WS_ID[0] = original
 
 
 async def _user_id(email: str) -> str:
@@ -131,7 +142,7 @@ def test_no_open_member_status_comparison_remains():
     assert offenders == [], f"member status compared against a bare literal at {offenders}"
 
 
-async def test_non_active_status_is_excluded_at_every_read(app_client):
+async def test_non_active_status_is_excluded_at_every_read(app_client, ws_slot):
     """Both non-active statuses lose every membership read; `active` keeps them.
 
     One assertion per swept site, so a site that stops consulting the table, or a
@@ -140,7 +151,7 @@ async def test_non_active_status_is_excluded_at_every_read(app_client):
     client = app_client
     owner = await register_user(client, "reads-owner@example.com")
     ws = await create_workspace(client, owner)
-    _WS_ID[0] = ws["id"]
+    ws_slot[0] = ws["id"]
     peer = await register_user(client, "reads-peer@example.com")
     await _join(client, peer, await _invite(client, owner, ws, "reads-peer@example.com"))
     target = await register_user(client, "reads-target@example.com")

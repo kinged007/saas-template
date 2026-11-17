@@ -134,10 +134,17 @@ async def list_workspaces(
         workspace = await service.get_workspace(workspace_id)
         if workspace is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
-        membership = await service.get_membership(workspace_id, user.id, active_only=True)
+        membership = await service.get_membership(workspace_id, user.id)
         role = membership[1] if membership else None
         response.headers["X-Total-Count"] = "1"
-        return [workspace_to_dict(workspace, role=role.name if role else None)]
+        return [
+            workspace_to_dict(
+                workspace,
+                role=role.name if role else None,
+                # Mirrors GET /me (auth.py): require_key_permission 403s, so else [] is unreachable.
+                permissions=sorted(principal.api_key.permissions) if role else [],
+            )
+        ]
     stmt = (
         select(Workspace)
         .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
@@ -162,9 +169,15 @@ async def list_workspaces(
     memberships = await service.list_workspaces(user.id)
     roles_by_ws = {w.id: role.name for w, role, _ in memberships}
     joined_by_ws = {w.id: m.created_at for w, _, m in memberships}
+    perms_by_ws = {w.id: role.permissions for w, role, _ in memberships}
     response.headers["X-Total-Count"] = str(total)
     return [
-        workspace_to_dict(w, role=roles_by_ws.get(w.id), joined_at=joined_by_ws.get(w.id))
+        workspace_to_dict(
+            w,
+            role=roles_by_ws.get(w.id),
+            permissions=perms_by_ws.get(w.id),
+            joined_at=joined_by_ws.get(w.id),
+        )
         for w in rows.scalars().all()
     ]
 
@@ -210,7 +223,7 @@ async def get_workspace(
     workspace = await service.get_workspace(workspace_id)
     if workspace is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
-    membership = await service.get_membership(workspace_id, user.id, active_only=True)
+    membership = await service.get_membership(workspace_id, user.id)
     role = membership[1] if membership else None
     return workspace_to_dict(workspace, role=role.name if role else None)
 

@@ -24,7 +24,8 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 API_PORT = os.environ.get("API_PORT", "8000")
-WEB_PORT = os.environ.get("WEB_PORT", "5173")
+DEFAULT_WEB_PORT = "5173"
+WEB_PORT = os.environ.get("WEB_PORT", DEFAULT_WEB_PORT)
 
 SERVERS = [
     {
@@ -76,7 +77,7 @@ def dev_allowed_origins(web_port: str = WEB_PORT) -> list[str]:
             [
                 *(
                     f"http://{host}:{port}"
-                    for port in ("5173", web_port)
+                    for port in (DEFAULT_WEB_PORT, web_port)
                     for host in ("localhost", "127.0.0.1")
                 ),
                 *(
