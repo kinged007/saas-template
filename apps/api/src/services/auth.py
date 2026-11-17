@@ -161,8 +161,9 @@ class AuthService:
 
         Links by (provider, subject) first so identity survives email changes;
         falls back to the provider's unverified email claim on first connect,
-        so multiple providers sharing an email link to the same user. New users are rejected when
-        AUTH_ALLOW_REGISTRATION is off — before any insert."""
+        so multiple providers sharing an email link to the same user. New
+        users are rejected when AUTH_ALLOW_REGISTRATION is off — before
+        any insert."""
         from src.models.oauth import OAuthAccount
 
         stmt = select(OAuthAccount).where(

@@ -60,10 +60,11 @@ const UNSCOPED_VERBS = ["custom"];
 // if the provider starts declaring one, this list must be updated and the verb
 // routed or marked unscoped.
 const ABSENT_VERBS = ["createMany", "updateMany"];
-// Declared keys of the provider literal. Tolerates every form TypeScript
-// allows for a function-valued member: `verb:`, `"verb":`, `verb(...)` and
-// `"verb"(...)` shorthand methods, and an optional `async` prefix on either.
-// Assumes alphanumeric member names at exactly two-space indentation.
+// Declared keys of the provider literal. Matches the enumerated member forms only:
+// `verb:`, `"verb":`, `verb(...)` and `"verb"(...)` shorthand methods, each with an
+// optional `async` prefix. Assumes alphanumeric member names at exactly
+// two-space indentation. Getters/setters (`get x()`, `set x(v)`) and computed
+// keys (`["x"]:`) are not matched.
 const DECLARED_KEY = /^ {2}(?:async\s+)?(?:(['"])([a-zA-Z]+)\1|([a-zA-Z]+))(?=\s*:|\s*\()/gm;
 
 function providerVerbDeclarations(
@@ -138,6 +139,8 @@ test("deleteMany forwards variables and meta through the fan-out", () => {
     /\{ resource, ids, \.\.\.params \}[\s\S]*?bulkDelete[\s\S]*?\(resourcePath\(resource\), ids, params\)/,
     "deleteMany drops variables/meta — forward them, the API shape decides whether they are used",
   );
+  // Whole-file, unlike the block above: the per-item forwarding lives inside
+  // bulkDelete(), which is outside the provider literal the block covers.
   assert.match(
     source,
     /baseDataProvider\.deleteOne<TData>\(\{ resource, id, \.\.\.params \}\)/,

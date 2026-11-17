@@ -56,6 +56,20 @@ test("an empty direction degrades to asc — the parser drops it just like an om
   ]);
 });
 
+test("a whitespace-only direction becomes order[]=asc, never an empty order[] entry", () => {
+  const params = adminListQuery({
+    sorters: [
+      { field: "a", order: "desc" },
+      // @ts-expect-error — " " is outside CrudSort's "asc" | "desc", reached by
+      // untyped callers; the API strips it to an invalid "" (crud.py)
+      { field: "b", order: " " },
+    ],
+  });
+  // Assert the serialized entries, not `appliedPairs`: that helper filters an
+  // empty order out and pads at the end, which hides the column shift here.
+  assert.deepEqual(params.getAll("order[]"), ["desc", "asc"]);
+});
+
 test("a sorter without a field is skipped without shifting the other directions", () => {
   const params = adminListQuery({
     sorters: [{ field: "a", order: "desc" }, {}, { field: "b", order: "desc" }],

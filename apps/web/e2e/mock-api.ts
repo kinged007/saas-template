@@ -1,13 +1,20 @@
 import type { Page } from "playwright/test";
+import type { Identity } from "../src/types";
 
-export const IDENTITY = {
+export const IDENTITY: Identity = {
   id: "user-1",
   email: "e2e@example.com",
-  first_name: "E2E",
-  last_name: "User",
+  display_name: "E2E User",
+  profile: {
+    id: "profile-1",
+    user_id: "user-1",
+    first_name: "E2E",
+    last_name: "User",
+    custom_data: {},
+  },
   is_superuser: true,
   permissions: ["*"],
-  workspaces: [{ id: "ws-1", name: "Acme Corp", role: "owner" }],
+  workspaces: [{ id: "ws-1", name: "Acme Corp", slug: "acme-corp", role: "owner" }],
   single_workspace: true,
 };
 
@@ -36,9 +43,14 @@ export async function mockApi(
     revokeOn = [],
   }: {
     signedIn: boolean;
-    identity?: unknown;
-    /** Rows for a bare `/api/v1/<resource>` list call; every other list answers `[]`. */
-    lists?: Record<string, unknown[]>;
+    identity?: Identity;
+    /**
+     * Rows for a bare `/api/v1/<resource>` list call; every other list answers
+     * `[]`. Values are only `JSON.stringify`-ed, so any JSON value works. A
+     * prototype-named key is seedable only through `Object.defineProperty`
+     * — a literal `__proto__:` key sets the object's prototype, not a key.
+     */
+    lists?: Record<string, unknown>;
     /** Path suffixes answered 401 `{detail: "session revoked"}` once, then normal — mid-session sign-out. */
     revokeOn?: string[];
   },
