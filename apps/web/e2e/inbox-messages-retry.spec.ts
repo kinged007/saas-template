@@ -174,6 +174,7 @@ test.describe("inbox message fetch", () => {
     // a double lock: the data-testid anchor excludes the conversation list while
     // `parentElement === scroller` pins the note as the scroller's direct child,
     // keeping the sticky top row free of row-flow artifacts.
+    await expect(page.getByTestId("thread-messages")).toBeAttached();
     const scrollerCheck = await staleNote.evaluate((note) => {
       const scroller = note.closest('[data-testid="thread-messages"].overflow-y-auto');
       return {

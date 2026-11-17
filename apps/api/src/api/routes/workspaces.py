@@ -141,6 +141,7 @@ async def list_workspaces(
             workspace_to_dict(
                 workspace,
                 role=role.name if role else None,
+                # Mirrors GET /me (auth.py): require_key_permission 403s, so else [] is unreachable.
                 permissions=sorted(principal.api_key.permissions) if role else [],
             )
         ]
