@@ -12,10 +12,11 @@ import { IDENTITY, mockApi } from "./mock-api";
  * Both pages share one `CopyButton`, so the pair is asserted equal on each:
  * the accessible name is the invariant and `title` duplicates it, and a control
  * whose two disagree announces one action and hovers another (WCAG 2.5.3,
- * Label in Name). The icon flips to a check for 1.5 s after the write, so the
- * name flips with it — a button that still reads "Copy …" in the copied state
- * announces the action just performed instead of a confirmation. The same shape
- * `security-2fa-copy.spec.ts` pins for the 2FA control.
+ * Label in Name). The name stays across the copy — the button keeps DOM focus,
+ * and a name change on a focused element is announced only opportunistically —
+ * while the confirmation enters a `role="status"` live region instead (#1075).
+ * The icon flip to a check for 1.5 s stays as the purely visual confirmation.
+ * The same shape `security-2fa-copy.spec.ts` pins for the 2FA control.
  */
 
 const API_KEY = {
@@ -98,11 +99,15 @@ const failSecondWrite = (page: Page) =>
 /** sonner's <Toaster>: the only aria-live region on the page, one <li> per toast. */
 const liveRegion = (page: Page) => page.locator('section[aria-live="polite"]');
 
+/** The live region inside the created-key dialog: one per dialog. */
+const status = (page: Page) => page.getByRole("dialog").getByRole("status");
+
 /**
- * The button is named, `title` matches the name, and the name flips to the
- * confirmation after the write. The role+name locator carries the 1.5 s flip, so
- * the confirmation is one retrying assertion rather than a chain coupled to how
- * long the transient state lasts.
+ * The button is named, `title` matches the name, and the confirmation is
+ * announced by the dialog's `role="status"` region — the button stays focused
+ * with its name across the copy, so no rename is relied on (#1075). The
+ * role+text locator carries the 1.5 s flip, so the confirmation is one retrying
+ * assertion rather than a chain coupled to how long the transient state lasts.
  */
 async function expectCopyButtonAnnounces(copy: Locator, label: string) {
   await expect(copy).toBeVisible();
@@ -111,11 +116,15 @@ async function expectCopyButtonAnnounces(copy: Locator, label: string) {
 
   await copy.click();
 
-  const confirmed = copy
-    .page()
-    .getByRole("dialog")
-    .getByRole("button", { name: "Copied", exact: true });
-  await expect(confirmed).toHaveAttribute("title", "Copied");
+  await expect(copy).toBeFocused();
+  await expect(copy).toHaveAccessibleName(label);
+  await expect(copy).toHaveAttribute("title", label);
+  await expect(copy.locator("svg.lucide-check")).toBeVisible();
+
+  const subject = label.replace(/^Copy\s+/i, "");
+  await expect(status(copy.page())).toHaveText(
+    subject.charAt(0).toUpperCase() + subject.slice(1) + " copied",
+  );
 }
 
 test.beforeEach(async ({ page }) => {
@@ -203,13 +212,13 @@ test("a denied second write clears the pending confirmation", async ({ page }) =
   await page.getByLabel("Name").fill(API_KEY.name);
   await page.getByRole("button", { name: "Create API key" }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
-  const copy = page.getByRole("button", { name: /^(Copy API key|Copied)$/ });
+  const copy = page.getByRole("button", { name: "Copy API key", exact: true });
   await copy.click();
-  await expect(copy).toHaveAccessibleName("Copied");
+  await expect(status(page)).toHaveText("API key copied");
   await copy.click();
-  // Without a `setCopied(false)` in the catch the button stays "Copied"
+  // Without a `setCopied(false)` in the catch the region keeps "API key copied"
   // forever: the second-click handler cleared the pending timer first.
-  await expect(copy).toHaveAccessibleName("Copy API key");
+  await expect(status(page)).toHaveText("");
   await expect
     .poll(async () => (await liveRegion(page).textContent()) ?? "")
     .toMatch(/could not copy/i);

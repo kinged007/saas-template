@@ -155,10 +155,11 @@ class NotificationService:
             if len(pending) != len(specs):
                 logger.info(
                     "notification fan-out for source event %s dropped %d of %d "
-                    "already-notified recipients",
+                    "already-notified recipients (correlation %s)",
                     source_event_id,
                     len(specs) - len(pending),
                     len(specs),
+                    correlation_id or "-",
                 )
         rows: list[Notification] = []
         for spec in pending:

@@ -62,7 +62,7 @@ export function useProfile(userId?: string | null) {
 export function useUpdateProfile(userId?: string | null) {
   const queryClient = useQueryClient();
   const invalidate = useInvalidate();
-  const { mutate, mutateAsync, mutation } = useCustomMutation<UserProfile>();
+  const { mutate, mutation } = useCustomMutation<UserProfile>();
   const url = userId ? `users/${userId}/profile` : "me/profile";
 
   const update = useCallback(
@@ -101,28 +101,7 @@ export function useUpdateProfile(userId?: string | null) {
     [mutate, queryClient, invalidate, url, userId]
   );
 
-  const updateAsync = useCallback(
-    async (values: Record<string, unknown>, isPut = false) => {
-      const res = await mutateAsync({
-        url,
-        method: isPut ? "put" : "patch",
-        values,
-        successNotification: {
-          message: "Profile updated",
-          type: "success",
-        },
-        errorNotification: false,
-      } as never);
-      if (!userId) {
-        queryClient.invalidateQueries({ queryKey: ["auth"] });
-        queryClient.invalidateQueries({ queryKey: ["data"] });
-      }
-      return res;
-    },
-    [mutateAsync, queryClient, url, userId]
-  );
-
-  return { mutate: update, mutateAsync: updateAsync, mutation };
+  return { mutate: update, mutation };
 }
 
 export function useExportProfile() {
@@ -184,7 +163,7 @@ export function useDeleteAccount() {
         {
           onSuccess: () => {
             tokenStore.clear();
-            identityStore.set(null);
+            identityStore.clear();
             clearAllCaches(queryClient);
             opts?.onSuccess?.();
           },
@@ -205,7 +184,7 @@ export function useDeleteAccount() {
         errorNotification: false,
       } as never);
       tokenStore.clear();
-      identityStore.set(null);
+      identityStore.clear();
       clearAllCaches(queryClient);
       return res;
     },

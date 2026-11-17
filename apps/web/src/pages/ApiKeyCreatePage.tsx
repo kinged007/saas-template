@@ -45,7 +45,8 @@ import type { ApiKeyCreated } from "../types";
 const apiKeySchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
   permissions: z.array(z.string()),
-  usage_quota: z.number().int().min(1).nullable().optional(),
+  // .max mirrors the backend MAX_QUOTA Integer column ceiling (apps/api/src/models/api_key.py).
+  usage_quota: z.number().int().min(1).max(2147483647).nullable().optional(),
   // datetime-local value ("2027-01-01T09:00"), empty = never expires.
   expires_at: z
     .string()

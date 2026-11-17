@@ -291,6 +291,40 @@ async def test_service_quota_guard_uses_the_same_words(app_client):
         assert str(over_patch.value) == QUOTA_MAX_MESSAGE
 
 
+async def test_service_quota_guard_rejects_non_integer(app_client):
+    """Direct service callers that skip the schema cannot slip a float (or any
+    non-int) past the range guards into the Integer column."""
+    from src.db.session import SessionFactory
+    from src.services.api_keys import ApiKeyError, ApiKeyService
+    from src.services.auth import AuthService
+
+    client = app_client
+    owner = await register_user(client, "quota-svc-type@example.com")
+    ws = await create_workspace(client, owner)
+
+    async with SessionFactory() as session:
+        service = ApiKeyService(session)
+        user = await AuthService(session).get_by_email("quota-svc-type@example.com")
+        with pytest.raises(ApiKeyError) as minted:
+            await service.create_api_key(
+                workspace_id=ws["id"],
+                name="float",
+                permissions=[],
+                actor=user,
+                usage_quota=5.5,
+            )
+        assert "integer" in str(minted.value)
+
+        key, _ = await service.create_api_key(
+            workspace_id=ws["id"], name="int-ok", permissions=[], actor=user, usage_quota=5
+        )
+        assert key.usage_quota == 5
+
+        with pytest.raises(ApiKeyError) as patched:
+            await service.set_quota(ws["id"], key.id, 2.0, actor=user)
+        assert "integer" in str(patched.value)
+
+
 async def test_quota_patch_scoped_to_owner(app_client):
     client = app_client
     owner = await register_user(client, "willa@example.com")

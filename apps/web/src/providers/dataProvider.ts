@@ -1,13 +1,19 @@
-import type { BaseKey, BaseRecord, DataProvider, DeleteManyResponse } from "@refinedev/core";
+import type {
+  BaseKey,
+  BaseRecord,
+  DataProvider,
+  DeleteManyParams,
+  DeleteManyResponse,
+} from "@refinedev/core";
 import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import dataProviderModule from "@refinedev/simple-rest";
 
-import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId, sessionHint } from "../utils/storage";
+import { tokenStore, workspaceStore, identityStore, getActiveWorkspaceId, sessionHint, returnToStore } from "../utils/storage";
 import { adminListQuery } from "./adminListQuery";
 import { clearAllCaches, queryClient } from "./queryClient";
 import { hasReadById, resourcePath } from "./resourcePaths";
 import { withRefreshLock } from "./refreshLock";
-import { normalizeSorters } from "./sorters.ts";
+import { normalizeSorters } from "./sorters";
 
 // Same-origin API path: the vite dev proxy (and nginx in production) forwards
 // /api → backend, so no CORS/absolute-URL issues regardless of how the app is
@@ -120,9 +126,11 @@ function normalizeError(error: AxiosError): AxiosError {
   // refine reads `statusCode` for its generic error notification and
   // authProvider.onError reads it to detect a 401; axios errors carry no such
   // field, so without this every notification says "status code: undefined".
-  // 0 is the "no HTTP response" sentinel (offline, DNS, CORS, abort) — refine
-  // always renders a status code, so the notification strips the parenthetical
-  // for anything that is not a real HTTP status.
+  // 0 is the "no HTTP response" sentinel (offline, DNS, CORS, abort). The
+  // notification helper (error-title.ts) is coupled to this value only by
+  // "not three digits": it drops the parenthetical unless the code is 100-599.
+  // Note 0 is a synthetic value, not absent — `err.statusCode ?? fallback`
+  // does not fall through on it.
   Object.assign(error, { statusCode: error.response?.status ?? 0 });
   const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail;
   // 2FA challenge responses carry an object detail ({code: "2fa_required",
@@ -151,9 +159,19 @@ function forceLogout() {
   // queryClient listener notifies the live socket via onTokensChanged.
   // tokenStore.clear() also drops the signed-in marker.
   const hadSession = Boolean(tokenStore.getAccess());
+  // Several calls can be in flight when the session dies and each 401 lands
+  // here. Only the call that still sees a session acts: a second call would
+  // re-run the destructive clear and wipe the destination recorded below.
+  if (!hadSession) return;
   tokenStore.clear();
   clearAllCaches(queryClient);
-  if (hadSession && window.location.pathname !== "/login") {
+  if (window.location.pathname !== "/login") {
+    // The bounce is a full page load, so the destination must survive it:
+    // record it for afterAuthRedirect() to replay after the next sign-in.
+    // Recorded after tokenStore.clear() — the clear wipes tf_return_to.
+    returnToStore.set(
+      window.location.pathname + window.location.search + window.location.hash,
+    );
     window.location.assign("/login");
   }
 }
@@ -194,9 +212,10 @@ const baseDataProvider = dataProviderModule(API_URL, httpClient);
 async function bulkDelete<TData extends BaseRecord>(
   resource: string,
   ids: BaseKey[],
+  params: Pick<DeleteManyParams<any>, "variables" | "meta"> = {},
 ): Promise<DeleteManyResponse<TData>> {
   const results = await Promise.all(
-    ids.map((id) => baseDataProvider.deleteOne<TData>({ resource, id })),
+    ids.map((id) => baseDataProvider.deleteOne<TData>({ resource, id, ...params })),
   );
   return { data: results.map(({ data }) => data) };
 }
@@ -263,7 +282,8 @@ export const dataProvider: DataProvider = {
     baseDataProvider.create({ resource: resourcePath(resource), ...params }),
   deleteOne: ({ resource, ...params }) =>
     baseDataProvider.deleteOne({ resource: resourcePath(resource), ...params }),
-  deleteMany: ({ resource, ids }) => bulkDelete(resourcePath(resource), ids),
+  deleteMany: ({ resource, ids, ...params }) =>
+    bulkDelete(resourcePath(resource), ids, params),
   custom: async ({ url, ...params }) => {
     const resolved =
       !url || /^https?:\/\//.test(url) || url.startsWith("/")

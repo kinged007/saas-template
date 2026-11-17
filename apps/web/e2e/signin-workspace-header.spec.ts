@@ -103,5 +103,8 @@ test.describe("sign-in credential requests", () => {
     // code was redeemed.
     await path(page).not.toBe("/oauth/callback");
     expectNoOutgoingWorkspace(authRequests, "/api/v1/auth/oauth/token");
+    // The code is single-use: a second POST would race the first and report an
+    // expired code, so exactly one exchange must leave the callback page.
+    expect(authRequests.filter((r) => r.path === "/api/v1/auth/oauth/token")).toHaveLength(1);
   });
 });

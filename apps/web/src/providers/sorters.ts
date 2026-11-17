@@ -6,7 +6,9 @@
 // position and pads only at the end, so dropping a direction would shift
 // every later direction onto the wrong column. Send the API default (`asc`)
 // instead — and `||`, not `??`, because the parser drops an empty direction
-// the same way it drops an omitted one. The generic keeps each caller's
+// the same way it drops an omitted one — and a whitespace-only direction
+// trims to empty and degrades the same way, rather than reaching the wire as a
+// value the API strips to an invalid `""`. The generic keeps each caller's
 // sorter type (refine's `CrudSort` stays `CrudSort`), so no call site needs
 // a cast. Free of runtime imports so `node --test` can load it.
 
@@ -19,4 +21,7 @@ type Normalized<T extends SorterInput> = Omit<T, "order"> & {
 export const normalizeSorters = <T extends SorterInput>(
   sorters: readonly T[] | undefined,
 ): Normalized<T>[] =>
-  (sorters ?? []).map((s) => ({ ...s, order: s.order || "asc" }) as Normalized<T>);
+  (sorters ?? []).map((s) => ({
+    ...s,
+    order: (s.order?.trim() || "asc") as Normalized<T>["order"],
+  }));

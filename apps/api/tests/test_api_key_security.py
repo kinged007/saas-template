@@ -61,11 +61,10 @@ async def _add_member(client, owner_headers, ws_id, email, role_name):
 
 
 async def _create_key(client, headers, name, permissions, usage_quota=None):
-    resp = await client.post(
-        "/api/v1/api-keys",
-        json={"name": name, "permissions": permissions, "usage_quota": usage_quota},
-        headers=headers,
-    )
+    body = {"name": name, "permissions": permissions}
+    if usage_quota is not None:
+        body["usage_quota"] = usage_quota
+    resp = await client.post("/api/v1/api-keys", json=body, headers=headers)
     assert resp.status_code == 201, resp.text
     return resp.json()
 
@@ -266,6 +265,30 @@ async def test_key_reads_within_its_permission_scope(app_client):
     resp = await client.get("/api/v1/workspaces", headers=_key_headers(wkey["key"], ws["id"]))
     assert resp.status_code == 200
     assert [w["id"] for w in resp.json()] == [ws["id"]]
+
+
+@pytest.mark.parametrize("grant", [["workspace:read"], ["workspace:read", "member:read"]])
+async def test_workspaces_list_reports_the_keys_grant_for_key_principals(app_client, grant):
+    """GET /workspaces for a key reports the key's own grant, like /auth/me.
+
+    The two endpoints must agree on the shape: `permissions` is what this
+    principal can do, not the creator's role. `[]` is a real grant, never a
+    fallback to the role.
+    """
+    client = app_client
+    owner = await register_user(client, "ws-grant@example.com")
+    ws = await create_workspace(client, owner, "Ws Grant Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "ws-granted", grant)
+
+    resp = await client.get("/api/v1/workspaces", headers=_key_headers(key["key"], ws["id"]))
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()) == 1
+    assert resp.json()[0]["permissions"] == sorted(grant)
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    assert me_key.json()["workspaces"][0]["permissions"] == resp.json()[0]["permissions"]
+    assert me_key.json()["permissions"] == resp.json()[0]["permissions"]
 
 
 async def test_key_cannot_read_outside_its_permission_scope(app_client):
@@ -1033,6 +1056,51 @@ async def test_auth_me_reports_the_keys_own_grant_not_the_owners_role(app_client
     assert me_key.json()["permissions"] != me_owner.json()["permissions"]
 
 
+@pytest.mark.parametrize("grant", [[], ["member:read"]])
+async def test_auth_me_narrows_workspace_permissions_to_the_keys_grant(app_client, grant):
+    """For a key principal, `workspaces[].permissions` is the key's own grant.
+
+    The nested field used to carry the creator's role set, so a client
+    reading it (like the web's `active?.permissions ?? identity?.permissions`)
+    got a capability the key does not have. `[]` pins the same truthiness
+    trap as the top-level fix: an empty grant stays `[]`, not the role.
+    """
+    client = app_client
+    owner = await register_user(client, "narrow@example.com")
+    ws = await create_workspace(client, owner, "Narrow Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "narrowed", grant)
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    body = me_key.json()
+    assert len(body["workspaces"]) == 1
+    assert body["workspaces"][0]["permissions"] == sorted(grant)
+    assert body["workspaces"][0]["permissions"] == body["permissions"]
+
+    me_owner = await client.get("/api/v1/auth/me", headers=auth_headers(owner))
+    assert me_owner.status_code == 200, me_owner.text
+    assert "*" in me_owner.json()["workspaces"][0]["permissions"]
+    assert body["workspaces"][0]["permissions"] != me_owner.json()["workspaces"][0]["permissions"]
+
+
+async def test_auth_me_passes_a_wildcard_grant_through_verbatim(app_client):
+    """A wildcard key is the highest-stakes pass-through: `['*']` reaches both
+    the nested entry and the top-level field unfiltered. No inequality-vs-owner
+    assertion here — an owner's role is also `*`, which is why the equality
+    parametrization above skips this grant."""
+    client = app_client
+    owner = await register_user(client, "wild@example.com")
+    ws = await create_workspace(client, owner, "Wild Grant Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "wild", ["*"])
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    body = me_key.json()
+    assert len(body["workspaces"]) == 1
+    assert body["workspaces"][0]["permissions"] == ["*"]
+    assert body["permissions"] == ["*"]
+
+
 async def test_auth_me_drops_a_keys_grant_when_its_membership_is_suspended(app_client):
     """`permissions` is what the gate authorizes on, and the gate also checks
     the membership: a key whose creator's membership is not active gets no
@@ -1125,31 +1193,58 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     # A key-authorized hit is metered like any other key route: every read and
     # write route spends one unit and reports what is left. Regression test for
     # #311 — the key branch of _require_run_access and _require_job_access used
-    # to return without record_key_use. Each key carries only what its own
-    # route needs — a GET is gated on jobs:read, a write on jobs:update — so
-    # the second request's refusal can only be the quota's doing.
-    for method, url, key_name, charged_status, body, refused_body in [
-        ("get", f"/api/v1/jobs/runs/{runs['workspace']}", "quota-run", 200, None, None),
-        ("get", f"/api/v1/jobs/runs/{runs['workspace']}/logs", "quota-logs", 200, None, None),
-        ("get", f"/api/v1/jobs/{runs['definition']}", "quota-definition", 200, None, None),
-        ("get", f"/api/v1/jobs/{runs['definition']}/runs", "quota-runs", 200, None, None),
+    # to return without record_key_use. Each row names the permission its route
+    # requires, so the key carries exactly that and no more — the second
+    # request's refusal can then only be the quota's doing.
+    for method, url, key_name, required, charged_status, body, refused_body in [
+        ("get", f"/api/v1/jobs/runs/{runs['workspace']}", "quota-run", JOB_READ, 200, None, None),
+        (
+            "get",
+            f"/api/v1/jobs/runs/{runs['workspace']}/logs",
+            "quota-logs",
+            JOB_READ,
+            200,
+            None,
+            None,
+        ),
+        (
+            "get",
+            f"/api/v1/jobs/{runs['definition']}",
+            "quota-definition",
+            JOB_READ,
+            200,
+            None,
+            None,
+        ),
+        (
+            "get",
+            f"/api/v1/jobs/{runs['definition']}/runs",
+            "quota-runs",
+            JOB_READ,
+            200,
+            None,
+            None,
+        ),
         (
             "patch",
             f"/api/v1/jobs/{runs['definition']}",
             "quota-patch",
+            JOB_UPDATE,
             200,
             {"cron_schedule": "30 4 * * *"},
             {"cron_schedule": "45 5 * * *"},
         ),
-        ("post", f"/api/v1/jobs/{runs['definition']}/execute", "quota-execute", 201, {}, {}),
+        (
+            "post",
+            f"/api/v1/jobs/{runs['definition']}/execute",
+            "quota-execute",
+            JOB_UPDATE,
+            201,
+            {},
+            {},
+        ),
     ]:
-        capped = await _create_key(
-            client,
-            headers,
-            key_name,
-            [JOB_READ if method == "get" else JOB_UPDATE],
-            usage_quota=1,
-        )
+        capped = await _create_key(client, headers, key_name, [required], usage_quota=1)
         capped_headers = _key_headers(capped["key"], ws["id"])
         first = await client.request(method, url, json=body, headers=capped_headers)
         assert first.status_code == charged_status, (url, first.text)
@@ -1159,22 +1254,20 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
             # the charge must not clobber the list route's own header
             assert first.headers["X-Total-Count"] == "1", url
 
-        # quota exhausted → 403, and the refusal does not spend again
+        # quota exhausted → 403, and the refusal does not spend again: the
+        # charge happens in the access helper before the handler body, and a
+        # refused call neither increments nor commits.
         second = await client.request(method, url, json=refused_body, headers=capped_headers)
         assert second.status_code == 403, (url, second.text)
         assert "quota" in second.json()["detail"].lower(), url
+        async with SessionFactory() as db:
+            row = await db.get(ApiKey, capped["id"])
+            assert row.usage_count == 1, (url, "a refused request must not spend a unit")
 
     # The refused PATCH never reached the write: the definition still holds
     # the schedule the charged request set.
     after = await client.get(f"/api/v1/jobs/{runs['definition']}", headers=auth_headers(owner))
     assert after.json()["cron_schedule"] == "30 4 * * *", after.text
-
-    # ... and the refused request never spent the unit it refused. This is the
-    # separate guard from the 403 above: the row must be left exactly as the
-    # charged request left it.
-    async with SessionFactory() as db:
-        row = await db.get(ApiKey, capped["id"])
-        assert row.usage_count == 1, "a refused request must not spend a unit"
 
 
 async def test_key_cannot_probe_global_run_existence(app_client):

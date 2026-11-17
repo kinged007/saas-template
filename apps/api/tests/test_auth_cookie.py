@@ -452,3 +452,14 @@ def test_set_refresh_cookie_requires_request():
 
     with pytest.raises(TypeError):
         set_refresh_cookie(Response(), "token")
+
+
+def test_set_refresh_cookie_request_keyword_only():
+    """Positional request must be rejected so the safe form is the only form."""
+    from fastapi import Request, Response
+
+    from src.core.security.cookies import set_refresh_cookie
+
+    scope = {"type": "http", "method": "GET", "path": "/", "headers": []}
+    with pytest.raises(TypeError):
+        set_refresh_cookie(Response(), "token", Request(scope))

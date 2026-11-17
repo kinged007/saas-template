@@ -1,18 +1,25 @@
 from __future__ import annotations
 
 import hashlib
+import operator
 import secrets
 from datetime import datetime
 
 from sqlalchemy import Select, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.dates import ensure_utc, now_utc
+from src.core.dates import ensure_utc, iso_or_none, now_utc
 from src.core.permissions import ALL_PERMISSIONS_INCLUDING_KEY_ONLY, KEY_ONLY_PERMISSIONS
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
-from src.models.api_key import MAX_QUOTA, QUOTA_MAX_MESSAGE, QUOTA_MIN_MESSAGE, ApiKey
+from src.models.api_key import (
+    MAX_QUOTA,
+    QUOTA_MAX_MESSAGE,
+    QUOTA_MIN_MESSAGE,
+    QUOTA_TYPE_MESSAGE,
+    ApiKey,
+)
 from src.models.workspace import User
 from src.services.workspaces import WorkspaceService
 
@@ -29,14 +36,25 @@ class ApiKeyNotFound(ApiKeyError):
     pass
 
 
-def _payload_iso(value: datetime | None) -> str | None:
-    """Serialize an ORM datetime for a publish payload.
+def _quota(usage_quota: int | None) -> int | None:
+    """Strict-type then range-check a service-side quota.
 
-    Normalized at the emission edge instead of read off the attribute: SQLite
-    hands `DateTime(timezone=True)` back without an offset, and a consumer's
-    `new Date(...)` reads a naive ISO string as local time.
+    `operator.index` accepts anything int-like (int, bool, numpy ints) and
+    refuses float/str values that only the schema would have coerced: a
+    direct caller that passes 5.5 must not reach the Integer column through
+    the range guards.
     """
-    return ensure_utc(value).isoformat() if value is not None else None
+    if usage_quota is None:
+        return None
+    try:
+        quota = operator.index(usage_quota)
+    except TypeError:
+        raise ApiKeyError(QUOTA_TYPE_MESSAGE) from None
+    if quota < 1:
+        raise ApiKeyError(QUOTA_MIN_MESSAGE)
+    if quota > MAX_QUOTA:
+        raise ApiKeyError(QUOTA_MAX_MESSAGE)
+    return quota
 
 
 class ApiKeyService:
@@ -98,9 +116,7 @@ class ApiKeyService:
         only ever returned once.
         """
         name = name.strip()
-        membership = await WorkspaceService(self._session).get_membership(
-            workspace_id, actor.id, active_only=True
-        )
+        membership = await WorkspaceService(self._session).get_membership(workspace_id, actor.id)
         if membership is None:
             raise ApiKeyForbidden("you are not a member of this workspace")
         _, role = membership
@@ -119,10 +135,7 @@ class ApiKeyService:
             denied = sorted(capped - allowed)
             raise ApiKeyForbidden(f"cannot grant permissions you do not have: {', '.join(denied)}")
 
-        if usage_quota is not None and usage_quota < 1:
-            raise ApiKeyError(QUOTA_MIN_MESSAGE)
-        if usage_quota is not None and usage_quota > MAX_QUOTA:
-            raise ApiKeyError(QUOTA_MAX_MESSAGE)
+        usage_quota = _quota(usage_quota)
         if expires_at is not None and ensure_utc(expires_at) <= now_utc():
             raise ApiKeyError("expiry must be in the future")
 
@@ -153,7 +166,7 @@ class ApiKeyService:
                 "permissions": key.permissions,
                 "created_by_user_id": actor.id,
                 "created_by_name": actor.display_name,
-                "expires_at": _payload_iso(key.expires_at),
+                "expires_at": iso_or_none(key.expires_at),
             },
         )
         await publish_audit(
@@ -348,10 +361,7 @@ class ApiKeyService:
             raise ApiKeyNotFound("api key not found")
         if actor is not None and key.created_by_user_id != actor.id:
             raise ApiKeyNotFound("api key not found")
-        if usage_quota is not None and usage_quota < 1:
-            raise ApiKeyError(QUOTA_MIN_MESSAGE)
-        if usage_quota is not None and usage_quota > MAX_QUOTA:
-            raise ApiKeyError(QUOTA_MAX_MESSAGE)
+        usage_quota = _quota(usage_quota)
         key.usage_quota = usage_quota
         await self._session.commit()
         await publish_event(

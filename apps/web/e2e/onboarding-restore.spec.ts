@@ -24,9 +24,9 @@ test.describe("onboarding restore", () => {
 
     // By role, not by text: the focus move only announces a heading if the
     // title is one, and a plain div matches the text query. The level is
-    // pinned because h3 is the level the card's place in the page outline
-    // depends on, and a name-only query also matches h2 or h4.
-    const heading = page.getByRole("heading", { name: "Get set up", level: 3 });
+    // pinned because h2 is the level the card's place in the page outline
+    // depends on, and a name-only query also matches h1 or h3.
+    const heading = page.getByRole("heading", { name: "Get set up", level: 2 });
     await expect(heading).toHaveCount(1);
     await expect(heading).toBeVisible();
     await expect(heading).toHaveAccessibleName("Get set up");

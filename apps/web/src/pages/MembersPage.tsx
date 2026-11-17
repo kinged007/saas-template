@@ -36,7 +36,7 @@ import { assignableRoles, rolePickerCapNotice } from "./role-picker-cap";
 import { isWorkspaceAdmin } from "./settings/workspace/WorkspaceSettingsLayout";
 import { isManagerRoleName, isOwnerRoleName } from "./role-name";
 import type { Identity, Invitation, Member, Role } from "../types";
-import { getMemberDisplayName } from "../types";
+import { getDisplayNameFromRow } from "../types";
 
 const PAGE_SIZE = 10;
 // The role pickers need every role, ordered by the endpoint. Capped at the
@@ -219,7 +219,7 @@ export function MembersPage() {
           </TableHeader>
           <TableBody>
             {rows.map((m) => {
-              const name = getMemberDisplayName(m);
+              const name = getDisplayNameFromRow(m);
               return (
                 <TableRow key={m.membership_id}>
                   <TableCell>
@@ -498,7 +498,7 @@ export function MembersPage() {
         fallback={
           selectedMember
             ? {
-                display_name: getMemberDisplayName(selectedMember),
+                display_name: getDisplayNameFromRow(selectedMember),
                 email: selectedMember.email,
                 avatar_url: selectedMember.avatar_url,
                 first_name: selectedMember.first_name,

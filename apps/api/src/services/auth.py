@@ -8,7 +8,7 @@ from typing import Literal
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.dates import ensure_utc, now_utc
+from src.core.dates import ensure_utc, iso_or_none, now_utc
 from src.core.security.password import PasswordHasher
 from src.core.security.tokens import OpaqueToken, create_access_token
 from src.events.bus import EventBus
@@ -161,8 +161,9 @@ class AuthService:
 
         Links by (provider, subject) first so identity survives email changes;
         falls back to the provider's unverified email claim on first connect,
-        so multiple providers sharing an email link to the same user. New users are rejected when
-        AUTH_ALLOW_REGISTRATION is off — before any insert."""
+        so multiple providers sharing an email link to the same user. New
+        users are rejected when AUTH_ALLOW_REGISTRATION is off — before
+        any insert."""
         from src.models.oauth import OAuthAccount
 
         stmt = select(OAuthAccount).where(
@@ -349,6 +350,9 @@ class AuthService:
                 .values(revoked_at=now_utc(), revoke_reason="rotated")
                 .execution_options(synchronize_session=False)
             )
+            # Intentional split commit: the claim above must commit before
+            # issue_tokens below. Merging them into one transaction re-opens
+            # the sqlite rotation race.
             await self._session.commit()
             if claimed.rowcount == 1:
                 pair = await self.issue_tokens(user, ip_address=ip_address, user_agent=user_agent)
@@ -385,7 +389,7 @@ class AuthService:
             # rotation can be two tabs of a browser racing. The attacker
             # holds a token older than every session still live.
             actor_user_id=None,
-            details={"session_id": row.id, "revoked_at": row.revoked_at.isoformat()},
+            details={"session_id": row.id, "revoked_at": iso_or_none(row.revoked_at)},
         )
         if revoked:
             logger.warning(

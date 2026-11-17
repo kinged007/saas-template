@@ -43,12 +43,31 @@ test("directions stay on their own column when an earlier sorter has none", () =
 
 test("an empty direction degrades to asc — the parser drops it just like an omitted one", () => {
   const params = adminListQuery({
-    sorters: [{ field: "a" }, { field: "b", order: "" }],
+    sorters: [
+      { field: "a" },
+      // @ts-expect-error — "" is outside the CrudSort contract, but the runtime
+      // still degrades it the same way as an omitted direction
+      { field: "b", order: "" },
+    ],
   });
   assert.deepEqual(appliedPairs(params), [
     ["a", "asc"],
     ["b", "asc"],
   ]);
+});
+
+test("a whitespace-only direction becomes order[]=asc, never an empty order[] entry", () => {
+  const params = adminListQuery({
+    sorters: [
+      { field: "a", order: "desc" },
+      // @ts-expect-error — " " is outside CrudSort's "asc" | "desc", reached by
+      // untyped callers; the API strips it to an invalid "" (crud.py)
+      { field: "b", order: " " },
+    ],
+  });
+  // Assert the serialized entries, not `appliedPairs`: that helper filters an
+  // empty order out and pads at the end, which hides the column shift here.
+  assert.deepEqual(params.getAll("order[]"), ["desc", "asc"]);
 });
 
 test("a sorter without a field is skipped without shifting the other directions", () => {
@@ -76,4 +95,17 @@ test("pagination becomes offset/limit and q stays a bare cross-field term", () =
   assert.equal(params.get("q"), "acme");
   assert.equal(params.get("status_like"), "active");
   assert.equal(params.get("and_like"), null);
+});
+
+test("shapes outside refine's contract are compile errors", () => {
+  adminListQuery({
+    sorters: [
+      // @ts-expect-error — order must be CrudSort's "asc" | "desc"
+      { field: "created_at", order: "up" },
+    ],
+    filters: [
+      // @ts-expect-error — a CrudFilter must declare operator and value
+      { field: "status" },
+    ],
+  });
 });
