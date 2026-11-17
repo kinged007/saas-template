@@ -1,8 +1,73 @@
+import asyncio
 import csv
 import io
 import json
+from uuid import uuid4
 
+import pytest
+from sqlalchemy import select
+
+from src.db.session import SessionFactory
+from src.models.audit import AuditLogEntry
 from tests.conftest import create_workspace, register_user, ws_headers
+
+
+async def _wait_for_audit_export(
+    client, headers, workspace_id, params=None, timeout_secs: float = 5.0, interval: float = 0.02
+):
+    """Return the export, requested once the bus has committed `workspace.created`.
+
+    Audit rows are written by a background event-bus task, so an export issued
+    right after setup can be served before they land. The gate polls the audit
+    table instead of re-reading the export: every export call publishes its own
+    `workspace.exported` audit event, so retrying the export would add work to
+    the bus this waits on. One export is issued, after the gate.
+    """
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout_secs
+    while True:
+        async with SessionFactory() as session:
+            result = await session.execute(
+                select(AuditLogEntry.action).where(AuditLogEntry.workspace_id == workspace_id)
+            )
+            landed = "workspace.created" in set(result.scalars().all())
+        if landed or loop.time() >= deadline:
+            break
+        await asyncio.sleep(interval)
+    assert landed, f"event bus did not commit workspace.created within {timeout_secs}s"
+    resp = await client.get("/api/v1/workspaces/export", params=params, headers=headers)
+    assert resp.status_code == 200, resp.text
+    return resp
+
+
+async def test_wait_for_audit_export_gives_up_without_issuing_export(app_client, monkeypatch):
+    """The exhausted gate: no `workspace.created` row -> no export, only the assert."""
+    from src.services.search_export import SearchExportService
+
+    issued = []
+
+    async def _recording_export_json(self, **kwargs):
+        issued.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(SearchExportService, "export_json", _recording_export_json)
+
+    # Real credentials, so the export is reachable and the counter below is
+    # evidence rather than a 401 short-circuit.
+    tokens = await register_user(app_client, "gate@example.com")
+    ws = await create_workspace(app_client, tokens, name="Gate Co")
+    # The gate watches a workspace id the bus has never seen, so the row can never land.
+    missing_workspace_id = str(uuid4())
+    timeout_secs, interval = 0.05, 0.01
+    with pytest.raises(AssertionError, match="event bus did not commit workspace.created"):
+        await _wait_for_audit_export(
+            app_client,
+            ws_headers(tokens, ws["id"]),
+            missing_workspace_id,
+            timeout_secs=timeout_secs,
+            interval=interval,
+        )
+    assert issued == [], "the gate must abort before the export is issued"
 
 
 async def _me_id(client, tokens):
@@ -194,8 +259,7 @@ async def test_search_rejects_blank_and_short_and_non_member(app_client):
 
 async def test_export_json_and_csv(app_client):
     client, h, ws, conv = await _setup(app_client)
-    resp = await client.get("/api/v1/workspaces/export", headers=h)
-    assert resp.status_code == 200, resp.text
+    resp = await _wait_for_audit_export(client, h, ws["id"])
     assert "attachment" in resp.headers["content-disposition"]
     bundle = json.loads(resp.text)
     for key in (
@@ -271,7 +335,7 @@ async def test_export_members_csv_keeps_columns_for_members_without_profile(app_
     client, h, ws, conv = await _setup(app_client)
     # register_user always creates a profile, so delete the row to get a member
     # without one — the columns must survive the missing row, not vanish with it.
-    from sqlalchemy import delete, select
+    from sqlalchemy import delete
 
     from src.db.session import SessionFactory
     from src.models.user_profile import UserProfile
@@ -304,15 +368,35 @@ async def test_export_members_csv_keeps_columns_for_members_without_profile(app_
     assert bare["role"]
 
 
+async def test_export_audit_details_drop_the_internal_source_event_id(app_client):
+    """The export is a downloadable artifact, so it strips the dedupe key."""
+    client, h, ws, conv = await _setup(app_client)
+    await _wait_for_audit_export(client, h, ws["id"])
+    async with SessionFactory() as session:
+        session.add(
+            AuditLogEntry(
+                workspace_id=ws["id"],
+                resource_type="workspace",
+                resource_id=ws["id"],
+                action="workspace.renamed",
+                details={"source_event_id": "evt-1", "name": "Renamed"},
+            )
+        )
+        await session.commit()
+
+    bundle = json.loads((await client.get("/api/v1/workspaces/export", headers=h)).text)
+    row = next(a for a in bundle["audit"] if a["action"] == "workspace.renamed")
+    assert row["details"] == {"name": "Renamed"}
+
+
 async def test_export_audit_csv(app_client):
     """The audit log is selectable in the export card and exports as CSV."""
     from src.services.search_export import CSV_RESOURCES
 
     client, h, ws, conv = await _setup(app_client)
-    resp = await client.get(
-        "/api/v1/workspaces/export", params={"format": "csv", "resource": "audit"}, headers=h
+    resp = await _wait_for_audit_export(
+        client, h, ws["id"], params={"format": "csv", "resource": "audit"}
     )
-    assert resp.status_code == 200, resp.text
     assert resp.headers["content-type"].startswith("text/csv")
     assert "attachment" in resp.headers["content-disposition"]
     expected = "id,created_at,actor_email,action,resource_type,resource_id,ip_address"
@@ -398,8 +482,6 @@ def test_export_csv_leaves_safe_values_untouched():
 
 async def test_export_members_csv_neutralises_injected_display_name(app_client):
     """End to end: a formula-shaped display_name is prefixed in the response."""
-    from sqlalchemy import select
-
     from src.db.session import SessionFactory
     from src.models.workspace import User
 
@@ -440,6 +522,53 @@ async def test_export_resources_endpoint_is_the_selector_source(app_client):
     assert resp.status_code == 200, resp.text
     assert resp.json()["resources"] == list(CSV_RESOURCES)
     assert "audit" in resp.json()["resources"]
+
+
+async def test_search_export_permission_check_ignores_suspended_member(app_client):
+    """#300: `_can` decides whether job rows reach the caller, so a suspended
+    member's row must not count as a membership there."""
+    from src.core.permissions import JOB_READ
+    from src.db.session import SessionFactory
+    from src.services.search_export import SearchExportService
+    from tests.conftest import auth_headers
+
+    client = app_client
+    owner = await register_user(client, "can-owner@example.com")
+    ws = await create_workspace(client, owner, name="Can Co")
+    h = ws_headers(owner, ws["id"])
+    admin_role = next(
+        r for r in (await client.get("/api/v1/roles", headers=h)).json() if r["name"] == "admin"
+    )
+    admin_tokens = await register_user(client, "can-admin@example.com")
+    admin_invite = await client.post(
+        "/api/v1/invitations",
+        json={"email": "can-admin@example.com", "role_id": admin_role["id"]},
+        headers=h,
+    )
+    assert admin_invite.status_code == 201, admin_invite.text
+    joined = await client.post(
+        "/api/v1/invitations/accept",
+        params={"token": admin_invite.json()["token"]},
+        headers=auth_headers(admin_tokens),
+    )
+    assert joined.status_code == 200, joined.text
+    admin_id = await _me_id(client, admin_tokens)
+    member_id = next(
+        m
+        for m in (await client.get("/api/v1/members", headers=h)).json()
+        if m["email"] == "can-admin@example.com"
+    )["membership_id"]
+
+    async with SessionFactory() as session:
+        service = SearchExportService(session)
+        assert await service._can(ws["id"], admin_id, JOB_READ) is True
+
+    suspended = await client.post(f"/api/v1/members/{member_id}/suspend", headers=h)
+    assert suspended.status_code == 200, suspended.text
+
+    async with SessionFactory() as session:
+        service = SearchExportService(session)
+        assert await service._can(ws["id"], admin_id, JOB_READ) is False
 
 
 async def test_export_requires_audit_read(app_client):

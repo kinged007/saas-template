@@ -34,10 +34,18 @@ def audit_payload(
     actor_user_id: str | None = None,
     details: dict | None = None,
     ip_address: str | None = None,
+    source_event_id: str | None = None,
 ) -> dict:
     """Shape of an `audit.entry.created` event payload (consumed by the audit
-    workflow, which persists an AuditLogEntry row)."""
-    return {
+    workflow, which persists an AuditLogEntry row).
+
+    `source_event_id` is the id of the event this entry was derived from. The
+    audit workflow dedupes on it, so an audit entry produced by a subscriber
+    handler must pass the *inbound* event's id — the handler, not the audit
+    publish, is what re-runs on a JetStream redelivery. Direct producers omit
+    it and the audit envelope's own id is used.
+    """
+    payload = {
         "workspace_id": workspace_id,
         "actor_user_id": actor_user_id,
         "resource_type": resource_type,
@@ -46,6 +54,9 @@ def audit_payload(
         "details": details or {},
         "ip_address": ip_address,
     }
+    if source_event_id:
+        payload["source_event_id"] = source_event_id
+    return payload
 
 
 async def publish_audit(
