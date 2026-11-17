@@ -51,7 +51,7 @@ make dev API_PORT=8010 WEB_PORT=5273   # open http://localhost:5273
 Or run each step individually:
 
 ```bash
-make api-install  # uv sync in apps/api
+make api-install  # uv sync --extra dev in apps/api (API tooling: ruff, pytest)
 make api-migrate  # alembic migrations (starts embedded postgres automatically)
 make api-seed     # demo users + workspaces
 make api          # uvicorn on :8000 (or $API_PORT)

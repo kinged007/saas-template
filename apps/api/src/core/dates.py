@@ -12,3 +12,13 @@ def ensure_utc(value: datetime) -> datetime:
 
 def now_utc() -> datetime:
     return datetime.now(UTC)
+
+
+def iso_or_none(value: datetime | None) -> str | None:
+    """Serialize a stored datetime for a client, or None when there is none.
+
+    SQLite hands back the `DateTime(timezone=True)` columns naive because it stores
+    the UTC wall clock every write path puts in them, so a bare `.isoformat()`
+    reads as local time in the browser.
+    """
+    return ensure_utc(value).isoformat() if value is not None else None

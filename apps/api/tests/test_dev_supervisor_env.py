@@ -1,4 +1,6 @@
-"""`make dev` must not clobber the CORS origins the user set in apps/api/.env."""
+"""`make dev` must not clobber the CORS origins the user set in apps/api/.env,
+and must allowlist every loopback name vite serves (127.0.0.1 as well as
+localhost) so the CSRF check accepts the proxied refresh call."""
 
 import importlib.util
 import os
@@ -40,6 +42,42 @@ def test_missing_file_and_key_are_empty(tmp_path, monkeypatch):
     dev = _load_dev()
     monkeypatch.setattr(dev, "ROOT", str(tmp_path))
     assert dev.api_env_file("CORS_ORIGINS") == ""
+
+
+def test_allowed_origins_cover_both_loopback_names(api_env):
+    origins = api_env.dev_allowed_origins("5318")
+    assert "http://localhost:5318" in origins
+    assert "http://127.0.0.1:5318" in origins
+    # The user's own entries survive the lift.
+    assert "*.coder.munyard.biz" in origins
+
+
+def test_allowed_origins_pass_the_csrf_check(api_env, monkeypatch):
+    """The supervisor's env is only useful if the API accepts these origins."""
+    from src.core.security import cookies
+
+    origins = api_env.dev_allowed_origins("5318")
+    monkeypatch.setattr(cookies.settings, "cors_origins", ",".join(origins))
+    # A `*` entry is a pattern for the CORS middleware, not a browser origin.
+    assert all(cookies._origin_allowed(o) for o in origins if "*" not in o)
+
+
+def test_web_port_defaults_to_the_constant(monkeypatch):
+    monkeypatch.delenv("WEB_PORT", raising=False)
+    dev = _load_dev()
+    assert dev.WEB_PORT == dev.DEFAULT_WEB_PORT
+
+
+def test_default_web_port_drives_the_allowed_origins(tmp_path, monkeypatch):
+    """Changing the default port moves every use site with it."""
+    dev = _load_dev()
+    monkeypatch.setattr(dev, "ROOT", str(tmp_path))
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+    monkeypatch.setattr(dev, "DEFAULT_WEB_PORT", "9999")
+    origins = dev.dev_allowed_origins("5318")
+    assert "http://localhost:9999" in origins
+    assert "http://127.0.0.1:9999" in origins
+    assert not any(o.endswith(":5173") for o in origins)
 
 
 def test_shell_env_wins_over_file(tmp_path, monkeypatch):
