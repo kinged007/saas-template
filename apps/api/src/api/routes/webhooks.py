@@ -80,6 +80,20 @@ async def list_subscriptions(
     return [subscription_to_dict(s) for s in rows.scalars().all()]
 
 
+@router.get("/subscriptions/{subscription_id}")
+async def get_subscription(
+    subscription_id: str,
+    workspace_id: str = Depends(get_current_workspace_id),
+    _=Depends(require_permission(WEBHOOK_READ)),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        sub = await WebhookService(db).get_subscription(workspace_id, subscription_id)
+    except WebhookError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    return subscription_to_dict(sub)
+
+
 @router.post("/subscriptions", status_code=201)
 async def create_subscription(
     body: WebhookSubscriptionCreate,

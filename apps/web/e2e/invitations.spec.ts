@@ -29,27 +29,57 @@ const ACCEPTED = {
   email: "accepted@example.com",
   status: "accepted",
 };
+const DECLINED = {
+  ...LIVE,
+  id: "inv-declined",
+  email: "declined@example.com",
+  status: "declined",
+};
+const REVOKED = {
+  ...LIVE,
+  id: "inv-revoked",
+  email: "revoked@example.com",
+  status: "revoked",
+};
+const EXPIRED_STATUS = {
+  ...LIVE,
+  id: "inv-expired-status",
+  email: "expired-status@example.com",
+  status: "expired",
+};
 
 const row = (page: Page, email: string) => page.getByRole("row").filter({ hasText: email });
 const deleteButton = (page: Page, email: string) => row(page, email).getByRole("button", { name: "Delete" });
+const resendButton = (page: Page, email: string) =>
+  row(page, email).getByRole("button", { name: "Re-send" });
 
 /**
- * A manager who may invite (member:create) but may not revoke
- * (member:delete). The owner/admin role name and member:update are what the
- * row actions require: `WorkspaceService.resend_invitation` refuses any other
- * actor with 403, and MembersPage gates both row controls on that same pair.
+ * A workspace actor claiming nothing itself. `IDENTITY` is superuser with a
+ * `"*"` wildcard, and either short-circuit every `useCan`, so an actor that
+ * inherits them passes a negative assertion for the wrong reason. Each actor
+ * below names the permissions its test needs and only those.
  */
-const inviter = {
+const actor = (permissions: string[], role = "admin") => ({
   ...IDENTITY,
-  workspaces: [
-    {
-      id: "ws-1",
-      name: "Acme Corp",
-      role: "admin",
-      permissions: ["member:read", "member:create", "member:update"],
-    },
-  ],
-};
+  is_superuser: false,
+  permissions: [],
+  workspaces: [{ id: "ws-1", name: "Acme Corp", slug: "acme-corp", role, permissions }],
+});
+
+// May invite (member:create) and re-send but not revoke: DELETE
+// /invitations/{id} requires member:delete. The owner/admin role name and
+// member:update are what the row actions require — `resend_invitation` refuses
+// any other actor with 403, and MembersPage gates both row controls on that
+// same pair.
+const manager = actor(["member:read", "member:create", "member:update"]);
+
+// The invite form's actor: member:create gates the section, and the roles
+// query behind the picker is ungated.
+const inviteFormActor = actor(["member:read", "member:create"]);
+
+// Every permission the manager holds, under a role name that is neither owner
+// nor admin.
+const customManager = actor(["member:read", "member:create", "member:update"], "custom");
 
 // A route registered after mockApi takes precedence over its catch-all.
 const invitations = (page: Page) =>
@@ -64,8 +94,23 @@ const invitations = (page: Page) =>
   );
 
 test.describe("invitations", () => {
+  test("the negative actor carries neither superuser nor a wildcard", async ({ page }) => {
+    await mockApi(page, { signedIn: true, identity: manager });
+    await page.goto("/members");
+
+    // A negative assertion in this file only means something if the actor it
+    // runs under holds nothing at the top level: superuser and `"*"` both
+    // short-circuit every `useCan`, so a gate would answer for a reason other
+    // than the one under test.
+    const identity = (await page.evaluate(() =>
+      fetch("/api/v1/auth/me").then((response) => response.json()),
+    )) as { is_superuser: boolean; permissions: string[] };
+    expect(identity.is_superuser).toBe(false);
+    expect(identity.permissions).toEqual([]);
+  });
+
   test("Delete is hidden, not disabled, without member:delete", async ({ page }) => {
-    await mockApi(page, { signedIn: true, identity: inviter });
+    await mockApi(page, { signedIn: true, identity: manager });
     await invitations(page);
     await page.goto("/members");
 
@@ -81,6 +126,21 @@ test.describe("invitations", () => {
     await expect(deleteButton(page, "expired@example.com")).toHaveCount(0);
   });
 
+  test("member:update under a non-manager role name gets no Re-send", async ({ page }) => {
+    await mockApi(page, { signedIn: true, identity: customManager });
+    await invitations(page);
+    await page.goto("/members");
+
+    // The section itself follows member:create, which this actor holds, so the
+    // row below is on the page and the absence is read off a rendered list.
+    await expect(row(page, "expired@example.com")).toBeVisible();
+    // canManageRoles is `useCan(members:edit) && isManagerRoleName(role)`:
+    // member:update satisfies the first half and the role name fails the
+    // second, which is the client mirror of the 403 `resend_invitation` returns
+    // for this actor.
+    await expect(row(page, "expired@example.com").getByRole("button", { name: "Re-send" })).toHaveCount(0);
+  });
+
   test("a role with member:delete gets Delete on the pending rows", async ({ page }) => {
     await mockApi(page, { signedIn: true });
     await invitations(page);
@@ -88,6 +148,51 @@ test.describe("invitations", () => {
 
     await expect(deleteButton(page, "live@example.com")).toBeEnabled();
     await expect(deleteButton(page, "accepted@example.com")).toHaveCount(0);
+  });
+
+  test("the Delete/Re-send buttons follow the revoke/resend gates per state", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    await page.route(
+      (url) => url.pathname.endsWith("/api/v1/invitations"),
+      (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([LIVE, EXPIRED, DECLINED, ACCEPTED, REVOKED, EXPIRED_STATUS]),
+        }),
+    );
+    await page.goto("/members");
+
+    // Every absence below is read off a rendered row, not a missing one.
+    for (const email of [
+      "live@example.com",
+      "expired@example.com",
+      "declined@example.com",
+      "accepted@example.com",
+      "revoked@example.com",
+      "expired-status@example.com",
+    ]) {
+      await expect(row(page, email)).toBeVisible();
+    }
+
+    // Delete maps to revoke: offered on a live invitation only
+    // (canRevokeInvitation is `status === "pending"`).
+    await expect(deleteButton(page, "live@example.com")).toBeVisible();
+    await expect(deleteButton(page, "expired@example.com")).toBeVisible();
+    await expect(deleteButton(page, "declined@example.com")).toHaveCount(0);
+    await expect(deleteButton(page, "accepted@example.com")).toHaveCount(0);
+    await expect(deleteButton(page, "revoked@example.com")).toHaveCount(0);
+    await expect(deleteButton(page, "expired-status@example.com")).toHaveCount(0);
+
+    // Re-send is offered on an expired pending row, a declined row, and a
+    // literal expired row; a fresh pending row is a no-op server-side and the
+    // terminal accepted/revoked rows are refused.
+    await expect(resendButton(page, "live@example.com")).toHaveCount(0);
+    await expect(resendButton(page, "expired@example.com")).toBeVisible();
+    await expect(resendButton(page, "declined@example.com")).toBeVisible();
+    await expect(resendButton(page, "accepted@example.com")).toHaveCount(0);
+    await expect(resendButton(page, "revoked@example.com")).toHaveCount(0);
+    await expect(resendButton(page, "expired-status@example.com")).toBeVisible();
   });
 
   test("the row controls are separated by a gap", async ({ page }) => {
@@ -127,7 +232,7 @@ test.describe("invitations", () => {
     const ADMIN = { id: "r-admin", workspace_id: "ws-1", name: "Admin", permissions: [], system: true };
     const EDITOR = { id: "r-editor", workspace_id: "ws-1", name: "Editor", permissions: [], system: true };
     const sent: unknown[] = [];
-    await mockApi(page, { signedIn: true, identity: inviter, lists: { roles: [ADMIN, EDITOR] } });
+    await mockApi(page, { signedIn: true, identity: inviteFormActor, lists: { roles: [ADMIN, EDITOR] } });
     await page.route(
       (url) => url.pathname.endsWith("/api/v1/invitations"),
       async (route) => {
@@ -199,5 +304,16 @@ test.describe("invitations", () => {
     // cached list instead of leaving the button that made it.
     await expect(row(page, "expired@example.com").getByText("revoked", { exact: true })).toBeVisible();
     await expect(resend).toHaveCount(0);
+    // The refusal must still be announced. The toast comes from refine's
+    // hook-level onError (description carries the 409 detail), so it only
+    // survives while the refresh handlers stay in the per-mutate() options:
+    // hoisting them into useCustomMutation() would replace refine's handler and
+    // silently drop the detail. The sonner Toaster section is the page's only
+    // named live region; the toast <li> itself has no role.
+    await expect(
+      page
+        .getByRole("region", { name: "Notifications alt+T" })
+        .getByText(/cannot be re-sent/),
+    ).toBeVisible();
   });
 });

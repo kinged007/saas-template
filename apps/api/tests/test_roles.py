@@ -4,8 +4,13 @@ import re
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 
 import src.core.permissions as perms
+from src.db.session import SessionFactory
+from src.models.workspace import Role, WorkspaceMember
+from src.services.auth import AuthService
+from src.services.workspaces import WorkspaceForbidden, WorkspaceService
 from tests.conftest import (
     auth_headers,
     create_workspace,
@@ -279,7 +284,12 @@ async def test_create_role_rejects_blank_name(app_client):
         json={"name": "   ", "permissions": []},
         headers=ws_headers(owner, ws["id"]),
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 422, resp.text
+    # Pin the field: any other 422 (a bad permission, a missing field) would
+    # also satisfy a status-only assertion.
+    detail = resp.json()["detail"][0]
+    assert detail["loc"] == ["body", "name"]
+    assert detail["type"] == "string_too_short"
 
 
 async def test_update_role_strips_padded_name(app_client):
@@ -298,7 +308,28 @@ async def test_update_role_strips_padded_name(app_client):
     resp = await client.patch(
         f"/api/v1/roles/{created['id']}", json={"name": "   "}, headers=headers
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 422, resp.text
+    # Pin the field: any other 422 would also satisfy a status-only assertion.
+    detail = resp.json()["detail"][0]
+    assert detail["loc"] == ["body", "name"]
+    assert detail["type"] == "string_too_short"
+
+
+async def test_create_role_accepts_a_name_padded_to_the_50_char_bound(app_client):
+    # The 50-char bound applies to the stripped value, so a padded name whose
+    # stripped form is exactly the bound is accepted. If the length check ran
+    # on the raw string first (strip reordered after it), this would 422.
+    client = app_client
+    owner = await register_user(client, "cr-pad50@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    name = "x" * 50
+    resp = await client.post(
+        "/api/v1/roles", json={"name": f"  {name}  ", "permissions": []}, headers=headers
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == name
+    assert await _role_id(client, headers, name)
 
 
 async def test_permission_catalog_excludes_legacy_key_only_scope(app_client):
@@ -376,17 +407,12 @@ async def test_create_role_capped_by_creator_permissions(app_client):
 async def test_suspended_actor_is_capped_on_role_writes(app_client):
     """A suspended actor is capped as if unauthenticated, not by its own role.
 
-    The role-capping sites resolve the actor's membership with
-    `active_only=True`; a suspended row therefore reads as "no actor cap" and
-    every requested permission is denied. The same actor, active, must still be
-    able to write — otherwise a refusal for everyone would satisfy the deny
-    half.
+    The role-capping sites resolve the actor's membership with `get_membership`,
+    which reads active rows only; a suspended row therefore reads as "no actor
+    cap" and every requested permission is denied. The same actor, active, must
+    still be able to write — otherwise a refusal for everyone would satisfy the
+    deny half.
     """
-    from src.db.session import SessionFactory
-    from src.models.workspace import WorkspaceMember
-    from src.services.auth import AuthService
-    from src.services.workspaces import WorkspaceForbidden, WorkspaceService
-
     client = app_client
     owner = await register_user(client, "cap-owner@example.com")
     ws = await create_workspace(client, owner)
@@ -440,6 +466,32 @@ async def test_suspended_actor_is_capped_on_role_writes(app_client):
             await service.update_role(
                 ws["id"], role_ids["editor"], permissions=["member:read"], actor=admin_user
             )
+        # #1126: the name branch resolved no membership at all, so a
+        # suspended caller renamed `editor` — which also flips `system` and opts
+        # the seeded role out of boot-time convergence.
+        with pytest.raises(WorkspaceForbidden):
+            await service.update_role(
+                ws["id"], role_ids["editor"], name="suspended-rename", actor=admin_user
+            )
+        # Same hole in the sibling writer: an empty permission list cannot trip
+        # the permission check, so it was the only path that mutated with no cap.
+        with pytest.raises(WorkspaceForbidden):
+            await service.create_custom_role(
+                ws["id"],
+                name="ops-empty",
+                description=None,
+                permissions=[],
+                actor=admin_user,
+            )
+        # Re-read via a fresh session so the assertions are on the stored rows.
+        async with SessionFactory() as check:
+            stored = await check.get(Role, role_ids["editor"])
+            assert stored is not None
+            assert stored.name == "editor"
+            leftovers = await check.scalars(
+                select(Role).where(Role.workspace_id == ws["id"], Role.name == "ops-empty")
+            )
+            assert leftovers.first() is None
 
 
 # ------------------------------------------------------------------ update
@@ -1176,3 +1228,47 @@ async def test_check_name_free_names_the_seeded_row(app_client):
     )
     assert renamed.status_code == 409, renamed.text
     assert renamed.json()["detail"] == "a role named 'admin' already exists"
+
+
+async def test_folded_role_lookups_resolve_the_same_row(app_client):
+    """The two folded lookups must not disagree about an indistinguishable pair.
+
+    `_check_name_free` and `_role_by_name` fold the same predicate, so a pair
+    they cannot tell apart has to resolve to the same row at both: the 409 that
+    names the row and the row `transfer_ownership` hands out. `_role_by_name`
+    ranked `Role.name != name`, so it picked the exact-case custom `admin` while
+    the 409 named the seeded `Admin` — the pair a pre-#328 workspace holds when
+    its seeded row was renamed to a case variant and a custom role then took the
+    exact name, both of which the name check allowed then.
+    """
+    client = app_client
+    owner = await register_user(client, "ci17@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    await _rename_seeded_role(ws["id"], "admin", "Admin")
+    await _seed_legacy_case_role(ws["id"], "admin")
+    heir = await _add_member(client, owner, ws, "ci17h@example.com", "editor")
+    target_id = await _membership_id(client, owner, ws, "ci17h@example.com")
+
+    created = await client.post(
+        "/api/v1/roles", json={"name": "ops", "permissions": []}, headers=headers
+    )
+    assert created.status_code == 201, created.text
+    conflict = await client.post(
+        "/api/v1/roles", json={"name": "admin", "permissions": []}, headers=headers
+    )
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["detail"] == "a role named 'Admin' already exists"
+
+    transfer = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/transfer",
+        json={"new_owner_membership_id": target_id},
+        headers=headers,
+    )
+    assert transfer.status_code == 200, transfer.text
+    # Read with the new owner's headers: the demoted owner's row is what the
+    # lookup picked, so they may not be able to list anything.
+    members = await client.get("/api/v1/members", headers=ws_headers(heir, ws["id"]))
+    assert members.status_code == 200, members.text
+    roles = {m["email"]: m["role"] for m in members.json()}
+    assert roles["ci17@example.com"] == "Admin"

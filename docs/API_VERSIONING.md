@@ -19,9 +19,15 @@ as `api_version`.
   the wrong status for a documented caller keeps its route and payload, so no
   new prefix is required — but the correction is recorded here and in the
   release notes.
+- **Serialization corrections are not breaking changes**: a value a route
+  serialized in a form that misstates the instant (a naive datetime read as
+  local time) keeps its field and its type, so no new prefix is required — the
+  correction is recorded here and in the release notes.
 
 ## Recorded corrections
 
+- `GET /api/v1/jobs/global/{id}/runs` returns `404 "job not found"` for an id
+  matching no definition — not `200 []` with `X-Total-Count: 0`.
 - `GET /api/v1/jobs/{id}`, `PATCH /api/v1/jobs/{id}`,
   `POST /api/v1/jobs/{id}/execute` and `GET /api/v1/jobs/{id}/runs` return
   `403 "you are not a member of this workspace"` — not `404 "job not found"` —
@@ -36,6 +42,11 @@ as `api_version`.
   no pair of them tells the key which state produced it. A session caller still
   gets `404 "job not found"` or `404 "run not found"` for an id matching
   nothing.
+- Every serialized datetime carries an explicit UTC offset:
+  `2026-01-01T00:00:00+00:00`, where it was `2026-01-01T00:00:00`. The instant
+  is unchanged and a client that parses the value is unaffected; a client that
+  compares timestamp strings byte-for-byte — including an importer matching an
+  exported bundle — sees the suffix.
 
 ## Response headers
 
@@ -53,6 +64,11 @@ All three ride on the `403 api key quota exceeded` rejection as well, so a
 client that has run out can still read its budget and when it recovers.
 `Remaining` counts the request being answered, so it reaches `0` on the last
 accepted call and the next call is rejected.
+
+The charge happens in the access helper, before the handler body: an accepted
+request spends and commits its unit even when the handler later fails, and the
+quota-exceeded `403` is raised before the handler runs, so a refused request
+spends nothing.
 
 ### Changed meanings
 
