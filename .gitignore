@@ -57,3 +57,6 @@ crash.log
 
 # Sortie
 .sortie/
+# Jigz local state (added by jig setup)
+.jigz/
+/jig
