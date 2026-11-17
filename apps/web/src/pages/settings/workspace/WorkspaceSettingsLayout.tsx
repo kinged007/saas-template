@@ -8,14 +8,13 @@ import { activeWorkspacePermissions } from "@/utils/permissions";
 import type { Identity } from "@/types";
 import { workspaceSettings } from "./registry";
 import { SettingsNav } from "./components/SettingsNav";
+import { isManagerRoleName } from "@/pages/role-name";
 
-const MANAGER_ROLES = ["owner", "admin"];
-
-function isWorkspaceAdmin(identity: Identity | undefined, workspaceId: string | undefined): boolean {
+export function isWorkspaceAdmin(identity: Identity | undefined, workspaceId: string | undefined): boolean {
   if (!identity || !workspaceId) return false;
   if (identity.is_superuser) return true;
   const ws = identity.workspaces.find((w) => w.id === workspaceId);
-  if (ws?.role && MANAGER_ROLES.includes(ws.role)) return true;
+  if (isManagerRoleName(ws?.role)) return true;
   // Fallback to permission check — admin/owner have workspace:update or audit:read that viewers lack.
   const perms = activeWorkspacePermissions(identity);
   if (perms.includes("*") || perms.includes("workspace:update")) return true;
@@ -93,7 +92,7 @@ export function WorkspaceSettingsLayout() {
 
       <div className="flex flex-col gap-6 md:flex-row">
         <aside className="w-full shrink-0 md:w-56">
-          <SettingsNav sections={visibleSections} basePath="/settings/workspace" />
+          <SettingsNav sections={visibleSections} basePath="/settings/workspace" label="Workspace Settings" />
           {__DEV_NOTES__ && (
             <p className="text-muted-foreground mt-4 hidden px-3 text-xs md:block">
               Add tabs by registering sections in <code className="font-mono">workspace/registry.ts</code>.

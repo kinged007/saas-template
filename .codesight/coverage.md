@@ -1,12 +1,14 @@
 # Test Coverage
 
-> **21%** of routes and models are covered by tests
-> 35 test files found
+> **22%** of routes and models are covered by tests
+> 58 test files found
 
 ## Covered Routes
 
 - GET:
 - POST:
+- POST:/register
+- POST:/login
 - GET:/
 
 ## Covered Models
@@ -22,6 +24,7 @@
 - JobDefinition
 - JobRun
 - JobLogEntry
+- OAuthAccount
 - StoredSecret
 - UserProfile
 - WebhookSubscription

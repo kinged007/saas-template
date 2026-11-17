@@ -9,23 +9,10 @@ from src.events.bus import (
     EventEnvelope,
     EventMetadata,
     SubscriberHandler,
+    subject_matches,
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _subject_matches(subscription: str, subject: str) -> bool:
-    """Support NATS-style wildcards: '*' single token, '>' rest."""
-    sub_tokens = subscription.split(".")
-    subj_tokens = subject.split(".")
-    for i, tok in enumerate(sub_tokens):
-        if tok == ">":
-            return True
-        if i >= len(subj_tokens):
-            return False
-        if tok != "*" and tok != subj_tokens[i]:
-            return False
-    return len(sub_tokens) == len(subj_tokens)
 
 
 class InProcessEventBus(EventBus):
@@ -73,7 +60,7 @@ class InProcessEventBus(EventBus):
         )
         matched = 0
         for sub, queue in list(self._queues.items()):
-            if _subject_matches(sub, subject):
+            if subject_matches(sub, subject):
                 queue.put_nowait(envelope)
                 matched += 1
         logger.debug("published %s (%d subscriber queues)", subject, matched)

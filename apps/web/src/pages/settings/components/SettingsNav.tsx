@@ -5,12 +5,15 @@ import type { SettingsSection } from "../types";
 export function SettingsNav({
   sections,
   basePath,
+  label,
 }: {
   sections: SettingsSection[];
   basePath: string;
+  /** Landmark name, passed by every shell so it matches that shell's <h1>. */
+  label: string;
 }) {
   return (
-    <nav className="flex flex-col gap-1">
+    <nav aria-label={label} className="flex flex-col gap-1">
       {sections.map((section) => {
         const Icon = section.icon;
         return (

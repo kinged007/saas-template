@@ -11,7 +11,8 @@
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "preview": "vite preview",
     "test": "node --test --test-reporter=tap \"src/**/*.test.ts\"",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:dev": "playwright test --config playwright.dev.config.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.0",

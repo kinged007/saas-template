@@ -122,6 +122,7 @@ app.add_middleware(
         "X-API-Version",
         "X-API-Key-Quota",
         "X-API-Key-Remaining",
+        "X-API-Key-Window-Reset",
         "X-Request-ID",
     ],
 )

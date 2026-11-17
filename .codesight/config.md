@@ -3,10 +3,13 @@
 ## Environment Variables
 
 - `ACCESS_TOKEN_EXPIRE_MINUTES` (has default) — apps/api/.env.example
+- `API_KEY_RETENTION_DAYS` (has default) — apps/api/.env.example
+- `API_PORT` (has default) — apps/web/vite.config.ts
 - `APP_NAME` (has default) — apps/api/.env.example
 - `AUDIT_LOG_RETENTION_DAYS` (has default) — apps/api/.env.example
 - `AUTH_RATE_LIMIT_MAX_ATTEMPTS` (has default) — apps/api/.env.example
 - `AUTH_RATE_LIMIT_WINDOW_SECONDS` (has default) — apps/api/.env.example
+- `CI` **required** — apps/web/playwright.config.ts
 - `CORS_ORIGINS` (has default) — apps/api/.env.example
 - `DATABASE_URL` **required** — apps/api/tests/conftest.py
 - `DEBUG` (has default) — apps/api/.env.example
@@ -37,6 +40,7 @@
 - `SUPERADMIN_EMAIL` **required** — apps/api/.env.example
 - `VITE_API_URL` (has default) — apps/web/src/providers/dataProvider.ts
 - `VITE_WS_URL` (has default) — apps/web/src/providers/liveProvider.ts
+- `WEB_PORT` **required** — apps/web/vite.config.ts
 
 ## Config Files
 
