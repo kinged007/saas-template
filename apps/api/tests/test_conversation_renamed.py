@@ -113,10 +113,12 @@ async def test_renamed_malformed_participants_fall_back_to_db():
         {"conversation_id": conversation_id, "participant_user_ids": [42]},
         {"conversation_id": conversation_id, "participant_user_ids": {}},
         {"conversation_id": conversation_id, "participant_user_ids": ["u1", " "]},
+        {"conversation_id": conversation_id, "participant_user_ids": ["u1", "u1 "]},
     ):
         await handler(payload, EventMetadata(subject=Subjects.CONVERSATION_RENAMED))
 
     assert [sorted(user_ids) for user_ids, _ in cm.calls] == [
+        sorted([user_a, user_b]),
         sorted([user_a, user_b]),
         sorted([user_a, user_b]),
         sorted([user_a, user_b]),

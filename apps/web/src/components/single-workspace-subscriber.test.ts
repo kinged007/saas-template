@@ -6,7 +6,7 @@ const source = readFileSync(new URL("./AppLayout.tsx", import.meta.url), "utf8")
 
 // `assert.match` echoes the whole haystack on failure, which is the whole
 // component. These asserts take a message so a red run prints one line.
-test("the identity query has a single single_workspace observer", () => {
+test("AppLayout calls useSingleWorkspace once", () => {
   // `(?!:)` skips the declaration `function useSingleWorkspace(): boolean`.
   const callSites = source.match(/useSingleWorkspace\(\)(?!:)/g) ?? [];
   assert.equal(callSites.length, 1, `expected 1 useSingleWorkspace() call, found ${callSites.length}`);

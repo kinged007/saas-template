@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio  # noqa: E402
+import inspect  # noqa: E402
 import os  # noqa: E402
 from datetime import timedelta  # noqa: E402
 from typing import TYPE_CHECKING  # noqa: E402
@@ -272,3 +273,21 @@ async def run_job_via_scheduler(
                 return run, list(messages)
         await asyncio.sleep(0.1)
     raise AssertionError(f"job {key} did not finish within {timeout_s}s (scheduled={scheduled})")
+
+
+async def wait_for(predicate, timeout_secs: float = 3.0, interval: float = 0.02) -> bool:
+    """Poll `predicate` until it returns truthy; False once the deadline passes.
+
+    `predicate` may be sync or async. Timeout reports False instead of raising so
+    every call site keeps its own failure message.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_secs
+    while loop.time() < deadline:
+        result = predicate()
+        if inspect.isawaitable(result):
+            result = await result
+        if result:
+            return True
+        await asyncio.sleep(interval)
+    return False

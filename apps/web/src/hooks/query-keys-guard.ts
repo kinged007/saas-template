@@ -11,12 +11,16 @@ export function stripComments(source: string): string {
 // `export function`.
 export function useUpdateProfileWindow(source: string): string | null {
   const code = stripComments(source);
-  const start = code.indexOf("export function useUpdateProfile");
+  const start = code.search(/^export function useUpdateProfile\b/m);
   if (start < 0) return null;
   const next = code.slice(start + 1).search(/^export /m);
   return code.slice(start, next < 0 ? undefined : start + 1 + next);
 }
 
 export function countAuthInvalidations(region: string): number {
-  return (region.match(/invalidateQueries\(\{\s*queryKey:\s*\[\s*"auth"\s*\]\s*\}\)/g) ?? []).length;
+  // An exact `queryKey: ["auth"]` invalidation counts whether the call carries
+  // other options around the key (`refetchType`, `exact`, ...) or not; a longer
+  // key that only shares the prefix (`["auth", "identity"]`) does not.
+  return (region.match(/invalidateQueries\(\{\s*[^{}]*queryKey:\s*\[\s*"auth"\s*\][^{}]*\}\)/g) ?? [])
+    .length;
 }

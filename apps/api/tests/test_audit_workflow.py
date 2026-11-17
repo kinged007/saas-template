@@ -20,15 +20,18 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 import yaml
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
-from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware, _TrustedHosts
 
 from src.db.session import SessionFactory
 from src.models.audit import AuditLogEntry
 
 COMPOSE = Path(__file__).resolve().parents[3] / "infra/docker/docker-compose.prod.yml"
+DOCKERFILE_API = Path(__file__).resolve().parents[3] / "infra/docker/Dockerfile.api"
+NGINX_CONF = Path(__file__).resolve().parents[3] / "infra/docker/nginx.conf"
 WORKFLOWS = Path(__file__).resolve().parents[1] / "src/workflows/__init__.py"
 
 
@@ -323,30 +326,256 @@ async def test_forwarded_for_from_untrusted_peer_is_ignored(app):
     assert rows[0].ip_address == "198.51.100.7"
 
 
+async def test_operator_forwarded_allow_ips_typo_is_silently_untrusted(app):
+    """Why FORWARDED_ALLOW_IPS must be checked after an edit, not just set.
+
+    uvicorn parses the operator's list itself and rejects nothing: an entry that
+    is not an address or a CIDR network is demoted to a literal that matches no
+    peer. The stack starts, nothing is logged, and the mistake surfaces only as
+    recorded client IPs equal to the proxy's — one rate-limit bucket for every
+    user. docs/OPERATIONS.md records that; these assertions pin the two facts
+    the docs sentence rests on (uv.lock pins the uvicorn version).
+    """
+    typo = "172.30.0.0/33"  # a bad mask where the intended proxy entry belonged
+    trusted = _TrustedHosts(typo)
+    assert set(trusted.trusted_literals) == {typo}, (
+        f"uvicorn no longer demotes an unparseable {typo!r} to a literal; "
+        "OPERATIONS.md needs the new behaviour recorded"
+    )
+    assert not trusted.trusted_networks and not trusted.trusted_hosts, (
+        f"{typo!r} is still trusted, so a typo costs nothing"
+    )
+
+    proxy = "172.30.0.2"
+    middleware = ProxyHeadersMiddleware(app, trusted_hosts=typo)
+    transport = ASGITransport(app=middleware, client=(proxy, 40000))
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "audit9@example.com",
+                "password": "Password123!",
+                "first_name": "Audit",
+                "last_name": "User",
+            },
+            headers={"X-Forwarded-For": "203.0.113.9"},
+        )
+    assert resp.status_code == 201, resp.text
+    assert await _wait_for(
+        lambda: _actions_equal(["user.register", "user.email_verification_sent"])
+    )
+    rows = await _audit_rows()
+    assert rows[0].ip_address == proxy
+
+    assert _TrustedHosts("*").always_trust is True
+    mixed = _TrustedHosts("*, 127.0.0.1")
+    assert mixed.always_trust is False and set(mixed.trusted_literals) == {"*"}, (
+        "'*' is a wildcard only as the whole value; see OPERATIONS.md"
+    )
+
+
 def test_prod_compose_trusts_only_the_pinned_proxy_network():
     """The shipped value the tests above stand in for must stay narrow.
 
     Reverting docker-compose.prod.yml to '--forwarded-allow-ips=*' leaves every
     other test green while reopening the spoofing hole, so pin the config too:
-    every entry must be a network, no entry may be a default route, the subnet
-    the compose file pins nginx to must be inside the trusted set, and
-    --proxy-headers must be on or the allowlist never applies.
+    uvicorn must parse every entry as an IP or network (strict=True — anything
+    else is demoted to an untrusted literal that silently matches no peer), no
+    entry may be a default route, the subnet the compose file pins nginx to
+    must be inside the trusted set, and --proxy-headers must be on or the
+    allowlist never applies. The value is parsed through uvicorn's own
+    _TrustedHosts so the guard cannot drift from what uvicorn actually does
+    with it (uv.lock pins the version).
     """
     compose = yaml.safe_load(COMPOSE.read_text())
     command = compose["services"]["api"]["command"]
     default = re.search(r"--forwarded-allow-ips=\$\{FORWARDED_ALLOW_IPS:-([^}]+)\}", command)
     assert default, f"no --forwarded-allow-ips default in: {command}"
-    trusted = [
-        ipaddress.ip_network(entry.strip(), strict=False) for entry in default.group(1).split(",")
+    trusted = _TrustedHosts(default.group(1))
+    assert trusted.always_trust is False and not trusted.trusted_literals, (
+        f"FORWARDED_ALLOW_IPS default trusts every peer or carries an entry "
+        f"uvicorn cannot parse (silently untrusted): {default.group(1)}"
+    )
+    nets = list(trusted.trusted_networks) + [
+        ipaddress.ip_network(ip) for ip in trusted.trusted_hosts
     ]
-    assert all(net.prefixlen > 0 for net in trusted), (
-        f"FORWARDED_ALLOW_IPS default trusts every peer: {trusted}"
+    assert all(net.prefixlen > 0 for net in trusted.trusted_networks), (
+        f"FORWARDED_ALLOW_IPS default trusts every peer: {default.group(1)}"
     )
     subnet = ipaddress.ip_network(compose["networks"]["default"]["ipam"]["config"][0]["subnet"])
-    assert all(subnet.subnet_of(net) for net in trusted), (
-        f"pinned subnet {subnet} outside FORWARDED_ALLOW_IPS default {trusted}"
+    assert all(subnet.subnet_of(net) for net in nets), (
+        f"pinned subnet {subnet} outside FORWARDED_ALLOW_IPS default {default.group(1)}"
     )
     assert "--proxy-headers" in command, f"--proxy-headers missing from: {command}"
+
+
+def test_image_cmd_carries_proxy_flags():
+    """A direct docker run, Kubernetes manifest or buildpack launch uses the
+    image CMD — compose's `command:` overrides it, so the flags must be on the
+    default or every non-compose deployment records the proxy's address and the
+    IP-keyed limiters collapse. The allowlist is wired to FORWARDED_ALLOW_IPS
+    with a loopback-only default: outside compose nothing remote is trusted
+    until the operator names the proxy.
+    """
+    cmd = re.search(r"^CMD (.+)$", DOCKERFILE_API.read_text(), re.MULTILINE)
+    assert cmd, "no CMD line in Dockerfile.api"
+    line = cmd.group(1)
+    default = re.search(r'--forwarded-allow-ips=\\"\$\{FORWARDED_ALLOW_IPS:-([^}]+)\}\\"', line)
+    assert default, (
+        f"image CMD must wire --forwarded-allow-ips to FORWARDED_ALLOW_IPS, "
+        f"quoted so a value containing spaces stays one argv: {line}"
+    )
+    trusted = _TrustedHosts(default.group(1))
+    assert trusted.always_trust is False and not trusted.trusted_literals, (
+        f"image CMD default trusts every peer or carries an entry uvicorn "
+        f"cannot parse (silently untrusted): {default.group(1)}"
+    )
+    assert "--proxy-headers" in line, f"--proxy-headers missing from: {line}"
+
+
+def test_nginx_ws_location_forwards_client_ip():
+    """Without X-Forwarded-For on the /api/v1/ws location, uvicorn's client is
+    the connecting peer alone — nginx's address, not the end user's.
+    X-Forwarded-Proto keeps the scheme honest (ws vs wss) exactly as the /api/
+    location already does. No ws route reads scope["client"] today, so the
+    headers keep future client-IP-dependent ws code correct rather than fix a
+    live misattribution.
+    """
+    ws = re.search(r"location /api/v1/ws \{([^}]*)\}", NGINX_CONF.read_text())
+    assert ws, "no /api/v1/ws location in nginx.conf"
+    for header in ("X-Forwarded-For", "X-Forwarded-Proto"):
+        assert f"proxy_set_header {header}" in ws.group(1), (
+            f"{header} missing from /api/v1/ws location: {ws.group(0)}"
+        )
+
+
+def _nginx_block_body(kind: str, anchor: str) -> str:
+    """Inner text of the first top-level `<kind> <anchor> { … }`.
+
+    Non-greedy so it stops at the block's own closing brace; the geo/map
+    blocks carry no nested braces. `anchor` is regex-safe.
+    """
+    body = NGINX_CONF.read_text()
+    match = re.search(rf"{kind}\s+{anchor}\s*\{{(.*?)\}}", body, re.DOTALL)
+    assert match, f"no {kind} {anchor} {{...}} block in nginx.conf"
+    return match.group(1)
+
+
+def _forwarded_proto(trusted: str, forwarded: str, local_scheme: str = "http") -> str:
+    """Evaluate the shipped `map ... $forwarded_proto` block the way nginx does.
+
+    nginx listens on plain :80, so `$scheme` is always `http` here — that is
+    `local_scheme`, the fallback when no rule matches. Regex keys (`~*`
+    case-insensitive) match first-in-order; a bare key is exact; `default` is
+    the fallback. Mirrors nginx's documented map semantics for the constructs
+    the conf uses, so the guard asserts shipped behaviour, not a retyping.
+    """
+    block = _nginx_block_body(
+        "map", r'"\$trusted_proxy:\$http_x_forwarded_proto"\s+\$forwarded_proto'
+    )
+    key = f"{trusted}:{forwarded}"
+    default = None
+    for line in block.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("default"):
+            default = line.split(None, 1)[1].rstrip(";").strip().strip('"')
+            continue
+        token, _, value = line.partition(" ")
+        token = token.strip().strip('"')
+        value = value.strip().rstrip(";").strip().strip('"')
+        if token.startswith("~*"):
+            matched = re.search(token[2:], key, re.IGNORECASE) is not None
+        elif token.startswith("~"):
+            matched = re.search(token[1:], key) is not None
+        else:
+            matched = token == key
+        if matched:
+            return local_scheme if value == "$scheme" else value
+    assert default is not None, "map block has no default"
+    return local_scheme if default == "$scheme" else default
+
+
+@pytest.mark.parametrize(
+    "trusted,forwarded,expected",
+    [
+        ("1", "https", "https"),
+        ("1", "HTTPS", "https"),
+        ("1", "https, http", "https"),
+        ("1", "http", "http"),
+        ("1", "HTTP", "http"),
+        ("1", "http, https", "http"),
+        ("1", "", "http"),
+        ("1", "gopher", "http"),
+        ("1", "httpsfoo", "http"),
+        ("1", "https-x", "http"),
+        ("0", "https", "http"),
+        ("0", "HTTPS", "http"),
+        ("0", "https, http", "http"),
+    ],
+)
+def test_nginx_forwarded_proto_matches_trusted_proxy_header(trusted, forwarded, expected):
+    """A trusted TLS-terminating load balancer's scheme reaches the API; a
+    spoofed header from anyone else is dropped to the local $scheme.
+
+    The API only sets Secure on the refresh cookie when it sees https (see
+    `cookie_secure_for`), so an https client behind the external terminator
+    must land here as https while an untrusted client cannot.
+    """
+    assert _forwarded_proto(trusted, forwarded) == expected
+
+
+def test_nginx_geo_and_map_blocks_are_at_http_level():
+    """The geo and map blocks sit at http level, before any server{}.
+
+    Both directives are rejected inside `server{}` — `nginx -t` fails with
+    "directive is not allowed here" and the container refuses to start — but
+    the guards above read the conf as plain text and would still pass, so an
+    indented or misplaced edit goes unnoticed.
+    """
+    lines = NGINX_CONF.read_text().splitlines()
+    server_line = next(i for i, ln in enumerate(lines) if ln.startswith("server {"))
+    directives = ("geo $trusted_proxy", 'map "$trusted_proxy:$http_x_forwarded_proto"')
+    for directive in directives:
+        at_column_zero = [i for i, ln in enumerate(lines) if ln.startswith(directive)]
+        assert at_column_zero, f"{directive!r} is indented (nested in server{{}}?)"
+        assert min(at_column_zero) < server_line, (
+            f"{directive} is declared inside server{{}}: nginx -t would fail"
+        )
+
+
+def test_nginx_locations_forward_the_trusted_proto_variable():
+    """Both proxied locations send X-Forwarded-Proto from the mapped
+    variable, never the always-http $scheme."""
+    for loc in (r"/api/", r"/api/v1/ws"):
+        match = re.search(rf"location {re.escape(loc)} \{{([^}}]*)\}}", NGINX_CONF.read_text())
+        assert match, f"no {loc} location in nginx.conf"
+        body = match.group(1)
+        assert "proxy_set_header X-Forwarded-Proto $scheme" not in body, (
+            f"{loc} forwards $scheme (always http here) instead of the mapped variable"
+        )
+        assert "proxy_set_header X-Forwarded-Proto $forwarded_proto" in body, (
+            f"{loc} must forward X-Forwarded-Proto from $forwarded_proto"
+        )
+
+
+def test_nginx_trusted_proxy_set_is_not_everyone():
+    """The geo set defaults to untrusted, trusts no default route, and still
+    covers the subnet compose pins nginx to."""
+    block = _nginx_block_body("geo", r"\$trusted_proxy")
+    assert re.search(r"default\s+0\b", block), f"geo must default to untrusted (0):\n{block}"
+    assert "0.0.0.0/0" not in block and "::/0" not in block, (
+        f"geo trusts every peer via a default route:\n{block}"
+    )
+    pinned = re.search(r"subnet:\s*(\S+)", COMPOSE.read_text())
+    assert pinned, "no pinned subnet in docker-compose.prod.yml"
+    pinned_net = ipaddress.ip_network(pinned.group(1).strip().strip('"'))
+    cidrs = re.findall(r"(\d+\.\d+\.\d+\.\d+/\d+)", block)
+    assert cidrs, f"no CIDR ranges in geo block:\n{block}"
+    assert any(pinned_net.subnet_of(ipaddress.ip_network(cidr)) for cidr in cidrs), (
+        f"pinned subnet {pinned_net} is not inside any trusted range: {cidrs}"
+    )
 
 
 async def _email_failed_rows(resource_id: str) -> list[AuditLogEntry]:

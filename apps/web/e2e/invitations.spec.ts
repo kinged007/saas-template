@@ -29,9 +29,29 @@ const ACCEPTED = {
   email: "accepted@example.com",
   status: "accepted",
 };
+const DECLINED = {
+  ...LIVE,
+  id: "inv-declined",
+  email: "declined@example.com",
+  status: "declined",
+};
+const REVOKED = {
+  ...LIVE,
+  id: "inv-revoked",
+  email: "revoked@example.com",
+  status: "revoked",
+};
+const EXPIRED_STATUS = {
+  ...LIVE,
+  id: "inv-expired-status",
+  email: "expired-status@example.com",
+  status: "expired",
+};
 
 const row = (page: Page, email: string) => page.getByRole("row").filter({ hasText: email });
 const deleteButton = (page: Page, email: string) => row(page, email).getByRole("button", { name: "Delete" });
+const resendButton = (page: Page, email: string) =>
+  row(page, email).getByRole("button", { name: "Re-send" });
 
 /**
  * A workspace actor claiming nothing itself. `IDENTITY` is superuser with a
@@ -43,7 +63,7 @@ const actor = (permissions: string[], role = "admin") => ({
   ...IDENTITY,
   is_superuser: false,
   permissions: [],
-  workspaces: [{ id: "ws-1", name: "Acme Corp", role, permissions }],
+  workspaces: [{ id: "ws-1", name: "Acme Corp", slug: "acme-corp", role, permissions }],
 });
 
 // May invite (member:create) and re-send but not revoke: DELETE
@@ -128,6 +148,51 @@ test.describe("invitations", () => {
 
     await expect(deleteButton(page, "live@example.com")).toBeEnabled();
     await expect(deleteButton(page, "accepted@example.com")).toHaveCount(0);
+  });
+
+  test("the Delete/Re-send buttons follow the revoke/resend gates per state", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    await page.route(
+      (url) => url.pathname.endsWith("/api/v1/invitations"),
+      (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([LIVE, EXPIRED, DECLINED, ACCEPTED, REVOKED, EXPIRED_STATUS]),
+        }),
+    );
+    await page.goto("/members");
+
+    // Every absence below is read off a rendered row, not a missing one.
+    for (const email of [
+      "live@example.com",
+      "expired@example.com",
+      "declined@example.com",
+      "accepted@example.com",
+      "revoked@example.com",
+      "expired-status@example.com",
+    ]) {
+      await expect(row(page, email)).toBeVisible();
+    }
+
+    // Delete maps to revoke: offered on a live invitation only
+    // (canRevokeInvitation is `status === "pending"`).
+    await expect(deleteButton(page, "live@example.com")).toBeVisible();
+    await expect(deleteButton(page, "expired@example.com")).toBeVisible();
+    await expect(deleteButton(page, "declined@example.com")).toHaveCount(0);
+    await expect(deleteButton(page, "accepted@example.com")).toHaveCount(0);
+    await expect(deleteButton(page, "revoked@example.com")).toHaveCount(0);
+    await expect(deleteButton(page, "expired-status@example.com")).toHaveCount(0);
+
+    // Re-send is offered on an expired pending row, a declined row, and a
+    // literal expired row; a fresh pending row is a no-op server-side and the
+    // terminal accepted/revoked rows are refused.
+    await expect(resendButton(page, "live@example.com")).toHaveCount(0);
+    await expect(resendButton(page, "expired@example.com")).toBeVisible();
+    await expect(resendButton(page, "declined@example.com")).toBeVisible();
+    await expect(resendButton(page, "accepted@example.com")).toHaveCount(0);
+    await expect(resendButton(page, "revoked@example.com")).toHaveCount(0);
+    await expect(resendButton(page, "expired-status@example.com")).toBeVisible();
   });
 
   test("the row controls are separated by a gap", async ({ page }) => {
