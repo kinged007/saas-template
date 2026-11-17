@@ -467,6 +467,7 @@ async def test_custom_role_create_emits_audit(bus, owner):
     assert bus.actions() == ["role.created"]
     audit = bus.audit()[0][0]
     assert audit["workspace_id"] == workspace.id
+    assert audit["actor_user_id"] == owner.id
     assert audit["resource_type"] == "role"
     assert audit["details"]["name"] == "billing"
 
