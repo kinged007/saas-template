@@ -624,3 +624,68 @@ def test_suspend_and_reactivate_decide_every_member_status():
     # it unreachable through SQL, so the default is pinned here at table level.
     assert _SUSPEND_ALLOWED.get("archived", False) is False
     assert _REACTIVATE_ALLOWED.get("archived", False) is False
+
+
+async def test_suspend_refuses_a_status_the_table_blocks():
+    """The #977 refusal branch is pinned directly, not only at table level.
+
+    `test_suspend_and_reactivate_decide_every_member_status` pins the table
+    default (`_SUSPEND_ALLOWED.get("archived", False) is False`), and the
+    `WorkspaceConflict` -> 409 mapping is exercised through `reactivate_member`.
+    Neither reaches the `raise` itself. This test drives it: a member whose
+    `status` is outside the CHECK domain (unreachable through SQL, so a stub
+    session stands in for the row) makes `suspend_member` raise
+    `WorkspaceConflict`, and the row is left untouched — the refusal is not the
+    idempotent `return member` no-op a `SUSPENDED` status takes above it.
+    """
+    import pytest
+
+    from src.models.workspace import Role, User, WorkspaceMember
+    from src.services.workspaces import WorkspaceConflict, WorkspaceService
+
+    actor = User(id="actor-1")
+    target = WorkspaceMember(
+        id="member-2",
+        workspace_id="ws-1",
+        user_id="user-2",
+        role_id="role-editor",
+        status="archived",
+    )
+    editor = Role(id="role-editor", name="editor")
+    # The manager gate reads the actor as an active admin; `.execute` backs
+    # `get_membership`, `.get` backs the target member and its role, so the
+    # only thing that can refuse the call is the status table itself.
+    actor_row = WorkspaceMember(
+        id="member-1",
+        workspace_id="ws-1",
+        user_id="actor-1",
+        role_id="role-admin",
+        status="active",
+    )
+    admin = Role(id="role-admin", name="admin")
+
+    class _Result:
+        def __init__(self, row):
+            self._row = row
+
+        def first(self):
+            return self._row
+
+    class _StubSession:
+        async def execute(self, _stmt):
+            return _Result((actor_row, admin))
+
+        async def get(self, model, _pk):
+            if model is WorkspaceMember:
+                return target
+            if model is Role:
+                return editor
+            return None
+
+    service = WorkspaceService(_StubSession())
+    with pytest.raises(WorkspaceConflict, match="cannot suspend a member in this state"):
+        await service.suspend_member("ws-1", "member-2", actor=actor)
+
+    # The refusal is not a write: the row keeps the status that was refused,
+    # rather than being flipped to "suspended" or silently returned.
+    assert target.status == "archived"

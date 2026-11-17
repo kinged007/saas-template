@@ -97,7 +97,7 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 
 | Flow | Mechanism |
 |---|---|
-| Password (browser) | `POST /auth/login` (`use_cookies: true`) → access JWT in JSON + refresh in `HttpOnly; SameSite=Lax` cookie, `Secure` per `cookie_secure_for()` (https request, explicit `REFRESH_COOKIE_SECURE`, or plain http outside `development`/`test`); `POST /auth/refresh` reads the cookie (rotating, hashed opaque token in DB); `POST /auth/logout` revokes + clears the cookie |
+| Password (browser) | `POST /auth/login` (`use_cookies: true`) → access JWT in JSON + refresh in `HttpOnly; SameSite=Lax` cookie, `Secure` per `cookie_secure_for()` (`REFRESH_COOKIE_SECURE` if set, else https request, else plain http outside `development`/`test`); `POST /auth/refresh` reads the cookie (rotating, hashed opaque token in DB); `POST /auth/logout` revokes + clears the cookie |
 | Password (non-browser) | `POST /auth/login` → access + refresh in JSON; `POST /auth/refresh` takes `{"refresh_token"}` as before |
 | 2FA / OAuth (browser) | `POST /auth/2fa/login` / `POST /auth/oauth/token` with `use_cookies: true` set the same cookie and omit the JSON refresh; the OAuth one-time code handoff carries only the access token for cookie callers |
 | API keys | `Authorization: Bearer <key>`; permissions resolved per workspace (untouched by the cookie flow) |
@@ -237,7 +237,7 @@ tie. Ties resolve by `id`, not by insertion order — the ids are UUIDs.
 
 - bcrypt password hashing, Fernet-encrypted secrets (versioned keys)
 - CORS allowlist from env (`allow_credentials` on); refresh-token rotation + revocation
-- Browser refresh tokens in `HttpOnly; SameSite=Lax` cookies (JS cannot exfiltrate them); `Secure` is resolved per request by `cookie_secure_for()` — on https requests, on plain http only when `ENVIRONMENT` is neither `development` nor `test`, or whatever `REFRESH_COOKIE_SECURE` is set to; CSRF covered by SameSite + `Origin`/`Referer` allowlist check + required `X-Requested-With` custom header on cookie-authenticated refresh/logout
+- Browser refresh tokens in `HttpOnly; SameSite=Lax` cookies (JS cannot exfiltrate them); `Secure` is resolved per request by `cookie_secure_for()` — `REFRESH_COOKIE_SECURE` if set, else https, else plain http only when `ENVIRONMENT` is neither `development` nor `test`; CSRF covered by SameSite + `Origin`/`Referer` allowlist check + required `X-Requested-With` custom header on cookie-authenticated refresh/logout
 - HttpOnly narrows theft to the live session — injected JS can still ride the session while the page is open, so CSP and output escaping remain the real XSS defense
 - Permission checks server-side on every workspace-scoped route
 - No secrets in responses; API-key raw values returned once at creation

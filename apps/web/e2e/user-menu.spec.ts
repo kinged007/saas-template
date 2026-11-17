@@ -42,7 +42,7 @@ test.describe("user menu", () => {
         ...IDENTITY,
         is_superuser: false,
         permissions: [],
-        workspaces: [{ id: "ws-1", name: "Acme Corp", role: "viewer" }],
+        workspaces: [{ id: "ws-1", name: "Acme Corp", slug: "acme-corp", role: "viewer" }],
       },
     });
     await page.goto("/");
