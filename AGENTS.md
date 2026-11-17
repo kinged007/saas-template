@@ -3,7 +3,9 @@
 **Stack:** fastapi | sqlalchemy | typescript
 **Monorepo:** api, saas-template-web
 
-26 routes | 10 models | 17 env vars | 247 import links
+124 routes | 23 models | 17 env vars | 247 import links
+
+_This counts line is hand-maintained, not generated: routes are route decorators across apps/api/src, models are SQLAlchemy Base subclasses in apps/api/src/models. Measured at main e435891d on 2026-11-17. The .codesight figures referenced below come from npx codesight --wiki._
 
 **API areas:** , /effective-permissions, /{api_key_id}, /register, /login, /refresh, /logout, /me, /{invitation_id}, /accept
 

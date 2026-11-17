@@ -3,7 +3,7 @@
 > **Stack:** fastapi | sqlalchemy | react | typescript
 > **Monorepo:** api, saas-template-web
 
-> 102 routes | 23 models | 64 components | 106 lib files | 39 env vars | 4 middleware | 22% test coverage
+> 124 routes | 23 models | 64 components | 106 lib files | 39 env vars | 4 middleware | 22% test coverage
 > **Token savings:** this file is ~11,900 tokens. Without it, AI exploration would cost ~125,600 tokens. **Saves ~113,700 tokens per conversation.**
 > **Last scanned:** 2026-09-30 19:01 — re-run after significant changes
 
