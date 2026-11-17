@@ -44,8 +44,13 @@ export async function mockApi(
   }: {
     signedIn: boolean;
     identity?: Identity;
-    /** Rows for a bare `/api/v1/<resource>` list call; every other list answers `[]`. */
-    lists?: Record<string, unknown[]>;
+    /**
+     * Rows for a bare `/api/v1/<resource>` list call; every other list answers
+     * `[]`. Values are only `JSON.stringify`-ed, so any JSON value works. A
+     * prototype-named key is seedable only through `Object.defineProperty`
+     * — a literal `__proto__:` key sets the object's prototype, not a key.
+     */
+    lists?: Record<string, unknown>;
     /** Path suffixes answered 401 `{detail: "session revoked"}` once, then normal — mid-session sign-out. */
     revokeOn?: string[];
   },
