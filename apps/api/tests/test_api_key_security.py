@@ -1193,31 +1193,58 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     # A key-authorized hit is metered like any other key route: every read and
     # write route spends one unit and reports what is left. Regression test for
     # #311 — the key branch of _require_run_access and _require_job_access used
-    # to return without record_key_use. Each key carries only what its own
-    # route needs — a GET is gated on jobs:read, a write on jobs:update — so
-    # the second request's refusal can only be the quota's doing.
-    for method, url, key_name, charged_status, body, refused_body in [
-        ("get", f"/api/v1/jobs/runs/{runs['workspace']}", "quota-run", 200, None, None),
-        ("get", f"/api/v1/jobs/runs/{runs['workspace']}/logs", "quota-logs", 200, None, None),
-        ("get", f"/api/v1/jobs/{runs['definition']}", "quota-definition", 200, None, None),
-        ("get", f"/api/v1/jobs/{runs['definition']}/runs", "quota-runs", 200, None, None),
+    # to return without record_key_use. Each row names the permission its route
+    # requires, so the key carries exactly that and no more — the second
+    # request's refusal can then only be the quota's doing.
+    for method, url, key_name, required, charged_status, body, refused_body in [
+        ("get", f"/api/v1/jobs/runs/{runs['workspace']}", "quota-run", JOB_READ, 200, None, None),
+        (
+            "get",
+            f"/api/v1/jobs/runs/{runs['workspace']}/logs",
+            "quota-logs",
+            JOB_READ,
+            200,
+            None,
+            None,
+        ),
+        (
+            "get",
+            f"/api/v1/jobs/{runs['definition']}",
+            "quota-definition",
+            JOB_READ,
+            200,
+            None,
+            None,
+        ),
+        (
+            "get",
+            f"/api/v1/jobs/{runs['definition']}/runs",
+            "quota-runs",
+            JOB_READ,
+            200,
+            None,
+            None,
+        ),
         (
             "patch",
             f"/api/v1/jobs/{runs['definition']}",
             "quota-patch",
+            JOB_UPDATE,
             200,
             {"cron_schedule": "30 4 * * *"},
             {"cron_schedule": "45 5 * * *"},
         ),
-        ("post", f"/api/v1/jobs/{runs['definition']}/execute", "quota-execute", 201, {}, {}),
+        (
+            "post",
+            f"/api/v1/jobs/{runs['definition']}/execute",
+            "quota-execute",
+            JOB_UPDATE,
+            201,
+            {},
+            {},
+        ),
     ]:
-        capped = await _create_key(
-            client,
-            headers,
-            key_name,
-            [JOB_READ if method == "get" else JOB_UPDATE],
-            usage_quota=1,
-        )
+        capped = await _create_key(client, headers, key_name, [required], usage_quota=1)
         capped_headers = _key_headers(capped["key"], ws["id"])
         first = await client.request(method, url, json=body, headers=capped_headers)
         assert first.status_code == charged_status, (url, first.text)

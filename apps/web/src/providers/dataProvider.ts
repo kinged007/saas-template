@@ -13,7 +13,7 @@ import { adminListQuery } from "./adminListQuery";
 import { clearAllCaches, queryClient } from "./queryClient";
 import { hasReadById, resourcePath } from "./resourcePaths";
 import { withRefreshLock } from "./refreshLock";
-import { normalizeSorters } from "./sorters.ts";
+import { normalizeSorters } from "./sorters";
 
 // Same-origin API path: the vite dev proxy (and nginx in production) forwards
 // /api → backend, so no CORS/absolute-URL issues regardless of how the app is

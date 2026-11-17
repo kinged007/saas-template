@@ -47,7 +47,7 @@ const member = (email: string, roleId: string, roleName: string) => ({
 const identity = (myRole: string, { singleWorkspace = true } = {}) => ({
   id: "user-1",
   email: "manager@example.com",
-  first_name: "Manager",
+  display_name: "Manager",
   is_superuser: false,
   permissions: [
     "member:read",
@@ -57,7 +57,7 @@ const identity = (myRole: string, { singleWorkspace = true } = {}) => ({
     "role:read",
     "role:create",
   ],
-  workspaces: [{ id: "ws-1", name: "Acme Corp", role: myRole }],
+  workspaces: [{ id: "ws-1", name: "Acme Corp", slug: "acme-corp", role: myRole }],
   single_workspace: singleWorkspace,
 });
 

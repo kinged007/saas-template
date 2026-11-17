@@ -19,10 +19,10 @@ import { mockApi } from "./mock-api";
 const identity = {
   id: "user-1",
   email: "owner@example.com",
-  first_name: "Owner",
+  display_name: "Owner",
   is_superuser: false,
   permissions: ["*"],
-  workspaces: [{ id: "ws-1", name: "Acme Corp", role: "owner" }],
+  workspaces: [{ id: "ws-1", name: "Acme Corp", slug: "acme-corp", role: "owner" }],
   // The danger zone holding the transfer block is hidden on a single-workspace
   // account, so the zone under test would never render without this.
   single_workspace: false,

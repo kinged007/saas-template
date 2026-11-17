@@ -113,6 +113,22 @@ test.describe("webhooks page", () => {
     await expect(page.getByText("No webhook subscriptions yet.")).toHaveCount(0);
   });
 
+  test("a failed subscriptions load reports the failure once, in the row", async ({
+    page,
+  }) => {
+    await webhooks(page);
+    await subscriptions(page, 500, { detail: "Permission denied" });
+
+    await page.goto("/webhooks");
+
+    const row = page.getByRole("row").filter({ hasText: "Could not load" });
+    await expect(row).toContainText("Permission denied");
+    await page.waitForTimeout(500);
+    expect(
+      await page.locator('[data-sonner-toast]:has-text("Permission denied")').count(),
+    ).toBe(0);
+  });
+
   test("an empty collection renders the empty state", async ({ page }) => {
     await webhooks(page);
     await subscriptions(page, 200, []);

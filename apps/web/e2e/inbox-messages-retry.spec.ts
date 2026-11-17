@@ -42,10 +42,11 @@ const MESSAGE_ROWS = Array.from({ length: 25 }, (_, i) => ({
  */
 async function expectNoRefineToast(page: import("playwright/test").Page) {
   await page.waitForTimeout(2_000);
-  // No content filter: without an i18nProvider refine falls back to the raw
-  // `notifications.error` key as the toast title, so match the toast element
-  // itself — these failure paths raise no other toast.
-  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
+  // Refine's error notifications go through sonner's `toast.error`, which
+  // renders the toast with `data-type="error"`, so scope the check to error
+  // toasts instead of every sonner toast: a success toast on one of these
+  // flows (say one for the Retry action) must not trip the failure paths.
+  await expect(page.locator('[data-sonner-toast][data-type="error"]')).toHaveCount(0);
 }
 
 /**
@@ -173,6 +174,7 @@ test.describe("inbox message fetch", () => {
     // a double lock: the data-testid anchor excludes the conversation list while
     // `parentElement === scroller` pins the note as the scroller's direct child,
     // keeping the sticky top row free of row-flow artifacts.
+    await expect(page.getByTestId("thread-messages")).toBeAttached();
     const scrollerCheck = await staleNote.evaluate((note) => {
       const scroller = note.closest('[data-testid="thread-messages"].overflow-y-auto');
       return {

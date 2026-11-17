@@ -35,10 +35,19 @@ export const canToggleUser = (detail: AdminUserDetail, viewerId?: string | null)
   detail.id !== viewerId;
 
 export const asAdminUserDetail = (raw: unknown): AdminUserDetail | undefined => {
-  const { id, workspaces } = (raw ?? {}) as Partial<AdminUserDetail>;
-  return typeof id === "string" && id.length > 0 && Array.isArray(workspaces)
-    ? (raw as AdminUserDetail)
-    : undefined;
+  const u = (raw ?? {}) as Partial<AdminUserDetail>;
+  // Every field AdminUserDetail claims must clear the guard, or a payload that
+  // renders an empty heading (no email) reaches UsersSection.
+  const valid =
+    typeof u.id === "string" &&
+    u.id.length > 0 &&
+    typeof u.email === "string" &&
+    typeof u.display_name === "string" &&
+    typeof u.is_active === "boolean" &&
+    typeof u.is_superuser === "boolean" &&
+    (u.created_at === undefined || typeof u.created_at === "string") &&
+    Array.isArray(u.workspaces);
+  return valid ? (raw as AdminUserDetail) : undefined;
 };
 
 export const pageRange = (current: number, total: number, pageSize = PAGE_SIZE) => {

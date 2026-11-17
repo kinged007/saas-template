@@ -149,7 +149,12 @@ function DeliveryLog({ subscriptionId }: { subscriptionId: string }) {
 }
 
 export function WebhooksPage() {
-  const { result, query } = useWorkspaceList<WebhookSubscription>({ resource: "webhooks" });
+  const { result, query } = useWorkspaceList<WebhookSubscription>({
+    resource: "webhooks",
+    // The failure row below reports the reason itself, so refine's error
+    // notification would only repeat it in a toast.
+    errorNotification: false,
+  });
   const { data: canManage } = useCan({ resource: "webhooks", action: "delete" });
   const [openId, setOpenId] = useState<string | null>(null);
 
