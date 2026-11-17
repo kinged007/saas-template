@@ -36,8 +36,15 @@ def _check_node(tmp_path, version=None):
         shim.write_text(f'#!/bin/sh\necho "v{version}"\n')
         shim.chmod(0o755)
         path = f"{bindir}{os.pathsep}{os.environ['PATH']}"
-    env = {**os.environ, "PATH": path}
-    return subprocess.run([MAKE, "check-node"], cwd=ROOT, env=env, capture_output=True, text=True)
+    env = {**os.environ, "PATH": path, "MAKELEVEL": "0"}
+    env.pop("MAKEFLAGS", None)
+    return subprocess.run(
+        [MAKE, "--no-print-directory", "check-node"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_makefile_floor_matches_engines():
