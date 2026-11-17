@@ -22,18 +22,18 @@ CSRF_HEADER_VALUE = "XMLHttpRequest"
 def _is_https_request(request: Request | None) -> bool:
     """True when the request arrived over TLS (proxy-aware).
 
-    The compose prod service (infra/docker/docker-compose.prod.yml) runs uvicorn
-    with --proxy-headers, so there request.url.scheme already honors
-    X-Forwarded-Proto; the image default CMD (infra/docker/Dockerfile.api) does
-    not, so the explicit header check is what covers that case, test clients,
-    and servers without proxy-header handling. Port suffix (:443) covers
+    The compose prod service (infra/docker/docker-compose.prod.yml) and the image
+    default CMD (infra/docker/Dockerfile.api) both run uvicorn with
+    --proxy-headers, so on those paths request.url.scheme already honors
+    X-Forwarded-Proto; the explicit header check still covers test clients and
+    servers without proxy-header handling. Port suffix (:443) covers
     X-Forwarded-Host forms that carry no scheme, for a proxy that forwards
     the host only.
 
     The header reads are client-controlled and deliberately ignore uvicorn's
-    forwarded_allow_ips (prod sets --forwarded-allow-ips='*', so there is no
-    trusted boundary to check). They are fail-secure: they can only return
-    True, never strip Secure from a real https request. Narrowing
+    forwarded_allow_ips (compose prod pins the nginx subnet 172.30.0.0/24 and
+    the image default trusts loopback only). They are fail-secure: they can
+    only return True, never strip Secure from a real https request. Narrowing
     forwarded_allow_ips must come with a re-check of this function."""
     if request is None:
         return False
@@ -49,6 +49,10 @@ def _is_https_request(request: Request | None) -> bool:
 def cookie_secure_for(request: Request | None = None) -> bool:
     """Secure flag for the refresh cookie.
 
+    `request=None` means "no request context": the pre-#155 ENVIRONMENT-based
+    flag is returned unchanged. Callers must pass a live request so the https
+    detection above applies; set_refresh_cookie already enforces this.
+
     Explicit REFRESH_COOKIE_SECURE wins; otherwise https requests get Secure
     even when ENVIRONMENT says development (e.g. prod misconfig serving TLS
     behind a plain-http app server), and plain-http requests skip it so the
@@ -60,9 +64,9 @@ def cookie_secure_for(request: Request | None = None) -> bool:
     return settings.refresh_cookie_secure_effective
 
 
-def set_refresh_cookie(response: Response, token: str, request: Request) -> None:
-    """Set the refresh cookie. `request` is required: the Secure flag is derived
-    from it, and a default would silently restore the ENVIRONMENT-based flag."""
+def set_refresh_cookie(response: Response, token: str, *, request: Request) -> None:
+    """Set the refresh cookie. `request` is required (keyword-only): the Secure flag
+    is derived from it, and a default would silently restore the ENVIRONMENT-based flag."""
     kwargs: dict = {
         "key": settings.refresh_cookie_name,
         "value": token,

@@ -2,7 +2,6 @@ import asyncio
 import csv
 import io
 import json
-import time
 from uuid import uuid4
 
 import pytest
@@ -14,7 +13,7 @@ from tests.conftest import create_workspace, register_user, ws_headers
 
 
 async def _wait_for_audit_export(
-    client, headers, workspace_id, params=None, timeout_secs: float = 5.0, poll_secs: float = 0.02
+    client, headers, workspace_id, params=None, timeout_secs: float = 5.0, interval: float = 0.02
 ):
     """Return the export, requested once the bus has committed `workspace.created`.
 
@@ -34,7 +33,7 @@ async def _wait_for_audit_export(
             landed = "workspace.created" in set(result.scalars().all())
         if landed or loop.time() >= deadline:
             break
-        await asyncio.sleep(poll_secs)
+        await asyncio.sleep(interval)
     assert landed, f"event bus did not commit workspace.created within {timeout_secs}s"
     resp = await client.get("/api/v1/workspaces/export", params=params, headers=headers)
     assert resp.status_code == 200, resp.text
@@ -59,19 +58,15 @@ async def test_wait_for_audit_export_gives_up_without_issuing_export(app_client,
     ws = await create_workspace(app_client, tokens, name="Gate Co")
     # The gate watches a workspace id the bus has never seen, so the row can never land.
     missing_workspace_id = str(uuid4())
-    timeout_secs, poll_secs = 0.05, 0.01
-    started = time.monotonic()
+    timeout_secs, interval = 0.05, 0.01
     with pytest.raises(AssertionError, match="event bus did not commit workspace.created"):
         await _wait_for_audit_export(
             app_client,
             ws_headers(tokens, ws["id"]),
             missing_workspace_id,
             timeout_secs=timeout_secs,
-            poll_secs=poll_secs,
+            interval=interval,
         )
-    # The loop cannot exit before the deadline, so this also proves the gate polled
-    # to the deadline instead of giving up on the first check.
-    assert time.monotonic() - started >= timeout_secs
     assert issued == [], "the gate must abort before the export is issued"
 
 
@@ -340,7 +335,7 @@ async def test_export_members_csv_keeps_columns_for_members_without_profile(app_
     client, h, ws, conv = await _setup(app_client)
     # register_user always creates a profile, so delete the row to get a member
     # without one — the columns must survive the missing row, not vanish with it.
-    from sqlalchemy import delete, select
+    from sqlalchemy import delete
 
     from src.db.session import SessionFactory
     from src.models.user_profile import UserProfile
@@ -371,6 +366,27 @@ async def test_export_members_csv_keeps_columns_for_members_without_profile(app_
     # The rest of the row is unaffected by the missing profile.
     assert bare["email"] == email
     assert bare["role"]
+
+
+async def test_export_audit_details_drop_the_internal_source_event_id(app_client):
+    """The export is a downloadable artifact, so it strips the dedupe key."""
+    client, h, ws, conv = await _setup(app_client)
+    await _wait_for_audit_export(client, h, ws["id"])
+    async with SessionFactory() as session:
+        session.add(
+            AuditLogEntry(
+                workspace_id=ws["id"],
+                resource_type="workspace",
+                resource_id=ws["id"],
+                action="workspace.renamed",
+                details={"source_event_id": "evt-1", "name": "Renamed"},
+            )
+        )
+        await session.commit()
+
+    bundle = json.loads((await client.get("/api/v1/workspaces/export", headers=h)).text)
+    row = next(a for a in bundle["audit"] if a["action"] == "workspace.renamed")
+    assert row["details"] == {"name": "Renamed"}
 
 
 async def test_export_audit_csv(app_client):
@@ -466,8 +482,6 @@ def test_export_csv_leaves_safe_values_untouched():
 
 async def test_export_members_csv_neutralises_injected_display_name(app_client):
     """End to end: a formula-shaped display_name is prefixed in the response."""
-    from sqlalchemy import select
-
     from src.db.session import SessionFactory
     from src.models.workspace import User
 

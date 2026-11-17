@@ -8,7 +8,9 @@ import { toast } from "sonner";
 import { markdownComponents, markdownComponentsInverted, stripMarkdown, truncate as truncatePreview } from "@/lib/markdown";
 import { mentionRemarkPlugin, mentionUrlTransform, type MentionTarget } from "@/lib/mentions";
 import { notificationLinkUrl } from "@/lib/notificationLink";
+import { errorMessage } from "@/utils/errorMessage";
 import { activeWorkspacePermissions } from "../utils/permissions";
+import { isClientError } from "../providers/queryClient";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,7 +23,7 @@ import { formatDate } from "../components/ui";
 import { TabbedPageHeader } from "../components/refine-ui/layout/tabbed-page-header";
 import { cn } from "@/lib/utils";
 import type { Notification, Conversation, Message, Identity, Member } from "../types";
-import { getDisplayName, getParticipantDisplayName, getMemberDisplayName } from "../types";
+import { getDisplayName, getDisplayNameFromRow } from "../types";
 import { ComposeDialog } from "../components/inbox/ComposeDialog";
 import { TiptapEditor } from "../components/inbox/TiptapEditor";
 import { EditParticipantsDialog } from "../components/inbox/EditParticipantsDialog";
@@ -229,7 +231,7 @@ export function InboxPage() {
       (membersResult?.data ?? []).map((m) => ({
         id: m.id,
         type: "user",
-        label: getMemberDisplayName(m),
+        label: getDisplayNameFromRow(m),
         email: m.email,
         avatar_url: m.avatar_url,
         first_name: m.first_name,
@@ -243,7 +245,7 @@ export function InboxPage() {
   const participantNames = useMemo(
     () =>
       (selectedConversation?.participants ?? []).map((p) =>
-        getParticipantDisplayName(
+        getDisplayNameFromRow(
           p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null },
         ),
       ),
@@ -264,6 +266,9 @@ export function InboxPage() {
     config: {
       query: { limit: 100 },
     },
+    // The inline note in the thread header is this failure's only signal;
+    // refine's default toast would echo it transiently next to the note.
+    errorNotification: false,
     queryOptions: {
       enabled: !!selectedConvId && tab === "messages",
       // Network failures make one attempt; a 4xx never retries anyway.
@@ -275,10 +280,15 @@ export function InboxPage() {
     if (raw && Array.isArray(raw)) return raw as Message[];
     return [];
   }, [messagesResult]);
-  const messagesLoading = (messagesQuery as unknown as { isLoading?: boolean })?.isLoading ?? false;
-  const messagesError = (messagesQuery as unknown as { isError?: boolean })?.isError ?? false;
+  const messagesLoading = messagesQuery.isLoading;
+  const messagesError = messagesQuery.isError;
+  // A 4xx means the server answered and refused; only a transport failure or 5xx
+  // leaves the cached list merely behind.
+  const messagesRefused = messagesError && isClientError(messagesQuery.error);
+  const hasCachedMessages = messages.length > 0;
+  const staleNote = messagesError && hasCachedMessages;
 
-  // Auto scroll to bottom when messages change
+  // Auto scroll to bottom when messages change.
   useEffect(() => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
@@ -452,7 +462,7 @@ export function InboxPage() {
       if (mentioned.length > 0) convQuery.refetch();
     } catch (err: unknown) {
       removeThreadMessage(conversationId, tempId);
-      const msg = (err as { message?: string })?.message || String(err);
+      const msg = errorMessage(err);
       toast.error(msg);
       // Restore draft on failure for retry
       setDraft(body);
@@ -478,7 +488,7 @@ export function InboxPage() {
           }
         },
         onError: (e) => {
-          toast.error(String((e as { message?: string })?.message ?? e));
+          toast.error(errorMessage(e));
         },
       }
     );
@@ -510,7 +520,7 @@ export function InboxPage() {
           invalidate({ resource: "notifications", invalidates: ["list"] });
         },
         onError: (e) => {
-          toast.error(String((e as { message?: string })?.message ?? e));
+          toast.error(errorMessage(e));
         },
       }
     );
@@ -532,7 +542,7 @@ export function InboxPage() {
           convQuery.refetch();
         },
         onError: (e) => {
-          toast.error(String((e as { message?: string })?.message ?? e));
+          toast.error(errorMessage(e));
         },
       }
     );
@@ -650,7 +660,7 @@ export function InboxPage() {
                     title={leftCollapsed ? "Expand panel" : "Collapse panel"}
                     className="ml-auto hidden h-9 w-9 shrink-0 md:inline-flex"
                   >
-                    <PanelLeftClose className="h-4 w-4" />
+                    {leftCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
                   </Button>
                 </>
               )}
@@ -682,7 +692,7 @@ export function InboxPage() {
                         <span className="text-muted-foreground shrink-0 text-[11px]">{formatListTime(c.last_message_at)}</span>
                         <div className="flex min-w-0 -space-x-1">
                           {c.participants.slice(0, 3).map((p) => {
-                            const name = getParticipantDisplayName(
+                            const name = getDisplayNameFromRow(
                               p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null },
                             );
                             const pEmail = (p as unknown as { email?: string | null }).email ?? null;
@@ -874,7 +884,7 @@ export function InboxPage() {
                       )}
                       <div className="mt-1 flex flex-wrap items-center gap-1">
                         {selectedConversation.participants.slice(0, 2).map((p) => {
-                          const name = getParticipantDisplayName(
+                          const name = getDisplayNameFromRow(
                             p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null },
                           );
                           const pEmail = (p as unknown as { email?: string | null }).email ?? null;
@@ -931,7 +941,7 @@ export function InboxPage() {
                               <TooltipContent side="bottom" align="start" className="max-w-[260px]">
                                 <div className="flex flex-col gap-1 text-xs">
                                   {selectedConversation.participants.map((p) => {
-                                    const name = getParticipantDisplayName(p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null });
+                                    const name = getDisplayNameFromRow(p as unknown as { display_name: string; first_name?: string | null; last_name?: string | null });
                                     return (
                                       <span key={p.id} className="truncate">
                                         {name}
@@ -961,13 +971,56 @@ export function InboxPage() {
                 </div>
 
                 {/* Messages */}
-                <div className="flex-1 overflow-y-auto p-4">
+                <div data-testid="thread-messages" className="relative flex-1 overflow-y-auto p-4">
+                  {/* A failed refetch keeps the cached messages. The note is sticky at the
+                      top edge of the scroller, so it stays visible at any scroll position
+                      — including the auto-scrolled-to-newest reading state.
+                      `pointer-events-none` keeps the note from blocking clicks on the
+                      messages it covers. Always mounted: a live region has to be in the
+                      accessibility tree before its text changes to be announced —
+                      `sr-only` keeps it out of the layout. */}
+                  <p
+                    role="status"
+                    className={cn(
+                      "flex items-center justify-between gap-2 text-sm",
+                      !staleNote && "sr-only",
+                      staleNote &&
+                        "pointer-events-none sticky inset-x-0 top-0 z-10 bg-background px-4 pb-2 pt-3",
+                      staleNote && (messagesRefused ? "text-destructive" : "text-muted-foreground"),
+                    )}
+                  >
+                    <span>
+                      {staleNote && (messagesRefused ? "Could not refresh messages." : "Showing the last messages loaded.")}
+                    </span>
+                    {staleNote && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="pointer-events-auto"
+                        onClick={() => void messagesQuery.refetch()}
+                        disabled={messagesQuery.isFetching}
+                        aria-label="Retry loading messages"
+                      >
+                        Retry
+                      </Button>
+                    )}
+                  </p>
                   <div className="flex flex-col gap-4">
                     {messagesLoading ? (
                       <p className="text-muted-foreground text-sm">Loading…</p>
-                    ) : messagesError && messages.length === 0 ? (
-                      <p className="text-destructive text-sm">Could not load messages.</p>
-                    ) : messages.length === 0 ? (
+                    ) : messagesError && !hasCachedMessages ? (
+                      <div className="flex items-center gap-2">
+                        <p className="text-destructive text-sm">Could not load messages.</p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void messagesQuery.refetch()}
+                          disabled={messagesQuery.isFetching}
+                        >
+                          Try again
+                        </Button>
+                      </div>
+                    ) : !hasCachedMessages ? (
                       <p className="text-muted-foreground text-sm">No messages yet.</p>
                     ) : (
                       messages.map((m) => {
@@ -1107,7 +1160,7 @@ export function InboxPage() {
                   title={leftCollapsed ? "Expand panel" : "Collapse panel"}
                   className="hidden h-9 w-9 shrink-0 md:inline-flex"
                 >
-                  <PanelLeftClose className="h-4 w-4" />
+                  {leftCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
                 </Button>
               </div>
             </div>
@@ -1189,6 +1242,7 @@ export function InboxPage() {
                   </div>
                 </div>
                 <div className="prose prose-sm dark:prose-invert max-w-none flex-1">
+                  {/* ponytail: this panel can show a conversation other than the open one, so mentionPlugins — derived from the open conversation's participants — would style the wrong name set. */}
                   <Markdown components={markdownComponents}>{selectedNotif.body || ""}</Markdown>
                 </div>
                 <div className="border-border mt-6 flex items-center gap-2 border-t pt-4">

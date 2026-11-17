@@ -24,7 +24,7 @@ from typing import Any
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.dates import ensure_utc, now_utc
+from src.core.dates import ensure_utc, iso_or_none, now_utc
 from src.core.security.crypto import SecretCipher
 from src.events.bus import EventBus
 from src.jobs.registry import (
@@ -83,10 +83,10 @@ def job_to_dict(d: JobDefinition) -> dict:
         "enabled": d.enabled,
         "missed_policy": d.missed_policy,
         "timeout_seconds": d.timeout_seconds,
-        "next_run_at": d.next_run_at.isoformat() if d.next_run_at else None,
-        "last_run_at": d.last_run_at.isoformat() if d.last_run_at else None,
-        "created_at": d.created_at.isoformat() if d.created_at else None,
-        "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+        "next_run_at": iso_or_none(d.next_run_at),
+        "last_run_at": iso_or_none(d.last_run_at),
+        "created_at": iso_or_none(d.created_at),
+        "updated_at": iso_or_none(d.updated_at),
     }
 
 
@@ -98,12 +98,12 @@ def job_run_to_dict(r: JobRun, *, schema: dict | None = None) -> dict:
         "status": r.status,
         "trigger": r.trigger,
         "actor_user_id": r.actor_user_id,
-        "scheduled_at": r.scheduled_at.isoformat() if r.scheduled_at else None,
-        "started_at": r.started_at.isoformat() if r.started_at else None,
-        "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+        "scheduled_at": iso_or_none(r.scheduled_at),
+        "started_at": iso_or_none(r.started_at),
+        "finished_at": iso_or_none(r.finished_at),
         "duration_ms": r.duration_ms,
         "error": r.error,
-        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "created_at": iso_or_none(r.created_at),
     }
     if schema is not None:
         data["params"] = _mask_params(schema, r.params)
@@ -113,7 +113,7 @@ def job_run_to_dict(r: JobRun, *, schema: dict | None = None) -> dict:
 def job_log_to_dict(e: JobLogEntry) -> dict:
     return {
         "seq": e.seq,
-        "ts": e.ts.isoformat() if e.ts else None,
+        "ts": iso_or_none(e.ts),
         "level": e.level,
         "message": e.message,
     }
