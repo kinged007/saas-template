@@ -3,8 +3,11 @@
 Flow: GET /auth/oauth/{provider}/authorize → provider → GET
 /auth/oauth/{provider}/callback?code&state → 302 to
 {FRONTEND_URL}/oauth/callback?code=<one-time> → POST /auth/oauth/token.
-Tokens never sit in URL logs; the one-time code is single-use, 5-minute TTL,
-stored in the shared container cache.
+The two legs are joined by the PKCE verifier kept in the server-side state
+entry. The verifier never leaves the server, so a captured authorization code
+is not redeemable with the client secret alone. Tokens never sit in URL logs;
+the one-time code is single-use, 5-minute TTL, stored in the shared
+container cache.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from src.services.auth import AuthError, AuthService
 from src.services.oauth import (
     CODE_TTL_HINT,
     OAuthError,
+    _single_line,
     build_authorize_url,
     claims_from_id_token,
     consume_state,
@@ -106,6 +110,8 @@ async def oauth_callback(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
+    # Checks a bucket this module never charges; see the rule in
+    # src/core/security/ratelimit.py.
     get_auth_limiter().check(f"oauth:{_client_ip(request) or 'unknown'}:{provider_id}")
     container = get_container(request)
     code = request.query_params.get("code")
@@ -124,16 +130,28 @@ async def oauth_callback(
         from src.services.oauth import _discovery
 
         doc = await _discovery(provider, container.cache)
-        tokens = await exchange_code(provider, doc, code=code, redirect_uri=redirect_uri)
+        tokens = await exchange_code(
+            provider,
+            doc,
+            code=code,
+            redirect_uri=redirect_uri,
+            code_verifier=saved["code_verifier"],
+        )
         claims = None
         if tokens.get("id_token"):
-            claims = claims_from_id_token(provider, doc, tokens["id_token"])
+            claims = await claims_from_id_token(provider, doc, tokens["id_token"], container.cache)
         userinfo = {}
         if tokens.get("access_token"):
             userinfo = await fetch_userinfo(provider, doc, tokens["access_token"])
         identity = normalize_identity(provider_id=provider_id, claims=claims, userinfo=userinfo)
     except OAuthError as exc:
-        logger.warning("oauth callback failed provider=%s: %s", provider_id, exc)
+        # provider_id is the percent-decoded path param and exc can embed it,
+        # so both get the same control-char flattening as the service logs.
+        logger.warning(
+            "oauth callback failed provider=%s: %s",
+            _single_line(provider_id),
+            _single_line(exc),
+        )
         return _error_redirect("sign-in failed")
     service = AuthService(db, container.bus)
     try:
@@ -146,16 +164,22 @@ async def oauth_callback(
             last_name=identity["last_name"],
         )
     except AuthError as exc:
-        logger.info("oauth signup rejected provider=%s: %s", provider_id, exc)
+        logger.info(
+            "oauth signup rejected provider=%s: %s",
+            _single_line(provider_id),
+            _single_line(exc),
+        )
         return _error_redirect("registration is disabled")
     # Join before the 2FA branch and before issue_tokens, as POST /auth/login
     # does. A failed join stays log-only and the 302 happens either way; the
     # helper can hand back a re-read instance, so bind it and read from that.
     try:
         user = await _join_single_workspace_best_effort(db, container, user)
-    except HTTPException:
-        # The helper's "account no longer exists" guard: a browser mid-redirect
-        # needs the error redirect, not a JSON 401 body.
+    except HTTPException as exc:
+        # The helper's "account no longer exists" guard (auth.py) is the
+        # only HTTPException it raises; anything else must not be masked.
+        if exc.status_code != status.HTTP_401_UNAUTHORIZED:
+            raise
         return _error_redirect("sign-in failed")
     if user.totp_enabled:
         # Passwordless SSO still honors 2FA: park the user id behind the

@@ -4,7 +4,7 @@
 
 | Workflow | Triggers | Jobs | Deploy | Environments |
 |---|---|---|---|---|
-| ci | pull_request, push | 4 | — | — |
+| ci | pull_request, push | 6 | — | — |
 
 ### ci
 
@@ -20,6 +20,12 @@
   - `actions/checkout@v4`
   - `astral-sh/setup-uv@v5`
 - **web-build** on `ubuntu-latest` — 4 steps
+  - `actions/checkout@v4`
+  - `actions/setup-node@v4`
+- **web-test** on `ubuntu-latest` — 4 steps
+  - `actions/checkout@v4`
+  - `actions/setup-node@v4`
+- **web-e2e** on `ubuntu-latest` — 5 steps
   - `actions/checkout@v4`
   - `actions/setup-node@v4`
 

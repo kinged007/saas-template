@@ -56,6 +56,7 @@ import type { LucideIcon } from "lucide-react";
 
 import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "../contexts/WorkspaceContext";
 import { activeWorkspacePermissions } from "../utils/permissions";
+import { isManagerRoleName } from "../pages/role-name";
 import { ThemeToggle } from "./refine-ui/theme/theme-toggle";
 import { NotificationCenter } from "./NotificationCenter";
 import { PendingInvitationsBadge } from "./PendingInvitations";
@@ -129,8 +130,7 @@ function SidebarNav() {
 
   const renderGroup = (group: (typeof visibleGroups)[number]) => (
     <SidebarGroup key={group.id}>
-      {/* The label element is the heading. `h2` matches the level the app gives its
-          landmark titles (ListView, PageHeader); the sidebar sits beside <main>, so
+      {/* The label element is the heading. The sidebar sits beside <main>, so
           a group title is not subordinate to the page heading. */}
       {group.title && (
         <SidebarGroupLabel asChild>
@@ -277,7 +277,7 @@ function UserMenu() {
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
   const isWorkspaceAdmin =
     identity?.is_superuser === true ||
-    (myRole !== undefined && ["owner", "admin"].includes(myRole)) ||
+    isManagerRoleName(myRole) ||
     permissions.includes("*") ||
     permissions.includes("workspace:update");
   const showWorkspaceSettings = isWorkspaceAdmin && identity?.single_workspace !== true;

@@ -1,13 +1,14 @@
 import asyncio
 
-from src.events.inprocess import InProcessEventBus, _subject_matches
+from src.events.bus import subject_matches
+from src.events.inprocess import InProcessEventBus
 
 
 def test_subject_wildcards():
-    assert _subject_matches("notifications.*", "notifications.created")
-    assert _subject_matches("workspaces.>", "workspaces.member.invited")
-    assert not _subject_matches("notifications", "notifications.created")
-    assert not _subject_matches("workspaces.*", "other.created")
+    assert subject_matches("notifications.*", "notifications.created")
+    assert subject_matches("workspaces.>", "workspaces.member.invited")
+    assert not subject_matches("notifications", "notifications.created")
+    assert not subject_matches("workspaces.*", "other.created")
 
 
 async def test_inprocess_pubsub():

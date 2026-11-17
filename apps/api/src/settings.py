@@ -106,6 +106,11 @@ class Settings(BaseSettings):
     # Auth brute-force protection: failures allowed per (IP, account) per window.
     auth_rate_limit_max_attempts: int = 10
     auth_rate_limit_window_seconds: int = 300
+    # Registration mail budget (#1343), keyed on the IP alone: distinct from
+    # auth_rate_limit_* because the registrant owns every fresh address, and
+    # tests that tighten the auth pair must not collapse this window.
+    auth_register_rate_limit_max_attempts: int = 10
+    auth_register_rate_limit_window_seconds: int = 300
     # Single-workspace mode. When true, the first login/register creates the
     # one shared workspace (owned by whoever arrives first, normally the
     # superadmin) and every later login/register auto-joins it as
@@ -114,14 +119,33 @@ class Settings(BaseSettings):
     # entry in the user menu, and the delete danger-zone are hidden.
     single_workspace: bool = False
     # Role given to users who auto-join the single workspace: any of its
-    # system or custom role names. An unknown or blank name falls back to
-    # viewer (SINGLE_WORKSPACE_DEFAULT_ROLE=editor).
+    # system or custom role names (SINGLE_WORKSPACE_DEFAULT_ROLE). An unknown
+    # or blank name falls through viewer -> editor -> admin -> an arbitrary
+    # remaining non-owner role; a workspace with no non-owner role grants no
+    # membership. The name only picks the role a new member gets: changing an
+    # existing member's role, suspending one and reactivating one check the
+    # role name ("owner"/"admin", any case) and transferring ownership checks
+    # "owner", so a custom role here cannot do any of them however open its
+    # permission list is (src/services/workspaces.py).
     single_workspace_default_role: str = "viewer"
 
     # Scheduled jobs
     jobs_scheduler_tick_seconds: float = 10.0
     jobs_default_timeout_seconds: int = 600
     jobs_run_retention: int = 1000  # per definition; pruned by scheduler housekeeping
+
+    # max_attempts 0 or negative means the check never has a positive budget
+    # to spend — the cap silently turns off, so a misconfigured env var must
+    # fail startup, not disable throttling.
+    @field_validator(
+        "auth_rate_limit_max_attempts",
+        "auth_register_rate_limit_max_attempts",
+    )
+    @classmethod
+    def _max_attempts_must_be_positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("auth rate-limit max_attempts must be >= 1")
+        return v
 
     # Retention cleanup (days; enforced by the system.retention_cleanup job).
     # audit_log_retention_days=0 keeps audit entries forever (compliance trail).
