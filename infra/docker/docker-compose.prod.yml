@@ -1,7 +1,7 @@
 # Production stack: postgres, nats (JetStream), api (FastAPI + migrations), web (nginx).
 #
 # First-time setup:
-#   cp infra/docker/.env.production.example infra/docker/.env   # then edit the secrets
+#   cp infra/docker/.env.example infra/docker/.env   # then edit the secrets
 #
 # Deploy / update:
 #   docker compose -f infra/docker/docker-compose.prod.yml up --build -d
@@ -12,6 +12,12 @@
 #
 # Migrations run automatically before each api start (`alembic upgrade head`).
 # Demo seed data is NOT applied — create the first user via /api/v1/register.
+#
+# FORWARDED_ALLOW_IPS (optional, see infra/docker/.env.example) lists the peers
+# whose X-Forwarded-For uvicorn honours — that header is what lands in audit
+# rows, session rows and rate-limit keys. The default is the network pinned
+# below: the api service publishes no ports, so nginx is its only peer. Widen it
+# only for another proxy in front; docs/OPERATIONS.md has the details.
 name: saas-template
 
 services:
@@ -68,7 +74,7 @@ services:
     command: >
       sh -c "alembic upgrade head &&
              exec uvicorn src.main:app --host 0.0.0.0 --port 8000
-                  --proxy-headers --forwarded-allow-ips='*'"
+                  --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-172.30.0.0/24}"
 
   web:
     build:
@@ -88,3 +94,11 @@ services:
 volumes:
   saas_template_pg:
   saas_template_nats:
+
+# Pinned so FORWARDED_ALLOW_IPS can name the api's peer exactly instead of
+# guessing whichever /24 Docker hands out next.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

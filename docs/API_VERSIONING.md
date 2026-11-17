@@ -15,6 +15,72 @@ as `api_version`.
   documented consumer has migrated.
 - **Deprecation**: announce in release notes first; serve the old version for
   at least one minor release with a `Sunset` response header before removal.
+- **Status-code corrections are not breaking changes**: a route that returned
+  the wrong status for a documented caller keeps its route and payload, so no
+  new prefix is required — but the correction is recorded here and in the
+  release notes.
+- **Serialization corrections are not breaking changes**: a value a route
+  serialized in a form that misstates the instant (a naive datetime read as
+  local time) keeps its field and its type, so no new prefix is required — the
+  correction is recorded here and in the release notes.
+
+## Recorded corrections
+
+- `GET /api/v1/jobs/global/{id}/runs` returns `404 "job not found"` for an id
+  matching no definition — not `200 []` with `X-Total-Count: 0`.
+- `GET /api/v1/jobs/{id}`, `PATCH /api/v1/jobs/{id}`,
+  `POST /api/v1/jobs/{id}/execute` and `GET /api/v1/jobs/{id}/runs` return
+  `403 "you are not a member of this workspace"` — not `404 "job not found"` —
+  for an authenticated user who is not a member of the definition's workspace.
+  This matches the run routes and every other workspace-owned resource.
+- `GET /api/v1/jobs/{id}`, `PATCH /api/v1/jobs/{id}`,
+  `POST /api/v1/jobs/{id}/execute`, `GET /api/v1/jobs/{id}/runs`,
+  `GET /api/v1/jobs/runs/{id}` and `GET /api/v1/jobs/runs/{id}/logs` answer
+  an API-key caller with `403 "deployment administration is not available to
+  API keys"` for every record it may not read: a global one, one outside the
+  key's workspace, and an id matching no record — one answer for all three, so
+  no pair of them tells the key which state produced it. A session caller still
+  gets `404 "job not found"` or `404 "run not found"` for an id matching
+  nothing.
+- Every serialized datetime carries an explicit UTC offset:
+  `2026-01-01T00:00:00+00:00`, where it was `2026-01-01T00:00:00`. The instant
+  is unchanged and a client that parses the value is unaffected; a client that
+  compares timestamp strings byte-for-byte — including an importer matching an
+  exported bundle — sees the suffix.
+
+## Response headers
+
+Every `/api/*` response carries `X-API-Version`. A request authenticated with
+an API key that has a `usage_quota` set additionally carries these three; an
+unlimited key carries none of them:
+
+| Header | Meaning |
+|---|---|
+| `X-API-Key-Quota` | The key's monthly cap |
+| `X-API-Key-Remaining` | Uses left in the current calendar month (UTC) |
+| `X-API-Key-Window-Reset` | IMF-fixdate of the next month boundary, when the counter resets |
+
+All three ride on the `403 api key quota exceeded` rejection as well, so a
+client that has run out can still read its budget and when it recovers.
+`Remaining` counts the request being answered, so it reaches `0` on the last
+accepted call and the next call is rejected.
+
+The charge happens in the access helper, before the handler body: an accepted
+request spends and commits its unit even when the handler later fails, and the
+quota-exceeded `403` is raised before the handler runs, so a refused request
+spends nothing.
+
+### Changed meanings
+
+`usage_quota` and `X-API-Key-Remaining` were lifetime-scoped and are now per
+calendar month (UTC). The names are unchanged and both stay under `/api/v1`,
+so this is the one departure from the additive-only rule above. It is
+announced in the release notes for the release that carries it (issue #69),
+and no version bump was taken because the per-month cap is that issue's
+intent and the lifetime reading was the defect — not a stable contract that a
+client could have relied on. A client that tracked "remaining for the life of
+this key" must read the calendar month instead: the number climbs back on the
+1st.
 
 ## Why prefix strategy
 

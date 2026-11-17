@@ -32,12 +32,21 @@ export function WorkspaceExportCard() {
   const { result: resourcesResult, query: resourcesQuery } = useCustom<{ resources: string[] }>({
     url: "workspaces/export/resources",
     method: "get",
+    // Recovery is user-initiated: a mount makes one attempt, no storm.
+    // e2e/export-card.spec.ts asserts exactly one request per attempt.
     queryOptions: { enabled: !!workspace && canExport?.can === true, retry: false },
     // The card reports this failure inline; refine's generic toast would
     // report the same failure a second time.
     errorNotification: false,
   });
-  const resourcesFailed = resourcesQuery.isError;
+  // refine's isLoading is `isFetching && !data`, which is true again while a
+  // retry runs: the refetch targets a query that never resolved. A non-zero
+  // errorUpdatedAt means an earlier attempt already failed, and that is what
+  // tells a first load from a retry. Holding the card and its alert up while
+  // the retry is in flight is the point: Retry shows as disabled, not gone.
+  const retrying =
+    resourcesQuery.isFetching && !resourcesQuery.data && resourcesQuery.errorUpdatedAt > 0;
+  const resourcesFailed = resourcesQuery.isError || retrying;
   const resources = resourcesResult?.data?.resources ?? [];
   const [resource, setResource] = useState<string>("members");
   const [busy, setBusy] = useState<"json" | "csv" | null>(null);
@@ -62,7 +71,7 @@ export function WorkspaceExportCard() {
     }
   };
 
-  if (!workspace || isLoading || resourcesQuery.isLoading) return null;
+  if (!workspace || isLoading || (resourcesQuery.isLoading && !resourcesQuery.errorUpdatedAt)) return null;
   if (canExport && !canExport.can) return null;
 
   return (
@@ -70,17 +79,32 @@ export function WorkspaceExportCard() {
       <CardHeader>
         <CardTitle>Data export</CardTitle>
         <CardDescription>
-          Download a complete, importable-shaped dump of this workspace (members, roles, conversations, jobs,
-          notifications, webhooks, audit log). Secrets (API key values, webhook signing secrets, job secret
-          params) are never included — re-mint them after import.
+          Download a read-only snapshot of this workspace: the workspace itself, members and their profiles,
+          roles, invitations, conversations and their messages, jobs, API key metadata, webhook subscriptions,
+          notifications, and the audit log. The JSON download is the full record. There is no import in this
+          app — the file is for your own backup, or for loading into another system. The CSV download is a
+          spreadsheet view of one selected resource, and cells a spreadsheet would read as a formula are prefixed
+          with an apostrophe, so use the JSON for anything you intend to parse. Secrets (API key values, webhook
+          signing secrets, secret job parameters) are never included — re-mint them yourself.
         </CardDescription>
       </CardHeader>
       <CardContent>
         {resourcesFailed && (
-          <p role="alert" className="mb-2 text-sm text-destructive">
-            Could not load the exportable resources. CSV export is unavailable; the JSON export below still
-            works.
-          </p>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <p role="alert" className="text-sm text-destructive">
+              Could not load the exportable resources. CSV export is unavailable; the JSON export below still
+              works.
+            </p>
+            {/* Recovery is user-initiated: retry stays off so a mount makes one attempt, not a storm. */}
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={resourcesQuery.isFetching}
+              onClick={() => void resourcesQuery.refetch()}
+            >
+              Retry
+            </Button>
+          </div>
         )}
         <div className="flex flex-wrap items-center gap-2">
           <Select value={resource} onValueChange={setResource} disabled={resourcesFailed}>

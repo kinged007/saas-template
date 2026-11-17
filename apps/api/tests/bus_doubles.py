@@ -4,12 +4,21 @@ RecordingBus implements the EventBus contract but only records publishes — it
 never delivers. It lets service unit tests assert exactly which subjects,
 payloads, correlation ids and transient flags a service emits without wiring
 up a live bus or waiting on async delivery.
+
+ReplayBus delivers synchronously and can redeliver an already-delivered
+envelope, which is how a test reproduces JetStream's at-least-once delivery.
 """
 
 from __future__ import annotations
 
 from src.db.session import SessionFactory
-from src.events.bus import EventBus
+from src.events.bus import (
+    EventBus,
+    EventEnvelope,
+    EventMetadata,
+    SubscriberHandler,
+    subject_matches,
+)
 from src.events.subjects import Subjects
 from src.models.core import Invitation
 
@@ -88,3 +97,62 @@ class CommitProbeBus(RecordingBus):
                 invite = await probe.get(Invitation, payload.get("invitation_id"))
                 self.committed_token_at_publish.append(invite.token if invite else None)
         await super().publish(subject, payload, correlation_id=correlation_id, transient=transient)
+
+
+class ReplayBus(EventBus):
+    """Delivers to subscribed handlers inline and can redeliver an envelope.
+
+    JetStream is at-least-once: a nack, an ack timeout or a consumer restart
+    hands the *same* envelope to the handler again, metadata included.
+    `publish` cannot model that — the in-process bus mints a fresh event_id per
+    publish — so redelivery goes through `redeliver`, which re-invokes the
+    handlers with the metadata of the last publish on that subject.
+    """
+
+    name = "replay"
+
+    def __init__(self) -> None:
+        self._handlers: dict[str, list[SubscriberHandler]] = {}
+        self._delivered: dict[str, EventEnvelope] = {}
+        self._subjects_by_id: dict[str, str] = {}
+
+    async def publish(
+        self,
+        subject: str,
+        payload: dict,
+        *,
+        correlation_id: str | None = None,
+        transient: bool = False,
+    ) -> None:
+        envelope = EventEnvelope(
+            metadata=EventMetadata(subject=subject, correlation_id=correlation_id or ""),
+            payload=payload,
+        )
+        self._delivered[subject] = envelope
+        await self._deliver(subject, envelope)
+
+    async def redeliver(self, subject: str) -> None:
+        await self._deliver(subject, self._delivered[subject])
+
+    async def _deliver(self, subject: str, envelope: EventEnvelope) -> None:
+        for subscription, handlers in list(self._handlers.items()):
+            if subject_matches(subscription, subject):
+                for handler in list(handlers):
+                    await handler(envelope.payload, envelope.metadata)
+
+    async def subscribe(self, subject: str, handler, *, fanout: bool = False) -> str:
+        subscription_id = f"{subject}:sub{len(self._subjects_by_id)}"
+        self._subjects_by_id[subscription_id] = subject
+        self._handlers.setdefault(subject, []).append(handler)
+        return subscription_id
+
+    async def unsubscribe(self, subscription_id: str) -> None:
+        subject = self._subjects_by_id.pop(subscription_id, None)
+        if subject is not None:
+            self._handlers.pop(subject, None)
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
