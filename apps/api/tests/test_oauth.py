@@ -251,7 +251,7 @@ async def test_oauth_new_user_allowed(app_client, oauth_on, monkeypatch):
     assert tokens.status_code == 200, tokens.text
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens.json()))
     assert me.status_code == 200
-    assert me.json()["email"] == "sso@example.com"
+    assert me.json()["email"] == SSO_EMAIL
     # Reuse is rejected (single-use code).
     again = await app_client.post("/api/v1/auth/oauth/token", json={"code": code})
     assert again.status_code == 400
@@ -281,10 +281,11 @@ async def test_oauth_same_provider_new_subject_links_same_user(app_client, oauth
     assert await _user_count() == before
     async with SessionFactory() as s:
         user_id = (await s.execute(select(User.id).where(User.email == SSO_EMAIL))).scalar_one()
-    assert await _link_count("testidp", user_id) == 2
+    scoped = await _link_count("testidp", user_id)
+    assert scoped == 2
     # Total across providers catches a row another provider adds, which the
     # scoped testidp count above cannot see.
-    assert await _link_count(None, user_id) == 2
+    assert await _link_count(None, user_id) == scoped
 
 
 async def test_oauth_callback_survives_join_failure(app_client, oauth_on, monkeypatch):
@@ -349,7 +350,7 @@ async def test_oauth_2fa_user_is_joined(app_client, oauth_on, monkeypatch):
     ][0]["id"]
     # Enrol outside the single-workspace window so only the OAuth callback can join.
     monkeypatch.setattr(settings, "single_workspace", False)
-    sso = await register_user(app_client, "sso@example.com")
+    sso = await register_user(app_client, SSO_EMAIL)
     setup_token, code = await _totp_for(app_client, auth_headers(sso))
     enabled = await app_client.post(
         "/api/v1/auth/2fa/enable",
@@ -360,7 +361,7 @@ async def test_oauth_2fa_user_is_joined(app_client, oauth_on, monkeypatch):
     backup_code = enabled.json()["backup_codes"][0]
     monkeypatch.setattr(settings, "single_workspace", True)
 
-    _mock_oauth(monkeypatch, email="sso@example.com")
+    _mock_oauth(monkeypatch, email=SSO_EMAIL)
     _, resp = await _callback(app_client, monkeypatch)
     assert resp.status_code == 302, resp.text
     tokens = await app_client.post(
