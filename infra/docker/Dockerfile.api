@@ -25,4 +25,10 @@ COPY apps/api/src ./src
 EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -fsS http://localhost:8000/api/v1/healthz || exit 1
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Proxy flags must be on the image default: compose's `command:` overrides this
+# CMD, but a direct docker run / Kubernetes launch does not. FORWARDED_ALLOW_IPS
+# defaults to loopback only — outside compose no remote peer is trusted until
+# the operator names the proxy (docs/OPERATIONS.md). The expansion is quoted so
+# a comma-separated value containing spaces stays one argv: unquoted, the shell
+# field-splits it and uvicorn exits on the extra argument.
+CMD ["sh", "-c", "exec uvicorn src.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=\"${FORWARDED_ALLOW_IPS:-127.0.0.1}\""]

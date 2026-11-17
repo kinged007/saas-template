@@ -78,6 +78,9 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
 
   const [editorKey, setEditorKey] = useState(0);
   const [comboOpen, setComboOpen] = useState(false);
+  // Lifted from TiptapEditor: the dialog-level Escape handler closes the
+  // link popover instead of the whole compose dialog while it is open.
+  const [linkOpen, setLinkOpen] = useState(false);
 
   const onSubmit = async (data: FormData) => {
     const payload = {
@@ -111,10 +114,22 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
         form.reset({ title: "", participantIds: [], initialMessage: "" });
         setEditorKey(k=>k+1);
         setComboOpen(false);
+        setLinkOpen(false);
       }
       onOpenChange(v);
     }}>
-      <DialogContent className="sm:max-w-[600px]">
+      <DialogContent
+        className="sm:max-w-[600px]"
+        onEscapeKeyDown={(e) => {
+          // Radix only lets the topmost layer handle Escape; before the link
+          // popover registers, this dialog is topmost and would close with it.
+          // Close just the popover instead, like its own Escape handling does.
+          if (linkOpen) {
+            e.preventDefault();
+            setLinkOpen(false);
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>New conversation</DialogTitle>
           <DialogDescription>Start a conversation with workspace members. Markdown supported.</DialogDescription>
@@ -288,6 +303,8 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
                       value={field.value}
                       onChange={(md) => field.onChange(md)}
                       placeholder="Write a message…"
+                      linkOpen={linkOpen}
+                      onLinkOpenChange={setLinkOpen}
                     />
                   </FormControl>
                   <FormMessage />

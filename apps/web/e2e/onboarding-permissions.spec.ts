@@ -34,7 +34,7 @@ function watchCardRequests(page: Page) {
 const asRole = (permissions: string[]) => ({
   ...IDENTITY,
   permissions: [],
-  workspaces: [{ id: "ws-1", name: "Acme Corp", role: "member", permissions }],
+  workspaces: [{ id: "ws-1", name: "Acme Corp", slug: "acme-corp", role: "member", permissions }],
 });
 
 const card = (page: Page) => page.getByRole("heading", { name: "Get set up", level: 2 });

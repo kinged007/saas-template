@@ -72,9 +72,10 @@ class QuerySpec:
     def validate_sort(self) -> None:
         """Reject a direction list that does not line up with the sort list.
 
-        Called by `apply_query` and by the routes that sort in their service
-        layer, so a malformed sort query answers the same on every route
-        whether the client wrote `sort[]`/`order[]` or `_sort`/`_order`.
+        Called by `parse_query`, `apply_query`, and by the routes that sort
+        in their service layer, so a malformed sort query answers the same
+        on every route whether the client wrote `sort[]`/`order[]` or
+        `_sort`/`_order`.
         """
         if len(self.sort_by) != len(self.sort_order):
             by, order = self._sort_param_names()

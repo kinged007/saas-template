@@ -5,8 +5,8 @@ The durable consumer persists notification pointers from
 written); a valid list must produce one pointer per non-sender recipient,
 deduped in first-seen order. The tail covers the shared normalizer
 (`_participant_user_ids`) directly: absent / None / empty list / bare
-string / non-string, empty, or whitespace-only items / dict payload /
-dedupe + order, plus the malformed-field warning (#1514).
+string / non-string, empty, whitespace-only, or whitespace-padded items / dict
+payload / dedupe + order, plus the malformed-field warning (#1514, #1564).
 """
 
 from __future__ import annotations
@@ -75,7 +75,15 @@ async def test_durable_message_creates_pointer_per_non_sender_recipient():
 
 async def test_durable_message_malformed_participants_write_nothing():
     handler = _wired()
-    for malformed in ("u1", ["u1", 42], ["u1", ""], ["u1", " "], {"a": "b"}, 42):
+    for malformed in (
+        "u1",
+        ["u1", 42],
+        ["u1", ""],
+        ["u1", " "],
+        ["u1", "u1 "],
+        {"a": "b"},
+        42,
+    ):
         await handler(
             {
                 "workspace_id": str(uuid.uuid4()),
@@ -112,6 +120,15 @@ async def test_durable_message_malformed_participants_logs_warning(caplog):
     assert "corr-1514" in warnings[0].getMessage()
 
 
+def test_participant_user_ids_rejects_ids_with_surrounding_whitespace():
+    """An id with surrounding whitespace is rejected, not stripped: a list like
+    ["u1", "u1 "] must not reach the consumers as two entries."""
+    assert _participant_user_ids({"participant_user_ids": [" u1"]}) is None
+    assert _participant_user_ids({"participant_user_ids": ["u1 "]}) is None
+    assert _participant_user_ids({"participant_user_ids": ["u1\t", "\nu1"]}) is None
+    assert _participant_user_ids({"participant_user_ids": ["u1", "u1 "]}) is None
+
+
 def test_participant_user_ids_normalizer():
     assert _participant_user_ids({}) is None
     assert _participant_user_ids({"participant_user_ids": None}) is None
@@ -124,6 +141,15 @@ def test_participant_user_ids_normalizer():
     assert _participant_user_ids({"participant_user_ids": ["u1", " "]}) is None
     assert _participant_user_ids({"participant_user_ids": ["\t", "\n"]}) is None
     assert _participant_user_ids({"participant_user_ids": ["u2", "u1", "u2"]}) == ["u2", "u1"]
+
+
+def test_participant_user_ids_empty_list_logs_no_warning(caplog):
+    """An explicit `[]` is valid, so it stays silent — only a present-but-
+    malformed field warns."""
+    with caplog.at_level(logging.WARNING, logger="src.workflows"):
+        assert _participant_user_ids({"participant_user_ids": []}) == []
+
+    assert not [r for r in caplog.records if "malformed participant_user_ids" in r.getMessage()]
 
 
 def test_participant_user_ids_malformed_logs_warning(caplog):
@@ -140,3 +166,26 @@ def test_participant_user_ids_malformed_logs_warning(caplog):
     assert len(warnings) == 1
     assert "subj.x" in warnings[0].getMessage()
     assert "corr-1" in warnings[0].getMessage()
+
+
+def test_participant_user_ids_malformed_logs_warning_with_ids(caplog):
+    """The warning carries conversation_id and workspace_id so triage can jump
+    straight to the offending conversation."""
+    with caplog.at_level(logging.WARNING, logger="src.workflows"):
+        assert (
+            _participant_user_ids(
+                {
+                    "conversation_id": "c-1564",
+                    "workspace_id": "w-1564",
+                    "participant_user_ids": ["u1", "u1 "],
+                },
+                subject="subj.x",
+                correlation_id="corr-1",
+            )
+            is None
+        )
+
+    warnings = [r for r in caplog.records if "malformed participant_user_ids" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "c-1564" in warnings[0].getMessage()
+    assert "w-1564" in warnings[0].getMessage()

@@ -12,3 +12,13 @@ test("memberOptionLabel composes display name and email", () => {
   };
   assert.equal(memberOptionLabel(m), "Ada L. (ada@example.com)");
 });
+
+test("memberOptionLabel falls back to legacy display_name", () => {
+  const m = {
+    display_name: "Grace H.",
+    first_name: null,
+    last_name: null,
+    email: "grace@example.com",
+  };
+  assert.equal(memberOptionLabel(m), "Grace H. (grace@example.com)");
+});

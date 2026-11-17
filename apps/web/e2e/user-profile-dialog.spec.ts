@@ -79,4 +79,22 @@ test.describe("user profile dialog", () => {
     await expect(dialog.getByText("Could not load profile.")).toHaveCount(0);
     expect(calls).toBeGreaterThan(before);
   });
+
+  test("a 500 keeps the call site's fallback fields next to the retry affordance", async ({ page }) => {
+    // The members page hands over the row's own fields, so a refused profile
+    // load renders them instead of the dead end (the dead end stays for a call
+    // site with no fields to show).
+    await openMembersProfile(page, (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Boom" }),
+      }),
+    );
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByText("member@example.com")).toBeVisible();
+    await expect(dialog.getByText("Could not load profile.")).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Try again" })).toBeVisible();
+  });
 });

@@ -486,6 +486,14 @@ class WorkspaceService:
         result = await self._session.execute(stmt)
         return result.first() is not None
 
+    async def _require_active_member(
+        self, workspace_id: str, actor: User
+    ) -> tuple[WorkspaceMember, Role]:
+        membership = await self.get_membership(workspace_id, actor.id)
+        if membership is None:
+            raise WorkspaceForbidden("you are not a member of this workspace")
+        return membership
+
     # ---------------------------------------------------------------- members
 
     async def list_members(self, workspace_id: str) -> list[tuple[WorkspaceMember, User, Role]]:
@@ -508,10 +516,7 @@ class WorkspaceService:
         actor: User,
         ip_address: str | None = None,
     ) -> WorkspaceMember:
-        membership = await self.get_membership(workspace_id, actor.id)
-        if membership is None:
-            raise WorkspaceForbidden("you are not a member of this workspace")
-        _, actor_role = membership
+        _, actor_role = await self._require_active_member(workspace_id, actor)
         if not is_manager_role_name(actor_role.name):
             raise WorkspaceForbidden("only the workspace owner or an admin can change roles")
         member = await self._session.get(WorkspaceMember, member_id)
@@ -658,12 +663,10 @@ class WorkspaceService:
     async def _require_manager(
         self, workspace_id: str, actor: User
     ) -> tuple[WorkspaceMember, Role]:
-        membership = await self.get_membership(workspace_id, actor.id)
-        if membership is None:
-            raise WorkspaceForbidden("you are not a member of this workspace")
-        if not is_manager_role_name(membership[1].name):
+        member, actor_role = await self._require_active_member(workspace_id, actor)
+        if not is_manager_role_name(actor_role.name):
             raise WorkspaceForbidden("only the workspace owner or an admin can manage members")
-        return membership
+        return member, actor_role
 
     async def suspend_member(
         self,
@@ -1247,10 +1250,7 @@ class WorkspaceService:
         ip_address: str | None = None,
     ) -> Role:
         name = name.strip()
-        membership = await self.get_membership(workspace_id, actor.id)
-        if membership is None:
-            raise WorkspaceForbidden("you are not a member of this workspace")
-        _, actor_role = membership
+        _, actor_role = await self._require_active_member(workspace_id, actor)
         is_owner = "*" in actor_role.permissions
         assignable = set(actor_role.permissions)
         self._check_permissions_assignable(permissions, assignable, owner=is_owner)
@@ -1295,13 +1295,9 @@ class WorkspaceService:
         # Resolve the actor once, before any mutation: a name-only or
         # description-only edit carries no permission set to cap, so without
         # this it wrote — and flipped `system` below — for a suspended caller.
-        # Same shape and message as `set_member_role` and `_require_manager`.
         # ponytail: ROLE_CREATE stays the route's guard; add the service-side
         # check when a caller outside the route needs it.
-        membership = await self.get_membership(workspace_id, actor.id)
-        if membership is None:
-            raise WorkspaceForbidden("you are not a member of this workspace")
-        _, actor_role = membership
+        _, actor_role = await self._require_active_member(workspace_id, actor)
         is_owner = "*" in actor_role.permissions
         assignable = set(actor_role.permissions)
         changed = False
