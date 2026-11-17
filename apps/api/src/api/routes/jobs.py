@@ -19,10 +19,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.crud import InvalidQuery, apply_query, parse_query
 from src.api.deps import (
     AuthPrincipal,
-    deployment_admin_denied,
     get_container,
     get_current_workspace_id,
     record_key_use,
+    require_deployment_admin,
     require_permission,
     require_superuser,
     resolve_auth_principal,
@@ -228,13 +228,12 @@ async def _require_run_access(
     Response through, never drop it.
     """
     if run.workspace_id is None:
-        if not principal.is_deployment_admin:
-            raise deployment_admin_denied(principal)
+        require_deployment_admin(principal)
         return
     if principal.api_key is not None:
         api_key = principal.api_key
         if api_key.workspace_id != run.workspace_id:
-            raise deployment_admin_denied(principal)
+            require_deployment_admin(principal)
         if "*" in api_key.permissions or JOB_READ in api_key.permissions:
             await record_key_use(api_key, db, response)
             return
@@ -271,14 +270,13 @@ async def _require_job_access(
     """
     required = JOB_UPDATE if need_edit else JOB_READ
     if definition.workspace_id is None:
-        if not principal.is_deployment_admin:
-            raise deployment_admin_denied(principal)
+        require_deployment_admin(principal)
         return
     # workspace-scoped job — check the workspace of the definition, not the header
     if principal.api_key is not None:
         api_key = principal.api_key
         if api_key.workspace_id != definition.workspace_id:
-            raise deployment_admin_denied(principal)
+            require_deployment_admin(principal)
         if "*" in api_key.permissions or required in api_key.permissions:
             await record_key_use(api_key, db, response)
             return
