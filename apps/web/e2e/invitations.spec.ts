@@ -81,6 +81,10 @@ const inviteFormActor = actor(["member:read", "member:create"]);
 // nor admin.
 const customManager = actor(["member:read", "member:create", "member:update"], "custom");
 
+// May revoke but not invite: member:create gates the section, so this actor
+// gets no section and the canRevoke gate below is unreachable for it.
+const revoker = actor(["member:read", "member:delete"]);
+
 // A route registered after mockApi takes precedence over its catch-all.
 const invitations = (page: Page) =>
   page.route(
@@ -124,6 +128,13 @@ test.describe("invitations", () => {
     // than a button that can never fire.
     await expect(deleteButton(page, "live@example.com")).toHaveCount(0);
     await expect(deleteButton(page, "expired@example.com")).toHaveCount(0);
+  });
+
+  test("a revoke-only role gets no invitations section", async ({ page }) => {
+    await mockApi(page, { signedIn: true, identity: revoker });
+    await invitations(page);
+    await page.goto("/members");
+    await expect(page.getByRole("heading", { name: "Invited members" })).toHaveCount(0);
   });
 
   test("member:update under a non-manager role name gets no Re-send", async ({ page }) => {
