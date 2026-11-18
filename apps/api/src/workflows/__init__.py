@@ -118,6 +118,8 @@ async def _audit_email_failure(
         resource_type="notification",
         resource_id=notification.id,
         action="notification.email_failed",
+        # details.email is deliberate: this system-originated action has no actor
+        # (actor_user_id is None), so the address is the only field naming the recipient.
         details={"user_id": user_id, "type": n_type, "email": email, "reason": reason},
     )
 
