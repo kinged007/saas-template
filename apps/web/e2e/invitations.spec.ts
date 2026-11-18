@@ -134,6 +134,10 @@ test.describe("invitations", () => {
     await mockApi(page, { signedIn: true, identity: revoker });
     await invitations(page);
     await page.goto("/members");
+    // `toHaveCount(0)` passes on its first poll and the loading shell also
+    // has no such heading, so anchor on settled state first.
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByRole("heading", { name: "Members" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Invited members" })).toHaveCount(0);
   });
 
