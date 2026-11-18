@@ -26,9 +26,10 @@ export const ACCESS_TOKEN = [
 
 /**
  * Fulfill every backend call so the app runs with no API process. The session
- * endpoints decide auth; the list endpoints must answer with a bare array
- * (@refinedev/simple-rest maps the body straight to `data`); `/auth/config`
- * must report registration_enabled, or RegisterPage bounces to /login.
+ * endpoints decide auth; the list endpoints answer the requested `_start`/`_end`
+ * window of the fixture with `x-total-count` set to the fixture's length, like
+ * the backend's capped pages; `/auth/config` must report registration_enabled,
+ * or RegisterPage bounces to /login.
  *
  * The returned `signIn()` flips the mocked session mid-test, for flows that
  * start signed out and end signed in (the sign-in round trip). Specs that do
@@ -45,10 +46,12 @@ export async function mockApi(
     signedIn: boolean;
     identity?: Identity;
     /**
-     * Rows for a bare `/api/v1/<resource>` list call; every other list answers
-     * `[]`. Values are only `JSON.stringify`-ed, so any JSON value works. A
-     * prototype-named key is seedable only through `Object.defineProperty`
-     * — a literal `__proto__:` key sets the object's prototype, not a key.
+     * Rows for a `/api/v1/<resource>` list call, answered as the requested
+     * `_start`/`_end` window with `x-total-count` set to the fixture's length;
+     * every other list answers `[]` with `x-total-count: 0`. Values are only
+     * `JSON.stringify`-ed, so any JSON value works. A prototype-named key is
+     * seedable only through `Object.defineProperty` — a literal `__proto__:`
+     * key sets the object's prototype, not a key.
      */
     lists?: Record<string, unknown>;
     /** Path suffixes answered 401 `{detail: "session revoked"}` once, then normal — mid-session sign-out. */
@@ -96,11 +99,36 @@ export async function mockApi(
       }
     }
     const resource = pathname.slice("/api/v1/".length);
+    // simple-rest pages every list with `_start`/`_end`; honor the window so a
+    // seed longer than one page reproduces the backend's capped pages, and
+    // report the fixture length as the total. A `0` total falls back to
+    // `data.length` in simple-rest, exactly like a missing header did.
+    const replyList = (body: unknown) => {
+      const total = Array.isArray(body) ? body.length : 0;
+      let data = body;
+      if (Array.isArray(body)) {
+        const params = new URL(route.request().url()).searchParams;
+        const startParam = params.get("_start");
+        const endParam = params.get("_end");
+        // `Number(null)` is 0, so a missing param must stay missing — otherwise
+        // an unpaged fetch would slice to an empty page.
+        const start = startParam === null ? NaN : Number(startParam);
+        const end = endParam === null ? NaN : Number(endParam);
+        if (Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end >= start)
+          data = body.slice(start, end);
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: { "x-total-count": String(total) },
+        body: JSON.stringify(data),
+      });
+    };
     // Own-property only: `in` walks Object.prototype, so `toString` would serve
     // `JSON.stringify` of an inherited function, which is undefined. `Object.hasOwn`
     // needs lib ES2022; tsconfig pins ES2020.
-    if (Object.prototype.hasOwnProperty.call(lists, resource)) return reply(200, lists[resource]);
-    return reply(200, []);
+    if (Object.prototype.hasOwnProperty.call(lists, resource)) return replyList(lists[resource]);
+    return replyList([]);
   });
   // The auth check only refreshes when the signed-in marker is set, so seed
   // it before any app code runs — ONCE: later loads must see the live marker
@@ -155,7 +183,12 @@ export async function mockApiTwoFactor(
       revocations.add(pathname);
       return reply(401, { detail: "session revoked" });
     }
-    return reply(200, []);
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "x-total-count": "0" },
+      body: "[]",
+    });
   });
   // Password sign-in challenges 2FA; the verify call establishes the session.
   await page.route("**/api/v1/auth/login", async (route) =>
