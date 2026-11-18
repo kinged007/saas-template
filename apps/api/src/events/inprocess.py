@@ -122,6 +122,16 @@ class InProcessEventBus(EventBus):
             except asyncio.CancelledError:
                 pass
 
+    async def wait_idle(self) -> None:
+        """Wait until every queued delivery has run its handler.
+
+        `Queue.join` tracks items from the synchronous `put_nowait` in
+        `publish` until the matching `task_done` after the handler finishes,
+        so unlike polling `_in_flight` there is no gap between `queue.get()`
+        and the `_in_flight += 1` in `_consume`.
+        """
+        await asyncio.gather(*(q.join() for q in list(self._queues.values())))
+
     async def _consume(
         self, subject: str, queue: asyncio.Queue[EventEnvelope], handler: SubscriberHandler
     ) -> None:
