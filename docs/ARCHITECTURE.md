@@ -194,7 +194,7 @@ Every user/automatic action publishes an audit event (`audit.entry.created`):
 `member.role_changed/removed/left`, `invitation.created/resent/accepted/declined/revoked/email_failed`, `user.session_revoked/sessions_revoked/refresh_token_reuse`,
 `role.created`, `apikey.created/revoked`, `notification.acknowledged/
 unacknowledged`, `notification.email_failed`, `job.run_*`. The audit workflow persists them (committed) to
-`audit_log_entries`.
+`audit_log_entries`. `notification.email_failed` carries `details.reason` = `no_recipient | no_email | send_failed`.
 
 ## 7. Scheduled jobs
 
