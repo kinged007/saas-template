@@ -69,7 +69,14 @@ Evidence: [UPDATE-PATH.md §4](UPDATE-PATH.md#4-migration-ids-collide).
 **Means:** the filename format is already set by `file_template` in `apps/api/alembic.ini`;
 only the id changes. Existing migrations `0001`–`0020` are not renumbered.
 
-**Not yet decided — see O-2:** how many digits.
+**Format:** fourteen digits, `YYYYMMDDHHMMSS` in UTC — for example
+`20261118104500_acme_orders.py`. A ten-digit id (`YYYYMMDDHH`) is one hour wide, so two
+migrations created in the same hour would share it, which is the unrecoverable case this
+decision exists to remove. Fourteen digits narrows the window to one second. Width accepted
+2026-11-18.
+
+`make db-new` does not generate these ids yet; until it does, pass the id explicitly
+(see `AGENTS.md`, Migrations).
 
 ---
 
@@ -106,13 +113,5 @@ Measured 2026-11-17 18:16 CET: `private: true`, `is_template: false`. While priv
 can adopt it, so D-01 cannot be met. "Use this template" is also unavailable until the
 template flag is set.
 
-**Recommendation:** decide *when* it goes public, not only whether. The natural point is the
-first release, so the first version anyone adopts keeps the update promise.
-
-### O-2 — Migration id width
-
-A ten-digit timestamp, `YYYYMMDDHH`, is one hour wide. Two migrations created in the same
-hour would share an id — the unrecoverable case D-04 exists to remove.
-
-**Recommendation:** fourteen digits, `YYYYMMDDHHMMSS` (e.g. `20261118104500_acme_orders`).
-Same shape, one-second window.
+**Status (2026-11-18): deferred.** The repository stays private until the clean-up before the
+first release is done. Visibility and the template flag change together at that point.
