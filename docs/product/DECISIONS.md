@@ -73,7 +73,7 @@ only the id changes. Existing migrations `0001`–`0020` are not renumbered.
 `20261118104500_acme_orders.py`. A ten-digit id (`YYYYMMDDHH`) is one hour wide, so two
 migrations created in the same hour would share it, which is the unrecoverable case this
 decision exists to remove. Fourteen digits narrows the window to one second. Width accepted
-2026-11-18.
+2026-11-18. The one exception is the squashed release baseline, which `make db-squash` writes as `alembic/versions/0001_<slug>.py` with `revision = "0001"` (see `docs/MIGRATIONS.md`).
 
 `make db-new` does not generate these ids yet; until it does, pass the id explicitly
 (see `AGENTS.md`, Migrations).

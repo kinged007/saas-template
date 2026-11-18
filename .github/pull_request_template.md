@@ -9,10 +9,15 @@
 
 **Area:** api / web / db / infra  <!-- one; if more, say why it can't be split -->
 
-## Admission ([docs/product/ADMISSION.md](../docs/product/ADMISSION.md))
+## Admission ([docs/product/ADMISSION.md](https://github.com/kinged007/saas-template/blob/main/docs/product/ADMISSION.md))
 
 **Gate 0 — phase** (until the first release, one of):
 - [ ] update-path guarantee · [ ] security fix · [ ] restores documented behaviour
+
+**Gate 1 — scope** (plumbing, not a domain feature; no demo-surface growth):
+- [ ] Plumbing every multi-tenant B2B SaaS needs (ADMISSION Gate 1 list)
+- [ ] Not a domain feature (orders, invoices, projects, CRM, chat…)
+- [ ] Does not grow the demo surface beyond exercising plumbing
 
 **Gate 2 — update safety**
 - [ ] Renames / moves / deletions under `apps/` are listed in the release-note line
@@ -31,4 +36,4 @@
 - [ ] Docs touched are true against this diff
 - [ ] Unbranded — no credits, banners or marketing copy
 
-**Verdict line:** <!-- e.g. "Accept — Gate 0 security fix; Gates 2–4 pass." -->
+**Verdict line:** <!-- e.g. "Accept — Gate 0 security fix; Gates 1–4 pass." -->

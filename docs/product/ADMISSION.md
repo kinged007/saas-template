@@ -23,8 +23,8 @@ Until the first release, only three kinds of change are built:
 - [ ] fixes a security problem, **or**
 - [ ] restores behaviour that is already documented (README, `docs/`, or a test).
 
-Anything else is assessed through Gates 1–4 and then **deferred**, not built.
-A "small obvious improvement" is a new capability; it is deferred too.
+Gate 0 is the one exception to §1 stop-at-the-first-failure rule: a change that fails it is still assessed through Gates 1–4, so the verdict names every gate it fails. Only a change that fails Gate 0 and passes Gates 1–4 is **deferred**, not built; a change that also fails a later gate gets that gate verdict (**Reject**, or **Maintainer** under §5).
+A "small obvious improvement" is a new capability: it fails Gate 0, and is deferred only if it survives Gates 1–4.
 
 ### Gate 1 — Scope *(P4 Plumbing, not product)*
 
@@ -39,7 +39,7 @@ Fails → **Reject**. If it is plumbing but not on the list above → **Maintain
 
 ### Gate 2 — Update safety *(P1 Updatable, P2 Never silent, P6 Secure)*
 
-Hard rules. Any unchecked box → **Reject** until fixed.
+Hard rules. Any unchecked box that can be fixed becomes a named condition (**Accept with conditions**); one with no way to fix it → **Reject**.
 
 - [ ] **Renames, moves and deletions** of a file under `apps/` are listed in the change's
       release-note line as `old/path → new/path` (or `removed`). A silent rename breaks every

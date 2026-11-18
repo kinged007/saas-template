@@ -30,7 +30,7 @@ Never:
 - add hook, plugin or override layers over template files (`docs/product/DECISIONS.md` D-03);
 - rename, move or delete a file under `apps/` without listing it in the PR's release-note
   line as `old/path → new/path` or `removed`;
-- create a migration without a 14-digit timestamp revision id (D-04; see Migrations below);
+- create a migration without a 14-digit timestamp revision id (D-04; see Migrations below; the squashed 0001 baseline is the only exception);
 - add credits, branding or promotional text.
 
 ## Dev stack ports
@@ -60,11 +60,11 @@ cd apps/api && uv run alembic revision --autogenerate \
   --rev-id "$(date -u +%Y%m%d%H%M%S)" -m "acme orders"   # → 20261118104500_acme_orders.py
 ```
 
-`make db-new` does not set the id yet, so do not use it for new migrations until it does.
+`make db-new` does not set the id yet, so do not use it for new migrations until it does — it writes Alembic's default random hex id, which violates D-04. Use the `--rev-id` command above.
 Review the diff (watch for accidental drops, wrong nullability, missing server_default),
 commit the file.
 `make db-check` (also in CI) fails on multiple heads or models≠migrations.
-Full workflow: `docs/MIGRATIONS.md`.
+Full workflow: `docs/MIGRATIONS.md`, except its Daily workflow still shows `make db-new`: use the `--rev-id` command above for the id until that file is fixed.
 
 ---
 
