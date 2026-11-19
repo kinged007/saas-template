@@ -35,36 +35,6 @@ async def _wait_for_audit_export(
     return resp
 
 
-async def test_wait_for_audit_export_gives_up_without_issuing_export(app_client, monkeypatch):
-    """The exhausted gate: no `workspace.created` row -> no export, only the assert."""
-    from src.services.search_export import SearchExportService
-
-    issued = []
-
-    async def _recording_export_json(self, **kwargs):
-        issued.append(kwargs)
-        return {}
-
-    monkeypatch.setattr(SearchExportService, "export_json", _recording_export_json)
-
-    # Real credentials, so the export is reachable and the counter below is
-    # evidence rather than a 401 short-circuit.
-    tokens = await register_user(app_client, "gate@example.com")
-    ws = await create_workspace(app_client, tokens, name="Gate Co")
-    # The gate watches a workspace id the bus has never seen, so the row can never land.
-    missing_workspace_id = str(uuid4())
-    timeout_secs, interval = 0.05, 0.01
-    with pytest.raises(AssertionError, match="audit bus did not commit workspace.created"):
-        await _wait_for_audit_export(
-            app_client,
-            ws_headers(tokens, ws["id"]),
-            missing_workspace_id,
-            timeout_secs=timeout_secs,
-            interval=interval,
-        )
-    assert issued == [], "the gate must abort before the export is issued"
-
-
 async def _me_id(client, tokens):
     resp = await client.get(
         "/api/v1/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"}
@@ -114,6 +84,36 @@ async def _setup(app_client):
         headers=h,
     )
     return client, h, ws, conv
+
+
+async def test_wait_for_audit_export_gives_up_without_issuing_export(app_client, monkeypatch):
+    """The exhausted gate: no `workspace.created` row -> no export, only the assert."""
+    from src.services.search_export import SearchExportService
+
+    issued = []
+
+    async def _recording_export_json(self, **kwargs):
+        issued.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(SearchExportService, "export_json", _recording_export_json)
+
+    # Real credentials, so the export is reachable and the counter below is
+    # evidence rather than a 401 short-circuit.
+    tokens = await register_user(app_client, "gate@example.com")
+    ws = await create_workspace(app_client, tokens, name="Gate Co")
+    # The gate watches a workspace id the bus has never seen, so the row can never land.
+    missing_workspace_id = str(uuid4())
+    timeout_secs, interval = 0.05, 0.01
+    with pytest.raises(AssertionError, match="audit bus did not commit workspace.created"):
+        await _wait_for_audit_export(
+            app_client,
+            ws_headers(tokens, ws["id"]),
+            missing_workspace_id,
+            timeout_secs=timeout_secs,
+            interval=interval,
+        )
+    assert issued == [], "the gate must abort before the export is issued"
 
 
 async def test_search_finds_workspace_content(app_client):
