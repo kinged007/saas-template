@@ -63,5 +63,9 @@ test.describe("dashboard card headings", () => {
     await expect
       .poll(() => outline(pageBody(page)))
       .toEqual(["H1: No workspace yet"]);
+
+    await expect(
+      page.getByRole("heading", { name: "No workspace yet", level: 1 }),
+    ).toBeVisible();
   });
 });
