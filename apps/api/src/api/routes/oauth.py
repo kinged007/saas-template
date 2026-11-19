@@ -20,7 +20,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_container, get_current_user
+from src.api.deps import get_container, get_current_user, uuid_or_404
 from src.api.routes.auth import (
     _client_ip,
     _join_single_workspace_best_effort,
@@ -176,11 +176,14 @@ async def oauth_link_token(
 @router.delete("/identities/{link_id}", status_code=204)
 async def oauth_unlink(
     link_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user=Depends(get_current_user),
 ):
+    container = get_container(request)
+    uuid_or_404(link_id, "OAuth identity")
     try:
-        await AuthService(db).unlink_oauth_identity(user_id=user.id, link_id=link_id)
+        await AuthService(db, container.bus).unlink_oauth_identity(user_id=user.id, link_id=link_id)
     except AuthError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -201,7 +204,12 @@ async def oauth_callback(
     cookie_state = request.cookies.get(STATE_COOKIE)
     if not code or not state:
         return _error_redirect("missing code or state")
-    if not cookie_state or not secrets.compare_digest(state, cookie_state):
+    if (
+        not cookie_state
+        or not state.isascii()
+        or not cookie_state.isascii()
+        or not secrets.compare_digest(state, cookie_state)
+    ):
         return _error_redirect("invalid or expired state")
     try:
         saved = consume_state(container.cache, state)
