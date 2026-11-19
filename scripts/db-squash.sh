@@ -209,6 +209,10 @@ echo "==> replacing versions/ with the baseline"
 cp "$SCRATCH_ROOT/$BASELINE_NAME" alembic/versions/
 # ruff is a dev extra: it cannot spawn without --extra dev. Lint failures
 # abort the squash; the EXIT trap restores the old chain.
+# Keep these ruff steps loud: do not add `>/dev/null 2>&1` here. The alembic
+# steps above silence output but keep their exit codes (each has a post-check);
+# a silenced ruff discarded output and failure and shipped an unformatted
+# baseline (see #602). test_ruff_failure_is_not_silenced rejects it.
 uv run --extra dev ruff format "$BASELINE"
 uv run --extra dev ruff check --fix "$BASELINE"
 
