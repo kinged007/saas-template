@@ -295,7 +295,21 @@ class AuthService:
             return existing
         link = OAuthAccount(user_id=user_id, provider=provider, subject=subject, email=email)
         self._session.add(link)
-        await self._session.commit()
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            await self._session.commit()
+        except IntegrityError:
+            await self._session.rollback()
+            existing = (await self._session.execute(stmt)).scalar_one_or_none()
+            if existing is not None and existing.user_id != user_id:
+                raise AuthError("this sign-in is already linked to another account") from None
+            if existing is None:
+                raise
+            if email and not existing.email:
+                existing.email = email
+                await self._session.commit()
+            return existing
         await publish_audit(
             self._bus,
             workspace_id=None,
@@ -312,7 +326,7 @@ class AuthService:
         link = await self._session.get(OAuthAccount, link_id)
         if link is None or link.user_id != user_id:
             raise AuthError("linked account not found")
-        remaining = [row for row in await self.list_oauth_identities(user_id) if row.id != link_id]
+        remaining = [row for row in await self.list_oauth_identities(user_id) if row.id != link.id]
         user = await self._session.get(User, user_id)
         if not remaining and (user is None or not user.password_hash):
             raise AuthError("set a password before unlinking your only sign-in method")
