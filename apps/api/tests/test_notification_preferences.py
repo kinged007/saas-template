@@ -20,6 +20,27 @@ async def _prefs(client, tokens) -> dict:
     return resp.json()
 
 
+async def _row_ids(user_id: str) -> list:
+    from sqlalchemy import select
+
+    from src.db.session import SessionFactory
+    from src.models.core import Notification
+
+    async with SessionFactory() as session:
+        return list(
+            (
+                await session.execute(
+                    select(Notification.id).where(
+                        Notification.user_id == user_id,
+                        Notification.type == "member_joined",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+
 async def test_preference_defaults_to_inapp(app_client):
     from tests.conftest import register_user
 
@@ -330,11 +351,8 @@ async def test_unsubscribe_token_disables_email(app_client):
 
 
 async def test_failed_notification_email_is_audited(app_client, monkeypatch):
-    from sqlalchemy import select
-
     import src.email.factory as factory
     from src.db.session import SessionFactory
-    from src.models.core import Notification
     from src.services.notifications import NotificationService
     from tests.bus_doubles import RecordingBus
     from tests.conftest import register_user
@@ -369,31 +387,16 @@ async def test_failed_notification_email_is_audited(app_client, monkeypatch):
                 metadata={},
             )
 
-    async def _row_ids():
-        async with SessionFactory() as session:
-            return list(
-                (
-                    await session.execute(
-                        select(Notification.id).where(
-                            Notification.user_id == me["id"],
-                            Notification.type == "member_joined",
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-
     ok = False
     await notify()
-    (failed_id,) = await _row_ids()
+    (failed_id,) = await _row_ids(me["id"])
     assert bus.actions() == ["notification.email_failed"]
 
     ok = True
     await notify()  # a delivered email is not an audit event
 
     # The in-app row is kept either way; only the failed send is audited.
-    assert len(await _row_ids()) == 2
+    assert len(await _row_ids(me["id"])) == 2
     assert bus.actions() == ["notification.email_failed"]
     payload = bus.audit()[0][0]
     assert payload["resource_type"] == "notification"
@@ -444,6 +447,7 @@ async def test_notification_email_without_recipient_is_audited(app_client, caplo
         "reason": "no_recipient",
     }
     assert any("no_recipient" in r.getMessage() for r in caplog.records)
+    assert len(await _row_ids(ghost_id)) == 1
 
 
 async def test_notification_email_without_address_is_audited(app_client, caplog):
@@ -487,3 +491,4 @@ async def test_notification_email_without_address_is_audited(app_client, caplog)
         "reason": "no_email",
     }
     assert any("no_email" in r.getMessage() for r in caplog.records)
+    assert len(await _row_ids(me["id"])) == 1
