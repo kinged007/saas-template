@@ -436,3 +436,82 @@ async def test_zero_quota_is_rejected(app_client):
     ok = await client.get("/api/v1/members", headers=key_headers)
     assert ok.status_code == 200, ok.text
     assert ok.headers["X-API-Key-Remaining"] == "1", ok.text
+
+
+async def test_legacy_zero_quota_row_is_dead_until_patched(app_client):
+    """A row stored with usage_quota = 0 before the #948 guard is dead, not
+    broken: it cannot authenticate, the listing still reports it with
+    Remaining 0, and a PATCH to a positive quota (or null) revives it. The
+    row is written straight to the DB, bypassing both guards, which is what
+    a pre-#948 row is — neither entry point accepts 0 anymore."""
+    from sqlalchemy import select, update
+
+    from src.db.session import SessionFactory
+    from src.models.api_key import ApiKey
+
+    client = app_client
+    owner = await register_user(client, "legacy-zero@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    legacy = (
+        await client.post(
+            "/api/v1/api-keys",
+            json={"name": "legacy", "permissions": ["member:read"], "usage_quota": 1},
+            headers=headers,
+        )
+    ).json()
+    for name, quota in (("open", None), ("capped", 5)):
+        resp = await client.post(
+            "/api/v1/api-keys",
+            json={"name": name, "permissions": ["member:read"], "usage_quota": quota},
+            headers=headers,
+        )
+        assert resp.status_code == 201, resp.text
+
+    async with SessionFactory() as session:
+        await session.execute(update(ApiKey).where(ApiKey.id == legacy["id"]).values(usage_quota=0))
+        await session.commit()
+        # The runbook query from docs/MIGRATIONS.md: only the legacy row matches.
+        zero_ids = (
+            (await session.execute(select(ApiKey.id).where(ApiKey.usage_quota == 0)))
+            .scalars()
+            .all()
+        )
+    assert zero_ids == [legacy["id"]], zero_ids
+
+    # The listing still reports the row, with Remaining 0.
+    listed = (await client.get("/api/v1/api-keys", headers=headers)).json()
+    item = next(k for k in listed if k["id"] == legacy["id"])
+    assert item["usage_quota"] == 0, item
+
+    # ... but it cannot authenticate: 0 < 0 spends nothing.
+    key_headers = {"Authorization": f"Bearer {legacy['key']}", "X-Workspace-ID": ws["id"]}
+    refused = await client.get("/api/v1/members", headers=key_headers)
+    assert refused.status_code == 403, refused.text
+    assert "quota" in refused.json()["detail"].lower(), refused.text
+    assert refused.headers["X-API-Key-Quota"] == "0", refused.text
+    assert refused.headers["X-API-Key-Remaining"] == "0", refused.text
+
+    # A positive quota revives it.
+    patched = await client.patch(
+        f"/api/v1/api-keys/{legacy['id']}",
+        json={"usage_quota": 5},
+        headers=headers,
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["usage_quota"] == 5, patched.text
+    ok = await client.get("/api/v1/members", headers=key_headers)
+    assert ok.status_code == 200, ok.text
+    assert ok.headers["X-API-Key-Remaining"] == "4", ok.text
+
+    # Null is the deliberate-unlimited repair.
+    cleared = await client.patch(
+        f"/api/v1/api-keys/{legacy['id']}",
+        json={"usage_quota": None},
+        headers=headers,
+    )
+    assert cleared.json()["usage_quota"] is None, cleared.text
+    ok = await client.get("/api/v1/members", headers=key_headers)
+    assert ok.status_code == 200, ok.text
+    assert "X-API-Key-Quota" not in ok.headers, ok.text
