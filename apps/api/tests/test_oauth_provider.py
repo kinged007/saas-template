@@ -719,7 +719,8 @@ def test_authorize_url_carries_s256_challenge(provider, idp):
     the server kept: the client only ever sees the public half."""
     cache = TtlCache(ttl_seconds=60)
 
-    params = parse_qs(urlsplit(build_authorize_url(provider, idp.doc, cache, REDIRECT_URI)).query)
+    _, url = build_authorize_url(provider, idp.doc, cache, REDIRECT_URI)
+    params = parse_qs(urlsplit(url).query)
 
     assert params["code_challenge_method"] == ["S256"]
     assert "code_verifier" not in params
