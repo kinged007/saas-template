@@ -694,7 +694,7 @@ async def test_cleanup_job_error_message_caps_the_id_list(app_client, monkeypatc
     # Counting ids does not pin the separator. The prose above already contains ", ",
     # so pin the list itself: a quote-glued separator fails both assertions.
     assert ", " in message.split("of them: ", 1)[1]
-    assert "'" not in message
+    assert "'" not in message.split("of them: ", 1)[1]
 
 
 async def test_cleanup_job_logs_only_the_first_publish_failure_with_a_traceback(
