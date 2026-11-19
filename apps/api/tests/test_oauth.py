@@ -474,7 +474,6 @@ async def test_callback_failure_log_is_control_free(app_client, oauth_on, caplog
     # provider_id and into the OAuthError text the callback logs. The warning
     # must leave no Cc control behind (log forging / ANSI injection).
     import src.api.routes.oauth as oauth_routes
-
     from src.main import app as fastapi_app
 
     provider_id = "bad\r\nidp\x1b[31m"
