@@ -51,6 +51,7 @@ export const PageHeader = ({
       <div className={cn("flex", "items-center", "justify-between", "gap-4", headerClassName)}>
         <div>
           <h2 className="text-2xl font-bold">{title}</h2>
+          {/* Deliberate && (see #731): JSX children drop "", unlike the inspected RoleCapNotice return fixed in #711. */}
           {subtitle && <p className="text-muted-foreground mt-1">{subtitle}</p>}
         </div>
         {rightContent && (
