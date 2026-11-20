@@ -183,9 +183,11 @@ export function GeneralSection() {
       date_of_birth: (getProfileField(profile, "date_of_birth", "") as string) || "",
       website_url: (getProfileField(profile, "website_url", "") as string) || "",
       location: (getProfileField(profile, "location", "") as string) || "",
-      // identity.avatar_url is the signed-in user's: never a fallback in the
-      // member editor.
-      avatar_url: targetId ? "" : identity?.avatar_url || "",
+      // The delegated GET returns the target's avatar_url; identity.avatar_url
+      // is the signed-in user's and is only a fallback for the self profile.
+      avatar_url:
+        (getProfileField(profile, "avatar_url", "") as string) ||
+        (targetId ? "" : identity?.avatar_url || ""),
     }),
     [profile, identity?.avatar_url, detectedTimezone, targetId],
   );
