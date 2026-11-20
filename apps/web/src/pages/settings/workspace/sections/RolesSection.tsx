@@ -27,8 +27,14 @@ import {
 } from "@/components/ui/table";
 import { Check, ChevronDown, Pencil, Plus } from "lucide-react";
 import type { Role } from "@/types";
+import { roleCapNotice } from "@/lib/role-cap";
+import { isOwnerRoleName } from "@/pages/role-name";
 
 type CatalogResponse = { catalog: string[]; permissions: string[] };
+
+// parse_query's max_limit: ask for one full page so the server order is
+// complete. A workspace past this is reported as truncated below the list.
+const ROLES_PAGE_SIZE = 100;
 
 const SYSTEM_RANK: Record<string, number> = { owner: 0, admin: 1, editor: 2, viewer: 3 };
 
@@ -155,7 +161,10 @@ function PermissionPicker({
 }
 
 export function RolesSection() {
-  const { result } = useWorkspaceList<Role>({ resource: "roles" });
+  const { result } = useWorkspaceList<Role>({
+    resource: "roles",
+    pagination: { currentPage: 1, pageSize: ROLES_PAGE_SIZE },
+  });
   const { result: catalogResult } = useWorkspaceCustom<CatalogResponse>({
     url: "roles/permission-catalog",
     method: "get",
@@ -168,9 +177,13 @@ export function RolesSection() {
   const { data: canManage } = useCan({ resource: "roles", action: "create" });
   const { data: canEdit } = useCan({ resource: "roles", action: "edit" });
 
+  // Server orders by a name-keyed rank; re-apply the system-keyed rank within
+  // the fetched page so a custom role named like a system role sorts last.
   const rows = [...(result?.data ?? [])].sort(
     (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name),
   );
+  const total = result?.total ?? rows.length;
+  const capNotice = roleCapNotice(rows.length, total);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
@@ -314,10 +327,11 @@ export function RolesSection() {
           </Dialog>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
+          {capNotice && <p className="text-muted-foreground text-sm">{capNotice}</p>}
           {rows.map((role) => {
             const isOpen = expanded.has(role.id);
             const granted = new Set(role.permissions.includes("*") ? catalog : role.permissions);
-            const isOwner = role.name === "owner";
+            const isOwner = isOwnerRoleName(role.name);
             return (
               <div key={role.id} className="border-border flex flex-col gap-2 rounded-lg border p-4">
                 <div className="flex items-center gap-2">

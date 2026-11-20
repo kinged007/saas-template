@@ -207,8 +207,10 @@ echo "    ok"
 
 echo "==> replacing versions/ with the baseline"
 cp "$SCRATCH_ROOT/$BASELINE_NAME" alembic/versions/
-uv run ruff format "$BASELINE" >/dev/null 2>&1 || true
-uv run ruff check --fix "$BASELINE" >/dev/null 2>&1 || true
+# ruff is a dev extra: it cannot spawn without --extra dev. Lint failures
+# abort the squash; the EXIT trap restores the old chain.
+uv run --extra dev ruff format "$BASELINE"
+uv run --extra dev ruff check --fix "$BASELINE"
 
 echo "PASS: $OLD_COUNT migrations squashed into 1"
 echo "  versions/ now holds $(ls alembic/versions/*.py | wc -l | tr -d ' ') file(s)"
