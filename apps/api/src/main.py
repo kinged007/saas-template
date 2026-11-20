@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
+from src.api.errors import register_malformed_id_handler
 from src.api.routes import (
     admin,
     api_keys,
@@ -128,6 +129,8 @@ app.add_middleware(
 )
 
 app.state.container = Container()
+
+register_malformed_id_handler(app)
 
 
 @app.get("/")
