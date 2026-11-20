@@ -13,6 +13,7 @@ import { Navigate } from "react-router";
 import { toast } from "sonner";
 
 import { CopyButton } from "@/components/CopyButton";
+import { ReadError } from "@/components/ui";
 import { errorMessage } from "@/utils/errorMessage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -52,7 +53,7 @@ type WebhookFormData = z.infer<typeof webhookSchema>;
 export function WebhookCreatePage() {
   const { list } = useNavigation();
   const { data: can } = useCan({ resource: "webhooks", action: "create" });
-  const { result: eventsResult } = useCustom<{ events: string[] }>({
+  const { result: eventsResult, query: eventsQuery } = useCustom<{ events: string[] }>({
     url: "webhooks/events",
     method: "get",
   });
@@ -113,6 +114,7 @@ export function WebhookCreatePage() {
   return (
     <CreateView>
       <CreateViewHeader title="Create webhook" />
+      <ReadError error={eventsQuery.error} />
       <Form {...form}>
         <form
           onSubmit={form.handleSubmit(onSubmit)}
