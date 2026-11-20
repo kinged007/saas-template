@@ -58,7 +58,7 @@ User ──< WorkspaceMember >── Workspace (slug, name)
   subscription, HMAC-signed, retried with backoff (1m→5m→30m→2h→12h, 6
   attempts) until success or `exhausted`. The signing secret lives in the
   `SecretStore`, returned once at creation. See `docs/WEBHOOKS.md`.
-- **UserProfile** — 1:1 with `User` (`user_id` PK FK CASCADE), 9 common columns (`first_name`, `last_name`, `bio`, `phone_number`, `timezone`, `locale`, `date_of_birth`, `website_url`, `location`) + schemaless `custom_data JSON DEFAULT {}` (Merge Patch, 50 keys / 16 KiB). Lazily auto-created on `GET /me/profile` or `GET /auth/me` (ON CONFLICT), cascade-deleted with `User`. Cross-user read is workspace-bounded (404 if not co-member nor superuser) with redacted projection (`phone_number`, `date_of_birth`, `_private*` stripped). See `docs/providers/profile.md` for extension seam.
+- **UserProfile** — 1:1 with `User` (`user_id` PK FK CASCADE), 9 common columns (`first_name`, `last_name`, `bio`, `phone_number`, `timezone`, `locale`, `date_of_birth`, `website_url`, `location`) + schemaless `custom_data JSON DEFAULT {}` (Merge Patch, 50 keys / 16 KiB). Lazily auto-created on `GET /me/profile` or `GET /auth/me` (ON CONFLICT), cascade-deleted with `User`. Cross-user read is workspace-bounded (404 if not co-member nor superuser) with redacted projection (`phone_number`, `date_of_birth`, `_private*` stripped). See `apps/api/src/models/user_profile.py` for extension seam.
 - **JobDefinition / JobRun** — DB-backed scheduled jobs (see §7).
 - **Notification** — persisted per user/workspace, acknowledged via
   `PATCH /notifications/{id}`; pushed in realtime over WebSockets.
