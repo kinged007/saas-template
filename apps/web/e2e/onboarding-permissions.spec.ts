@@ -34,10 +34,10 @@ function watchCardRequests(page: Page) {
 const asRole = (permissions: string[]) => ({
   ...IDENTITY,
   permissions: [],
-  workspaces: [{ id: "ws-1", name: "Acme Corp", role: "member", permissions }],
+  workspaces: [{ id: "ws-1", name: "Acme Corp", slug: "acme-corp", role: "member", permissions }],
 });
 
-const card = (page: Page) => page.getByRole("heading", { name: "Get set up", level: 3 });
+const card = (page: Page) => page.getByRole("heading", { name: "Get set up", level: 2 });
 const restore = (page: Page) => page.getByRole("button", { name: "Show setup checklist again" });
 
 test.describe("onboarding steps the identity cannot act on", () => {
@@ -53,7 +53,7 @@ test.describe("onboarding steps the identity cannot act on", () => {
     await page.goto("/");
 
     // Guards the two assertions below against a page that never rendered.
-    await expect(page.getByRole("heading", { name: "Acme Corp", level: 2 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Acme Corp", level: 1 })).toBeVisible();
     await expect(card(page)).toHaveCount(0);
     await expect(restore(page)).toHaveCount(0);
     // Listing either resource needs a permission this role lacks, so the card
@@ -89,7 +89,7 @@ test.describe("onboarding steps the identity cannot act on", () => {
 
     // Progress is read over the permitted steps only, so this is reachable
     // even though the omitted key step has no key behind it.
-    await expect(page.getByRole("heading", { name: "Acme Corp", level: 2 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Acme Corp", level: 1 })).toBeVisible();
     await expect(card(page)).toHaveCount(0);
     expect(failures).toEqual([]);
   });

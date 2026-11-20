@@ -92,7 +92,7 @@ export function WorkspaceSettingsLayout() {
 
       <div className="flex flex-col gap-6 md:flex-row">
         <aside className="w-full shrink-0 md:w-56">
-          <SettingsNav sections={visibleSections} basePath="/settings/workspace" />
+          <SettingsNav sections={visibleSections} basePath="/settings/workspace" label="Workspace Settings" />
           {__DEV_NOTES__ && (
             <p className="text-muted-foreground mt-4 hidden px-3 text-xs md:block">
               Add tabs by registering sections in <code className="font-mono">workspace/registry.ts</code>.

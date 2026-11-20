@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Squash alembic/versions/ into a single baseline migration, then prove it.
+# The project branch (alembic/project_versions/) is left alone: the baseline
+# covers the template chain only, and proof 1 runs with the project files
+# moved aside (a project revision's depends_on names a template revision the
+# baseline deletes, which otherwise crashes the revision map — restored
+# before proof 2 and on every failure path).
 #
 # Usage:
 #   make db-squash m="baseline schema"    # from repo root
@@ -13,7 +18,7 @@
 # database with no `alembic_version` row ("Target database is not up to date"),
 # because the chain's head exists and the database has never been stamped.
 #
-# The order that works: `alembic stamp head` writes the version row without
+# The order that works: `alembic stamp heads` writes the version rows without
 # executing a single migration, so the up-to-date guard passes while the
 # database is still completely empty. Autogenerate then diffs empty-vs-models
 # and emits the whole schema.
@@ -39,23 +44,25 @@
 # every column kept the exact type and server default it had before. Review
 # type changes in the squashed diff by eye.
 #
-# Refuses to run with uncommitted changes under versions/, so a squash always
-# leaves one reviewable diff.
+# Refuses to run with uncommitted changes under versions/ or project_versions/,
+# so a squash always leaves one reviewable diff and the proofs never move a
+# dirty project file aside.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT/apps/api"
 MESSAGE="${m:-baseline schema}"
 
-if [ -n "$(git status --porcelain -- alembic/versions)" ]; then
-  echo "FAIL: uncommitted changes under apps/api/alembic/versions"
-  git status --porcelain -- alembic/versions
+if [ -n "$(git status --porcelain -- alembic/versions alembic/project_versions)" ]; then
+  echo "FAIL: uncommitted changes under apps/api/alembic/versions or project_versions"
+  git status --porcelain -- alembic/versions alembic/project_versions
   exit 1
 fi
 
 SCRATCH_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/saas-dbsquash-XXXXXX")"
 GENERATED=""
 OLD_CHAIN=""
+PROJECT_ASIDE=""
 
 # The old chain is moved aside partway through so each proof can run with only
 # one chain in versions/. That makes $SCRATCH_ROOT the last copy of it, so any
@@ -63,6 +70,13 @@ OLD_CHAIN=""
 cleanup() {
   local status=$?
   if [ "$status" -ne 0 ]; then
+    if [ -n "$PROJECT_ASIDE" ] && [ -d "$PROJECT_ASIDE" ]; then
+      echo "FAIL: restoring the project branch" >&2
+      for f in "$PROJECT_ASIDE"/*.py; do
+        [ -e "$f" ] || continue
+        mv "$f" alembic/project_versions/
+      done
+    fi
     if [ -n "$OLD_CHAIN" ] && [ -d "$OLD_CHAIN" ]; then
       echo "FAIL: restoring the original chain" >&2
       rm -f alembic/versions/*.py
@@ -84,11 +98,13 @@ if [ "$OLD_COUNT" -lt 1 ]; then
   exit 1
 fi
 
-# Autogenerate must produce a file; returns its path on stdout.
+# Autogenerate must produce a file; returns its path on stdout. The new
+# revision always descends from the template head, so with two version
+# locations it lands in versions/ (the template head's directory).
 autogenerate() {
   local before after generated
   before="$(ls alembic/versions/*.py | sort)"
-  uv run alembic revision --autogenerate -m "$1" >/dev/null 2>&1
+  uv run alembic revision --autogenerate --head template@head -m "$1" >/dev/null 2>&1
   after="$(ls alembic/versions/*.py | sort)"
   generated="$(comm -13 <(echo "$before") <(echo "$after") | head -1 || true)"
   if [ -z "${generated:-}" ]; then
@@ -106,7 +122,7 @@ assert_reproduces_models() {
   echo "    upgrading scratch DB to $label"
   export EMBEDDED_DB_DIR="$SCRATCH_ROOT/pg-$2"
   mkdir -p "$EMBEDDED_DB_DIR"
-  uv run alembic upgrade head >/dev/null 2>&1
+  uv run alembic upgrade heads >/dev/null 2>&1
   generated="$(autogenerate "_squash_verify")"
   ops="$(grep -cE '^[[:space:]]+op\.' "$generated" || true)"
   if [ "${ops:-0}" -ne 0 ]; then
@@ -119,14 +135,14 @@ assert_reproduces_models() {
 }
 
 echo "==> generating baseline against an empty database"
-uv run alembic stamp head >/dev/null 2>&1
+uv run alembic stamp heads >/dev/null 2>&1
 BASELINE="$(autogenerate "$MESSAGE")"
 GENERATED="$BASELINE"
 BASELINE_NAME="$(basename "$BASELINE")"
 CREATE_TABLES="$(grep -cE '^[[:space:]]+op\.create_table\(' "$BASELINE" || true)"
 if [ "${CREATE_TABLES:-0}" -lt 1 ]; then
   echo "FAIL: baseline has no op.create_table calls — it would create no schema" >&2
-  echo "      (autogenerate diffed a non-empty database; check 'alembic stamp head' above)" >&2
+  echo "      (autogenerate diffed a non-empty database; check 'alembic stamp heads' above)" >&2
   rm -f "$BASELINE"
   exit 1
 fi
@@ -168,6 +184,15 @@ header = header.replace(
     "branch_labels: Union[str, Sequence[str], None] = None",
     "branch_labels: str | Sequence[str] | None = None",
 )
+# The baseline is the new root of the template branch: name the branch so
+# template@head keeps resolving after the old chain (and its label) is gone.
+header = re.sub(
+    r"^branch_labels: .*$",
+    'branch_labels: str | Sequence[str] | None = "template"',
+    header,
+    count=1,
+    flags=re.M,
+)
 header = header.replace(
     "depends_on: Union[str, Sequence[str], None] = None",
     "depends_on: str | Sequence[str] | None = None",
@@ -194,9 +219,21 @@ mv "$OLD_CHAIN/$BASELINE_NAME" "$SCRATCH_ROOT/$BASELINE_NAME"
 BASELINE="alembic/versions/$BASELINE_NAME"
 
 echo "==> check 1/2: the baseline alone must reproduce the schema"
+# A project revision's depends_on names a template revision this proof just
+# removed, which crashes revision loading — move the project files aside and
+# restore them before check 2/2 (final state never touches project_versions/).
+PROJECT_ASIDE="$SCRATCH_ROOT/project-aside"
+mkdir -p "$PROJECT_ASIDE"
+if ls alembic/project_versions/*.py >/dev/null 2>&1; then
+  mv alembic/project_versions/*.py "$PROJECT_ASIDE"/
+fi
 cp "$SCRATCH_ROOT/$BASELINE_NAME" alembic/versions/
 assert_reproduces_models "the baseline" baseline
 rm -f alembic/versions/*.py
+for f in "$PROJECT_ASIDE"/*.py; do
+  [ -e "$f" ] || continue
+  mv "$f" alembic/project_versions/
+done
 echo "    ok"
 
 echo "==> check 2/2: the old chain must still reach the same schema"
@@ -214,5 +251,6 @@ uv run --extra dev ruff check --fix "$BASELINE"
 
 echo "PASS: $OLD_COUNT migrations squashed into 1"
 echo "  versions/ now holds $(ls alembic/versions/*.py | wc -l | tr -d ' ') file(s)"
-echo "  review the diff, then repoint any open migration's down_revision to 0001"
-echo "  consumers upgrading past this point: alembic stamp 0001 && alembic upgrade head"
+echo "  review the diff, then repoint any open template migration's down_revision to 0001"
+echo "  project revisions now dangle: repoint each depends_on to 0001 (see docs/MIGRATIONS.md)"
+echo "  consumers upgrading past this point: alembic stamp heads && alembic upgrade heads"

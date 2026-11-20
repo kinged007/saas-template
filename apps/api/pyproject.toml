@@ -56,3 +56,4 @@ ignore = ["B008"]
 # string literals, so `ruff check --fix` would exit 1 on a diagnostic only a
 # hand edit can clear — db-squash would abort on code it just generated.
 "alembic/versions/*.py" = ["E501"]
+"alembic/project_versions/*.py" = ["E501"]

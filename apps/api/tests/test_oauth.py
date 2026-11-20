@@ -2,7 +2,9 @@
 exchanges are monkeypatched at the service-module boundary."""
 
 import json
+import logging
 from dataclasses import replace
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -15,6 +17,10 @@ from src.services import oauth as oauth_svc
 from src.settings import settings
 from tests.conftest import auth_headers, break_single_workspace_join, register_user
 from tests.test_auth_2fa_sessions import _totp_for
+
+# Shared by _mock_oauth's default and the scoped lookup so an edit to the mock
+# email cannot leave the lookup raising NoResultFound.
+SSO_EMAIL = "sso@example.com"
 
 PROVIDERS = [
     {
@@ -140,9 +146,14 @@ async def _user_count() -> int:
         return (await s.execute(select(func.count()).select_from(User))).scalar_one()
 
 
-async def _link_count() -> int:
+async def _link_count(provider: str | None, user_id: str) -> int:
     async with SessionFactory() as s:
-        return (await s.execute(select(func.count()).select_from(OAuthAccount))).scalar_one()
+        query = (
+            select(func.count()).select_from(OAuthAccount).where(OAuthAccount.user_id == user_id)
+        )
+        if provider is not None:
+            query = query.where(OAuthAccount.provider == provider)
+        return (await s.execute(query)).scalar_one()
 
 
 async def test_config_reflects_flags(app_client, oauth_on, monkeypatch):
@@ -181,7 +192,7 @@ async def test_unknown_provider_404(app_client, oauth_on):
     assert resp.status_code == 404
 
 
-def _mock_oauth(monkeypatch, *, sub="sub-1", email="sso@example.com", jwks_uri=None):
+def _mock_oauth(monkeypatch, *, sub="sub-1", email=SSO_EMAIL, jwks_uri=None):
     async def fake_discovery(provider, cache):
         return {
             "authorization_endpoint": provider.authorize_url,
@@ -207,6 +218,48 @@ def _mock_oauth(monkeypatch, *, sub="sub-1", email="sso@example.com", jwks_uri=N
 
     monkeypatch.setattr(oauth_routes, "exchange_code", fake_exchange)
     monkeypatch.setattr(oauth_routes, "fetch_userinfo", fake_userinfo)
+
+
+def _mock_discovery(monkeypatch, doc):
+    """Real fetch_userinfo / exchange_code against a canned discovery document."""
+
+    async def fake_discovery(provider, cache):
+        return dict(doc)
+
+    async def fake_exchange(provider, doc, *, code, redirect_uri, code_verifier):
+        return {"access_token": "at", "id_token": None}
+
+    monkeypatch.setattr(oauth_svc, "_discovery", fake_discovery)
+    import src.api.routes.oauth as oauth_routes
+
+    monkeypatch.setattr(oauth_routes, "exchange_code", fake_exchange)
+
+
+# A discovery-mode provider: no explicit endpoints, one anchor host (idp.example).
+DISCOVERY = {
+    "id": "oidcidp",
+    "display_name": "OIDC IdP",
+    "discovery_url": "https://idp.example/.well-known/openid-configuration",
+    "emails_url": "https://userinfo.idp.example/user/emails",
+    "client_id": "cid",
+    "client_secret": "csecret",
+}
+
+
+@pytest.fixture
+def oidc_on(monkeypatch):
+    def _set(emails_url: str) -> None:
+        monkeypatch.setattr(
+            settings,
+            "oauth_providers",
+            json.dumps([{**DISCOVERY, "emails_url": emails_url}]),
+        )
+        monkeypatch.setattr(settings, "auth_allow_registration", True)
+
+    _set(DISCOVERY["emails_url"])
+    yield _set
+    monkeypatch.setattr(settings, "oauth_providers", "")
+    monkeypatch.setattr(settings, "auth_allow_registration", True)
 
 
 async def _callback(app_client, monkeypatch, state="s", provider="testidp"):
@@ -243,7 +296,7 @@ async def test_oauth_new_user_allowed(app_client, oauth_on, monkeypatch):
     assert tokens.status_code == 200, tokens.text
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens.json()))
     assert me.status_code == 200
-    assert me.json()["email"] == "sso@example.com"
+    assert me.json()["email"] == SSO_EMAIL
     # Reuse is rejected (single-use code).
     again = await app_client.post("/api/v1/auth/oauth/token", json={"code": code})
     assert again.status_code == 400
@@ -289,7 +342,13 @@ async def test_oauth_same_provider_new_subject_links_same_user(app_client, oauth
     _, second = await _callback(app_client, monkeypatch, state="s2")
     assert second.status_code == 302
     assert await _user_count() == before
-    assert await _link_count() == 2
+    async with SessionFactory() as s:
+        user_id = (await s.execute(select(User.id).where(User.email == SSO_EMAIL))).scalar_one()
+    scoped = await _link_count("testidp", user_id)
+    assert scoped == 2
+    # Total across providers catches a row another provider adds, which the
+    # scoped testidp count above cannot see.
+    assert await _link_count(None, user_id) == scoped
 
 
 async def test_oauth_callback_survives_join_failure(app_client, oauth_on, monkeypatch):
@@ -354,7 +413,7 @@ async def test_oauth_2fa_user_is_joined(app_client, oauth_on, monkeypatch):
     ][0]["id"]
     # Enrol outside the single-workspace window so only the OAuth callback can join.
     monkeypatch.setattr(settings, "single_workspace", False)
-    sso = await register_user(app_client, "sso@example.com")
+    sso = await register_user(app_client, SSO_EMAIL)
     setup_token, code = await _totp_for(app_client, auth_headers(sso))
     enabled = await app_client.post(
         "/api/v1/auth/2fa/enable",
@@ -365,7 +424,7 @@ async def test_oauth_2fa_user_is_joined(app_client, oauth_on, monkeypatch):
     backup_code = enabled.json()["backup_codes"][0]
     monkeypatch.setattr(settings, "single_workspace", True)
 
-    _mock_oauth(monkeypatch, email="sso@example.com")
+    _mock_oauth(monkeypatch, email=SSO_EMAIL)
     _, resp = await _callback(app_client, monkeypatch)
     assert resp.status_code == 302, resp.text
     tokens = await app_client.post(
@@ -383,9 +442,12 @@ async def test_oauth_2fa_user_is_joined(app_client, oauth_on, monkeypatch):
 
 async def test_oauth_callback_account_gone_redirects(app_client, oauth_on, monkeypatch):
     # The join's "account no longer exists" guard must leave the browser flow
-    # as a redirect, not a JSON 401 body mid-redirect.
+    # as a redirect, not a JSON 401 body mid-redirect. It is deliberately
+    # uncharged (see the rule in src/core/security/ratelimit.py), so even with
+    # a budget of one neither attempt may trip a 429.
     from src.services.auth import AuthService
 
+    monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 1)
     monkeypatch.setattr(settings, "single_workspace", True)
     await break_single_workspace_join(app_client)
     _mock_oauth(monkeypatch)
@@ -394,9 +456,27 @@ async def test_oauth_callback_account_gone_redirects(app_client, oauth_on, monke
         return None
 
     monkeypatch.setattr(AuthService, "get_user", gone)
+    for _ in range(2):
+        _, resp = await _callback(app_client, monkeypatch)
+        assert resp.status_code == 302, resp.text
+        assert resp.headers["location"] == "http://localhost:5173/login?error=sign-in%20failed"
+
+
+async def test_oauth_callback_non_401_join_error_propagates(app_client, oauth_on, monkeypatch):
+    # Only the helper's 401 account-gone guard may become a login redirect;
+    # any other HTTPException (e.g. a 503 from the join) must propagate.
+    from fastapi import HTTPException, status
+
+    import src.api.routes.oauth as oauth_routes
+
+    _mock_oauth(monkeypatch)
+
+    async def boom(db, container, user):
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "join down")
+
+    monkeypatch.setattr(oauth_routes, "_join_single_workspace_best_effort", boom)
     _, resp = await _callback(app_client, monkeypatch)
-    assert resp.status_code == 302
-    assert resp.headers["location"] == "http://localhost:5173/login?error=sign-in%20failed"
+    assert resp.status_code == 503, resp.text
 
 
 async def test_oauth_new_user_blocked_when_registration_disabled(app_client, oauth_on, monkeypatch):
@@ -447,6 +527,34 @@ async def test_callback_rejects_state_entry_without_verifier(app_client, oauth_o
     assert resp.status_code == 302
     assert resp.headers["location"].startswith("http://localhost:5173/login?error=")
     assert httpx.URL(resp.headers["location"]).params["error"] == "invalid or expired state"
+
+
+async def test_callback_failure_log_is_control_free(app_client, oauth_on, caplog):
+    # Starlette percent-decodes the path param, so CR/LF/ESC survive into
+    # provider_id and into the OAuthError text the callback logs. The warning
+    # must leave no Cc control behind (log forging / ANSI injection).
+    from src.main import app as fastapi_app
+
+    provider_id = "bad\r\nidp\x1b[31m"
+    fastapi_app.state.container.cache.set(
+        oauth_svc.STATE_TTL_HINT + "s-forged",
+        {"provider": provider_id, "redirect_uri": "http://test/cb", "code_verifier": "v"},
+    )
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.oauth"):
+        resp = await app_client.get(
+            f"/api/v1/auth/oauth/{quote(provider_id)}/callback?code=x&state=s-forged",
+            follow_redirects=False,
+        )
+    assert resp.status_code == 302
+    assert httpx.URL(resp.headers["location"]).params["error"] == "sign-in failed"
+    record = next(r for r in caplog.records if "oauth callback failed" in r.getMessage())
+    text = record.getMessage()
+    for control in ("\r", "\n", "\x1b", "\x7f"):
+        assert control not in text
+    # exc content survives flattened: unknown-provider echo + the full flattened id
+    # (CR and LF each collapse to their own space; ESC becomes the space before [31m).
+    assert "unknown oauth provider" in text
+    assert "bad  idp [31m" in text
 
 
 async def test_register_blocked_when_disabled(app_client, monkeypatch):
@@ -651,6 +759,361 @@ async def test_verified_email_edge_branches(payload, status, expected):
     else:
         got = await oauth_svc._verified_email(client, "https://api.github.com/user/emails", {})
         assert got == expected
+
+
+async def _github_sign_in(app_client, monkeypatch, *, user, emails, state):
+    """One GitHub callback round-trip: (requested URLs, response, user count before)."""
+    calls = _fake_httpx(monkeypatch, user=user, emails=emails)
+    before = await _user_count()
+    _, resp = await _callback(app_client, monkeypatch, state=state, provider="github")
+    return calls, resp, before
+
+
+async def _account_email(app_client, resp):
+    tokens = await app_client.post(
+        "/api/v1/auth/oauth/token", json={"code": resp.headers["location"].split("code=")[1]}
+    )
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens.json()))
+    assert me.status_code == 200, me.text
+    return me.json()["email"]
+
+
+@pytest.fixture
+def github_with_emails_url(monkeypatch):
+    """github_on, but with emails_url pointed at an operator-chosen URL."""
+
+    def _set(url: str) -> None:
+        monkeypatch.setattr(
+            settings, "oauth_providers", json.dumps([{**GITHUB, "emails_url": url}])
+        )
+        monkeypatch.setattr(settings, "auth_allow_registration", True)
+
+    _set(GITHUB["emails_url"])
+    yield _set
+    monkeypatch.setattr(settings, "oauth_providers", "")
+    monkeypatch.setattr(settings, "auth_allow_registration", True)
+
+
+# A provider that serialises the flag as a non-empty string is not thereby
+# claiming verification: only an affirmative value counts, everything else is
+# refused so an unverified address is never taken.
+async def test_github_refuses_string_false_verified(app_client, github_on, monkeypatch):
+    _, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=[{"email": "octo@example.com", "primary": True, "verified": "false"}],
+        state="gsf",
+    )
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+@pytest.mark.parametrize("flag", [True, 1, "1", "true", "TRUE", "True", "yes", "Yes", " true "])
+async def test_verified_flag_accepts_affirmative_serialisations(
+    app_client, github_on, monkeypatch, flag
+):
+    _, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=[{"email": "octo@example.com", "primary": True, "verified": flag}],
+        state="gok",
+    )
+    assert "/oauth/callback?code=" in resp.headers["location"]
+    assert await _user_count() == before + 1
+
+
+@pytest.mark.parametrize("flag", [False, "false", "False", "FALSE", 0, "0", "no", "No", "", None])
+async def test_verified_flag_refuses_every_other_value(app_client, github_on, monkeypatch, flag):
+    _, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=[{"email": "octo@example.com", "primary": True, "verified": flag}],
+        state="gno",
+    )
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+async def test_verified_flag_refuses_when_key_absent(app_client, github_on, monkeypatch):
+    _, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=[{"email": "octo@example.com", "primary": True}],
+        state="gabs",
+    )
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+async def test_github_ignores_string_false_primary(app_client, github_on, monkeypatch):
+    _, resp, _ = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=[
+            {"email": "octo@example.com", "primary": "false", "verified": True},
+            {"email": "Alt@Example.com", "primary": True, "verified": True},
+        ],
+        state="gp",
+    )
+    assert await _account_email(app_client, resp) == "alt@example.com"
+
+
+async def test_github_whitespace_profile_email_falls_back_to_emails_endpoint(
+    app_client, github_on, monkeypatch
+):
+    calls, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": "  ", "name": "The Octocat"},
+        emails=[{"email": " Octo@Example.com ", "primary": True, "verified": True}],
+        state="gws",
+    )
+    assert "https://api.github.com/user/emails" in calls
+    assert "/oauth/callback?code=" in resp.headers["location"]
+    assert await _account_email(app_client, resp) == "octo@example.com"
+    assert await _user_count() == before + 1
+
+
+async def test_github_refuses_whitespace_only_email(app_client, github_on, monkeypatch):
+    _, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": " "},
+        emails=[{"email": "  ", "primary": True, "verified": True}],
+        state="gwo",
+    )
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://api.github.com.evil.com/user/emails",
+        "https://api.github.com@evil.com/user/emails",
+    ],
+)
+async def test_emails_url_off_provider_host_is_refused(
+    app_client, github_with_emails_url, monkeypatch, url
+):
+    github_with_emails_url(url)
+    # emails=None raises if /emails is hit at all, so the call list is the proof
+    # of whether the bearer token left the process.
+    calls, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=None,
+        state="gx",
+    )
+    assert not [c for c in calls if "evil.com" in c]
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+async def test_emails_url_on_non_default_port_of_config_host_passes(
+    app_client, github_with_emails_url, monkeypatch
+):
+    # hostname ignores the port, so a provider on :8443 is still its own host.
+    github_with_emails_url("https://api.github.com:8443/user/emails")
+    calls, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=[{"email": "octo@example.com", "primary": True, "verified": True}],
+        state="gport",
+    )
+    assert "https://api.github.com:8443/user/emails" in calls
+    assert "/oauth/callback?code=" in resp.headers["location"]
+    assert await _user_count() == before + 1
+
+
+async def test_emails_url_of_wrong_type_is_refused(app_client, github_with_emails_url, monkeypatch):
+    # A number in the config must not reach urlsplit() as a 500.
+    github_with_emails_url(123)
+    calls, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=None,
+        state="gtype",
+    )
+    assert not [c for c in calls if c.endswith("/emails")]
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+def test_untrusted_emails_urls_reports_bad_config_at_boot(github_with_emails_url):
+    github_with_emails_url("https://api.github.com.evil.com/user/emails")
+    assert oauth_svc.untrusted_emails_urls() == ["github"]
+    github_with_emails_url("https://api.github.com/user/emails")
+    assert oauth_svc.untrusted_emails_urls() == []
+
+
+async def test_discovery_doc_endpoint_anchors_emails_url(app_client, oidc_on, monkeypatch):
+    # emails_url sits on userinfo.idp.example, which the config never names; the
+    # discovery document does, via its token endpoint.
+    oidc_on("https://userinfo.idp.example/user/emails")
+    _mock_discovery(
+        monkeypatch,
+        {
+            "authorization_endpoint": "https://idp.example/authorize",
+            "token_endpoint": "https://userinfo.idp.example/token",
+            "userinfo_endpoint": "https://idp.example/userinfo",
+        },
+    )
+    calls = _fake_httpx(
+        monkeypatch,
+        user={"id": 4242, "sub": "4242", "email": None},
+        emails=[{"email": "octo@example.com", "primary": True, "verified": True}],
+    )
+    _, resp = await _callback(app_client, monkeypatch, state="o1", provider="oidcidp")
+    assert "https://userinfo.idp.example/user/emails" in calls
+    assert "/oauth/callback?code=" in resp.headers["location"]
+
+
+async def test_discovery_doc_anchors_cross_host_userinfo_endpoint(app_client, oidc_on, monkeypatch):
+    # Google serves userinfo from openidconnect.googleapis.com and Entra from
+    # graph.microsoft.com, hosts their issuer never names: the document comes from
+    # the operator's own https config, so the endpoints it states are anchors too.
+    oidc_on("")
+    _mock_discovery(
+        monkeypatch,
+        {
+            "authorization_endpoint": "https://idp.example/authorize",
+            "token_endpoint": "https://idp.example/token",
+            "userinfo_endpoint": "https://userinfo.idp.example/userinfo",
+        },
+    )
+    calls = _fake_httpx(
+        monkeypatch,
+        user={"id": 4242, "sub": "4242", "email": "octo@example.com", "name": "Octo"},
+        emails=None,
+    )
+    _, resp = await _callback(app_client, monkeypatch, state="o2", provider="oidcidp")
+    assert "https://userinfo.idp.example/userinfo" in calls
+    assert await _account_email(app_client, resp) == "octo@example.com"
+
+
+async def test_discovery_over_plain_http_is_refused(monkeypatch):
+    # A forged document is what could name a third party's endpoints, so one is
+    # never fetched over plaintext: no request leaves the process at all.
+    calls = _fake_httpx(monkeypatch, user={}, emails=[])
+    cfg = oauth_svc.ProviderConfig(
+        id="oidcidp",
+        display_name="OIDC IdP",
+        client_id="cid",
+        client_secret="csecret",
+        discovery_url="http://idp.example/.well-known/openid-configuration",
+    )
+    with pytest.raises(oauth_svc.OAuthError, match="must be https"):
+        await oauth_svc._discovery(cfg, oauth_svc.TtlCache())
+    assert calls == []
+
+
+async def test_plaintext_token_endpoint_is_refused(monkeypatch):
+    # client_secret is posted to the token endpoint, so it is origin-checked like
+    # the bearer ones. The config is the trust root, so the host rule cannot bite
+    # here; the scheme rule is what refuses a plaintext secret.
+    calls = _fake_httpx(monkeypatch, user={}, emails=[])
+    provider = oauth_svc.ProviderConfig(
+        id="oidcidp",
+        display_name="OIDC IdP",
+        client_id="cid",
+        client_secret="csecret",
+        discovery_url="https://idp.example/.well-known/openid-configuration",
+    )
+    with pytest.raises(oauth_svc.OAuthError, match="token endpoint"):
+        await oauth_svc.exchange_code(
+            provider,
+            {"token_endpoint": "http://idp.example/token"},
+            code="c",
+            redirect_uri="http://app.test/cb",
+            code_verifier="verifier-abc",
+        )
+    assert calls == []
+    # Control: the same endpoint over https is posted to.
+    ok = await oauth_svc.exchange_code(
+        provider,
+        {"token_endpoint": "https://idp.example/token"},
+        code="c",
+        redirect_uri="http://app.test/cb",
+        code_verifier="verifier-abc",
+    )
+    assert ok["access_token"] == "at" and calls == ["https://idp.example/token"]
+
+
+async def test_plaintext_userinfo_endpoint_is_refused(app_client, oidc_on, monkeypatch):
+    # The bearer never leaves over plaintext either, config-named host or not.
+    oidc_on("")
+    _mock_discovery(
+        monkeypatch,
+        {
+            "authorization_endpoint": "https://idp.example/authorize",
+            "token_endpoint": "https://idp.example/token",
+            "userinfo_endpoint": "http://idp.example/userinfo",
+        },
+    )
+    calls = _fake_httpx(monkeypatch, user={"sub": "1", "email": "octo@example.com"}, emails=None)
+    before = await _user_count()
+    _, resp = await _callback(app_client, monkeypatch, state="o3", provider="oidcidp")
+    assert not [c for c in calls if c.startswith("http://")]
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+def test_boot_check_is_config_only_and_may_be_conservative(oidc_on):
+    # The document cannot be fetched at boot, so a doc-anchored emails_url is
+    # named there and accepted at the callback; main.py says "may fail".
+    oidc_on("https://userinfo.idp.example/user/emails")
+    assert oauth_svc.untrusted_emails_urls() == ["oidcidp"]
+
+
+def test_untrusted_emails_urls_skips_entries_that_cannot_be_selected(monkeypatch):
+    # get_provider() matches a raw id against a route string, so a numeric id and
+    # a non-dict entry are not providers at all and are not reported as broken.
+    monkeypatch.setattr(
+        settings,
+        "oauth_providers",
+        json.dumps(
+            [
+                {"id": 123, "emails_url": "https://api.github.com.evil.com/user/emails"},
+                "not-a-dict",
+            ]
+        ),
+    )
+    assert oauth_svc.untrusted_emails_urls() == []
+
+
+async def test_non_string_provider_email_is_refused(app_client, github_on, monkeypatch):
+    _fake_httpx(
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=[{"email": ["octo@example.com"], "primary": True, "verified": True}],
+    )
+    before = await _user_count()
+    _, resp = await _callback(app_client, monkeypatch, state="g6", provider="github")
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+async def test_emails_url_plain_http_is_refused(app_client, github_with_emails_url, monkeypatch):
+    github_with_emails_url("http://api.github.com/user/emails")
+    calls, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=None,
+        state="ghttp",
+    )
+    assert not [c for c in calls if c.endswith("/emails")]
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
 
 
 async def test_github_public_email_skips_emails_endpoint(app_client, github_on, monkeypatch):

@@ -26,7 +26,7 @@ export default defineConfig({
     command: [
       `export USE_SQLITE=1 API_PORT=${API_PORT} WEB_PORT=${WEB_PORT} DATABASE_URL=${DB}`,
       "cd ../api",
-      "uv run alembic upgrade head",
+      "uv run alembic upgrade heads",
       "uv run python -m src.seed",
       "cd ../..",
       "exec python3 scripts/dev.py",

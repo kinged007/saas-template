@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-MAKE = shutil.which("make")
+MAKE = shutil.which("make") or pytest.skip("make not installed", allow_module_level=True)
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +33,13 @@ def _check_node(tmp_path, version=None):
     # print `Entering directory` lines, which is what this file asserts against.
     env = {k: v for k, v in os.environ.items() if k not in {"MAKEFLAGS", "MFLAGS", "MAKELEVEL"}}
     env["PATH"] = path
-    return subprocess.run([MAKE, "check-node"], cwd=ROOT, env=env, capture_output=True, text=True)
+    return subprocess.run(
+        [MAKE, "--no-print-directory", "check-node"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_makefile_floor_matches_engines():
