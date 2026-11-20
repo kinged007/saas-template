@@ -4,6 +4,7 @@ import { test } from "node:test";
 import type { Member } from "@/types";
 import {
   resolveTransferTarget,
+  transferCandidateMessage,
   transferEligibleMembers,
 } from "./transfer-ownership.ts";
 
@@ -28,6 +29,26 @@ test("transferEligibleMembers offers active non-owners only", () => {
   );
 });
 
+// transfer_ownership rejects a target that already owns the workspace and calls
+// the owner the row whose name folds to `owner` (is_owner_role_name), so a row
+// spelled `Owner` is not offered as a target for itself.
+test("transferEligibleMembers drops the case-variant owner row too", () => {
+  const legacyOwner = member({ membership_id: "m-0", role: "Owner" });
+  const admin = member({ membership_id: "m-1" });
+  assert.deepEqual(
+    transferEligibleMembers([legacyOwner, admin]).map((m) => m.membership_id),
+    ["m-1"],
+  );
+});
+
+test("transferEligibleMembers drops a status it has never seen", () => {
+  const unknown = member({
+    membership_id: "m-3",
+    status: "archived" as unknown as Member["status"],
+  });
+  assert.deepEqual(transferEligibleMembers([unknown]), []);
+});
+
 test("resolveTransferTarget returns the picked candidate", () => {
   const admin = member({ membership_id: "m-1" });
   assert.equal(resolveTransferTarget([admin], "m-1"), admin);
@@ -49,6 +70,31 @@ test("resolveTransferTarget is disarmed before a selection is made", () => {
   assert.equal(resolveTransferTarget([member()], ""), undefined);
 });
 
+test("transferCandidateMessage reports a failed load instead of advising an invite", () => {
+  const message = transferCandidateMessage({ isPending: false, isError: true, loaded: 0, total: 0 });
+  assert.equal(message, "Could not load members. Reload the page to try again.");
+  assert.doesNotMatch(message, /invite one first/);
+});
+
+test("transferCandidateMessage never contradicts a truncated list with an invite prompt", () => {
+  const message = transferCandidateMessage({
+    isPending: false,
+    isError: false,
+    loaded: 100,
+    total: 124,
+  });
+  assert.match(message, /100 members loaded here\. The other 24 are not listed/);
+  assert.doesNotMatch(message, /invite one first/);
+});
+
+test("transferCandidateMessage invites only when the whole list was loaded and empty", () => {
+  const empty = { isPending: false, isError: false };
+  assert.match(transferCandidateMessage({ ...empty, loaded: 3, total: 3 }), /invite one first/);
+  assert.equal(
+    transferCandidateMessage({ ...empty, isPending: true, loaded: 0, total: 0 }),
+    "Loading members…",
+  );
+});
 // Coverage: these are the pure helpers behind the transfer Select. The effect
 // that clears a stale id in GeneralSection.tsx is wiring over
 // resolveTransferTarget, not a tested unit — `node --test` cannot load .tsx

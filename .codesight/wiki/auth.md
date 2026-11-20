@@ -2,7 +2,7 @@
 
 > **Navigation aid.** Route list and file locations extracted via AST. Read the source files listed below before implementing or modifying this subsystem.
 
-The Auth subsystem handles **20 routes** and touches: auth, email, db, cache.
+The Auth subsystem handles **21 routes** and touches: auth, email, db, cache.
 
 ## Routes
 
@@ -22,11 +22,13 @@ The Auth subsystem handles **20 routes** and touches: auth, email, db, cache.
   `apps/api/src/api/routes/auth.py`
 - `POST` `/refresh` → in: RegisterRequest, out: TokenResponse [auth]
   `apps/api/src/api/routes/auth.py`
+- `POST` `/change-password` → in: RegisterRequest, out: TokenResponse [auth]
+  `apps/api/src/api/routes/auth.py`
 - `GET` `/2fa/status` → out: TokenResponse
   `apps/api/src/api/routes/auth.py`
-- `POST` `/2fa/setup` → in: RegisterRequest, out: TokenResponse
+- `POST` `/2fa/setup` → in: RegisterRequest, out: TokenResponse [auth]
   `apps/api/src/api/routes/auth.py`
-- `POST` `/2fa/enable` → in: RegisterRequest, out: TokenResponse
+- `POST` `/2fa/enable` → in: RegisterRequest, out: TokenResponse [auth]
   `apps/api/src/api/routes/auth.py`
 - `POST` `/2fa/disable` → in: RegisterRequest, out: TokenResponse [auth]
   `apps/api/src/api/routes/auth.py`

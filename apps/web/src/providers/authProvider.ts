@@ -5,11 +5,14 @@ import { API_URL, cancelPendingRefresh, ensureSession, httpClient } from "./data
 import {
   identityStore,
   pendingInvitationStore,
+  returnToStore,
   tokenStore,
   workspaceStore,
   setActiveWorkspaceId,
 } from "../utils/storage";
+import { postCredentials } from "../utils/credentialPost";
 import { clearAllCaches, queryClient } from "./queryClient";
+import { sameOriginPath } from "../lib/sameOriginPath.ts";
 import type { Identity } from "../types";
 
 const post = async (path: string, body: unknown) => {
@@ -53,17 +56,32 @@ export async function seedWorkspace(identity: Identity): Promise<void> {
 
 /**
  * Where a freshly authenticated user lands: the pending invitation accept
- * page when they arrived from an invite link, the dashboard otherwise.
+ * page when they arrived from an invite link, the destination the auth guard
+ * recorded when it denied them, the dashboard otherwise.
  */
-const afterAuthRedirect = () => {
+export const afterAuthRedirect = () => {
+  // A pending invitation outranks the recorded destination: the invite is an
+  // explicit, expiring, one-shot action, and skipping it would leave its token
+  // stored to hijack the next sign-in.
   const token = pendingInvitationStore.get();
-  return token ? `/invitations/accept?token=${encodeURIComponent(token)}` : "/";
+  if (token) {
+    // The destination is not being honoured, so drop it — a later sign-in must
+    // not land on a page this session never reached.
+    returnToStore.clear();
+    return `/invitations/accept?token=${encodeURIComponent(token)}`;
+  }
+  // take() consumes the destination, so one this guard rejects cannot be
+  // replayed by a later sign-in either.
+  const dest = returnToStore.take();
+  return (dest && sameOriginPath(dest)) || "/";
 };
 
 export const authProvider: AuthProvider = {
   login: async ({ email, password }) => {
     try {
-      const tokens = await post("/auth/login", { email, password, use_cookies: true }).catch((err: unknown) => {
+      const tokens = await postCredentials(() =>
+        post("/auth/login", { email, password, use_cookies: true }),
+      ).catch((err: unknown) => {
         // 2FA challenge: raw fetch stringifies an object detail — recover the
         // payload from the message when it parses as the challenge shape.
         const msg = (err as Error)?.message ?? "";
@@ -88,22 +106,19 @@ export const authProvider: AuthProvider = {
           error: new Error("2fa_required:" + (tokens as { __challenge: string }).__challenge),
         };
       }
-      // Drop the previous session's caches, workspace selection, and cached
-      // identity before storing the new tokens: refine navigates to "/"
+      // The identity reset already ran, ahead of the POST (postCredentials).
+      // Caches go now, before the new tokens land: refine navigates to "/"
       // immediately and only invalidates the identity query ~32ms later, so
-      // without this the app would mount with the previous user's workspace
-      // id and rows (dashboard empty / notifications from the old workspace).
+      // without this the app would mount with the previous user's rows
+      // (dashboard empty / notifications from the old workspace).
       // Unconditional — a no-op when logout already cleared.
-      workspaceStore.clear();
-      setActiveWorkspaceId(null);
-      identityStore.set(null);
       clearAllCaches(queryClient);
       tokenStore.setTokens(tokens.access_token);
       try {
         const { data: identity } = await httpClient.get<Identity>(`${API_URL}/auth/me`);
         await seedWorkspace(identity);
       } catch {
-        identityStore.set(null);
+        identityStore.clear();
       }
       return { success: true, redirectTo: afterAuthRedirect() };
     } catch (error) {
@@ -128,18 +143,17 @@ export const authProvider: AuthProvider = {
       if (first_name) body.first_name = first_name;
       if (last_name) body.last_name = last_name;
       if (display_name && !body.display_name) body.display_name = display_name;
-      const tokens = await post("/auth/register", { ...body, use_cookies: true });
-      // Same stale-session reset + workspace seed as login (see above).
-      workspaceStore.clear();
-      setActiveWorkspaceId(null);
-      identityStore.set(null);
+      const tokens = await postCredentials(() =>
+        post("/auth/register", { ...body, use_cookies: true }),
+      );
+      // Same cache reset + workspace seed as login.
       clearAllCaches(queryClient);
       tokenStore.setTokens(tokens.access_token);
       try {
         const { data: identity } = await httpClient.get<Identity>(`${API_URL}/auth/me`);
         await seedWorkspace(identity);
       } catch {
-        identityStore.set(null);
+        identityStore.clear();
       }
       return { success: true, redirectTo: afterAuthRedirect() };
     } catch (error) {

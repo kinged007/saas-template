@@ -27,7 +27,8 @@ import {
 } from "@/components/ui/table";
 import { Check, ChevronDown, Pencil, Plus } from "lucide-react";
 import type { Role } from "@/types";
-import { roleCapNotice } from "@/pages/role-picker-cap";
+import { roleCapNotice } from "@/lib/role-cap";
+import { isOwnerRoleName } from "@/pages/role-name";
 
 type CatalogResponse = { catalog: string[]; permissions: string[] };
 
@@ -322,7 +323,7 @@ export function RolesSection() {
           {rows.map((role) => {
             const isOpen = expanded.has(role.id);
             const granted = new Set(role.permissions.includes("*") ? catalog : role.permissions);
-            const isOwner = role.name === "owner";
+            const isOwner = isOwnerRoleName(role.name);
             return (
               <div key={role.id} className="border-border flex flex-col gap-2 rounded-lg border p-4">
                 <div className="flex items-center gap-2">

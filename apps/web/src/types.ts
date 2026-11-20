@@ -79,26 +79,23 @@ export function getDisplayName(identity?: Identity | null): string {
   return identity.email?.split("@")[0] ?? "U";
 }
 
-export function getMemberDisplayName(member: { display_name: string; first_name?: string | null; last_name?: string | null; email?: string }): string {
-  const anyM = member as { first_name?: string | null; last_name?: string | null };
-  if (anyM.first_name || anyM.last_name) return formatDisplayName(anyM.first_name, anyM.last_name, member.display_name);
+/** Display name for any row carrying a legacy display_name plus optional first/last names (members, conversation participants). */
+type DisplayNameRow = { display_name: string; first_name?: string | null; last_name?: string | null };
+
+export function getDisplayNameFromRow(row: DisplayNameRow): string {
+  if (row.first_name || row.last_name) return formatDisplayName(row.first_name, row.last_name, row.display_name);
   // Fallback: convert legacy "First Last" display_name to "First L." for consistency
-  if (member.display_name) {
-    const parts = member.display_name.trim().split(/\s+/);
-    if (parts.length >= 2) return formatDisplayName(parts[0], parts.slice(1).join(" "), member.display_name);
-    return member.display_name;
+  if (row.display_name) {
+    const parts = row.display_name.trim().split(/\s+/);
+    if (parts.length >= 2) return formatDisplayName(parts[0], parts.slice(1).join(" "), row.display_name);
+    return row.display_name;
   }
-  return member.display_name;
+  return row.display_name;
 }
 
-export function getParticipantDisplayName(participant: { display_name: string; first_name?: string | null; last_name?: string | null }): string {
-  if (participant.first_name || participant.last_name) return formatDisplayName(participant.first_name, participant.last_name, participant.display_name);
-  if (participant.display_name) {
-    const parts = participant.display_name.trim().split(/\s+/);
-    if (parts.length >= 2) return formatDisplayName(parts[0], parts.slice(1).join(" "), participant.display_name);
-    return participant.display_name;
-  }
-  return participant.display_name;
+/** One shared `${name} (${email})` label for member pickers (trigger + options). */
+export function memberOptionLabel(member: DisplayNameRow & { email: string }): string {
+  return `${getDisplayNameFromRow(member)} (${member.email})`;
 }
 
 export type Identity = {
@@ -122,7 +119,8 @@ export type AdminUser = {
   display_name: string;
   is_active: boolean;
   is_superuser: boolean;
-  created_at?: string;
+  /** `iso_or_none` in the API, so a stored null arrives as JSON `null`. */
+  created_at?: string | null;
   workspaces?: Array<{ id: string; name: string; slug: string; role: string }>;
 };
 
@@ -145,10 +143,20 @@ export type Role = {
  */
 export type MemberStatus = "active" | "invited" | "suspended";
 
+/**
+ * What the admin users list shows for `AdminUser.is_active`; not a stored value.
+ *
+ * Its `"active"` collapses into `MemberStatus`'s `"active"` in
+ * `StatusBadgeStatus`, so the two meanings share one badge variant. They
+ * currently agree on `secondary`; a per-meaning variant needs a discriminated
+ * map, not a flat `Record`.
+ */
+export type AdminUserStatus = "active" | "disabled";
+
 export type Member = {
   id: string;
   email: string;
-  /** @deprecated — use first_name/last_name via getMemberDisplayName() */
+  /** @deprecated — use first_name/last_name via getDisplayNameFromRow() */
   display_name: string;
   first_name?: string | null;
   last_name?: string | null;
@@ -260,6 +268,11 @@ export type ApiKey = {
   /** Lifetime authenticated uses; null usage_quota = unlimited. */
   usage_count?: number;
   usage_quota?: number | null;
+  /** Uses in the current calendar month — the window usage_quota caps. */
+  usage_window_count?: number;
+  /** First instant of the current calendar month (UTC), or null before first
+   *  use. It is the month boundary, so it can predate the key's own first use. */
+  usage_window_start?: string | null;
   revoked_at?: string;
   created_at?: string;
 };

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { assignableRoles, roleCapNotice, rolePickerCapNotice } from "./role-picker-cap.ts";
+import { assignableRoles, rolePickerCapNotice } from "./role-picker-cap.ts";
+import { isManagerRoleName } from "./role-name.ts";
 import type { Role } from "../types.ts";
 
 const role = (id: string, name: string): Role => ({
@@ -20,7 +21,7 @@ const page = (rest: number): Role[] => [
 
 /** A full picker page holding no owner row, so `count` custom roles and no owner. */
 const pageWithoutOwner = (count: number): Role[] =>
-  Array.from({ length: count }, (_, i) => role(String(i + 1), `r${i}`));
+  Array.from({ length: count }, (_, i) => role(String(i + 2), `r${i}`));
 
 // The role endpoints answer with one capped page. When a workspace has more
 // roles than that page holds, both pickers on MembersPage render a short list,
@@ -59,14 +60,23 @@ test("the owner role is matched case-insensitively, like the backend", () => {
   );
 });
 
-// A missing `X-Total-Count` makes the total 0, so the denominator is clamped at
-// 0 rather than going negative and the notice stays suppressed.
+// A missing `X-Total-Count` makes the total 0, so an unknown total keeps the
+// notice suppressed. That pins the suppression, not the clamp at 0: nothing
+// compares `pickable` except `pickable > assignable.length`.
 test("no notice when the workspace total is missing", () => {
   assert.equal(rolePickerCapNotice(0, page(99)), null);
 });
 
-test("the roles table counts every fetched row, owner included", () => {
-  assert.equal(roleCapNotice(5, 7), "Showing 5 of 7 roles.");
-  assert.equal(roleCapNotice(4, 4), null);
-  assert.equal(roleCapNotice(0, 0), null);
+// `is_manager_role_name` (workspaces.py) case-folds both halves, so a row spelled
+// `Admin` beside its seeded `admin` is a manager to the API. An exact match here
+// would hide the member and invitation controls the backend accepts for it.
+test("the manager gate case-folds like the backend's", () => {
+  assert.equal(isManagerRoleName("owner"), true);
+  assert.equal(isManagerRoleName("admin"), true);
+  assert.equal(isManagerRoleName("Owner"), true);
+  assert.equal(isManagerRoleName("Admin"), true);
+  assert.equal(isManagerRoleName("viewer"), false);
+  assert.equal(isManagerRoleName("Administrator"), false);
+  assert.equal(isManagerRoleName(""), false);
+  assert.equal(isManagerRoleName(undefined), false);
 });

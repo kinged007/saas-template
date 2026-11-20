@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { MemberStatus } from "@/types";
-import { canReactivateMember, canSuspendMember } from "./member-actions.ts";
+import {
+  canReactivateMember,
+  canReceiveOwnership,
+  canSuspendMember,
+} from "./member-actions.ts";
 
 const mem = (status: MemberStatus) => ({ status });
 
@@ -18,10 +22,17 @@ test("canReactivateMember offers Reactivate on a suspended member only", () => {
   assert.equal(canReactivateMember(mem("invited")), false);
 });
 
+test("canReceiveOwnership accepts an active member only", () => {
+  assert.equal(canReceiveOwnership(mem("active")), true);
+  assert.equal(canReceiveOwnership(mem("invited")), false);
+  assert.equal(canReceiveOwnership(mem("suspended")), false);
+});
+
 test("a status outside the union gets neither action", () => {
   // The cast is the only way to spell "a status this app has never seen"; it
   // exercises the runtime behaviour, not a type error to fix.
   const future = { status: "archived" as unknown as MemberStatus };
   assert.equal(canSuspendMember(future), false);
   assert.equal(canReactivateMember(future), false);
+  assert.equal(canReceiveOwnership(future), false);
 });
