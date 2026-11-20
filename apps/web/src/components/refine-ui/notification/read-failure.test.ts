@@ -52,6 +52,7 @@ test("only errors are read failures", () => {
  * duplicate toast (or silencing a mutation).
  */
 test("matches the notification keys the installed refine generates", () => {
+  // Runs from apps/web (npm test cwd); fails loudly if the tree moves.
   const source = readFileSync(
     "node_modules/@refinedev/core/dist/index.mjs",
     "utf8",
