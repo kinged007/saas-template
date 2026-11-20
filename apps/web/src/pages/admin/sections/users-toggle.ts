@@ -45,7 +45,7 @@ export const asAdminUserDetail = (raw: unknown): AdminUserDetail | undefined => 
     typeof u.display_name === "string" &&
     typeof u.is_active === "boolean" &&
     typeof u.is_superuser === "boolean" &&
-    (u.created_at === undefined || typeof u.created_at === "string") &&
+    (u.created_at == null || typeof u.created_at === "string") &&
     Array.isArray(u.workspaces);
   return valid ? (raw as AdminUserDetail) : undefined;
 };
