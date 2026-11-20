@@ -21,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { EmptyRow, formatDate } from "@/components/ui";
+import { EmptyRow, ReadError, formatDate } from "@/components/ui";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { isOwnerRoleName } from "@/pages/role-name";
 import type { Identity, Workspace } from "@/types";
@@ -62,6 +62,7 @@ export function WorkspacesSection() {
 
   return (
     <div className="flex flex-col gap-6">
+      <ReadError error={list.query.error} />
       <Card>
         <CardHeader>
           <CardTitle>My workspaces</CardTitle>
