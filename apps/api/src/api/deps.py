@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import format_datetime
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -209,15 +210,22 @@ async def resolve_or_deny(principal: AuthPrincipal, lookup, missing_detail: str)
 
 
 async def get_current_workspace_id(
-    x_workspace_id: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
+    x_workspace_id: Annotated[UUID | None, Header(alias="X-Workspace-ID")] = None,
 ) -> str:
+    """Required X-Workspace-ID header, canonicalised to str.
+
+    The UUID annotation makes FastAPI reject a malformed header as 422. The return
+    type stays str deliberately: StringUUID round-trips UUID columns back to str, so
+    widening it to UUID would silently break the api_key.workspace_id equality
+    checks in require_key_permission/require_permission.
+    """
     if not x_workspace_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "X-Workspace-ID header is required")
-    return x_workspace_id
+    return str(x_workspace_id)
 
 
 async def get_optional_workspace_id(
-    x_workspace_id: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
+    x_workspace_id: Annotated[UUID | None, Header(alias="X-Workspace-ID")] = None,
 ) -> str | None:
     """Like get_current_workspace_id, but optional.
 
@@ -225,7 +233,7 @@ async def get_optional_workspace_id(
     received invitations, workspace listing) but become workspace-scoped the
     moment an API key is presented.
     """
-    return x_workspace_id
+    return str(x_workspace_id) if x_workspace_id is not None else None
 
 
 def _quota_headers(api_key: ApiKey, now: datetime) -> dict[str, str]:
@@ -443,7 +451,7 @@ async def require_target_profile_update(
 
 
 async def require_existing_workspace(
-    workspace_id: str,
+    workspace_id: UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     """404 on missing workspaces before membership checks run.

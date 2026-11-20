@@ -152,7 +152,8 @@ async def test_permission_registry_covers_route_guards():
 
 async def test_permission_catalog_requires_auth(app_client):
     resp = await app_client.get(
-        "/api/v1/roles/permission-catalog", headers={"X-Workspace-ID": "ws-does-not-exist"}
+        "/api/v1/roles/permission-catalog",
+        headers={"X-Workspace-ID": "00000000-0000-0000-0000-000000000000"},
     )
     assert resp.status_code in (401, 403)
 
