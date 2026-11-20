@@ -19,13 +19,14 @@ import json
 import logging
 import secrets
 import urllib.parse
+import uuid
 from datetime import timedelta
 
 import httpx
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.dates import ensure_utc, now_utc
+from src.core.dates import ensure_utc, iso_or_none, now_utc
 from src.events.bus import EventBus
 from src.events.webhook_events import webhook_event_for_subject, webhook_event_names
 from src.models.webhook import WebhookDelivery, WebhookDeliveryStatus, WebhookSubscription
@@ -126,8 +127,8 @@ def subscription_to_dict(s: WebhookSubscription) -> dict:
         "events": s.events or [],
         "active": s.active,
         "created_by_user_id": s.created_by_user_id,
-        "created_at": s.created_at.isoformat() if s.created_at else None,
-        "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+        "created_at": iso_or_none(s.created_at),
+        "updated_at": iso_or_none(s.updated_at),
     }
 
 
@@ -141,14 +142,14 @@ def delivery_to_dict(d: WebhookDelivery) -> dict:
         "payload": d.payload or {},
         "status": d.status,
         "attempt_count": d.attempt_count,
-        "next_retry_at": d.next_retry_at.isoformat() if d.next_retry_at else None,
-        "last_attempt_at": d.last_attempt_at.isoformat() if d.last_attempt_at else None,
+        "next_retry_at": iso_or_none(d.next_retry_at),
+        "last_attempt_at": iso_or_none(d.last_attempt_at),
         "response_status": d.response_status,
         "error": d.error,
         "event_id": d.event_id,
         "correlation_id": d.correlation_id,
-        "created_at": d.created_at.isoformat() if d.created_at else None,
-        "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+        "created_at": iso_or_none(d.created_at),
+        "updated_at": iso_or_none(d.updated_at),
     }
 
 
@@ -160,6 +161,10 @@ class WebhookService:
         self._secrets = secret_store
 
     async def _get_or_404(self, workspace_id: str, subscription_id: str) -> WebhookSubscription:
+        try:
+            uuid.UUID(subscription_id)
+        except ValueError:
+            raise WebhookError("webhook subscription not found") from None
         sub = await self._session.get(WebhookSubscription, subscription_id)
         if sub is None or sub.workspace_id != workspace_id:
             raise WebhookError("webhook subscription not found")
@@ -246,6 +251,11 @@ class WebhookService:
             )
         return secret
 
+    async def get_subscription(
+        self, workspace_id: str, subscription_id: str
+    ) -> WebhookSubscription:
+        return await self._get_or_404(workspace_id, subscription_id)
+
     async def list_deliveries(self, workspace_id: str, *, subscription_id: str | None = None):
         stmt = select(WebhookDelivery).where(WebhookDelivery.workspace_id == workspace_id)
         if subscription_id is not None:
@@ -254,6 +264,10 @@ class WebhookService:
         return stmt
 
     async def get_delivery(self, workspace_id: str, delivery_id: str) -> WebhookDelivery:
+        try:
+            uuid.UUID(delivery_id)
+        except ValueError:
+            raise WebhookError("webhook delivery not found") from None
         delivery = await self._session.get(WebhookDelivery, delivery_id)
         if delivery is None or delivery.workspace_id != workspace_id:
             raise WebhookError("webhook delivery not found")
@@ -284,12 +298,14 @@ def build_envelope(
     occurred_at: str,
     workspace_id: str | None,
     data: dict,
+    correlation_id: str | None = None,
 ) -> dict:
     return {
         "event": event_type,
         "event_id": event_id,
         "occurred_at": occurred_at,
         "workspace_id": workspace_id,
+        "correlation_id": correlation_id,
         "data": data,
     }
 
@@ -327,6 +343,9 @@ async def fan_out_event(
         .scalars()
         .all()
     )
+    # The bus defaults uncorrelated publishes to "", which normalizes to
+    # NULL on the row and in the body (not an empty-string field).
+    correlation_id = correlation_id or None
     count = 0
     for sub in rows:
         if sub.events and event_type not in (sub.events or []):
@@ -343,6 +362,7 @@ async def fan_out_event(
                     occurred_at=occurred_at,
                     workspace_id=workspace_id,
                     data=payload,
+                    correlation_id=correlation_id,
                 ),
                 status=WebhookDeliveryStatus.PENDING,
                 next_retry_at=now_utc(),

@@ -2,26 +2,52 @@ import { useCustom, useCustomMutation, useGetIdentity, useInvalidate } from "@re
 import { useQuery } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
-
-import type { Identity, UserProfile } from "../types";
-import { getProfileField } from "../types";
-export { getProfileField };
+import { useParams } from "react-router";
 
 import { API_URL, httpClient } from "../providers/dataProvider";
-import { identityStore, tokenStore } from "../utils/storage";
 import { clearAllCaches } from "../providers/queryClient";
+import { identityStore, tokenStore } from "../utils/storage";
+import type { Identity, UserProfile } from "../types";
+import { getProfileField } from "../types";
+import { resolveTargetUserId } from "./target-user";
+export { getProfileField };
 
-export function useProfile() {
+/**
+ * The member being edited, or null on the self-service routes.
+ *
+ * The target editor is routed as `users/:id/settings/*`; the self routes carry
+ * no `:id`, so the route itself is the switch. Every section in a settings
+ * registry reads it, which is what makes a new tab target-aware for free.
+ *
+ * Your own id is the self page, not a delegated editor: the editor's routes
+ * manage other members and the entries are hidden on your own row.
+ */
+export function useTargetUserId(): string | null {
   const { data: identity } = useGetIdentity<Identity>();
+  const id = useParams().id ?? null;
+  return resolveTargetUserId(id, identity?.id);
+}
+
+/**
+ * Self profile, or another member's when `userId` is given.
+ *
+ * The target routes are workspace-scoped and gated on `profile:update`; the
+ * httpClient interceptor attaches X-Workspace-ID. `null`/`undefined` means the
+ * signed-in user, which is the only shape `/me/profile` answers.
+ */
+export function useProfile(userId?: string | null) {
+  const { data: identity } = useGetIdentity<Identity>();
+  const isSelf = !userId;
   const custom = useCustom<UserProfile>({
-    url: "me/profile",
+    url: isSelf ? "me/profile" : `users/${userId}/profile`,
     method: "get",
   });
   // `simple-rest` wraps a `custom` response as `{ data }`, so read the query
   // payload: `result.data` is a frozen, always-truthy `{}` until the request
-  // settles, which is what left the form blank. `/auth/me`'s embed is only the
-  // first-paint fallback — it can arrive with all-null fields.
-  const data = custom.query.data?.data ?? identity?.profile;
+  // settles, which is what left the form blank. The fetched record wins;
+  // `/auth/me`'s embed is only the first-paint fallback for the self profile
+  // (it can arrive with all-null fields), and never applies to a target.
+  const data = custom.query.data?.data ?? (isSelf ? identity?.profile : undefined);
   const isLoading = custom.query.isPending;
   const isError = custom.query.isError;
   return {
@@ -33,10 +59,11 @@ export function useProfile() {
   };
 }
 
-export function useUpdateProfile() {
+export function useUpdateProfile(userId?: string | null) {
   const queryClient = useQueryClient();
   const invalidate = useInvalidate();
-  const { mutate, mutateAsync, mutation } = useCustomMutation<UserProfile>();
+  const { mutate, mutation } = useCustomMutation<UserProfile>();
+  const url = userId ? `users/${userId}/profile` : "me/profile";
 
   const update = useCallback(
     (
@@ -46,7 +73,7 @@ export function useUpdateProfile() {
       const isPut = opts?.isPut ?? false;
       mutate(
         {
-          url: "me/profile",
+          url,
           method: isPut ? "put" : "patch",
           values,
           successNotification: {
@@ -57,9 +84,12 @@ export function useUpdateProfile() {
         } as never,
         {
           onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ["auth"] });
-            queryClient.invalidateQueries({ queryKey: ["data"] });
-            invalidate({ resource: "profile", invalidates: ["all"] });
+            // Only the self profile feeds the cached identity.
+            if (!userId) {
+              queryClient.invalidateQueries({ queryKey: ["auth"] });
+              queryClient.invalidateQueries({ queryKey: ["data"] });
+              invalidate({ resource: "profile", invalidates: ["all"] });
+            }
             opts?.onSuccess?.();
           },
           onError: (e) => {
@@ -68,29 +98,10 @@ export function useUpdateProfile() {
         }
       );
     },
-    [mutate, queryClient, invalidate]
+    [mutate, queryClient, invalidate, url, userId]
   );
 
-  const updateAsync = useCallback(
-    async (values: Record<string, unknown>, isPut = false) => {
-      const res = await mutateAsync({
-        url: "me/profile",
-        method: isPut ? "put" : "patch",
-        values,
-        successNotification: {
-          message: "Profile updated",
-          type: "success",
-        },
-        errorNotification: false,
-      } as never);
-      queryClient.invalidateQueries({ queryKey: ["auth"] });
-      queryClient.invalidateQueries({ queryKey: ["data"] });
-      return res;
-    },
-    [mutateAsync, queryClient]
-  );
-
-  return { mutate: update, mutateAsync: updateAsync, mutation };
+  return { mutate: update, mutation };
 }
 
 export function useExportProfile() {
@@ -152,7 +163,7 @@ export function useDeleteAccount() {
         {
           onSuccess: () => {
             tokenStore.clear();
-            identityStore.set(null);
+            identityStore.clear();
             clearAllCaches(queryClient);
             opts?.onSuccess?.();
           },
@@ -173,7 +184,7 @@ export function useDeleteAccount() {
         errorNotification: false,
       } as never);
       tokenStore.clear();
-      identityStore.set(null);
+      identityStore.clear();
       clearAllCaches(queryClient);
       return res;
     },

@@ -2,7 +2,9 @@
 exchanges are monkeypatched at the service-module boundary."""
 
 import json
+import logging
 from dataclasses import replace
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -15,6 +17,10 @@ from src.services import oauth as oauth_svc
 from src.settings import settings
 from tests.conftest import auth_headers, break_single_workspace_join, register_user
 from tests.test_auth_2fa_sessions import _totp_for
+
+# Shared by _mock_oauth's default and the scoped lookup so an edit to the mock
+# email cannot leave the lookup raising NoResultFound.
+SSO_EMAIL = "sso@example.com"
 
 PROVIDERS = [
     {
@@ -140,9 +146,14 @@ async def _user_count() -> int:
         return (await s.execute(select(func.count()).select_from(User))).scalar_one()
 
 
-async def _link_count() -> int:
+async def _link_count(provider: str | None, user_id: str) -> int:
     async with SessionFactory() as s:
-        return (await s.execute(select(func.count()).select_from(OAuthAccount))).scalar_one()
+        query = (
+            select(func.count()).select_from(OAuthAccount).where(OAuthAccount.user_id == user_id)
+        )
+        if provider is not None:
+            query = query.where(OAuthAccount.provider == provider)
+        return (await s.execute(query)).scalar_one()
 
 
 async def test_config_reflects_flags(app_client, oauth_on, monkeypatch):
@@ -171,6 +182,9 @@ async def test_authorize_redirects_with_state(app_client, oauth_on):
     assert resp.status_code == 302
     assert resp.headers["location"].startswith("https://idp.example/authorize?")
     assert "state=" in resp.headers["location"]
+    assert "code_challenge_method=S256" in resp.headers["location"]
+    assert "code_challenge=" in resp.headers["location"]
+    assert "code_verifier" not in resp.headers["location"]
 
 
 async def test_unknown_provider_404(app_client, oauth_on):
@@ -178,7 +192,7 @@ async def test_unknown_provider_404(app_client, oauth_on):
     assert resp.status_code == 404
 
 
-def _mock_oauth(monkeypatch, *, sub="sub-1", email="sso@example.com"):
+def _mock_oauth(monkeypatch, *, sub="sub-1", email=SSO_EMAIL):
     async def fake_discovery(provider, cache):
         return {
             "authorization_endpoint": provider.authorize_url,
@@ -186,8 +200,11 @@ def _mock_oauth(monkeypatch, *, sub="sub-1", email="sso@example.com"):
             "userinfo_endpoint": provider.userinfo_url,
         }
 
-    async def fake_exchange(provider, doc, *, code, redirect_uri):
+    async def fake_exchange(provider, doc, *, code, redirect_uri, code_verifier):
         assert code == "authcode"
+        # Only the state entry knows this string, so the callback can satisfy it
+        # by reading the PKCE verifier out of the entry it just consumed.
+        assert code_verifier == "verifier-abc"
         return {"access_token": "at", "id_token": None}
 
     async def fake_userinfo(provider, doc, access_token):
@@ -208,7 +225,12 @@ async def _callback(app_client, monkeypatch, state="s", provider="testidp"):
     from src.main import app as fastapi_app
 
     fastapi_app.state.container.cache.set(
-        oauth_svc.STATE_TTL_HINT + state, {"provider": provider, "redirect_uri": "http://test/cb"}
+        oauth_svc.STATE_TTL_HINT + state,
+        {
+            "provider": provider,
+            "redirect_uri": "http://test/cb",
+            "code_verifier": "verifier-abc",
+        },
     )
     resp = await app_client.get(
         f"/api/v1/auth/oauth/{provider}/callback?code=authcode&state={state}",
@@ -229,7 +251,7 @@ async def test_oauth_new_user_allowed(app_client, oauth_on, monkeypatch):
     assert tokens.status_code == 200, tokens.text
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens.json()))
     assert me.status_code == 200
-    assert me.json()["email"] == "sso@example.com"
+    assert me.json()["email"] == SSO_EMAIL
     # Reuse is rejected (single-use code).
     again = await app_client.post("/api/v1/auth/oauth/token", json={"code": code})
     assert again.status_code == 400
@@ -257,7 +279,13 @@ async def test_oauth_same_provider_new_subject_links_same_user(app_client, oauth
     _, second = await _callback(app_client, monkeypatch, state="s2")
     assert second.status_code == 302
     assert await _user_count() == before
-    assert await _link_count() == 2
+    async with SessionFactory() as s:
+        user_id = (await s.execute(select(User.id).where(User.email == SSO_EMAIL))).scalar_one()
+    scoped = await _link_count("testidp", user_id)
+    assert scoped == 2
+    # Total across providers catches a row another provider adds, which the
+    # scoped testidp count above cannot see.
+    assert await _link_count(None, user_id) == scoped
 
 
 async def test_oauth_callback_survives_join_failure(app_client, oauth_on, monkeypatch):
@@ -322,7 +350,7 @@ async def test_oauth_2fa_user_is_joined(app_client, oauth_on, monkeypatch):
     ][0]["id"]
     # Enrol outside the single-workspace window so only the OAuth callback can join.
     monkeypatch.setattr(settings, "single_workspace", False)
-    sso = await register_user(app_client, "sso@example.com")
+    sso = await register_user(app_client, SSO_EMAIL)
     setup_token, code = await _totp_for(app_client, auth_headers(sso))
     enabled = await app_client.post(
         "/api/v1/auth/2fa/enable",
@@ -333,7 +361,7 @@ async def test_oauth_2fa_user_is_joined(app_client, oauth_on, monkeypatch):
     backup_code = enabled.json()["backup_codes"][0]
     monkeypatch.setattr(settings, "single_workspace", True)
 
-    _mock_oauth(monkeypatch, email="sso@example.com")
+    _mock_oauth(monkeypatch, email=SSO_EMAIL)
     _, resp = await _callback(app_client, monkeypatch)
     assert resp.status_code == 302, resp.text
     tokens = await app_client.post(
@@ -351,9 +379,12 @@ async def test_oauth_2fa_user_is_joined(app_client, oauth_on, monkeypatch):
 
 async def test_oauth_callback_account_gone_redirects(app_client, oauth_on, monkeypatch):
     # The join's "account no longer exists" guard must leave the browser flow
-    # as a redirect, not a JSON 401 body mid-redirect.
+    # as a redirect, not a JSON 401 body mid-redirect. It is deliberately
+    # uncharged (see the rule in src/core/security/ratelimit.py), so even with
+    # a budget of one neither attempt may trip a 429.
     from src.services.auth import AuthService
 
+    monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 1)
     monkeypatch.setattr(settings, "single_workspace", True)
     await break_single_workspace_join(app_client)
     _mock_oauth(monkeypatch)
@@ -362,9 +393,27 @@ async def test_oauth_callback_account_gone_redirects(app_client, oauth_on, monke
         return None
 
     monkeypatch.setattr(AuthService, "get_user", gone)
+    for _ in range(2):
+        _, resp = await _callback(app_client, monkeypatch)
+        assert resp.status_code == 302, resp.text
+        assert resp.headers["location"] == "http://localhost:5173/login?error=sign-in%20failed"
+
+
+async def test_oauth_callback_non_401_join_error_propagates(app_client, oauth_on, monkeypatch):
+    # Only the helper's 401 account-gone guard may become a login redirect;
+    # any other HTTPException (e.g. a 503 from the join) must propagate.
+    from fastapi import HTTPException, status
+
+    import src.api.routes.oauth as oauth_routes
+
+    _mock_oauth(monkeypatch)
+
+    async def boom(db, container, user):
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "join down")
+
+    monkeypatch.setattr(oauth_routes, "_join_single_workspace_best_effort", boom)
     _, resp = await _callback(app_client, monkeypatch)
-    assert resp.status_code == 302
-    assert resp.headers["location"] == "http://localhost:5173/login?error=sign-in%20failed"
+    assert resp.status_code == 503, resp.text
 
 
 async def test_oauth_new_user_blocked_when_registration_disabled(app_client, oauth_on, monkeypatch):
@@ -397,6 +446,52 @@ async def test_callback_bad_state_redirects_to_login(app_client, oauth_on):
     )
     assert resp.status_code == 302
     assert resp.headers["location"].startswith("http://localhost:5173/login?error=")
+
+
+async def test_callback_rejects_state_entry_without_verifier(app_client, oauth_on):
+    # A verifier-less entry would mint a token POST with no code_verifier, the
+    # one request the challenge exists to prevent.
+    from src.main import app as fastapi_app
+
+    fastapi_app.state.container.cache.set(
+        oauth_svc.STATE_TTL_HINT + "noverifier",
+        {"provider": "testidp", "redirect_uri": "http://test/cb"},
+    )
+    resp = await app_client.get(
+        "/api/v1/auth/oauth/testidp/callback?code=authcode&state=noverifier",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=")
+    assert httpx.URL(resp.headers["location"]).params["error"] == "invalid or expired state"
+
+
+async def test_callback_failure_log_is_control_free(app_client, oauth_on, caplog):
+    # Starlette percent-decodes the path param, so CR/LF/ESC survive into
+    # provider_id and into the OAuthError text the callback logs. The warning
+    # must leave no Cc control behind (log forging / ANSI injection).
+    from src.main import app as fastapi_app
+
+    provider_id = "bad\r\nidp\x1b[31m"
+    fastapi_app.state.container.cache.set(
+        oauth_svc.STATE_TTL_HINT + "s-forged",
+        {"provider": provider_id, "redirect_uri": "http://test/cb", "code_verifier": "v"},
+    )
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.oauth"):
+        resp = await app_client.get(
+            f"/api/v1/auth/oauth/{quote(provider_id)}/callback?code=x&state=s-forged",
+            follow_redirects=False,
+        )
+    assert resp.status_code == 302
+    assert httpx.URL(resp.headers["location"]).params["error"] == "sign-in failed"
+    record = next(r for r in caplog.records if "oauth callback failed" in r.getMessage())
+    text = record.getMessage()
+    for control in ("\r", "\n", "\x1b", "\x7f"):
+        assert control not in text
+    # exc content survives flattened: unknown-provider echo + the full flattened id
+    # (CR and LF each collapse to their own space; ESC becomes the space before [31m).
+    assert "unknown oauth provider" in text
+    assert "bad  idp [31m" in text
 
 
 async def test_register_blocked_when_disabled(app_client, monkeypatch):
@@ -485,7 +580,9 @@ async def test_exchange_failure_names_the_upstream_status(monkeypatch):
     _fake_httpx(monkeypatch, user={}, emails=[], token_status=400)
     cfg = replace(_github_config(), token_url="https://github.com/login/oauth/access_token")
     with pytest.raises(oauth_svc.OAuthError) as err:
-        await oauth_svc.exchange_code(cfg, {}, code="c", redirect_uri="http://app.test/cb")
+        await oauth_svc.exchange_code(
+            cfg, {}, code="c", redirect_uri="http://app.test/cb", code_verifier="verifier-abc"
+        )
     msg = str(err.value)
     assert "code exchange failed" in msg
     assert "400" in msg  # expired code, clock skew or a wrong secret all land here

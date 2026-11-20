@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { InvitationStatus } from "@/types";
-import { canResendInvitation, canRevokeInvitation, invitationStatus } from "./invitation-actions.ts";
+import {
+  canResendInvitation,
+  canRevokeInvitation,
+  invitationStatus,
+  isActionableInvitation,
+} from "./invitation-actions.ts";
 
 const inv = (status: InvitationStatus, expired = false) => ({ status, expired });
 
@@ -14,6 +19,19 @@ test("canRevokeInvitation offers Delete on a live invitation only", () => {
   assert.equal(canRevokeInvitation(inv("declined")), false);
   assert.equal(canRevokeInvitation(inv("revoked")), false);
   assert.equal(canRevokeInvitation(inv("accepted")), false);
+});
+
+test("isActionableInvitation offers Accept/Decline on a live pending row only", () => {
+  assert.equal(isActionableInvitation(inv("pending", false)), true);
+  assert.equal(isActionableInvitation(inv("pending", true)), false);
+  assert.equal(isActionableInvitation(inv("declined")), false);
+  assert.equal(isActionableInvitation(inv("accepted")), false);
+  assert.equal(isActionableInvitation(inv("revoked")), false);
+});
+
+test("isActionableInvitation treats an absent expired flag as live", () => {
+  // `expired` is optional on the invitation shape and may be absent.
+  assert.equal(isActionableInvitation({ status: "pending" }), true);
 });
 
 test("canResendInvitation is off on the terminal statuses", () => {
