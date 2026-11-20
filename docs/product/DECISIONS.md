@@ -4,8 +4,9 @@
 > ID. Changing one needs the maintainer
 > ([ADMISSION.md §5](ADMISSION.md#5-what-needs-the-maintainer)).
 >
-> **Status:** Proposed. D-01 to D-06 are already agreed; this file becomes their canonical
-> record when merged. Open items are at the bottom and are **not** decided.
+> **Status:** Proposed. D-01 to D-06 are already agreed; D-07 is accepted by merging the PR
+> that adds it. This file becomes their canonical record when merged. Open items are at the
+> bottom and are **not** decided.
 
 ---
 
@@ -101,6 +102,25 @@ coding agents. A change that is consistent with them is accepted by applying the
 not need individual sign-off. Only the items in ADMISSION §5 go to the maintainer.
 
 **Means:** the reviewer's verdict line is the record of each decision.
+
+---
+
+## D-07 — Changes reach `main` only by promotion
+
+**Accepted:** pending — accepted when the maintainer merges the PR that adds it
+
+**Decision:** Work flows through three branches. Fleet PRs are squash-merged into `dev`, one
+commit per PR carrying `Area:` and `Release-note:` lines. A scheduled promotion verifies a
+frozen `dev` SHA with full CI and e2e and merges it into `staging` with a merge commit. The
+maintainer merges `staging` into `main` through one promotion PR, optionally after a
+click-through. `main` is the default branch, is never rewritten, and moves only by a
+promotion PR; there is no direct push, including for hotfixes. Urgent fixes use the same path
+started by hand.
+
+**Means:** the maintainer reviews one promotion per cadence instead of every PR. ADMISSION §5
+reads "the maintainer merges every promotion into `main`". Release slices (VISION §4.3) are
+read from `git log`. The design, cadence, enforcement stages and build order are in
+[docs/architecture/CI-CD.md](../architecture/CI-CD.md).
 
 ---
 

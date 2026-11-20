@@ -176,5 +176,6 @@ line is the record.
 
 When escalating: one question, the options, a recommendation and the gate that triggered it.
 
-The maintainer merges every pull request. A merge is not, by itself, a decision on any of the
-five items above — those are recorded in `DECISIONS.md`.
+The maintainer merges every promotion into `main` ([DECISIONS.md D-07](DECISIONS.md)); fleet
+pull requests are merged into `dev` by the merge queue once their gates pass. A merge is not,
+by itself, a decision on any of the five items above — those are recorded in `DECISIONS.md`.
