@@ -1,19 +1,14 @@
+import { roleCapNotice } from "../lib/role-cap.ts";
 import type { Role } from "../types";
+import { isOwnerRoleName } from "./role-name.ts";
 
 // The role pickers on MembersPage offer every role except the owner, so the
 // offer and the notice count the same list: a notice counting a role the
-// dropdown never lists misreports the cap. Owner is matched case-insensitively
-// because the backend does: `is_owner_role_name` locks the row whose lower-cased
-// name is "owner" (workspaces.py) and the roles endpoint ranks on
-// `func.lower(Role.name)` (roles.py). A row spelled `Owner` is the locked owner
-// role to the API, so it must not be offered either.
+// dropdown never lists misreports the cap. The owner is the row
+// `is_owner_role_name` locks, so the filter and the notice agree with the
+// backend on a row spelled `Owner` as well as on the seeded `owner`.
 export const assignableRoles = (roles: Role[]): Role[] =>
-  roles.filter((r) => r.name.toLowerCase() !== "owner");
-
-// The gate and sentence the roles table and the MembersPage pickers both share;
-// null while the page is complete.
-export const roleCapNotice = (fetched: number, total: number): string | null =>
-  total > fetched ? `Showing ${fetched} of ${total} roles.` : null;
+  roles.filter((r) => !isOwnerRoleName(r.name));
 
 // The roles endpoint answers with one capped page, so a workspace past that cap
 // leaves both MembersPage pickers short of the full role list. Same wording as

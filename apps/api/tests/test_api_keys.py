@@ -53,7 +53,7 @@ async def test_owner_can_create_list_and_use_api_key(app_client):
     item = next(k for k in keys.json() if k["id"] == key["id"])
     assert "key" not in item
     assert item["key_prefix"].startswith("sk_live_")
-    assert item["last_used_at"] is not None  # touch() ran on the members call
+    assert item["last_used_at"] is not None  # record_use ran on the members call
 
 
 async def test_api_key_timestamps_are_offset_aware(app_client):
@@ -73,7 +73,7 @@ async def test_api_key_timestamps_are_offset_aware(app_client):
         permissions=["member:read"],
         body={"expires_at": "2027-01-01T00:00:00Z"},
     )
-    # a real call so touch() populates last_used_at, then revoke
+    # a real call so record_use populates last_used_at, then revoke
     key_headers = {"Authorization": f"Bearer {key['key']}", "X-Workspace-ID": ws["id"]}
     assert (await client.get("/api/v1/members", headers=key_headers)).status_code == 200
     resp = await client.delete(f"/api/v1/api-keys/{key['id']}", headers=headers)
@@ -490,3 +490,46 @@ async def test_explicit_sort_paging_partitions_the_set(app_client):
         assert len(chunk) == 1, (offset, chunk)
         paged.extend(k["id"] for k in chunk)
     assert paged == [k["id"] for k in rows]
+
+
+async def test_create_api_key_strips_padded_name(app_client):
+    client = app_client
+    owner = await register_user(client, "pad-key@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    resp = await client.post(
+        "/api/v1/api-keys", json={"name": "  ci-deploy  ", "permissions": []}, headers=headers
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == "ci-deploy"
+    listed = await client.get("/api/v1/api-keys", headers=headers)
+    assert next(k for k in listed.json() if k["id"] == resp.json()["id"])["name"] == "ci-deploy"
+
+    blank = await client.post(
+        "/api/v1/api-keys", json={"name": "   ", "permissions": []}, headers=headers
+    )
+    assert blank.status_code == 422
+
+
+async def test_api_key_service_stores_trimmed_name(app_client):
+    """The service trims without the schema — seed and internal callers never
+    pass through `ApiKeyCreate`."""
+    from src.db.session import SessionFactory
+    from src.models.api_key import ApiKey
+    from src.services.api_keys import ApiKeyService
+    from src.services.auth import AuthService
+
+    client = app_client
+    owner = await register_user(client, "pad-key-svc@example.com")
+    ws = await create_workspace(client, owner)
+
+    async with SessionFactory() as session:
+        user = await AuthService(session).get_by_email("pad-key-svc@example.com")
+        key, _ = await ApiKeyService(session).create_api_key(
+            workspace_id=ws["id"], name="  ci-deploy  ", permissions=["member:read"], actor=user
+        )
+
+    async with SessionFactory() as session:
+        stored = await session.get(ApiKey, key.id)
+        assert stored.name == "ci-deploy"

@@ -1,6 +1,6 @@
 import { useLayoutEffect, useReducer, useRef } from "react";
 import { useCan, useGetIdentity, useList } from "@refinedev/core";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { CheckCircle2, Circle, PlusCircle, X } from "lucide-react";
 import { Link } from "react-router";
 
@@ -8,10 +8,11 @@ import { Button } from "@/components/ui/button";
 import { WorkspaceSearch } from "@/components/WorkspaceSearch";
 import { useWorkspace } from "../contexts/WorkspaceContext";
 import { onboardingStore } from "@/utils/storage";
+import { setupSteps, type SetupStep } from "./setup-steps";
 import { IDENTITY_QUERY_OPTIONS } from "../contexts/WorkspaceContext";
 import type { ApiKey, Identity, Invitation } from "../types";
 
-function Step({ done, title, hint, to, cta }: { done: boolean; title: string; hint: string; to: string; cta: string }) {
+function Step({ done, title, hint, to, cta }: SetupStep) {
   return (
     <div className="flex items-center justify-between gap-4 py-2">
       <div className="flex items-start gap-3">
@@ -60,9 +61,17 @@ export function DashboardPage() {
   // choice, and the flag exists to control what new users are shown.
   const onboardingOffForWorkspace = workspace?.onboarding_enabled === false;
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
+  const { data: canCreateKey } = useCan({ resource: "api-keys", action: "create" });
+  const { data: canReadKeys } = useCan({ resource: "api-keys", action: "list" });
+  // The key step needs both permissions: its progress is read from the key
+  // list, so a custom role holding `apikey:create` without `apikey:read` could
+  // never complete it and its count request would come back 403.
+  const canTrackKeyStep = canCreateKey?.can === true && canReadKeys?.can === true;
   const { result: keysResult } = useList<ApiKey>({
     resource: "api-keys",
-    queryOptions: { enabled: !!workspace },
+    // The count only decides this card's key step, so it is fetched only when
+    // that step is one the user has.
+    queryOptions: { enabled: !!workspace && canTrackKeyStep },
   });
   const { result: invitationsResult } = useList<Invitation>({
     resource: "invitations",
@@ -73,7 +82,11 @@ export function DashboardPage() {
     return (
       <Card>
         <CardHeader>
-          <CardTitle>No workspace yet</CardTitle>
+          {/* CardTitle renders a div, so the title is spelled out as a heading
+              with the classes CardTitle applies; card-title-classes.test.ts
+              keeps the copy in step with the primitive. This branch returns
+              before the page title, so the card title is the page h1. */}
+          <h1 className="font-semibold leading-none tracking-tight">No workspace yet</h1>
           <CardDescription>
             Create a workspace to get started with managing your team.
           </CardDescription>
@@ -97,25 +110,37 @@ export function DashboardPage() {
   const keys = keysResult?.data ?? [];
   const invitations = invitationsResult?.data ?? [];
   // ponytail: step progress is derived per render; only dismissal persists (onboardingStore). Add a tour store when onboarding grows past 3 steps.
-  const steps = [
-    { done: invitations.length > 0, title: "Invite your team", hint: "Members get workspace access by role.", to: "/members", cta: "Invite" },
-    { done: keys.length > 0, title: "Create an API key", hint: "Automate with scoped machine credentials.", to: "/api-keys/create", cta: "Create key" },
-  ];
+  const steps = setupSteps({
+    canInvite: canInvite?.can,
+    invitationCount: invitations.length,
+    canTrackKeyStep,
+    apiKeyCount: keys.length,
+  });
+  // Progress is read over the steps this user has, so an empty list (nothing
+  // they may do) completes the card as surely as every step being finished.
   const allDone = steps.every((s) => s.done);
+  // While a permission is still loading the step list is empty, which reads as
+  // "nothing to do" and would take the card and its restore button down for a
+  // render before either belongs there.
+  const setupResolved =
+    canInvite?.can !== undefined &&
+    canCreateKey?.can !== undefined &&
+    canReadKeys?.can !== undefined;
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight">{workspace?.name ?? "Workspace"}</h2>
+          <h1 className="text-3xl font-bold tracking-tight">{workspace?.name ?? "Workspace"}</h1>
           <p className="text-muted-foreground mt-1">
             Manage your team and collaborate effectively.
           </p>
         </div>
-        {/* The card is hidden by three independent reasons (all steps done, the
-            caller's own dismissal, the workspace flag). Restore shows only
-            when the caller's dismissal is the sole reason it is gone. */}
-        {onboardingDismissed && !allDone && !onboardingOffForWorkspace && (
+        {/* The card is hidden by four independent reasons (its step list not
+            settled yet, all steps done, the caller's own dismissal, the
+            workspace flag). Restore shows only when the caller's dismissal is
+            the sole reason it is gone. */}
+        {onboardingDismissed && setupResolved && !allDone && !onboardingOffForWorkspace && (
           <Button
             variant="ghost"
             size="sm"
@@ -131,16 +156,18 @@ export function DashboardPage() {
         )}
       </div>
 
-      {!allDone && !onboardingDismissed && !onboardingOffForWorkspace && (
+      {setupResolved && !allDone && !onboardingDismissed && !onboardingOffForWorkspace && (
         <Card>
           <CardHeader>
             <div className="flex items-start justify-between gap-2">
               <div>
-                {/* Focus must stay (it is what announces the card is back), but the
-                    heading is not keyboard reachable, so the default ring only reads as a
-                    full-width input. Ring off, focus on. CardTitle renders a div, so the
-                    heading is spelled out here with the classes it applies. */}
-                <h3 tabIndex={-1} ref={restoreHeading} className="font-semibold leading-none tracking-tight outline-none">Get set up</h3>
+                {/* CardTitle renders a div, so each card title on this
+                    page is spelled out as an h2 with the classes CardTitle applies;
+                    card-title-classes.test.ts keeps the copies in step with the
+                    primitive. Focus must stay on this one (it is what announces the card
+                    is back), but the heading is not keyboard reachable, so the default
+                    ring only reads as a full-width input. Ring off, focus on. */}
+                <h2 tabIndex={-1} ref={restoreHeading} className="font-semibold leading-none tracking-tight outline-none">Get set up</h2>
                 <CardDescription>
                   Finish these steps to get the most out of your workspace.
                 </CardDescription>
@@ -172,7 +199,7 @@ export function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Members</CardTitle>
+            <h2 className="font-semibold leading-none tracking-tight">Members</h2>
             <CardDescription>Manage workspace members and their roles</CardDescription>
           </CardHeader>
           <CardContent>
@@ -184,7 +211,7 @@ export function DashboardPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Inbox</CardTitle>
+            <h2 className="font-semibold leading-none tracking-tight">Inbox</h2>
             <CardDescription>View your notifications and updates</CardDescription>
           </CardHeader>
           <CardContent>
