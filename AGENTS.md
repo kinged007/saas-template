@@ -52,19 +52,17 @@ since vite serves both) — open either and the session holds.
 ## Migrations
 
 Models are the source of truth; migrations are generated, reviewed, committed.
-After changing any model, generate the migration with a 14-digit UTC timestamp
-revision id (`docs/product/DECISIONS.md` D-04):
+After changing any model, generate the migration (`make db-new` assigns a
+14-digit UTC timestamp revision id per `docs/product/DECISIONS.md` D-04):
 
 ```bash
-cd apps/api && uv run alembic revision --autogenerate \
-  --rev-id "$(date -u +%Y%m%d%H%M%S)" -m "acme orders"   # → 20261118104500_acme_orders.py
+make db-new m="acme orders"   # → 20261118104500_acme_orders.py
 ```
 
-`make db-new` does not set the id yet, so do not use it for new migrations until it does — it writes Alembic's default random hex id, which violates D-04. Use the `--rev-id` command above.
 Review the diff (watch for accidental drops, wrong nullability, missing server_default),
 commit the file.
 `make db-check` (also in CI) fails on multiple heads or models≠migrations.
-Full workflow: `docs/MIGRATIONS.md`, except its Daily workflow still shows `make db-new`: use the `--rev-id` command above for the id until that file is fixed.
+Full workflow: `docs/MIGRATIONS.md`.
 
 ---
 
