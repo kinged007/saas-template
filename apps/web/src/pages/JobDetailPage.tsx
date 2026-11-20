@@ -337,7 +337,7 @@ export function JobDetailPage() {
     // refine raises no toast for a failed read — the body's copy is the
     // report, so it has to carry the reason, not just "nothing here".
     return (
-      <p className="text-muted-foreground p-4 text-sm">
+      <p role="alert" className="text-muted-foreground p-4 text-sm">
         {jobQuery.error ? errorMessage(jobQuery.error) : "Job not found."}
       </p>
     );

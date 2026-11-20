@@ -73,7 +73,7 @@ export function JobRunPage() {
     // The heading's job fetch carries no page state (the name falls back to
     // "job"), so this refusal is reported here, once, with the server's reason.
     return (
-      <p className="text-muted-foreground p-4 text-sm">
+      <p role="alert" className="text-muted-foreground p-4 text-sm">
         {runQuery.error || jobQuery.error
           ? errorMessage(runQuery.error ?? jobQuery.error)
           : "Run not found."}
