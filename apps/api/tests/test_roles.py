@@ -152,7 +152,8 @@ async def test_permission_registry_covers_route_guards():
 
 async def test_permission_catalog_requires_auth(app_client):
     resp = await app_client.get(
-        "/api/v1/roles/permission-catalog", headers={"X-Workspace-ID": "ws-does-not-exist"}
+        "/api/v1/roles/permission-catalog",
+        headers={"X-Workspace-ID": "00000000-0000-0000-0000-000000000000"},
     )
     assert resp.status_code in (401, 403)
 
@@ -165,8 +166,8 @@ async def test_permission_catalog_filtered_to_assignable(app_client):
     # Seed the key-only scope before the member joins. accept_invitation stores
     # role_id and copies no permissions, so this way the viewer holds the scope
     # from the moment it joins and the test does not depend on get_membership
-    # joining Role live on WorkspaceMember.role_id. The intersection at
-    # roles.py:92 is only reachable for a non-owner caller.
+    # joining Role live on WorkspaceMember.role_id. The non-owner intersection
+    # in permission_catalog() is only reachable for a non-owner caller.
     await _add_key_only_to_role(
         await _role_id(client, owner_headers, "viewer"), perms.NOTIFICATION_READ
     )

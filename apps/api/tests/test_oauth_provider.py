@@ -58,10 +58,18 @@ UNSET = object()
 def _jwk(
     key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey, kid: str | None, alg: str
 ) -> dict[str, Any]:
+    # Mirrors the allow-list in src/services/oauth.py; not imported so drift fails loudly.
     algo = {"RS256": jwt.algorithms.RSAAlgorithm, "ES256": jwt.algorithms.ECAlgorithm}[alg]
     pub = json.loads(algo.to_jwk(key.public_key()))
     # A kid of None omits the member, as a provider that assigns no kid would.
     return {**pub, **({"kid": kid} if kid else {}), "use": "sig", "alg": alg}
+
+
+def test_jwk_rejects_unknown_algorithm(idp):
+    """An alg outside the map raises here, at the call site, rather than publishing a key
+    labelled with an algorithm it was not built for."""
+    with pytest.raises(KeyError, match="PS256"):
+        _jwk(idp.signing_key, "kid-x", "PS256")
 
 
 class _StubIdP:
@@ -381,14 +389,6 @@ async def test_claims_from_id_token_rejects_rs256_token_published_under_the_ec_k
 
     assert await claims_from_id_token(provider, idp.doc, from_published_rsa_key, cache) is None
     assert await claims_from_id_token(provider, idp.doc, from_attacker_rsa_key, cache) is None
-
-
-def test_jwk_rejects_unknown_algorithm(idp):
-    """An alg outside the map raises here, at the call site. The ternary this replaced
-    emitted an RSA key labelled with whatever alg it was handed, so the stub published
-    a key it could never verify and the failure surfaced as a signature error."""
-    with pytest.raises(KeyError):
-        _jwk(idp.signing_key, "kid-x", "PS256")
 
 
 async def test_claims_from_id_token_rejects_wrong_audience(provider, idp, cache):

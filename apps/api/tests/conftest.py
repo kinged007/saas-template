@@ -279,3 +279,41 @@ async def wait_for(predicate, timeout_secs: float = 3.0, interval: float = 0.02)
             return True
         await asyncio.sleep(interval)
     return False
+
+
+async def wait_for_audit_action(
+    workspace_id: str, action: str, timeout_secs: float = 5.0, *, interval: float = 0.02
+) -> list[str]:
+    """Poll the audit table until `action` lands for `workspace_id`.
+
+    Each iteration opens a fresh SessionFactory session: a cached session can
+    hold a stale read snapshot and never observe the consumer's commit.
+    """
+    from sqlalchemy import select
+
+    from src.db.session import SessionFactory
+    from src.models.audit import AuditLogEntry
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_secs
+    actions: list[str] = []
+    while True:
+        async with SessionFactory() as session:
+            actions = list(
+                (
+                    await session.execute(
+                        select(AuditLogEntry.action).where(
+                            AuditLogEntry.workspace_id == workspace_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        if action in actions or loop.time() >= deadline:
+            break
+        await asyncio.sleep(interval)
+    assert action in actions, (
+        f"audit bus did not commit {action} in {timeout_secs}s; saw {sorted(actions)}"
+    )
+    return actions

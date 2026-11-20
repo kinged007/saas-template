@@ -113,8 +113,8 @@ def is_manager_role_name(name: str | None) -> bool:
     check (#328) can hold a pre-#328 `Admin` row beside its seeded `admin`, and
     that row's holder is now admitted at both manager gates, where the exact
     comparison refused them. `_check_name_free` refuses the name
-    case-insensitively, so such a row can only come from old data; #400's
-    backfill is what removes it.
+    case-insensitively, so such a row can only come from old data; see
+    `is_owner_role_name` for the removal path (#400, parked on `needs-human`).
 
     Name-only by design, as on the owner half: an `Admin` row an admin created
     carries no `"*"`, since `"*"` is reserved for the owner role, and the gate

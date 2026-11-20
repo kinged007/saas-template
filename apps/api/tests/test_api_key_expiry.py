@@ -32,6 +32,7 @@ from tests.conftest import (
     register_user,
     run_job_via_scheduler,
     wait_for,
+    wait_for_audit_action,
     ws_headers,
 )
 
@@ -693,7 +694,7 @@ async def test_cleanup_job_error_message_caps_the_id_list(app_client, monkeypatc
     # Counting ids does not pin the separator. The prose above already contains ", ",
     # so pin the list itself: a quote-glued separator fails both assertions.
     assert ", " in message.split("of them: ", 1)[1]
-    assert "'" not in message
+    assert "'" not in message.split("of them: ", 1)[1]
 
 
 async def test_cleanup_job_logs_only_the_first_publish_failure_with_a_traceback(
@@ -719,34 +720,6 @@ async def test_cleanup_job_logs_only_the_first_publish_failure_with_a_traceback(
     assert records[0].exc_info is not None
     assert [r.exc_info for r in records[1:]] == [None, None]
     assert [r.levelno for r in records] == [logging.ERROR, logging.WARNING, logging.WARNING]
-
-
-async def _wait_for_audit(resource_id: str, timeout_s: float = 10.0):
-    """The audit consumer is a background handler — poll for its row."""
-    entry = None
-
-    async def poll() -> AuditLogEntry | None:
-        nonlocal entry
-        async with SessionFactory() as session:
-            entry = (
-                (
-                    await session.execute(
-                        select(AuditLogEntry)
-                        .where(
-                            AuditLogEntry.resource_id == resource_id,
-                            AuditLogEntry.action == "apikey.revoked",
-                        )
-                        .order_by(AuditLogEntry.created_at.desc())
-                    )
-                )
-                .scalars()
-                .first()
-            )
-        return entry
-
-    if not await wait_for(poll, timeout_secs=timeout_s, interval=0.1):
-        raise AssertionError(f"no apikey.revoked audit entry for {resource_id}")
-    return entry
 
 
 async def test_job_is_dispatched_by_the_scheduler(app_client):
@@ -787,5 +760,21 @@ async def test_job_is_dispatched_by_the_scheduler(app_client):
 
     # `publish_audit` no-ops without a bus, so this row exists only if the
     # executor really passed the app's bus to the handler.
-    audited = await _wait_for_audit(expired["id"])
+    await wait_for_audit_action(ws["id"], "apikey.revoked", timeout_secs=10.0)
+    async with SessionFactory() as session:
+        audited = (
+            (
+                await session.execute(
+                    select(AuditLogEntry)
+                    .where(
+                        AuditLogEntry.resource_id == expired["id"],
+                        AuditLogEntry.action == "apikey.revoked",
+                    )
+                    .order_by(AuditLogEntry.created_at.desc())
+                )
+            )
+            .scalars()
+            .first()
+        )
+    assert audited is not None, f"no apikey.revoked audit entry for {expired['id']}"
     assert audited.details.get("reason") == "expired"

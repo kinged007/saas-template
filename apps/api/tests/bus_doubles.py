@@ -51,6 +51,9 @@ class RecordingBus(EventBus):
     async def stop(self) -> None:
         pass
 
+    async def wait_idle(self) -> None:
+        pass
+
     def by_subject(self, subject: str) -> list[tuple[dict, str | None, bool]]:
         return [(p, c, t) for s, p, c, t in self.events if s == subject]
 
@@ -117,4 +120,8 @@ class ReplayBus(EventBus):
         pass
 
     async def stop(self) -> None:
+        pass
+
+    async def wait_idle(self) -> None:
+        # Delivery is inline in publish(), so the bus is always idle.
         pass

@@ -1,10 +1,13 @@
 // Query string for the virtual `admin-workspaces` / `admin-audit` lists
 // (superuser-only GET /admin/*): offset/limit plus one parameter per filter and
-// per sorter. Free of runtime imports so `node --test` can assert the serialised
-// request itself instead of scanning `dataProvider.ts` for source text.
-// The input types are refine's own contract (CrudFilter / CrudSort), so a
+// per sorter. Imports only pure modules, so `node --test` can assert the
+// serialised request itself instead of scanning `dataProvider.ts` for source
+// text. The input types are refine's own contract (CrudFilter / CrudSort), so a
 // caller passing the wrong shape is a compile error, not a runtime one.
 import type { CrudFilter, CrudSort } from "@refinedev/core";
+// The explicit `.ts` specifier stays on purpose: this module is loaded by
+// `node --test` (adminListQuery.test.ts), which resolves specifiers literally
+// and cannot find a bundled `./sorters`. Vite accepts the extension too.
 import { normalizeSorters } from "./sorters.ts";
 
 export type AdminListQueryInput = {

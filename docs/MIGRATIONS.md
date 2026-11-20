@@ -6,11 +6,14 @@ appending migrations exactly like now.
 
 ## Daily workflow
 
-Change models, then generate:
+Change models, then generate (14-digit UTC timestamp id per DECISIONS D-04):
 
 ```bash
 make db-new m="add index on users.email"
 ```
+
+This writes `apps/api/alembic/versions/<YYYYMMDDHHMMSS>_<slug>.py` with a
+matching `revision` id.
 
 **Review the generated diff before committing.** Autogenerate catches
 tables, columns, indexes, constraints — it does not judge intent. Check
