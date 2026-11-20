@@ -133,3 +133,24 @@ def get_register_limiter() -> SlidingWindowLimiter:
     if wanted != current:
         register_limiter = SlidingWindowLimiter(max_attempts=wanted[0], window_seconds=wanted[1])
     return register_limiter
+
+
+export_limiter = SlidingWindowLimiter()
+
+
+def get_export_limiter() -> SlidingWindowLimiter:
+    """Per-workspace cap on GET /audit/export (audit_exports_per_hour).
+
+    A request rate per workspace, not a cap on what one export returns: the
+    dump itself stays complete (up to the row cap) while bursts of repeated
+    pulls from one workspace are throttled. Separate instance and key space
+    so export spend never touches the auth budgets.
+    """
+    from src.settings import settings
+
+    global export_limiter
+    wanted = (settings.audit_exports_per_hour, 3600)
+    current = (export_limiter.max_attempts, export_limiter.window_seconds)
+    if wanted != current:
+        export_limiter = SlidingWindowLimiter(max_attempts=wanted[0], window_seconds=wanted[1])
+    return export_limiter

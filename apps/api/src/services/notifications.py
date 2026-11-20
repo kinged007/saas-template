@@ -293,7 +293,10 @@ class NotificationService:
                 self._bus,
                 workspace_id=workspace_id,
                 resource_type="notification",
-                resource_id="all",
+                # The bulk scope, not a sentinel string: resource_id must stay
+                # a UUID — Postgres binds it as one and a non-UUID value fails
+                # the write before any SQL runs.
+                resource_id=workspace_id,
                 action="notifications.acknowledged",
                 actor_user_id=user_id,
                 details={"count": count},

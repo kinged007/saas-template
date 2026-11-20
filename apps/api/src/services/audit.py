@@ -14,6 +14,7 @@ and both are recorded.
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -103,6 +104,15 @@ class AuditService:
         action: str,
         source_event_id: str,
     ) -> AuditLogEntry | None:
+        # The dedupe key is a UUID comparison, and Postgres binds it as one:
+        # a non-UUID resource_id would fail the write before any SQL runs, so
+        # legacy sentinel rows skip the lookup instead of breaking the insert.
+        # At-most-once buses never redeliver, so the skipped dedupe costs
+        # nothing there; on redelivering buses one duplicate may land.
+        try:
+            uuid.UUID(str(resource_id))
+        except (ValueError, AttributeError, TypeError):
+            return None
         result = await self._session.execute(
             select(AuditLogEntry)
             .where(
