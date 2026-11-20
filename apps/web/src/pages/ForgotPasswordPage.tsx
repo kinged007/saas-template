@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { forgotPasswordError } from "./forgot-password";
 import { API_URL } from "@/providers/dataProvider";
 
 export function ForgotPasswordPage() {
@@ -23,10 +24,10 @@ export function ForgotPasswordPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
-      if (!resp.ok) throw new Error("request failed");
+      if (!resp.ok) throw new Error(forgotPasswordError(resp.status, resp));
       setDone(true);
     } catch (err) {
-      setError((err as Error)?.message ?? "Request failed");
+      setError((err as Error)?.message ?? "request failed");
     } finally {
       setPending(false);
     }

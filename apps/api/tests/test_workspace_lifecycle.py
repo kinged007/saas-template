@@ -1,7 +1,14 @@
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
+from tests.conftest import (
+    auth_headers,
+    create_workspace,
+    expire_invitation,
+    register_user,
+    wait_for_audit_action,
+    ws_headers,
+)
 
 
 async def _role_id(client, headers, name: str) -> str:
@@ -15,18 +22,6 @@ async def _member_by_email(client, headers, email: str) -> dict:
     assert members.status_code == 200, members.text
     return next(m for m in members.json() if m["email"] == email)
 
-
-async def _expire_invitation(invitation_id: str) -> None:
-    from datetime import timedelta
-
-    from src.core.dates import now_utc
-    from src.db.session import SessionFactory
-    from src.models.core import Invitation
-
-    async with SessionFactory() as session:
-        row = await session.get(Invitation, invitation_id)
-        row.expires_at = now_utc() - timedelta(minutes=5)
-        await session.commit()
 
 async def _invite_and_join(client, owner_tokens, ws, email: str, role_name: str = "viewer"):
     owner_headers = ws_headers(owner_tokens, ws["id"])
@@ -168,7 +163,7 @@ async def test_resend_expired_invitation(app_client):
     old_token = invite.json()["token"]
 
     # Backdate the expiry, then resend to prove a dead invite becomes usable again.
-    await _expire_invitation(invite.json()["id"])
+    await expire_invitation(invite.json()["id"])
     resp = await client.post(
         f"/api/v1/invitations/{invite.json()['id']}/resend", headers=owner_headers
     )
@@ -242,6 +237,7 @@ async def test_resend_rejects_accepted_invitation(app_client):
     )
     assert resp.status_code == 409, resp.text
 
+
 async def test_resend_rejects_revoked_invitation(app_client):
     """Revoke is terminal: Re-send must not put the row back in the invitee's inbox."""
     client = app_client
@@ -305,20 +301,6 @@ async def test_safe_delete_cascades_but_keeps_audit(app_client):
     ).status_code == 404
     # The delete also drops the caller's membership, so the workspace-scoped
     # audit endpoint is no longer reachable for them — assert the retained rows
-    # directly instead.
-    from sqlalchemy import select
-
-    from src.db.session import SessionFactory
-    from src.models.audit import AuditLogEntry
-
-    async with SessionFactory() as session:
-        actions = (
-            (
-                await session.execute(
-                    select(AuditLogEntry.action).where(AuditLogEntry.workspace_id == ws["id"])
-                )
-            )
-            .scalars()
-            .all()
-        )
-    assert "workspace.deleted" in actions
+    # directly instead. The row is written by the background audit consumer, so
+    # poll for it instead of reading once.
+    await wait_for_audit_action(ws["id"], "workspace.deleted")

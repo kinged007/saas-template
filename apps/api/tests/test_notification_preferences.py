@@ -327,3 +327,163 @@ async def test_unsubscribe_token_disables_email(app_client):
 
     bad = await app_client.get("/api/v1/notifications/unsubscribe?token=nope&type=all")
     assert bad.status_code == 404, bad.text
+
+
+async def test_failed_notification_email_is_audited(app_client, monkeypatch):
+    from sqlalchemy import select
+
+    import src.email.factory as factory
+    from src.db.session import SessionFactory
+    from src.models.core import Notification
+    from src.services.notifications import NotificationService
+    from tests.bus_doubles import RecordingBus
+    from tests.conftest import register_user
+
+    ok = True
+
+    async def _send(msg):
+        return ok
+
+    monkeypatch.setattr(factory, "send_email", _send)
+
+    user = await register_user(app_client, "pref-failed@example.com")
+    me = await _me(app_client, user)
+
+    async with SessionFactory() as session:
+        await NotificationService(session).upsert_channels(me["id"], {"member_joined": "email"})
+
+    import src.workflows as workflows
+
+    bus = RecordingBus()
+
+    async def notify():
+        async with SessionFactory() as session:
+            await workflows._create_notification(
+                session,
+                bus,
+                user_id=me["id"],
+                workspace_id="0" * 32,
+                type="member_joined",
+                title="A joined",
+                body="a",
+                metadata={},
+            )
+
+    async def _row_ids():
+        async with SessionFactory() as session:
+            return list(
+                (
+                    await session.execute(
+                        select(Notification.id).where(
+                            Notification.user_id == me["id"],
+                            Notification.type == "member_joined",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+    ok = False
+    await notify()
+    (failed_id,) = await _row_ids()
+    assert bus.actions() == ["notification.email_failed"]
+
+    ok = True
+    await notify()  # a delivered email is not an audit event
+
+    # The in-app row is kept either way; only the failed send is audited.
+    assert len(await _row_ids()) == 2
+    assert bus.actions() == ["notification.email_failed"]
+    payload = bus.audit()[0][0]
+    assert payload["resource_type"] == "notification"
+    assert payload["resource_id"] == failed_id
+    assert payload["workspace_id"] == "0" * 32
+    assert payload["details"] == {
+        "user_id": me["id"],
+        "type": "member_joined",
+        "email": "pref-failed@example.com",
+        "reason": "send_failed",
+    }
+
+
+async def test_notification_email_without_recipient_is_audited(app_client, caplog):
+    import logging
+
+    import src.workflows as workflows
+    from src.db.session import SessionFactory
+    from src.services.notifications import NotificationService
+    from tests.bus_doubles import RecordingBus
+    from tests.conftest import register_user
+
+    await register_user(app_client, "pref-gone@example.com")
+    ghost_id = "f" * 32
+    bus = RecordingBus()
+
+    async with SessionFactory() as session:
+        await NotificationService(session).upsert_channels(ghost_id, {"member_joined": "email"})
+
+    with caplog.at_level(logging.ERROR):
+        async with SessionFactory() as session:
+            await workflows._create_notification(
+                session,
+                bus,
+                user_id=ghost_id,
+                workspace_id="0" * 32,
+                type="member_joined",
+                title="A joined",
+                body="a",
+                metadata={},
+            )
+
+    assert bus.actions() == ["notification.email_failed"]
+    assert bus.audit()[0][0]["details"] == {
+        "user_id": ghost_id,
+        "type": "member_joined",
+        "email": None,
+        "reason": "no_recipient",
+    }
+    assert any("no_recipient" in r.getMessage() for r in caplog.records)
+
+
+async def test_notification_email_without_address_is_audited(app_client, caplog):
+    import logging
+
+    import src.workflows as workflows
+    from src.db.session import SessionFactory
+    from src.models.workspace import User
+    from src.services.notifications import NotificationService
+    from tests.bus_doubles import RecordingBus
+    from tests.conftest import register_user
+
+    tokens = await register_user(app_client, "pref-noaddress@example.com")
+    me = await _me(app_client, tokens)
+
+    async with SessionFactory() as session:
+        user = await session.get(User, me["id"])
+        user.email = ""  # address cleared after signup; the column is NOT NULL
+        await session.commit()
+        await NotificationService(session).upsert_channels(me["id"], {"member_joined": "email"})
+
+    bus = RecordingBus()
+    with caplog.at_level(logging.ERROR):
+        async with SessionFactory() as session:
+            await workflows._create_notification(
+                session,
+                bus,
+                user_id=me["id"],
+                workspace_id="0" * 32,
+                type="member_joined",
+                title="A joined",
+                body="a",
+                metadata={},
+            )
+
+    assert bus.actions() == ["notification.email_failed"]
+    assert bus.audit()[0][0]["details"] == {
+        "user_id": me["id"],
+        "type": "member_joined",
+        "email": "",
+        "reason": "no_email",
+    }
+    assert any("no_email" in r.getMessage() for r in caplog.records)

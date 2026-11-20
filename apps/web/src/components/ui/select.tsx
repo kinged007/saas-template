@@ -37,7 +37,24 @@ function Select({
 
 const SelectGroup = SelectPrimitive.Group
 
-const SelectValue = SelectPrimitive.Value
+// Radix renders `children` verbatim whenever the value is non-empty — the
+// placeholder only comes back for an empty value — so `children` is required,
+// and it is the trigger label, e.g. the selected role's name. A label
+// expression that can evaluate to nothing at runtime (a lookup against a
+// refetched list) still needs its own fallback — `roleName(id) ?? id`.
+// Local divergence from shadcn upstream: re-apply after `shadcn add/update select`.
+const SelectValue = React.forwardRef<
+  React.ElementRef<typeof SelectPrimitive.Value>,
+  Omit<
+    React.ComponentPropsWithoutRef<typeof SelectPrimitive.Value>,
+    "children"
+  > & { children: Exclude<React.ReactNode, null | undefined> }
+>(({ children, ...props }, ref) => (
+  <SelectPrimitive.Value ref={ref} {...props}>
+    {children}
+  </SelectPrimitive.Value>
+));
+SelectValue.displayName = SelectPrimitive.Value.displayName
 
 const SelectTrigger = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Trigger>,
@@ -100,8 +117,6 @@ const SelectContent = React.forwardRef<
 >(({ className, children, position = "popper", ...props }, ref) => {
   // Closed content stays unmounted: Radix tears its internal fragment down
   // while React still owns the children, which throws on unmount.
-  // SelectValue therefore gets no item text to read and every caller with a
-  // value must pass children explicitly.
   const open = React.useContext(SelectOpenContext);
   if (!open) return null;
 

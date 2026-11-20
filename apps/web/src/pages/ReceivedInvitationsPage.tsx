@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useCustom, useCustomMutation } from "@refinedev/core";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -14,7 +13,9 @@ import {
 } from "@/components/ui/table";
 import { ListView, ListViewHeader } from "../components/refine-ui/views/list-view";
 import { EmptyRow, StatusBadge, formatDate } from "../components/ui";
+import { invitationStatus, isActionableInvitation } from "./invitation-actions";
 import { useWorkspace } from "../contexts/WorkspaceContext";
+import { errorMessage } from "@/utils/errorMessage";
 import type { Invitation } from "../types";
 
 export function ReceivedInvitationsPage() {
@@ -54,7 +55,7 @@ export function ReceivedInvitationsPage() {
         onError: (err) => {
           setBusyId(null);
           toast.error("Could not accept invitation", {
-            description: String((err as { message?: string })?.message ?? err),
+            description: errorMessage(err),
           });
           void query.refetch();
         },
@@ -81,7 +82,7 @@ export function ReceivedInvitationsPage() {
         onError: (err) => {
           setBusyId(null);
           toast.error("Could not decline invitation", {
-            description: String((err as { message?: string })?.message ?? err),
+            description: errorMessage(err),
           });
           void query.refetch();
         },
@@ -105,17 +106,13 @@ export function ReceivedInvitationsPage() {
           </TableHeader>
           <TableBody>
             {rows.map((inv) => {
-              const actionable = inv.status === "pending" && !inv.expired;
+              const actionable = isActionableInvitation(inv);
               return (
                 <TableRow key={inv.id}>
                   <TableCell className="font-medium">{inv.workspace_name ?? "—"}</TableCell>
                   <TableCell>{inv.invited_by_name ?? "—"}</TableCell>
                   <TableCell>
-                    {inv.expired ? (
-                      <Badge variant="destructive">expired</Badge>
-                    ) : (
-                      <StatusBadge status={inv.status} />
-                    )}
+                    <StatusBadge status={invitationStatus(inv)} />
                   </TableCell>
                   <TableCell className="text-muted-foreground">{formatDate(inv.expires_at)}</TableCell>
                   <TableCell className="text-right">

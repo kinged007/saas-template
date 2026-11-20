@@ -8,12 +8,16 @@ const baseURL = `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({
   testDir: "./e2e",
+  // dev-session.spec.ts needs the real stack — playwright.dev.config.ts.
+  testIgnore: "**/dev-session.spec.ts",
   forbidOnly: !!process.env.CI,
   // The first spec pays the cold cost of vite transforming the app module
   // graph, which exceeds the 30s default on a GitHub runner. Both of these are
-  // per-test options, so they sit at the top level rather than under `use`.
+  // per-test options, so they sit at the top level rather than under `use`;
+  // the expect budget is raised too, because a cold page load is slow for
+  // assertions on that page as well.
   timeout: 90_000,
-  expect: { timeout: 10_000 },
+  expect: { timeout: 30_000 },
   use: { baseURL },
   webServer: {
     command: `npm run dev -- --port ${PORT} --strictPort`,

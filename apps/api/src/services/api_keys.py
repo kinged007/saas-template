@@ -1,18 +1,25 @@
 from __future__ import annotations
 
 import hashlib
+import operator
 import secrets
 from datetime import datetime
 
-from sqlalchemy import Select, func, or_, select, update
+from sqlalchemy import Select, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.dates import ensure_utc, now_utc
+from src.core.dates import ensure_utc, iso_or_none, now_utc
 from src.core.permissions import ALL_PERMISSIONS_INCLUDING_KEY_ONLY, KEY_ONLY_PERMISSIONS
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
-from src.models.api_key import ApiKey
+from src.models.api_key import (
+    MAX_QUOTA,
+    QUOTA_MAX_MESSAGE,
+    QUOTA_MIN_MESSAGE,
+    QUOTA_TYPE_MESSAGE,
+    ApiKey,
+)
 from src.models.workspace import User
 from src.services.workspaces import WorkspaceService
 
@@ -27,6 +34,27 @@ class ApiKeyForbidden(ApiKeyError):
 
 class ApiKeyNotFound(ApiKeyError):
     pass
+
+
+def _quota(usage_quota: int | None) -> int | None:
+    """Strict-type then range-check a service-side quota.
+
+    `operator.index` accepts anything int-like (int, bool, numpy ints) and
+    refuses float/str values that only the schema would have coerced: a
+    direct caller that passes 5.5 must not reach the Integer column through
+    the range guards.
+    """
+    if usage_quota is None:
+        return None
+    try:
+        quota = operator.index(usage_quota)
+    except TypeError:
+        raise ApiKeyError(QUOTA_TYPE_MESSAGE) from None
+    if quota < 1:
+        raise ApiKeyError(QUOTA_MIN_MESSAGE)
+    if quota > MAX_QUOTA:
+        raise ApiKeyError(QUOTA_MAX_MESSAGE)
+    return quota
 
 
 class ApiKeyService:
@@ -87,9 +115,8 @@ class ApiKeyService:
         own permission list. Returns (key, raw_secret); the raw secret is
         only ever returned once.
         """
-        membership = await WorkspaceService(self._session).get_membership(
-            workspace_id, actor.id, active_only=True
-        )
+        name = name.strip()
+        membership = await WorkspaceService(self._session).get_membership(workspace_id, actor.id)
         if membership is None:
             raise ApiKeyForbidden("you are not a member of this workspace")
         _, role = membership
@@ -108,8 +135,7 @@ class ApiKeyService:
             denied = sorted(capped - allowed)
             raise ApiKeyForbidden(f"cannot grant permissions you do not have: {', '.join(denied)}")
 
-        if usage_quota is not None and usage_quota < 0:
-            raise ApiKeyError("usage quota cannot be negative")
+        usage_quota = _quota(usage_quota)
         if expires_at is not None and ensure_utc(expires_at) <= now_utc():
             raise ApiKeyError("expiry must be in the future")
 
@@ -140,7 +166,7 @@ class ApiKeyService:
                 "permissions": key.permissions,
                 "created_by_user_id": actor.id,
                 "created_by_name": actor.display_name,
-                "expires_at": key.expires_at.isoformat() if key.expires_at else None,
+                "expires_at": iso_or_none(key.expires_at),
             },
         )
         await publish_audit(
@@ -159,27 +185,48 @@ class ApiKeyService:
         )
         return key, raw
 
-    def owner_scope(self, workspace_id: str, created_by_user_id: str) -> Select[tuple[ApiKey]]:
-        """Base statement restricted to one user's keys in one workspace.
+    @staticmethod
+    def _scope(
+        workspace_id: str, created_by_user_id: str, stmt: Select[tuple[ApiKey]]
+    ) -> Select[tuple[ApiKey]]:
+        """AND the owner predicate onto `stmt`, so it can only narrow.
 
-        The personal-scope predicate lives here (not in the route) so every
-        key read shares one owner. Callers apply their own filters, counting
-        and pagination on top — the scope can only ever narrow."""
-        return select(ApiKey).where(
+        Only `Select` is accepted: a subquery or compound select has no
+        `.where`, so it raises here rather than executing unscoped. Do not
+        wrap this call in try/except — a swallowed error would skip the scope.
+        """
+        return stmt.where(
             ApiKey.workspace_id == workspace_id,
             ApiKey.created_by_user_id == created_by_user_id,
         )
 
-    async def count_for_user(self, stmt: Select[tuple[ApiKey]]) -> int:
-        """Rows the scoped statement matches, ignoring its ORDER BY."""
+    async def count_for_user(
+        self, workspace_id: str, created_by_user_id: str, stmt: Select[tuple[ApiKey]]
+    ) -> int:
+        """Rows the statement matches within one user's scope, ignoring its ORDER BY.
+
+        The owner predicate is re-applied here, so a statement from another
+        workspace or owner cannot widen the scope. ORDER BY, LIMIT and OFFSET
+        are stripped: the count is the whole scope, not one page of it."""
         count = await self._session.execute(
-            select(func.count()).select_from(stmt.order_by(None).subquery())
+            select(func.count()).select_from(
+                self._scope(workspace_id, created_by_user_id, stmt)
+                .order_by(None)
+                .limit(None)
+                .offset(None)
+                .subquery()
+            )
         )
         return count.scalar_one()
 
-    async def list_for_user(self, stmt: Select[tuple[ApiKey]]) -> list[ApiKey]:
-        """Run an owner-scoped statement and return the page."""
-        result = await self._session.execute(stmt)
+    async def list_for_user(
+        self, workspace_id: str, created_by_user_id: str, stmt: Select[tuple[ApiKey]]
+    ) -> list[ApiKey]:
+        """Run the statement within one user's scope and return the page.
+
+        The owner predicate is re-applied here, so a statement from another
+        workspace or owner cannot widen the scope."""
+        result = await self._session.execute(self._scope(workspace_id, created_by_user_id, stmt))
         return list(result.scalars().all())
 
     async def revoke_api_key(
@@ -228,8 +275,11 @@ class ApiKeyService:
 
         A key past its `expires_at` is rejected here rather than relying on the
         cleanup job, so expiry takes effect the moment it passes.
+
+        Takes the row lock for the rest of the transaction, so the quota
+        charge runs inside the transaction that authenticated the key.
         """
-        stmt = select(ApiKey).where(ApiKey.key_hash == self._hash(raw))
+        stmt = select(ApiKey).where(ApiKey.key_hash == self._hash(raw)).with_for_update()
         result = await self._session.execute(stmt)
         key = result.scalar_one_or_none()
         if key is None or key.revoked_at is not None:
@@ -238,33 +288,59 @@ class ApiKeyService:
             return None
         return key
 
-    async def touch(self, key: ApiKey) -> bool:
-        # ponytail: lifetime counter, never reset (usage_quota is a lifetime
-        # cap); add a window start column + rollover here when true monthly
-        # quotas are needed.
-        """Record a successful use: bump the usage counter + last_used_at.
+    async def record_use(self, key: ApiKey, now: datetime | None = None) -> bool:
+        """Count one successful use; False when the month's quota is spent.
 
-        Returns False and leaves the row alone when the quota is already
-        spent. The counter bump and the quota test are one conditional
-        UPDATE, so two requests that read usage_count before either writes
-        race on this statement alone and only the first can spend the last
-        unit. `refresh` keeps the caller's key in step with the row (the
-        session does not expire on commit), so quota headers read
-        post-increment values and a later flush cannot write the old count
-        back."""
+        The rollover, the quota test and the increment are one UPDATE, so
+        concurrent requests carrying one key cannot interleave a
+        read-modify-write and consume more than `usage_quota` uses, and cannot
+        write a stale `0` over each other's increment on SQLite (which ignores
+        FOR UPDATE and serialises writers per statement instead).
+        `authenticate` holds the row lock, which is what makes the budget exact
+        on Postgres.
+
+        The window is month-aligned in UTC rather than anchored to the first
+        use: any request landing in a new calendar month opens a fresh window,
+        so the stored start is the first instant of that month. Only a strictly
+        earlier stored month rolls — the same month is current, and a later one
+        means the host clock moved backwards, which would hand out a second full
+        budget, so the counter is left alone and the key fails closed instead.
+        `usage_count` is the lifetime total and is never reset.
+
+        Returns False without committing, so the caller can report the
+        untouched counters: a rejected request neither counts nor opens the
+        next window. Those counters are the ones `authenticate` loaded, which
+        is the committed value on a row-lock backend and at most one unit
+        behind on SQLite, where a concurrent writer can slip in between.
+        """
+        now = ensure_utc(now or now_utc())
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        rolled = or_(ApiKey.usage_window_start.is_(None), ApiKey.usage_window_start < month_start)
+        windowed = case((rolled, 0), else_=ApiKey.usage_window_count)
         result = await self._session.execute(
             update(ApiKey)
             .where(
                 ApiKey.id == key.id,
-                or_(ApiKey.usage_quota.is_(None), ApiKey.usage_count < ApiKey.usage_quota),
+                or_(ApiKey.usage_quota.is_(None), windowed < ApiKey.usage_quota),
             )
-            .values(usage_count=ApiKey.usage_count + 1, last_used_at=now_utc())
+            .values(
+                usage_count=ApiKey.usage_count + 1,
+                usage_window_count=windowed + 1,
+                usage_window_start=case((rolled, month_start), else_=ApiKey.usage_window_start),
+                last_used_at=now,
+            )
             .execution_options(synchronize_session=False)
         )
         if result.rowcount == 0:
             return False
-        await self._session.commit()
+        # The rollover is a case() on the stored month, which the ORM cannot
+        # evaluate in place, so the row is re-read instead: the quota headers
+        # the caller reports must come from the values the database now holds.
+        # ponytail: that costs a PK SELECT inside the lock authenticate already
+        # holds. Ceiling: one extra read per key-authenticated request.
+        # Upgrade path: UPDATE ... RETURNING.
         await self._session.refresh(key)
+        await self._session.commit()
         return True
 
     async def set_quota(
@@ -285,8 +361,7 @@ class ApiKeyService:
             raise ApiKeyNotFound("api key not found")
         if actor is not None and key.created_by_user_id != actor.id:
             raise ApiKeyNotFound("api key not found")
-        if usage_quota is not None and usage_quota < 0:
-            raise ApiKeyError("usage quota cannot be negative")
+        usage_quota = _quota(usage_quota)
         key.usage_quota = usage_quota
         await self._session.commit()
         await publish_event(
