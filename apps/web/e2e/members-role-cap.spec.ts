@@ -60,7 +60,7 @@ const members = (page: Page) =>
 
 const rowTrigger = (page: Page) =>
   page.getByRole("row").filter({ hasText: "member@example.com" }).getByRole("combobox");
-const inviteTrigger = (page: Page) => page.getByRole("combobox").last();
+const inviteTrigger = (page: Page) => page.locator("form").getByRole("combobox");
 
 // The sentence the triggers describe themselves with. The two notices label
 // their link differently, so a link is addressed by its accessible name rather
@@ -75,7 +75,7 @@ const reader = {
   ...IDENTITY,
   is_superuser: false,
   permissions: [],
-  workspaces: [{ id: "ws-1", name: "Acme Corp", role: "custom", permissions: ["member:read"] }],
+  workspaces: [{ id: "ws-1", name: "Acme Corp", slug: "acme-corp", role: "custom", permissions: ["member:read"] }],
 };
 
 // A custom role that may invite and read roles but is neither owner nor admin
@@ -90,6 +90,7 @@ const inviter = {
     {
       id: "ws-1",
       name: "Acme Corp",
+      slug: "acme-corp",
       role: "custom",
       permissions: ["member:read", "member:create", "role:read"],
     },

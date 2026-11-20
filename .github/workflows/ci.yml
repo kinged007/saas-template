@@ -16,6 +16,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+          python-version: "3.12"
       - run: cd apps/api && uv sync --extra dev
       - run: cd apps/api && uv run ruff check . && uv run ruff format --check .
 
@@ -26,6 +27,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+          python-version: "3.12"
       - run: cd apps/api && uv sync --extra dev
       - run: cd apps/api && uv run pytest -q --tb=short -p no:cacheprovider
 
@@ -36,6 +38,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+          python-version: "3.12"
       - run: cd apps/api && uv sync --extra dev
       - run: make db-check
 
@@ -86,3 +89,23 @@ jobs:
           # A red e2e leg always writes both directories; finding neither means
           # the run failed before Playwright did, which the default `warn` hides.
           if-no-files-found: error
+
+  trailing-newline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check trailing newlines
+        run: |
+          set -eo pipefail
+          failed=0
+          while IFS= read -r -d '' f; do
+            case "$f" in
+              .codesight/*|review-artifacts/*) continue ;;
+            esac
+            [ -s "$f" ] || continue
+            if [ -n "$(tail -c1 "$f")" ]; then
+              echo "no trailing newline: $f"
+              failed=1
+            fi
+          done < <(git ls-files -z '*.ts' '*.tsx' '*.py' '*.sh' '*.md')
+          exit $failed

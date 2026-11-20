@@ -24,7 +24,8 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 API_PORT = os.environ.get("API_PORT", "8000")
-WEB_PORT = os.environ.get("WEB_PORT", "5173")
+DEFAULT_WEB_PORT = "5173"
+WEB_PORT = os.environ.get("WEB_PORT", DEFAULT_WEB_PORT)
 
 SERVERS = [
     {
@@ -67,17 +68,22 @@ def dev_allowed_origins(web_port: str = WEB_PORT) -> list[str]:
     needs its own entries. Vite serves every loopback name (server.host: true),
     so both names of the default port and of `web_port` are listed: a browser
     opened on 127.0.0.1 sends that Origin and gets a 403 cross-origin on the
-    refresh call otherwise. Anything the user configured in .env is kept."""
+    refresh call otherwise. Anything the user configured in .env is kept,
+    whitespace-stripped per entry: `a, b` in .env must allowlist `b`, since
+    `" b"` matches no Origin header and the CSRF check rejects it."""
     return [
         o
         for o in dict.fromkeys(
             [
                 *(
                     f"http://{host}:{port}"
-                    for port in ("5173", web_port)
+                    for port in (DEFAULT_WEB_PORT, web_port)
                     for host in ("localhost", "127.0.0.1")
                 ),
-                *(os.environ.get("CORS_ORIGINS") or api_env_file("CORS_ORIGINS")).split(","),
+                *(
+                    o.strip()
+                    for o in (os.environ.get("CORS_ORIGINS") or api_env_file("CORS_ORIGINS")).split(",")
+                ),
             ]
         )
         if o

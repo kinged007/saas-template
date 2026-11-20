@@ -1,6 +1,17 @@
+import { useEffect } from "react";
+
 import { Refine, Authenticated } from "@refinedev/core";
 import routerProvider from "@refinedev/react-router";
-import { BrowserRouter, Navigate, Outlet, Route, Routes } from "react-router";
+import {
+  BrowserRouter,
+  Navigate,
+  Outlet,
+  Route,
+  Routes,
+  useLocation,
+  useParams,
+} from "react-router";
+import { toast } from "sonner";
 
 import { useNotificationProvider } from "./components/refine-ui/notification/use-notification-provider";
 import { Toaster } from "./components/refine-ui/notification/toaster";
@@ -10,7 +21,7 @@ import { authProvider } from "./providers/authProvider";
 import { liveProvider } from "./providers/liveProvider";
 import { accessControlProvider } from "./providers/accessControlProvider";
 import { queryClient } from "./providers/queryClient";
-import { WorkspaceProvider } from "./contexts/WorkspaceContext";
+import { WorkspaceProvider, useWorkspace } from "./contexts/WorkspaceContext";
 import { AppLayout } from "./components/AppLayout";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
@@ -39,6 +50,8 @@ import { GeneralSection as ProfileGeneralSection } from "./pages/settings/profil
 import { NotificationsSection as ProfileNotificationsSection } from "./pages/settings/profile/sections/NotificationsSection";
 import { SecuritySection } from "./pages/settings/profile/sections/SecuritySection";
 import { WorkspacesSection } from "./pages/settings/profile/sections/WorkspacesSection";
+import { UserSettingsLayout } from "./pages/settings/user/UserSettingsLayout";
+import { userSettings } from "./pages/settings/user/registry";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { WorkspaceSettingsLayout } from "./pages/settings/workspace/WorkspaceSettingsLayout";
 import { GeneralSection } from "./pages/settings/workspace/sections/GeneralSection";
@@ -46,6 +59,66 @@ import { RolesSection } from "./pages/settings/workspace/sections/RolesSection";
 import { JobsSection } from "./pages/settings/workspace/sections/JobsSection";
 import { UsersSection } from "./pages/settings/workspace/sections/UsersSection";
 import { AuditLogSection } from "./pages/settings/workspace/sections/AuditLogSection";
+import { returnToStore } from "./utils/storage";
+
+/**
+ * Where the guard sends a signed-out visitor. The destination they asked for is
+ * recorded so sign-in can return them to it.
+ *
+ * This is the `/` group's `Authenticated` fallback, so it only ever runs for a
+ * guarded route — never on /login, /register or /invitations/accept, which
+ * would record the sign-in page as its own destination. Written on mount, not
+ * on every location change: <Navigate> replaces this render immediately, and
+ * only the location at the moment of denial is the destination.
+ */
+function ToLogin() {
+  const { pathname, search, hash } = useLocation();
+  useEffect(() => {
+    returnToStore.set(pathname + search + hash);
+  }, []);
+  return <Navigate to="/login" replace />;
+}
+
+// A splat route resolves a relative `to` against the matched splat, so an unknown
+// member-editor tab would grow the URL on every hop. Match the two sibling
+// settings layouts: redirect to an absolute path.
+function MemberSettingsFallback() {
+  const { id = "" } = useParams();
+  return <Navigate to={`/users/${id}/settings/general`} replace />;
+}
+
+/**
+ * With zero workspaces nothing auto-selects, so useWorkspaceQuery keeps every
+ * workspace-scoped query disabled: the page hangs on `isPending` or renders a
+ * misleading empty list. DashboardPage already carries the "No workspace yet"
+ * card and the create CTA, so send them there. This lives in the router rather
+ * than in WorkspaceProvider because the provider also wraps the workspace-free
+ * routes (settings/profile, users/:id/settings, workspaces/create, admin,
+ * invitations).
+ *
+ * WorkspaceProvider renders nothing until the identity settles, so `workspaces`
+ * is empty only once the identity is known to hold none: the guard never fires
+ * on an identity that is still loading.
+ */
+function RequireWorkspace() {
+  const { workspaces } = useWorkspace();
+  const hasNoWorkspace = workspaces.length === 0;
+  useEffect(() => {
+    // The redirect moves the user without changing the page, and the dashboard's
+    // "No workspace yet" card only explains it visually. sonner's <Toaster> is
+    // the page's aria-live region, so this is what announces the move.
+    if (hasNoWorkspace) {
+      toast("You need a workspace to open that page. Showing your dashboard instead.", {
+        // sonner auto-increments an id per call and dedups only on a supplied
+        // one, so StrictMode's double-invoked mount effect needs this to land
+        // one announcement instead of two.
+        id: "workspace-guard-redirect",
+      });
+    }
+  }, [hasNoWorkspace]);
+  if (hasNoWorkspace) return <Navigate to="/" replace />;
+  return <Outlet />;
+}
 
 export function App() {
   return (
@@ -82,17 +155,32 @@ export function App() {
             meta: { label: "Scheduled Jobs" },
           },
           { name: "audit", list: "/audit", meta: { hide: true } },
+          // Member editor. Registered so useGo() can resolve the path; the tabs
+          // themselves are the routes in the <Routes> block below.
+          { name: "member-profiles", show: "/users/:id/settings", meta: { hide: true } },
           { name: "admin-users", list: "/admin/users", meta: { hide: true } },
           { name: "admin-workspaces", list: "/admin/workspaces", meta: { hide: true } },
           { name: "admin-audit", list: "/admin/audit", meta: { hide: true } },
         ]}
       >
-        <WorkspaceProvider>
-          <Routes>
+        <Routes>
+          {/* Pathless layout: everything that needs the workspace context lives
+              here. The four public auth routes below are top-level siblings —
+              they read no workspace context, and wrapping /oauth/callback in the
+              provider would unmount and remount it mid-exchange on every
+              identity settle, because the gate renders nothing while the
+              identity loads. */}
+          <Route
+            element={
+              <WorkspaceProvider>
+                <Outlet />
+              </WorkspaceProvider>
+            }
+          >
             <Route
               path="/"
               element={
-                <Authenticated key="app" fallback={<Navigate to="/login" replace />}>
+                <Authenticated key="app" fallback={<ToLogin />}>
                   <AppLayout>
                     <Outlet />
                   </AppLayout>
@@ -107,16 +195,42 @@ export function App() {
                 <Route path="audit" element={<AdminAuditSection />} />
               </Route>
               <Route path="workspaces/create" element={<WorkspaceCreatePage />} />
-              <Route path="members" element={<MembersPage />} />
               <Route path="invitations" element={<ReceivedInvitationsPage />} />
-              <Route path="api-keys/create" element={<ApiKeyCreatePage />} />
-              <Route path="api-keys" element={<ApiKeysPage />} />
-              <Route path="webhooks/create" element={<WebhookCreatePage />} />
-              <Route path="webhooks" element={<WebhooksPage />} />
-              <Route path="inbox" element={<InboxPage />} />
-              {/* Jobs detail stays top-level; list moved into workspace settings */}
-              <Route path="jobs/:id" element={<JobDetailPage />} />
-              <Route path="jobs/:id/runs/:runId" element={<JobRunPage />} />
+              {/* Every route below reads the active workspace; the guard keeps a
+                  user in zero workspaces out instead of stranding them here.
+                  Workspace-free routes (settings/profile, users/:id/settings,
+                  workspaces/create, admin, invitations) stay outside — the guard
+                  redirects on zero workspaces, and those pages are reachable
+                  without one. See RequireWorkspace's doc comment above. */}
+              <Route element={<RequireWorkspace />}>
+                <Route path="members" element={<MembersPage />} />
+                <Route path="api-keys/create" element={<ApiKeyCreatePage />} />
+                <Route path="api-keys" element={<ApiKeysPage />} />
+                <Route path="webhooks/create" element={<WebhookCreatePage />} />
+                <Route path="webhooks" element={<WebhooksPage />} />
+                <Route path="inbox" element={<InboxPage />} />
+                {/* Jobs detail stays top-level; list moved into workspace settings */}
+                <Route path="jobs/:id" element={<JobDetailPage />} />
+                <Route path="jobs/:id/runs/:runId" element={<JobRunPage />} />
+                <Route path="settings/workspace" element={<WorkspaceSettingsLayout />}>
+                  <Route index element={<Navigate to="general" replace />} />
+                  <Route path="general" element={<GeneralSection />} />
+                  <Route path="roles" element={<RolesSection />} />
+                  <Route path="jobs" element={<JobsSection />} />
+                  <Route path="users" element={<UsersSection />} />
+                  <Route path="audit" element={<AuditLogSection />} />
+                  <Route
+                    path="*"
+                    element={<Navigate to="/settings/workspace/general" replace />}
+                  />
+                </Route>
+                {/* Legacy redirects — keep old URLs working. Inside the guard for
+                    the same reason as the routes above; their workspace-free
+                    siblings are listed just outside it. See the comment on the
+                    RequireWorkspace group above. */}
+                <Route path="roles" element={<Navigate to="/settings/workspace/roles" replace />} />
+                <Route path="jobs" element={<Navigate to="/settings/workspace/jobs" replace />} />
+              </Route>
               <Route path="settings/profile" element={<ProfileSettingsLayout />}>
                 <Route index element={<Navigate to="general" replace />} />
                 <Route path="general" element={<ProfileGeneralSection />} />
@@ -125,40 +239,19 @@ export function App() {
                 <Route path="workspaces" element={<WorkspacesSection />} />
                 <Route path="*" element={<Navigate to="/settings/profile/general" replace />} />
               </Route>
-              <Route path="settings/workspace" element={<WorkspaceSettingsLayout />}>
+              {/* Member editor: same sections, target-aware. New tabs come from
+                  `userSettings`; keep this map in sync with that registry. */}
+              <Route path="users/:id/settings" element={<UserSettingsLayout />}>
                 <Route index element={<Navigate to="general" replace />} />
-                <Route path="general" element={<GeneralSection />} />
-                <Route path="roles" element={<RolesSection />} />
-                <Route path="jobs" element={<JobsSection />} />
-                <Route path="users" element={<UsersSection />} />
-                <Route path="audit" element={<AuditLogSection />} />
-                <Route path="*" element={<Navigate to="/settings/workspace/general" replace />} />
+                {userSettings.sections.map((s) => (
+                  <Route key={s.key} path={s.key} element={<s.component />} />
+                ))}
+                <Route path="*" element={<MemberSettingsFallback />} />
               </Route>
-              {/* Legacy redirects — keep old URLs working */}
-              <Route path="roles" element={<Navigate to="/settings/workspace/roles" replace />} />
-              <Route path="jobs" element={<Navigate to="/settings/workspace/jobs" replace />} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>
-            <Route
-              path="/login"
-              element={
-                <Authenticated key="login" fallback={<LoginPage />}>
-                  <Navigate to="/" replace />
-                </Authenticated>
-              }
-            />
-            <Route
-              path="/register"
-              element={
-                <Authenticated key="register" fallback={<RegisterPage />}>
-                  <Navigate to="/" replace />
-                </Authenticated>
-              }
-            />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
-            <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
-            <Route path="/verify-email" element={<VerifyEmailPage />} />
             {/* Emailed invite link — public: the recipient may not have an account yet. */}
             <Route
               path="/invitations/accept"
@@ -173,9 +266,27 @@ export function App() {
                 above "/" would flip that. Authenticated's fallback sends a signed-out
                 visitor to /login. */}
             <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-          <Toaster />
-        </WorkspaceProvider>
+          </Route>
+          <Route
+            path="/login"
+            element={
+              <Authenticated key="login" fallback={<LoginPage />}>
+                <Navigate to="/" replace />
+              </Authenticated>
+            }
+          />
+          <Route
+            path="/register"
+            element={
+              <Authenticated key="register" fallback={<RegisterPage />}>
+                <Navigate to="/" replace />
+              </Authenticated>
+            }
+          />
+          <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
+          <Route path="/verify-email" element={<VerifyEmailPage />} />
+        </Routes>
+        <Toaster />
       </Refine>
       </BrowserRouter>
     </ThemeProvider>

@@ -12,18 +12,30 @@ import {
   humanizeType,
   useNotificationPreferences,
 } from "@/hooks/useNotificationPreferences";
+import { useTargetUserId } from "@/hooks/useProfile";
 import type { NotificationChannel } from "@/types";
 
 export function NotificationsSection() {
+  // A member editor (users/:id/settings/notifications) writes the target's
+  // preferences; the self page keeps using the signed-in user's.
+  const targetId = useTargetUserId();
   const { channels, digestEnabled, visibleTypes, saving, setChannel, setDigest } =
-    useNotificationPreferences();
+    useNotificationPreferences(
+      [],
+      true,
+      targetId ? `users/${targetId}/notification-preferences` : "notifications/preferences"
+    );
 
   return (
     <div className="flex flex-col gap-6">
       <Card>
         <CardHeader>
           <CardTitle>Notifications</CardTitle>
-          <CardDescription>Choose how each notification type reaches you.</CardDescription>
+          <CardDescription>
+            {targetId
+              ? "Choose how each notification type reaches this member."
+              : "Choose how each notification type reaches you."}
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           {visibleTypes.map((t) => {
@@ -43,7 +55,8 @@ export function NotificationsSection() {
                 >
                   <SelectTrigger className="h-8 w-32 text-sm">
                     <SelectValue>
-                      {CHANNEL_OPTIONS.find((o) => o.value === (channels[t] ?? "in-app"))?.label}
+                      {CHANNEL_OPTIONS.find((o) => o.value === (channels[t] ?? "in-app"))?.label ??
+                        (channels[t] ?? "in-app")}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
