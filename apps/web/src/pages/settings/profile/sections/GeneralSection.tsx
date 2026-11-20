@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -201,6 +201,14 @@ export function GeneralSection() {
     values,
     resetOptions: { keepDirtyValues: true },
   });
+
+  // A new target means new values: drop dirty edits from the previous member
+  // so they cannot be saved into the next one. Runs after RHF's own
+  // values-reset (declared inside useForm), so it wins with a clean slate.
+  useEffect(() => {
+    form.reset(values, { keepDirtyValues: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetId]);
 
   const onSubmit = (data: ProfileFormData) => {
     const payload: Record<string, unknown> = {};
