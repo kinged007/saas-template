@@ -82,10 +82,12 @@ content, so **no merge or cherry-pick strategy sees a conflict**. Then:
 Timestamp ids do not prevent the branch; they make it **recoverable with one command**.
 Two consequences for whoever designs the mechanism:
 
-- Every call site in the repo runs `upgrade head` (singular): `Makefile`,
-  `docker-compose.prod.yml`, the Helm API deployment, `scripts/db-check.sh`, the Playwright
-  dev config. So either the merge step is documented as part of taking an update, or those
-  call sites change. Either is acceptable; silence is not (guarantee 2).
+- Every call site in the repo runs `upgrade heads`: `Makefile`,
+  `docker-compose.prod.yml`, the Helm API deployment, `scripts/db-check.sh`,
+  `scripts/db-squash.sh`, the Playwright dev config. The project branch takes
+  the second option above: two permanent heads (`template`, `project`) that
+  every call site upgrades together, so taking an update never needs a merge
+  (merging stays available as an option — see `docs/MIGRATIONS.md`).
 - `make db-new` passes no `--rev-id` today, so Alembic still generates a random hex id. The
   convention needs enforcing where migrations are created, or it will decay.
 
