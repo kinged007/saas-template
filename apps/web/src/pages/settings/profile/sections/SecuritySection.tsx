@@ -26,7 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { EmptyRow, formatDate } from "@/components/ui";
+import { EmptyRow, ReadError, formatDate } from "@/components/ui";
 import { errorMessage } from "@/utils/errorMessage";
 
 export type AuthSession = {
@@ -200,6 +200,7 @@ export function SecuritySection() {
 
   return (
     <div className="flex flex-col gap-6">
+      <ReadError error={sessions.query.error ?? status.query.error} />
       <Card>
         <CardHeader>
           <CardTitle>Change password</CardTitle>
