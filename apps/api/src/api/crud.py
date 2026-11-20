@@ -217,7 +217,22 @@ def apply_query(
         column = getattr(model, fname)
         stmt = stmt.order_by(column.desc() if order == "desc" else column.asc())
     # A unique column last makes the order total, so offset/limit paging can
-    # neither repeat nor skip a row when the leading terms tie.
+    # neither repeat nor skip a row when the leading terms tie. The key costs
+    # one comparison inside the sort the statement already runs. On SQLite
+    # `EXPLAIN QUERY PLAN` is identical with and without it for every route's
+    # sort: the scoped lists pick the scope's equality index and then sort the
+    # scoped set (`USE TEMP B-TREE FOR ORDER BY` either way), and the two
+    # unscoped sorts land on unique indexes (`users.email`, `workspaces.slug`)
+    # where no row ties, so the comparison never runs. PostgreSQL 13+ covers
+    # `ORDER BY <indexed col>, id` with an incremental sort. The one shape that
+    # flips a plan is a leading sort term covered by a single-column index that
+    # omits `id` (`api_keys.expires_at`, `job_runs.status`,
+    # `webhook_deliveries.status` are sortable and indexed; none is a route's
+    # default order): SQLite then adds `USE TEMP B-TREE FOR LAST TERM OF
+    # ORDER BY`, a sort bounded to each tie group, not a whole-table re-sort.
+    # When a hot list reaches that shape the fix is an index, never this code:
+    # a composite `(<sort col>, id)` per route, or `(<scope col>, <sort col>,
+    # id)` on SQLite to drop the temp b-tree as well (#854).
     if spec.sort_by:
         last = spec.sort_order[-1]
         stmt = stmt.order_by(model.id.desc() if last == "desc" else model.id.asc())
