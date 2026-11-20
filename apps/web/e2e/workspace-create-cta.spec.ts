@@ -16,6 +16,29 @@ const noWorkspaces = { ...IDENTITY, single_workspace: false, workspaces: [] };
 /** Asserts on the pathname, so a redirect may add a query string. */
 const path = (page: Page) => expect.poll(() => new URL(page.url()).pathname);
 
+/** Auth endpoints need no workspace: sign-in, refresh, and config run before one exists. */
+const authPath = /\/auth\/(me|refresh|config|login|logout|register|2fa\/login|oauth\/token)$/;
+
+/**
+ * Collects every non-auth /api/v1 request the page fires from here on. Not every
+ * non-auth endpoint is workspace-scoped — `invitations/mine` is workspace-free
+ * (PendingInvitations) — so this is a request filter, not a workspace-scope
+ * classifier; the sweep below deliberately asserts the stronger property that
+ * these particular navigations fire nothing at all.
+ *
+ * The guard lives in the router precisely so the guarded page never mounts, so a
+ * zero-workspace navigation that keeps the redirect but still fires a query
+ * would otherwise pass unnoticed — the request is what proves the property.
+ */
+const collectNonAuthRequests = (page: Page) => {
+  const nonAuth: string[] = [];
+  page.on("request", (request) => {
+    const { pathname } = new URL(request.url());
+    if (pathname.startsWith("/api/v1/") && !authPath.test(pathname)) nonAuth.push(pathname);
+  });
+  return nonAuth;
+};
+
 test.describe("workspace create call to action", () => {
   test("single-workspace mode offers no way to create one", async ({ page }) => {
     await mockApi(page, { signedIn: true, identity: lockedOut });
@@ -61,10 +84,14 @@ test.describe("zero workspaces on a workspace-scoped route", () => {
   ]) {
     test(`${url} lands on the dashboard instead of stalling`, async ({ page }) => {
       await mockApi(page, { signedIn: true, identity: noWorkspaces });
+      const nonAuth = collectNonAuthRequests(page);
       await page.goto(url);
       await path(page).toBe("/");
       await expect(page.getByText("No workspace yet")).toBeVisible();
       await expect(page.getByRole("link", { name: "Create workspace" })).toBeVisible();
+      // Asserted last, after the redirect and the CTA: sampling mid-navigation
+      // could read the list before the guarded page had the chance to fire.
+      expect(nonAuth).toEqual([]);
     });
   }
 
