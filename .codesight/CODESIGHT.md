@@ -1,11 +1,11 @@
-# 267 — AI Context Map
+# 211 — AI Context Map
 
 > **Stack:** fastapi | sqlalchemy | react | typescript
 > **Monorepo:** api, saas-template-web
 
-> 102 routes | 23 models | 64 components | 106 lib files | 39 env vars | 4 middleware | 22% test coverage
-> **Token savings:** this file is ~11,900 tokens. Without it, AI exploration would cost ~125,600 tokens. **Saves ~113,700 tokens per conversation.**
-> **Last scanned:** 2026-09-30 19:01 — re-run after significant changes
+> 111 routes | 23 models | 67 components | 119 lib files | 45 env vars | 8 middleware | 35% test coverage
+> **Token savings:** this file is ~13,300 tokens. Without it, AI exploration would cost ~136,400 tokens. **Saves ~123,100 tokens per conversation.**
+> **Last scanned:** 2026-10-15 11:22 — re-run after significant changes
 
 ---
 
@@ -17,6 +17,7 @@
 - **``** GET | POST | GET/:id | PATCH/:id | DELETE/:id
 - **`/sessions`** GET | GET/:id | DELETE/:id → Session
 - **`/global`** GET | GET/:id | PATCH/:id → Global
+- **`/users/{user_id}/sessions`** GET | GET/:id | DELETE/:id → Session
 - **`/subscriptions`** GET | POST | GET/:id | PATCH/:id | DELETE/:id → Subscription
 
 ## Other Routes
@@ -25,23 +26,23 @@
 - `PATCH` `/workspaces/{workspace_id}/flags` params(workspace_id)
 - `GET` `/audit` params() [db]
 - `GET` `/effective-permissions` params()
-- `GET` `/config` params() → out: TokenResponse [auth]
+- `GET` `/config` params() → in: Use, out: TokenResponse [auth]
 - `POST` `/register` params() → in: RegisterRequest, out: TokenResponse [auth] ✓
-- `POST` `/forgot-password` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/forgot-password` params() → in: RegisterRequest, out: TokenResponse [auth] ✓
 - `POST` `/reset-password` params() → in: RegisterRequest, out: TokenResponse [auth]
-- `POST` `/verify-email` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/verify-email` params() → in: RegisterRequest, out: TokenResponse [auth] ✓
 - `POST` `/resend-verification` params() → in: RegisterRequest, out: TokenResponse [auth, email]
 - `POST` `/login` params() → in: RegisterRequest, out: TokenResponse [auth] ✓
 - `POST` `/refresh` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/change-password` params() → in: RegisterRequest, out: TokenResponse [auth]
-- `GET` `/2fa/status` params() → out: TokenResponse
-- `POST` `/2fa/setup` params() → in: RegisterRequest, out: TokenResponse [auth]
-- `POST` `/2fa/enable` params() → in: RegisterRequest, out: TokenResponse [auth]
+- `GET` `/2fa/status` params() → in: Use, out: TokenResponse
+- `POST` `/2fa/setup` params() → in: RegisterRequest, out: TokenResponse
+- `POST` `/2fa/enable` params() → in: RegisterRequest, out: TokenResponse
 - `POST` `/2fa/disable` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/2fa/backup-codes` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/2fa/login` params() → in: RegisterRequest, out: TokenResponse [auth]
 - `POST` `/logout` params() → in: RegisterRequest, out: TokenResponse [auth]
-- `GET` `/me` params() → out: TokenResponse
+- `GET` `/me` params() → in: Use, out: TokenResponse [auth] ✓
 - `GET` `/unread-count` params() → in: st
 - `PATCH` `/{conversation_id}/participants` params(conversation_id)
 - `PATCH` `/{conversation_id}/read` params(conversation_id)
@@ -49,11 +50,11 @@
 - `PATCH` `/{conversation_id}/archive` params(conversation_id)
 - `GET` `/{conversation_id}/messages` params(conversation_id) → in: st
 - `POST` `/{conversation_id}/messages` params(conversation_id) → in: ConversationCreate
-- `POST` `/accept` params() → in: InvitationCreate [auth, db]
-- `GET` `/mine` params()
-- `POST` `/{invitation_id}/resend` params(invitation_id) → in: InvitationCreate [email]
-- `POST` `/{invitation_id}/decline` params(invitation_id) → in: InvitationCreate
-- `POST` `/global/{definition_id}/execute` params(definition_id)
+- `POST` `/accept` params() → in: InvitationCreate [auth, db] ✓
+- `GET` `/mine` params() ✓
+- `POST` `/{invitation_id}/resend` params(invitation_id) → in: InvitationCreate [email] ✓
+- `POST` `/{invitation_id}/decline` params(invitation_id) → in: InvitationCreate ✓
+- `POST` `/global/{definition_id}/execute` params(definition_id) [auth]
 - `GET` `/global/{definition_id}/runs` params(definition_id)
 - `GET` `/runs/{run_id}` params(run_id) [auth]
 - `GET` `/runs/{run_id}/logs` params(run_id) [auth]
@@ -71,20 +72,25 @@
 - `GET` `/{provider_id}/authorize` params(provider_id) [auth, cache]
 - `GET` `/{provider_id}/callback` params(provider_id) [auth, cache]
 - `POST` `/token` params() → in: OAuthTokenRequest [auth, db, cache]
-- `GET` `/me/profile` params() → in: Use
-- `PUT` `/me/profile` params() → in: ProfileUpdate [db]
-- `PATCH` `/me/profile` params() → in: ProfileUpdate [db]
-- `GET` `/users/{user_id}/profile` params(user_id) → in: Use [auth]
-- `GET` `/me/export` params() → in: Use
-- `GET` `/users/{user_id}/export` params(user_id) → in: Use
-- `DELETE` `/me` params() → in: DeleteMeRequest [db]
+- `GET` `/me/profile` params() → in: Use, out: list
+- `PUT` `/me/profile` params() → in: ProfileUpdate, out: list [db]
+- `PATCH` `/me/profile` params() → in: ProfileUpdate, out: list [db]
+- `GET` `/users/{user_id}/profile` params(user_id) → in: Use, out: list [auth]
+- `PATCH` `/users/{user_id}/profile` params(user_id) → in: ProfileUpdate, out: list [auth, db]
+- `PUT` `/users/{user_id}/profile` params(user_id) → in: ProfileUpdate, out: list [auth, db]
+- `GET` `/users/{user_id}/notification-preferences` params(user_id) → in: Use, out: list
+- `PUT` `/users/{user_id}/notification-preferences` params(user_id) → in: ProfileUpdate, out: list
+- `POST` `/users/{user_id}/password` params(user_id) → out: list [auth]
+- `GET` `/me/export` params() → in: Use, out: list
+- `GET` `/users/{user_id}/export` params(user_id) → in: Use, out: list
+- `DELETE` `/me` params() → out: list [db] ✓
 - `GET` `/permission-catalog` params()
-- `GET` `/events` params() [webhook]
-- `POST` `/subscriptions/{subscription_id}/rotate-secret` params(subscription_id) → in: WebhookSubscriptionCreate [webhook]
-- `GET` `/deliveries` params() [db, webhook]
-- `GET` `/subscriptions/{subscription_id}/deliveries` params(subscription_id) [db, webhook]
-- `GET` `/deliveries/{delivery_id}` params(delivery_id) [webhook]
-- `POST` `/deliveries/{delivery_id}/redeliver` params(delivery_id) → in: WebhookSubscriptionCreate [webhook]
+- `GET` `/events` params() [webhook] ✓
+- `POST` `/subscriptions/{subscription_id}/rotate-secret` params(subscription_id) → in: WebhookSubscriptionCreate [webhook] ✓
+- `GET` `/deliveries` params() [db, webhook] ✓
+- `GET` `/subscriptions/{subscription_id}/deliveries` params(subscription_id) [db, webhook] ✓
+- `GET` `/deliveries/{delivery_id}` params(delivery_id) [webhook] ✓
+- `POST` `/deliveries/{delivery_id}/redeliver` params(delivery_id) → in: WebhookSubscriptionCreate [webhook] ✓
 - `GET` `/search` params() → out: list
 - `GET` `/export/resources` params() → out: list
 - `GET` `/export` params() → out: list
@@ -305,6 +311,7 @@
 - token_hash: String (unique, index)
 - expires_at: DateTime
 - revoked_at: DateTime (nullable)
+- revoke_reason: String (nullable)
 - ip_address: String (nullable)
 - user_agent: String (nullable)
 
@@ -339,6 +346,7 @@
 - **AppLayout** — `apps/web/src/components/AppLayout.tsx`
 - **AuditLogTable** — props: resource, searchPlaceholder, searchEnabled, showWorkspace — `apps/web/src/components/AuditLogTable.tsx`
 - **SsoButtons** — props: providers, disabled — `apps/web/src/components/AuthConfig.tsx`
+- **CopyButton** — props: copied, label, onClick, type, size — `apps/web/src/components/CopyButton.tsx`
 - **NotificationCenter** — `apps/web/src/components/NotificationCenter.tsx`
 - **PendingInvitationsBadge** — `apps/web/src/components/PendingInvitations.tsx`
 - **UserProfileDialog** — props: userId, open, onOpenChange, fallback — `apps/web/src/components/UserProfileDialog.tsx`
@@ -371,7 +379,6 @@
 - **InvitationAcceptPage** — `apps/web/src/pages/InvitationAcceptPage.tsx`
 - **JobDetailPage** — `apps/web/src/pages/JobDetailPage.tsx`
 - **JobRunPage** — `apps/web/src/pages/JobRunPage.tsx`
-- **JobsPage** — `apps/web/src/pages/JobsPage.tsx`
 - **LoginPage** — `apps/web/src/pages/LoginPage.tsx`
 - **MembersPage** — `apps/web/src/pages/MembersPage.tsx`
 - **NotFoundPage** — `apps/web/src/pages/NotFoundPage.tsx`
@@ -384,19 +391,22 @@
 - **WorkspaceCreatePage** — `apps/web/src/pages/WorkspaceCreatePage.tsx`
 - **AdminLayout** — `apps/web/src/pages/admin/sections/AdminLayout.tsx`
 - **AuditSection** — `apps/web/src/pages/admin/sections/AuditSection.tsx`
+- **JobsSection** — `apps/web/src/pages/admin/sections/JobsSection.tsx`
 - **UsersSection** — `apps/web/src/pages/admin/sections/UsersSection.tsx`
 - **WorkspacesSection** — `apps/web/src/pages/admin/sections/WorkspacesSection.tsx`
 - **GenericSettingsLayout** — props: registry, basePath, title, subtitle, can, guard — `apps/web/src/pages/settings/components/GenericSettingsLayout.tsx`
-- **SettingsNav** — props: sections, basePath — `apps/web/src/pages/settings/components/SettingsNav.tsx`
+- **SettingsNav** — props: sections, basePath, label — `apps/web/src/pages/settings/components/SettingsNav.tsx`
 - **ProfileSettingsLayout** — `apps/web/src/pages/settings/profile/ProfileSettingsLayout.tsx`
 - **GeneralSection** — `apps/web/src/pages/settings/profile/sections/GeneralSection.tsx`
 - **NotificationsSection** — `apps/web/src/pages/settings/profile/sections/NotificationsSection.tsx`
 - **SecuritySection** — `apps/web/src/pages/settings/profile/sections/SecuritySection.tsx`
 - **WorkspacesSection** — `apps/web/src/pages/settings/profile/sections/WorkspacesSection.tsx`
+- **UserSettingsLayout** — `apps/web/src/pages/settings/user/UserSettingsLayout.tsx`
+- **SecuritySection** — `apps/web/src/pages/settings/user/sections/SecuritySection.tsx`
 - **WorkspaceSettingsLayout** — `apps/web/src/pages/settings/workspace/WorkspaceSettingsLayout.tsx`
 - **AuditLogSection** — `apps/web/src/pages/settings/workspace/sections/AuditLogSection.tsx`
 - **GeneralSection** — `apps/web/src/pages/settings/workspace/sections/GeneralSection.tsx`
-- **JobsSection** — `apps/web/src/pages/settings/workspace/sections/JobsSection.tsx`
+- **GlobalJobsTable** — `apps/web/src/pages/settings/workspace/sections/JobsSection.tsx`
 - **RolesSection** — `apps/web/src/pages/settings/workspace/sections/RolesSection.tsx`
 - **UsersSection** — `apps/web/src/pages/settings/workspace/sections/UsersSection.tsx`
 
@@ -427,6 +437,8 @@
 - `apps/api/alembic/versions/0017_member_suspension.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0018_api_key_expiry.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/alembic/versions/0019_api_key_quota_window.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0020_refresh_token_revoke_reason.py` — function upgrade: () -> None, function downgrade: () -> None
+- `apps/api/alembic/versions/0021_expire_invitations_global.py` — function upgrade: () -> None, function downgrade: () -> None
 - `apps/api/src/api/crud.py`
   - function parse_query: (request, *, max_limit) -> QuerySpec
   - function apply_query: (stmt, model, spec, *, sortable, filterable) -> Select
@@ -434,14 +446,18 @@
   - class InvalidQuery
 - `apps/api/src/api/deps.py`
   - function get_container: (request)
+  - function uuid_or_404: (value, label) -> str
+  - function require_deployment_admin: (principal) -> None
   - function require_key_permission: (permission)
   - function require_permission: (permission)
-  - function record_key_use: (api_key, db, response) -> None
-  - function authenticate_websocket_token: (db, token) -> User | None
-  - class AuthPrincipal
+  - function resolve_or_deny: (principal, lookup, missing_detail)
+  - _...3 more_
 - `apps/api/src/container.py` — class Container
-- `apps/api/src/core/cache.py` — class TtlCache
-- `apps/api/src/core/dates.py` — function ensure_utc: (value) -> datetime, function now_utc: () -> datetime
+- `apps/api/src/core/cache.py` — class TtlCache, class SingleFlight
+- `apps/api/src/core/dates.py`
+  - function ensure_utc: (value) -> datetime
+  - function now_utc: () -> datetime
+  - function iso_or_none: (value) -> str | None
 - `apps/api/src/core/metrics.py`
   - function inc: (name, value, **labels) -> None
   - function observe_request: (*, method, path, status) -> None
@@ -453,14 +469,17 @@
 - `apps/api/src/core/request_id.py` — function get_request_id: () -> str, class RequestIdMiddleware
 - `apps/api/src/core/security/cookies.py`
   - function cookie_secure_for: (request) -> bool
-  - function set_refresh_cookie: (response, token, request) -> None
+  - function set_refresh_cookie: (response, token, *, request) -> None
   - function clear_refresh_cookie: (response) -> None
   - function get_refresh_token: (request) -> str | None
   - function browser_flow: (request, body) -> bool
   - function require_csrf: (request) -> None
 - `apps/api/src/core/security/crypto.py` — class SecretCipher
 - `apps/api/src/core/security/password.py` — class PasswordHasher
-- `apps/api/src/core/security/ratelimit.py` — function get_auth_limiter: () -> SlidingWindowLimiter, class SlidingWindowLimiter
+- `apps/api/src/core/security/ratelimit.py`
+  - function get_auth_limiter: () -> SlidingWindowLimiter
+  - function get_register_limiter: () -> SlidingWindowLimiter
+  - class SlidingWindowLimiter
 - `apps/api/src/core/security/tokens.py`
   - function create_access_token: (user_id, *, session_id, expires_minutes) -> str
   - function decode_access_token: (token) -> dict[str, Any]
@@ -498,6 +517,7 @@
   - function email_verification: (to, *, verify_url) -> EmailMessage
   - function password_reset: (to, *, reset_url) -> EmailMessage
 - `apps/api/src/events/bus.py`
+  - function subject_matches: (subscription, subject) -> bool
   - class EventMetadata
   - class EventEnvelope
   - class EventBus
@@ -507,7 +527,7 @@
 - `apps/api/src/events/inprocess.py` — class InProcessEventBus
 - `apps/api/src/events/nats.py` — class NatsEventBus
 - `apps/api/src/events/publisher.py`
-  - function audit_payload: (*, workspace_id, resource_type, resource_id, action, actor_user_id, details, ip_address) -> dict
+  - function audit_payload: (*, workspace_id, resource_type, resource_id, action, actor_user_id, details, ip_address, source_event_id) -> dict
   - function publish_event: (bus, subject, payload, *, correlation_id, transient) -> None
   - function publish_audit: (bus, *, correlation_id, **kwargs) -> None
 - `apps/api/src/events/subjects.py` — class EventBusDriver, class Subjects
@@ -520,10 +540,11 @@
 - `apps/api/src/jobs/builtin.py`
   - function system_heartbeat: (ctx) -> None
   - function expire_stale_invitations: (ctx) -> None
+  - function demo_workspace_report: (ctx) -> None
   - function notifications_daily_digest: (ctx) -> None
   - function retention_cleanup: (ctx) -> None
   - function api_key_cleanup: (ctx) -> None
-  - function demo_global_daily_report: (ctx) -> None
+  - _...1 more_
 - `apps/api/src/jobs/capture.py`
   - function run_log_collector: () -> RunLogCollector | None
   - function set_run_log_collector: (collector)
@@ -578,7 +599,8 @@
   - class RefreshToken
   - class Workspace
   - class Role
-  - class WorkspaceMember
+  - class MemberStatus
+  - _...1 more_
 - `apps/api/src/realtime/manager.py` — class ConnectionManager
 - `apps/api/src/schemas/api.py`
   - class LoginRequest
@@ -587,19 +609,25 @@
   - class RefreshRequest
   - class ForgotPasswordRequest
   - class ResetPasswordRequest
-  - _...35 more_
+  - _...36 more_
 - `apps/api/src/secrets/base.py` — class SecretRecord, class SecretStore
 - `apps/api/src/secrets/db_store.py` — class DbSecretStore
 - `apps/api/src/secrets/factory.py` — function build_secret_store: () -> SecretStore
-- `apps/api/src/seed.py` — function main: () -> None
+- `apps/api/src/seed.py`
+  - function main: () -> None
+  - class MembershipRow
+  - class InvitationRow
+  - class ApiKeyRow
+  - class NotificationRow
 - `apps/api/src/services/api_keys.py`
   - class ApiKeyError
   - class ApiKeyForbidden
   - class ApiKeyNotFound
   - class ApiKeyService
-- `apps/api/src/services/audit.py` — function audit_log_to_dict: (entry) -> dict[str, Any], class AuditService
+- `apps/api/src/services/audit.py` — function public_details: (details) -> dict[str, Any], class AuditService
 - `apps/api/src/services/auth.py`
   - class AuthError
+  - class CurrentSessionError
   - class TokenPair
   - class AuthService
 - `apps/api/src/services/conversations.py`
@@ -615,15 +643,16 @@
   - class JobService
 - `apps/api/src/services/notifications.py`
   - function unsubscribe_url_for: (token, type, frontend_url) -> str
+  - function preferences_response: (prefs) -> dict
   - class NotificationSpec
   - class NotificationService
 - `apps/api/src/services/oauth.py`
   - function get_provider: (provider_id) -> ProviderConfig
   - function build_authorize_url: (provider, doc, Any], cache, redirect_uri) -> str
   - function consume_state: (cache, state) -> dict[str, Any]
-  - function claims_from_id_token: (provider, doc, Any], id_token, cache) -> Any] | None
   - function normalize_identity: (*, provider_id, claims, Any] | None, userinfo, Any]) -> dict[str, Any]
-  - function exchange_code: (provider, doc, Any], *, code, redirect_uri) -> dict[str, Any]
+  - function exchange_code: (provider, doc, Any], *, code, redirect_uri, code_verifier) -> dict[str, Any]
+  - function claims_from_id_token: (provider, doc, Any], id_token, cache) -> dict[str, Any] | None
   - _...3 more_
 - `apps/api/src/services/profile_helpers.py`
   - function escape_like: (q) -> str
@@ -637,7 +666,9 @@
   - function user_to_dict: (u) -> dict
   - function workspace_to_dict: (w, *, role, permissions, joined_at) -> dict
   - function profile_to_dict: (p) -> dict
-  - function public_projection: (p, user) -> dict
+  - function session_to_dict: (row, *, current) -> dict
+  - function strip_private_custom_data: (custom, Any] | None) -> dict[str, Any]
+  - _...2 more_
 - `apps/api/src/services/two_factor.py` — class TwoFactorError, class TwoFactorService
 - `apps/api/src/services/webhook_dispatcher.py` — class WebhookDispatcher
 - `apps/api/src/services/webhooks.py`
@@ -649,26 +680,43 @@
   - function validate_url: (url, *, allow_private) -> str
   - _...9 more_
 - `apps/api/src/services/workspaces.py`
+  - function is_owner_role_name: (name) -> bool
+  - function is_manager_role_name: (name) -> bool
   - class WorkspaceError
   - class WorkspaceForbidden
   - class WorkspaceConflict
   - class WorkspaceNotFound
-  - class WorkspaceService
+  - _...1 more_
 - `apps/api/src/settings.py` — class Settings
 - `apps/api/src/workflows/__init__.py` — function build_workflows: (registry, bus, connection_manager, cipher) -> None
 - `apps/web/e2e/mock-api.ts`
-  - function mockApi: (page, {...}) => void
-  - const IDENTITY
+  - function mockApi: (page, {...}, identity, lists, revokeOn, }, so any JSON value works. A
+     * prototype-named key is seedable only through `Object.defineProperty`
+     * — a literal `__proto__, not a key.
+     */
+    lists?, unknown>;
+    /** Path suffixes answered 401 `{detail, then normal — mid-session sign-out. */
+    revokeOn?) => void
+  - function mockApiTwoFactor: (page, {...}, revokeOn) => void
+  - const IDENTITY: Identity
   - const ACCESS_TOKEN
+- `apps/web/e2e/mock-api.typecheck.ts` — function checkIdentityContract: (page) => void
+- `apps/web/src/hooks/query-keys-guard.ts`
+  - function stripComments: (source) => string
+  - function useUpdateProfileWindow: (source) => string | null
+  - function countAuthInvalidations: (region) => number
+  - const useX
+- `apps/web/src/hooks/target-user.ts` — function resolveTargetUserId: (routeId, identityId?) => string | null
 - `apps/web/src/hooks/useNotificationPreferences.ts`
   - function humanizeType: (type) => string
-  - function useNotificationPreferences: (extraTypes, enabled) => void
+  - function useNotificationPreferences: (extraTypes, enabled, baseUrl) => void
   - const KNOWN_NOTIFICATION_TYPES
   - const CHANNEL_OPTIONS: Array<{ value: NotificationChannel; label: string }>
   - const NOTIFICATION_TYPE_META: Record<string, { title: string; description: string }>
 - `apps/web/src/hooks/useProfile.ts`
-  - function useProfile: () => void
-  - function useUpdateProfile: () => void
+  - function useTargetUserId: () => string | null
+  - function useProfile: (userId?) => void
+  - function useUpdateProfile: (userId?) => void
   - function useExportProfile: () => void
   - function useDeleteAccount: () => void
   - function usePublicProfile: (userId) => void
@@ -679,17 +727,24 @@
   - function getAvatarSrc: (avatarUrl?) => string | undefined
   - function getAvatarData: (entity, fallbackEmailAsName) => void
   - const UserProfileAvatar
+- `apps/web/src/lib/link-url.ts` — function normalizeLinkUrl: (raw) => string | null, function isAllowedLinkHref: (raw) => boolean
 - `apps/web/src/lib/mentions.ts`
   - function rankMentionTargets: (targets, query) => MentionTarget[]
   - function pickerIndex: (selectedId, items, query) => number
+  - function nextPickerIndex: (key, index, items) => number
   - function mentionUrlTransform: (url) => string
   - function mentionRemarkPlugin: (names) => void
   - type MentionTarget
-  - const MENTION_SCHEME
-  - _...1 more_
+  - _...2 more_
 - `apps/web/src/lib/notificationLink.ts` — function notificationLinkUrl: (n) => string | undefined
+- `apps/web/src/lib/role-cap.ts` — function roleCapNotice
+- `apps/web/src/lib/sameOriginPath.ts` — function sameOriginPath: (raw) => string | null
 - `apps/web/src/lib/utils.ts` — function cn: (...inputs) => void, function oktaAdminConsoleFix: (value?) => string | null
-- `apps/web/src/providers/authProvider.ts` — function seedWorkspace: (identity) => Promise<void>, const authProvider: AuthProvider
+- `apps/web/src/providers/adminListQuery.ts` — function adminListQuery, type AdminListQueryInput
+- `apps/web/src/providers/authProvider.ts`
+  - function seedWorkspace: (identity) => Promise<void>
+  - function afterAuthRedirect
+  - const authProvider: AuthProvider
 - `apps/web/src/providers/dataProvider.ts`
   - function cancelPendingRefresh: () => void
   - function ensureSession: () => Promise<boolean>
@@ -709,28 +764,37 @@
   - const liveChannels
   - const liveProvider: LiveProvider
 - `apps/web/src/providers/queryClient.ts`
+  - function isClientError: (error) => boolean
+  - function isServerError: (error) => boolean
+  - function isNoResponseError: (error) => boolean
+  - function shouldRetry: (failureCount, error, max) => boolean
   - function clearWorkspaceCaches: (client) => void
   - function clearAllCaches: (client) => void
-  - const queryClient
+  - _...1 more_
+- `apps/web/src/providers/refreshLock.ts` — function hasRefreshLock: () => boolean, function withRefreshLock: (fn) => void
+- `apps/web/src/providers/resourcePaths.ts` — function resourcePath, function hasReadById
 - `apps/web/src/types.ts`
   - function getProfileField: (profile, key, fallback) => unknown
   - function formatDisplayName: (firstName?, lastName?, fallback?) => string
   - function getDisplayNameFromProfile: (profile?, fallback?) => string
   - function getDisplayName: (identity?) => string
-  - function getMemberDisplayName: (member) => string
-  - function getParticipantDisplayName: (participant) => string
-  - _...26 more_
+  - function getDisplayNameFromRow: (row) => string
+  - function memberOptionLabel: (member) => string
+  - _...29 more_
+- `apps/web/src/utils/credentialPost.ts` — function postCredentials: (send) => void
+- `apps/web/src/utils/errorMessage.ts` — function errorMessage
 - `apps/web/src/utils/permissions.ts` — function activeWorkspacePermissions: (identity?) => string[]
 - `apps/web/src/utils/storage.ts`
   - function getActiveWorkspaceId: () => string | null
   - function setActiveWorkspaceId: (id) => void
+  - function resetSessionState: () => void
   - const sessionHint
   - const tokenStore
   - const identityStore
-  - const workspaceStore
-  - _...2 more_
+  - _...4 more_
 - `scripts/dev.py`
   - function api_env_file: (key) -> str
+  - function dev_allowed_origins: (web_port) -> list[str]
   - function main: () -> int
   - function kill_all: (procs, sig) -> None
   - function wait_all: (procs, timeout) -> None
@@ -743,11 +807,13 @@
 
 - `ACCESS_TOKEN_EXPIRE_MINUTES` (has default) — apps/api/.env.example
 - `API_KEY_RETENTION_DAYS` (has default) — apps/api/.env.example
-- `API_PORT` (has default) — apps/web/vite.config.ts
+- `API_PORT` (has default) — apps/web/playwright.dev.config.ts
 - `APP_NAME` (has default) — apps/api/.env.example
 - `AUDIT_LOG_RETENTION_DAYS` (has default) — apps/api/.env.example
 - `AUTH_RATE_LIMIT_MAX_ATTEMPTS` (has default) — apps/api/.env.example
 - `AUTH_RATE_LIMIT_WINDOW_SECONDS` (has default) — apps/api/.env.example
+- `AUTH_REGISTER_RATE_LIMIT_MAX_ATTEMPTS` (has default) — apps/api/.env.example
+- `AUTH_REGISTER_RATE_LIMIT_WINDOW_SECONDS` (has default) — apps/api/.env.example
 - `CI` **required** — apps/web/playwright.config.ts
 - `CORS_ORIGINS` (has default) — apps/api/.env.example
 - `DATABASE_URL` **required** — apps/api/tests/conftest.py
@@ -758,17 +824,20 @@
 - `EMBEDDED_DB_DIR` **required** — apps/api/src/db/embedded.py
 - `ENVIRONMENT` (has default) — apps/api/.env.example
 - `EVENT_BUS_DRIVER` (has default) — apps/api/.env.example
-- `FERNET_KEYS` (has default) — apps/api/.env.example
+- `FERNET_KEYS` **required** — infra/docker/.env.example
 - `FRONTEND_URL` (has default) — apps/api/.env.example
 - `JOBS_DEFAULT_TIMEOUT_SECONDS` (has default) — apps/api/.env.example
 - `JOBS_LOG_RETENTION_DAYS` (has default) — apps/api/.env.example
 - `JOBS_RUN_RETENTION` (has default) — apps/api/.env.example
 - `JOBS_SCHEDULER_TICK_SECONDS` (has default) — apps/api/.env.example
 - `NATS_URL` (has default) — apps/api/.env.example
+- `NODE_ENV` **required** — apps/web/src/utils/storage.ts
 - `NOTIFICATIONS_RETENTION_DAYS` (has default) — apps/api/.env.example
+- `PATH` **required** — apps/api/tests/test_node_floor.py
+- `POSTGRES_PASSWORD` **required** — infra/docker/.env.example
 - `REFRESH_TOKEN_EXPIRE_DAYS` (has default) — apps/api/.env.example
-- `SECRET_ENCRYPT_VERSION` (has default) — apps/api/.env.example
-- `SECRET_KEY` (has default) — apps/api/.env.example
+- `SECRET_ENCRYPT_VERSION` (has default) — infra/docker/.env.example
+- `SECRET_KEY` **required** — infra/docker/.env.example
 - `SECRET_STORE_DRIVER` (has default) — apps/api/.env.example
 - `SMTP_HOST` (has default) — apps/api/.env.example
 - `SMTP_PASSWORD` **required** — apps/api/.env.example
@@ -777,9 +846,10 @@
 - `SMTP_USE_TLS` (has default) — apps/api/.env.example
 - `SMTP_USERNAME` **required** — apps/api/.env.example
 - `SUPERADMIN_EMAIL` **required** — apps/api/.env.example
+- `TEST_POSTGRES_URL` **required** — apps/api/tests/test_api_key_expiry.py
 - `VITE_API_URL` (has default) — apps/web/src/providers/dataProvider.ts
 - `VITE_WS_URL` (has default) — apps/web/src/providers/liveProvider.ts
-- `WEB_PORT` **required** — apps/web/vite.config.ts
+- `WEB_PORT` (has default) — apps/web/playwright.dev.config.ts
 
 ## Config Files
 
@@ -787,6 +857,7 @@
 - `apps/web/.env.example`
 - `apps/web/tailwind.config.js`
 - `apps/web/vite.config.ts`
+- `infra/docker/.env.example`
 
 ---
 
@@ -795,10 +866,16 @@
 ## auth
 - ratelimit — `apps/api/src/core/security/ratelimit.py`
 - auth — `apps/api/src/services/auth.py`
+- test_register_rate_limit — `apps/api/tests/test_register_rate_limit.py`
+- query-keys-guard.test — `apps/web/src/hooks/query-keys-guard.test.ts`
 - authProvider — `apps/web/src/providers/authProvider.ts`
 
 ## cors
 - test_cors_wildcard_origin — `apps/api/tests/test_cors_wildcard_origin.py`
+
+## custom
+- workspace-guard-redirect.spec — `apps/web/e2e/workspace-guard-redirect.spec.ts`
+- query-keys-guard — `apps/web/src/hooks/query-keys-guard.ts`
 
 ---
 
@@ -806,53 +883,73 @@
 
 ## Most Imported Files (change these carefully)
 
-- `apps/api/src/db/session.py` — imported by **53** files
-- `apps/api/src/settings.py` — imported by **38** files
-- `apps/api/src/models/workspace.py` — imported by **36** files
-- `apps/web/src/types.ts` — imported by **31** files
-- `apps/api/tests/conftest.py` — imported by **30** files
-- `apps/api/src/core/dates.py` — imported by **26** files
-- `apps/api/src/models/core.py` — imported by **23** files
-- `apps/api/src/events/bus.py` — imported by **22** files
-- `apps/api/src/core/permissions.py` — imported by **17** files
-- `apps/api/src/events/subjects.py` — imported by **17** files
-- `apps/api/src/models/api_key.py` — imported by **16** files
-- `apps/api/src/services/workspaces.py` — imported by **16** files
-- `apps/api/src/api/deps.py` — imported by **16** files
+- `apps/api/src/db/session.py` — imported by **66** files
+- `apps/api/src/models/workspace.py` — imported by **47** files
+- `apps/api/src/settings.py` — imported by **42** files
+- `apps/api/tests/conftest.py` — imported by **38** files
+- `apps/web/src/types.ts` — imported by **37** files
+- `apps/api/src/core/dates.py` — imported by **35** files
+- `apps/web/e2e/mock-api.ts` — imported by **32** files
+- `apps/web/e2e/fixtures.ts` — imported by **31** files
+- `apps/api/src/models/core.py` — imported by **30** files
+- `apps/api/src/events/bus.py` — imported by **29** files
+- `apps/api/src/core/permissions.py` — imported by **23** files
+- `apps/api/src/events/subjects.py` — imported by **23** files
+- `apps/api/src/services/workspaces.py` — imported by **20** files
+- `apps/api/src/models/api_key.py` — imported by **19** files
+- `apps/api/src/services/auth.py` — imported by **18** files
+- `apps/api/src/db/base.py` — imported by **17** files
+- `apps/api/src/api/deps.py` — imported by **17** files
+- `apps/api/src/models/audit.py` — imported by **17** files
 - `apps/api/src/models/jobs.py` — imported by **16** files
-- `apps/api/src/models/audit.py` — imported by **15** files
-- `apps/web/src/hooks/useWorkspaceQuery.ts` — imported by **15** files
-- `apps/api/src/db/base.py` — imported by **14** files
-- `apps/api/src/events/publisher.py` — imported by **13** files
-- `apps/api/src/schemas/api.py` — imported by **12** files
-- `apps/api/src/services/auth.py` — imported by **11** files
+- `apps/api/src/events/publisher.py` — imported by **14** files
 
 ## Import Map (who imports what)
 
-- `apps/api/src/db/session.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/admin.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/auth.py` +48 more
-- `apps/api/src/settings.py` ← `apps/api/alembic/env.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/oauth.py`, `apps/api/src/container.py`, `apps/api/src/core/security/cookies.py` +33 more
-- `apps/api/src/models/workspace.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/admin.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/members.py` +31 more
-- `apps/web/src/types.ts` ← `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/NotificationCenter.tsx`, `apps/web/src/components/PendingInvitations.tsx`, `apps/web/src/components/inbox/EditParticipantsDialog.tsx` +26 more
-- `apps/api/tests/conftest.py` ← `apps/api/tests/test_admin.py`, `apps/api/tests/test_api_key_expiry.py`, `apps/api/tests/test_api_key_quota_window.py`, `apps/api/tests/test_api_key_security.py`, `apps/api/tests/test_api_keys.py` +25 more
-- `apps/api/src/core/dates.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/jobs/builtin.py` +21 more
-- `apps/api/src/models/core.py` ← `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/notifications.py`, `apps/api/src/db/cascade.py`, `apps/api/src/jobs/builtin.py`, `apps/api/src/models/__init__.py` +18 more
-- `apps/api/src/events/bus.py` ← `apps/api/src/container.py`, `apps/api/src/events/factory.py`, `apps/api/src/events/inprocess.py`, `apps/api/src/events/nats.py`, `apps/api/src/events/publisher.py` +17 more
-- `apps/api/src/core/permissions.py` ← `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/conversations.py`, `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/jobs.py` +12 more
-- `apps/api/src/events/subjects.py` ← `apps/api/src/events/nats.py`, `apps/api/src/events/publisher.py`, `apps/api/src/events/webhook_events.py`, `apps/api/src/jobs/builtin.py`, `apps/api/src/services/api_keys.py` +12 more
+- `apps/api/src/db/session.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/admin.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/auth.py` +61 more
+- `apps/api/src/models/workspace.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/admin.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/invitations.py` +42 more
+- `apps/api/src/settings.py` ← `apps/api/alembic/env.py`, `apps/api/src/api/routes/auth.py`, `apps/api/src/api/routes/oauth.py`, `apps/api/src/container.py`, `apps/api/src/core/security/cookies.py` +37 more
+- `apps/api/tests/conftest.py` ← `apps/api/tests/test_admin.py`, `apps/api/tests/test_api_key_expiry.py`, `apps/api/tests/test_api_key_quota_window.py`, `apps/api/tests/test_api_key_security.py`, `apps/api/tests/test_api_keys.py` +33 more
+- `apps/web/src/types.ts` ← `apps/web/e2e/mock-api.ts`, `apps/web/e2e/mock-api.typecheck.ts`, `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/AppLayout.tsx`, `apps/web/src/components/NotificationCenter.tsx` +32 more
+- `apps/api/src/core/dates.py` ← `apps/api/src/api/deps.py`, `apps/api/src/api/routes/admin.py`, `apps/api/src/api/routes/api_keys.py`, `apps/api/src/api/routes/audit.py`, `apps/api/src/api/routes/auth.py` +30 more
+- `apps/web/e2e/mock-api.ts` ← `apps/web/e2e/api-key-copy.spec.ts`, `apps/web/e2e/audit-log-refusal.spec.ts`, `apps/web/e2e/copy-button.spec.ts`, `apps/web/e2e/danger-zone.spec.ts`, `apps/web/e2e/dashboard-a11y.spec.ts` +27 more
+- `apps/web/e2e/fixtures.ts` ← `apps/web/e2e/api-key-copy.spec.ts`, `apps/web/e2e/audit-log-refusal.spec.ts`, `apps/web/e2e/copy-button.spec.ts`, `apps/web/e2e/danger-zone.spec.ts`, `apps/web/e2e/dashboard-a11y.spec.ts` +26 more
+- `apps/api/src/models/core.py` ← `apps/api/src/api/routes/invitations.py`, `apps/api/src/api/routes/notifications.py`, `apps/api/src/db/cascade.py`, `apps/api/src/jobs/builtin.py`, `apps/api/src/models/__init__.py` +25 more
+- `apps/api/src/events/bus.py` ← `apps/api/src/container.py`, `apps/api/src/events/factory.py`, `apps/api/src/events/inprocess.py`, `apps/api/src/events/nats.py`, `apps/api/src/events/publisher.py` +24 more
 
 ---
 
 # Test Coverage
 
-> **22%** of routes and models are covered by tests
-> 58 test files found
+> **35%** of routes and models are covered by tests
+> 137 test files found
 
 ## Covered Routes
 
 - GET:
 - POST:
 - POST:/register
+- POST:/forgot-password
+- POST:/verify-email
 - POST:/login
+- GET:/me
+- DELETE:/{invitation_id}
+- POST:/accept
+- GET:/mine
+- POST:/{invitation_id}/resend
+- POST:/{invitation_id}/decline
+- DELETE:/me
+- GET:/events
+- GET:/subscriptions
+- GET:/subscriptions/{subscription_id}
+- POST:/subscriptions
+- PATCH:/subscriptions/{subscription_id}
+- DELETE:/subscriptions/{subscription_id}
+- POST:/subscriptions/{subscription_id}/rotate-secret
+- GET:/deliveries
+- GET:/subscriptions/{subscription_id}/deliveries
+- GET:/deliveries/{delivery_id}
+- POST:/deliveries/{delivery_id}/redeliver
 - GET:/
 
 ## Covered Models

@@ -10,15 +10,20 @@ Register more jobs anywhere in service code:
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
 from sqlalchemy import delete, select, update
 
-from src.core.dates import ensure_utc, now_utc
+from src.core.dates import now_utc
 from src.jobs.registry import JobContext, JobSpec, job_registry
 from src.models.api_key import ApiKey
 from src.models.core import Invitation, Notification, NotificationPreference
 
 logger = logging.getLogger(__name__)
+
+# Invitations are kept as an "expired" status for this many days after their
+# expiry before the expiry job purges them outright.
+INVITATION_EXPIRED_RETENTION_DAYS = 30
 
 
 @job_registry.register(
@@ -53,15 +58,15 @@ async def system_heartbeat(ctx: JobContext) -> None:
 @job_registry.register(
     JobSpec(
         key="invitations.expire_stale",
-        name="[Demo] Expire Stale Invitations (Sample)",
+        name="Expire Stale Invitations",
         description=(
-            "[Sample/Demo] Workspace demo job — scans for pending invitations "
-            "past their expiry and marks them 'expired'. Note: invitations are "
-            "already rejected on accept when expired, so this is purely a "
-            "housekeeping/demo job to showcase scheduling, per-workspace config, "
-            "execution history and log capture."
+            "Scans pending invitations across every workspace and marks the "
+            "ones past their expiry as 'expired'. Accepting an expired "
+            "invitation is rejected regardless, so this is housekeeping. "
+            "Invitations that have been expired for more than "
+            f"{INVITATION_EXPIRED_RETENTION_DAYS} days are then deleted."
         ),
-        scope="workspace",
+        scope="global",
         schedule="0 3 * * *",
         params_schema={},
         default_enabled=True,
@@ -70,42 +75,89 @@ async def system_heartbeat(ctx: JobContext) -> None:
     )
 )
 async def expire_stale_invitations(ctx: JobContext) -> None:
+    logger.info("Starting job '%s' (run %s)", ctx.job_key, ctx.run_id[:8])
+    now = now_utc()
+    async with ctx.session() as session:
+        result = await session.execute(
+            select(Invitation).where(Invitation.status == "pending", Invitation.expires_at < now)
+        )
+        stale = list(result.scalars().all())
+        logger.info("Expiring %d stale invitation(s)", len(stale))
+        for invitation in stale:
+            logger.info(
+                "Expiring invitation %s (%s) — expired at %s",
+                invitation.id[:8],
+                invitation.email,
+                invitation.expires_at,
+            )
+            invitation.status = "expired"
+        await session.commit()
+
+        purge_cutoff = now - timedelta(days=INVITATION_EXPIRED_RETENTION_DAYS)
+        # The window is measured from expires_at, not from the moment the row was
+        # marked expired, so a first run after a long outage purges rows this job
+        # never saw in the "expired" state.
+        # synchronize_session=False: the rows above are already in this session's
+        # identity map, and the default ORM evaluator re-checks the WHERE clause
+        # in Python — where SQLite's naive timestamps cannot be compared against
+        # the aware purge_cutoff. The delete is the last statement, so nothing
+        # reads the stale objects afterwards.
+        deleted = await session.execute(
+            delete(Invitation).where(
+                Invitation.status == "expired",
+                Invitation.expires_at < purge_cutoff,
+            ),
+            execution_options={"synchronize_session": False},
+        )
+        purged = deleted.rowcount or 0
+        await session.commit()
+    logger.info("Completed — expired %d invitation(s), purged %d", len(stale), purged)
+    print(f"expire stale invitations — expired {len(stale)}, purged {purged}")
+
+
+@job_registry.register(
+    JobSpec(
+        key="demo.workspace_report",
+        name="[Demo] Workspace Daily Report (Sample)",
+        description=(
+            "[Sample/Demo] Workspace demo job — one row per workspace, so it "
+            "shows how scheduling, per-workspace configuration, execution "
+            "history and log capture work. Emits sample log output only; it "
+            "writes nothing. The global twin is '[Demo] Global Daily Report'."
+        ),
+        scope="workspace",
+        schedule="0 5 * * *",
+        params_schema={
+            "message": {
+                "type": "string",
+                "default": "workspace demo report",
+                "max_length": 200,
+                "label": "Message",
+                "help": "Sample text included in the demo log output.",
+            }
+        },
+        default_enabled=True,
+        missed_policy="single",
+        timeout_seconds=120,
+    )
+)
+async def demo_workspace_report(ctx: JobContext) -> None:
     logger.info(
         "[Demo] Starting workspace demo job '%s' (run %s, workspace %s)",
         ctx.job_key,
         ctx.run_id[:8],
         ctx.workspace_id,
     )
+    msg = ctx.params.get("message", "workspace demo report")
     print(f"[Demo] Workspace demo job started — workspace={ctx.workspace_id} run={ctx.run_id[:8]}")
-    print("[Demo] Step 1/4 — loading pending invitations...")
-    logger.info("[Demo] Step 1/4 — querying pending invitations")
-    now = now_utc()
-    async with ctx.session() as session:
-        result = await session.execute(select(Invitation).where(Invitation.status == "pending"))
-        pending = list(result.scalars().all())
-        stale = [i for i in pending if ensure_utc(i.expires_at) < now]
-        print(f"[Demo] Step 2/4 — found {len(pending)} pending, {len(stale)} stale/expired")
-        logger.info("[Demo] Found %d pending invitations, %d stale", len(pending), len(stale))
-        if stale:
-            print(f"[Demo] Step 3/4 — expiring {len(stale)} stale invitation(s)...")
-            logger.info("[Demo] Step 3/4 — expiring %d stale invitation(s)", len(stale))
-            for invitation in stale:
-                logger.info(
-                    "[Demo] Expiring invitation %s (%s) — expired at %s",
-                    invitation.id[:8],
-                    invitation.email,
-                    invitation.expires_at,
-                )
-                print(f"[Demo]   → expiring {invitation.email} ({invitation.id[:8]}...)")
-                invitation.status = "expired"
-            await session.commit()
-            print(f"[Demo] Step 4/4 — committed {len(stale)} expired invitation(s)")
-        else:
-            print("[Demo] Step 3/4 — nothing to expire, skipping updates")
-            logger.info("[Demo] Nothing to expire — all pending invitations are still valid")
-            print("[Demo] Step 4/4 — no changes to commit")
-    logger.info("[Demo] Workspace demo job completed — expired %d invitation(s)", len(stale))
-    print(f"[Demo] Workspace demo completed — expired {len(stale)} stale invitation(s) ✓")
+    print(f"[Demo] Step 1/3 — collecting sample metrics for workspace {ctx.workspace_id}...")
+    logger.info("[Demo] Sample metrics collected for workspace %s", ctx.workspace_id)
+    print("[Demo] Step 2/3 — generating demo report...")
+    logger.warning("[Demo] Step 2/3 — this is a sample warning log line (demo)")
+    print("[Demo]   → report message:", msg)
+    print("[Demo] Step 3/3 — finalizing (no data written — demo only)")
+    logger.info("[Demo] Workspace demo job completed successfully ✓")
+    print("[Demo] Workspace demo completed ✓")
 
 
 async def _digest_unsub_url(session, user_id: str) -> str:

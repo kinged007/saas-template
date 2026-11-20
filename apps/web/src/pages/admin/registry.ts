@@ -1,9 +1,10 @@
-import { Building2, ScrollText, Users } from "lucide-react";
+import { Building2, Clock, ScrollText, Users } from "lucide-react";
 
 import { createSettingsRegistry } from "@/pages/settings/types";
 import { UsersSection } from "./sections/UsersSection";
 import { WorkspacesSection } from "./sections/WorkspacesSection";
 import { AuditSection } from "./sections/AuditSection";
+import { JobsSection } from "./sections/JobsSection";
 
 /**
  * Admin settings registry — the extension seam for deployment-wide admin tabs.
@@ -31,5 +32,12 @@ export const adminSettings = createSettingsRegistry([
     icon: ScrollText,
     component: AuditSection,
     order: 30,
+  },
+  {
+    key: "jobs",
+    label: "Jobs",
+    icon: Clock,
+    component: JobsSection,
+    order: 40,
   },
 ]);

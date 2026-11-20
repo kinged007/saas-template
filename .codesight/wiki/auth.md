@@ -2,11 +2,11 @@
 
 > **Navigation aid.** Route list and file locations extracted via AST. Read the source files listed below before implementing or modifying this subsystem.
 
-The Auth subsystem handles **21 routes** and touches: auth, email, db, cache.
+The Auth subsystem handles **22 routes** and touches: auth, email, db, cache.
 
 ## Routes
 
-- `GET` `/config` → out: TokenResponse [auth]
+- `GET` `/config` → in: Use, out: TokenResponse [auth]
   `apps/api/src/api/routes/auth.py`
 - `POST` `/register` → in: RegisterRequest, out: TokenResponse [auth]
   `apps/api/src/api/routes/auth.py`
@@ -24,11 +24,11 @@ The Auth subsystem handles **21 routes** and touches: auth, email, db, cache.
   `apps/api/src/api/routes/auth.py`
 - `POST` `/change-password` → in: RegisterRequest, out: TokenResponse [auth]
   `apps/api/src/api/routes/auth.py`
-- `GET` `/2fa/status` → out: TokenResponse
+- `GET` `/2fa/status` → in: Use, out: TokenResponse
   `apps/api/src/api/routes/auth.py`
-- `POST` `/2fa/setup` → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/2fa/setup` → in: RegisterRequest, out: TokenResponse
   `apps/api/src/api/routes/auth.py`
-- `POST` `/2fa/enable` → in: RegisterRequest, out: TokenResponse [auth]
+- `POST` `/2fa/enable` → in: RegisterRequest, out: TokenResponse
   `apps/api/src/api/routes/auth.py`
 - `POST` `/2fa/disable` → in: RegisterRequest, out: TokenResponse [auth]
   `apps/api/src/api/routes/auth.py`
@@ -36,7 +36,7 @@ The Auth subsystem handles **21 routes** and touches: auth, email, db, cache.
   `apps/api/src/api/routes/auth.py`
 - `POST` `/2fa/login` → in: RegisterRequest, out: TokenResponse [auth]
   `apps/api/src/api/routes/auth.py`
-- `GET` `/sessions` → out: TokenResponse [auth]
+- `GET` `/sessions` → in: Use, out: TokenResponse [auth]
   `apps/api/src/api/routes/auth.py`
 - `DELETE` `/sessions` → out: TokenResponse [auth, db]
   `apps/api/src/api/routes/auth.py`
@@ -44,15 +44,19 @@ The Auth subsystem handles **21 routes** and touches: auth, email, db, cache.
   `apps/api/src/api/routes/auth.py`
 - `DELETE` `/sessions/{session_id}` params(session_id) → out: TokenResponse [auth, db]
   `apps/api/src/api/routes/auth.py`
-- `GET` `/me` → out: TokenResponse
+- `GET` `/me` → in: Use, out: TokenResponse [auth]
   `apps/api/src/api/routes/auth.py`
 - `POST` `/token` → in: OAuthTokenRequest [auth, db, cache]
   `apps/api/src/api/routes/oauth.py`
+- `POST` `/users/{user_id}/password` params(user_id) → out: list [auth]
+  `apps/api/src/api/routes/profiles.py`
 
 ## Middleware
 
 - **ratelimit** (auth) — `apps/api/src/core/security/ratelimit.py`
 - **auth** (auth) — `apps/api/src/services/auth.py`
+- **test_register_rate_limit** (auth) — `apps/api/tests/test_register_rate_limit.py`
+- **query-keys-guard.test** (auth) — `apps/web/src/hooks/query-keys-guard.test.ts`
 - **authProvider** (auth) — `apps/web/src/providers/authProvider.ts`
 
 ## Source Files
@@ -60,6 +64,7 @@ The Auth subsystem handles **21 routes** and touches: auth, email, db, cache.
 Read these before implementing or modifying this subsystem:
 - `apps/api/src/api/routes/auth.py`
 - `apps/api/src/api/routes/oauth.py`
+- `apps/api/src/api/routes/profiles.py`
 
 ---
 _Back to [overview.md](./overview.md)_

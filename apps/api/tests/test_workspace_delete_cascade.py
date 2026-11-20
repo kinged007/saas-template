@@ -247,7 +247,7 @@ async def test_delete_removes_all_workspace_rows(app_client):
             await session.execute(
                 select(JobDefinition).where(
                     JobDefinition.workspace_id == ws["id"],
-                    JobDefinition.key == "invitations.expire_stale",
+                    JobDefinition.key == "demo.workspace_report",
                 )
             )
         ).scalar_one()
@@ -314,7 +314,7 @@ async def test_scheduler_skips_deleted_workspace_definitions():
             await session.execute(
                 select(JobDefinition).where(
                     JobDefinition.workspace_id == ws_id,
-                    JobDefinition.key == "invitations.expire_stale",
+                    JobDefinition.key == "demo.workspace_report",
                 )
             )
         ).scalar_one()
@@ -328,7 +328,7 @@ async def test_scheduler_skips_deleted_workspace_definitions():
         # Re-insert a stale definition row pointing at the deleted workspace,
         # simulating a definition created just before the delete committed.
         stale = JobDefinition(
-            key="invitations.expire_stale",
+            key="demo.workspace_report",
             workspace_id=ws_id,
             name="stale",
             cron_schedule="* * * * *",
@@ -369,7 +369,7 @@ async def test_create_run_refuses_deleted_workspace(app_client):
         await JobService(session).sync_definitions(workspace_ids=[ws_id])
         await WorkspaceService(session, bus).delete_workspace(ws_id, actor=owner)
         stale = JobDefinition(
-            key="invitations.expire_stale",
+            key="demo.workspace_report",
             workspace_id=ws_id,
             name="stale",
             cron_schedule="* * * * *",

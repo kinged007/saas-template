@@ -190,8 +190,10 @@ async def test_search_hides_jobs_without_jobs_view(app_client):
     resp = await client.get("/api/v1/workspaces/search", params={"q": "echo"}, headers=h_viewer)
     assert resp.status_code == 200, resp.text
     assert [r for r in resp.json()["results"] if r["type"] == "job"] == []
+    # Search is workspace-scoped, so this finds the workspace sample job; the
+    # global expire-invitations job is not in a workspace's search results.
     owner_resp = await client.get(
-        "/api/v1/workspaces/search", params={"q": "expire stale invitations"}, headers=h
+        "/api/v1/workspaces/search", params={"q": "workspace daily report"}, headers=h
     )
     assert owner_resp.status_code == 200, owner_resp.text
     assert any(r["type"] == "job" for r in owner_resp.json()["results"])

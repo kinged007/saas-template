@@ -34,6 +34,7 @@ import { AdminIndex, AdminLayout } from "./pages/admin/sections/AdminLayout";
 import { UsersSection as AdminUsersSection } from "./pages/admin/sections/UsersSection";
 import { WorkspacesSection as AdminWorkspacesSection } from "./pages/admin/sections/WorkspacesSection";
 import { AuditSection as AdminAuditSection } from "./pages/admin/sections/AuditSection";
+import { JobsSection as AdminJobsSection } from "./pages/admin/sections/JobsSection";
 import { WorkspaceCreatePage } from "./pages/WorkspaceCreatePage";
 import { MembersPage } from "./pages/MembersPage";
 import { ReceivedInvitationsPage } from "./pages/ReceivedInvitationsPage";
@@ -193,6 +194,7 @@ export function App() {
                 <Route path="users" element={<AdminUsersSection />} />
                 <Route path="workspaces" element={<AdminWorkspacesSection />} />
                 <Route path="audit" element={<AdminAuditSection />} />
+                <Route path="jobs" element={<AdminJobsSection />} />
               </Route>
               <Route path="workspaces/create" element={<WorkspaceCreatePage />} />
               <Route path="invitations" element={<ReceivedInvitationsPage />} />

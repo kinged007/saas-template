@@ -1,4 +1,4 @@
-import { useCan, useCustom, useCustomMutation, useGetIdentity, useGo } from "@refinedev/core";
+import { useCan, useCustom, useCustomMutation, useGo } from "@refinedev/core";
 import { useWorkspaceList } from "../../../../hooks/useWorkspaceQuery";
 import { Clock, Play, Settings2 } from "lucide-react";
 
@@ -14,7 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { EmptyRow, formatDate } from "@/components/ui";
-import type { Identity, ScheduledJob } from "@/types";
+import type { ScheduledJob } from "@/types";
 
 function JobTable({
   jobs,
@@ -98,20 +98,32 @@ function JobTable({
   );
 }
 
+export function GlobalJobsTable() {
+  // Only mounted in the admin tab, behind AdminLayout's superuser guard.
+  const { result } = useCustom<ScheduledJob[]>({ url: "jobs/global", method: "get" });
+  const globalList = Array.isArray(result?.data) ? result.data : [];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Global jobs</CardTitle>
+        <CardDescription>Deployment-wide jobs — only superadmins can view and modify these.</CardDescription>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <JobTable jobs={globalList} urlPrefix="global/" canExecute emptyText="No global jobs." />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function JobsSection() {
-  const { data: identity } = useGetIdentity<Identity>();
-  const isSuperuser = !!identity?.is_superuser;
   const { data: canEdit } = useCan({ resource: "jobs", action: "edit" });
   const canEditWorkspaceJobs = canEdit?.can ?? false;
 
   const { result: workspaceJobs } = useWorkspaceList<ScheduledJob>({ resource: "jobs" });
-  const { result: globalResult } = useCustom<ScheduledJob[]>({
-    url: "jobs/global",
-    method: "get",
-    queryOptions: { enabled: isSuperuser },
-  });
   const workspaceList = Array.isArray(workspaceJobs?.data) ? workspaceJobs.data : [];
-  const globalList = Array.isArray(globalResult?.data) ? globalResult.data : [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -134,20 +146,6 @@ export function JobsSection() {
           </div>
         </CardContent>
       </Card>
-
-      {isSuperuser && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Global jobs</CardTitle>
-            <CardDescription>Deployment-wide jobs — only superadmins can view and modify these.</CardDescription>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <JobTable jobs={globalList} urlPrefix="global/" canExecute emptyText="No global jobs." />
-            </div>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }
