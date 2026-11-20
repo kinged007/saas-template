@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from sqlalchemy import select
+
+from src.api.crud import QuerySpec, apply_query
 from src.db.session import SessionFactory
-from src.models.workspace import User, Workspace
+from src.models.audit import AuditLogEntry
+from src.models.core import Notification
+from src.models.workspace import Role, User, Workspace
 from tests.conftest import auth_headers, create_workspace, login, register_user, ws_headers
 
 
@@ -314,6 +319,122 @@ async def test_admin_lists_default_created_desc_with_tiebreaker(app_client):
     assert "aaa@example.com" in emails and "zzz@example.com" in emails
 
 
+async def _seed_created_tie(client, tokens) -> list[tuple[str, dict, list[str]]]:
+    """Seed users, workspaces and audit rows that all share one `created_at`.
+
+    Arranged, not hoped for: the stamp is explicit, never `func.now()`. Ids
+    ascend in insertion order, so a `created_at DESC` sort *without* the id
+    tiebreaker returns the group as-is instead of reversed -- that is what makes
+    the pre-fix result distinguishable from the post-fix one.
+
+    Returns (url, headers, tied ids) for every list that reads `created_at`.
+    """
+    ws = await create_workspace(client, tokens, "Tie Co")
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    stamp = datetime(2026, 1, 1, tzinfo=UTC)
+    ids = [f"00000000-0000-4000-8000-00000000000{i}" for i in (1, 2, 3)]
+    users = [
+        User(
+            id=i,
+            email=f"tie{n}@example.com",
+            display_name=f"Tie {n}",
+            created_at=stamp,
+            updated_at=stamp,
+        )
+        for n, i in enumerate(ids, start=1)
+    ]
+    workspaces = [
+        Workspace(
+            id=i,
+            name=f"Tie {n}",
+            slug=f"tie-{n}",
+            created_by_user_id=me.json()["id"],
+            created_at=stamp,
+            updated_at=stamp,
+        )
+        for n, i in enumerate(ids, start=1)
+    ]
+    audit = [
+        AuditLogEntry(
+            id=i,
+            workspace_id=ws["id"],
+            actor_user_id=me.json()["id"],
+            resource_type="workspace",
+            resource_id=i,
+            action="tie.seeded",
+            details={},
+            created_at=stamp,
+            updated_at=stamp,
+        )
+        for i in ids
+    ]
+    async with SessionFactory() as session:
+        session.add_all(users + workspaces + audit)
+        await session.commit()
+    return [
+        ("/api/v1/admin/users", auth_headers(tokens), ids),
+        ("/api/v1/admin/workspaces", auth_headers(tokens), ids),
+        ("/api/v1/admin/audit", auth_headers(tokens), ids),
+        ("/api/v1/audit", ws_headers(tokens, ws["id"]), ids),
+    ]
+
+
+def _tied_ids(rows: list[dict], ids: list[str]) -> list[str]:
+    tied = set(ids)
+    assert len({r["created_at"] for r in rows if r["id"] in tied}) == 1, "no created_at tie"
+    return [r["id"] for r in rows if r["id"] in tied]
+
+
+async def test_admin_lists_tiebreaker_on_explicit_sort(app_client):
+    client, tokens = await _superuser_client(app_client)
+    # The path the UI actually takes: dataProvider appends sort[]/order[] for
+    # every sorter, so spec.sort_by is never empty and the default never runs.
+    for url, headers, ids in await _seed_created_tie(client, tokens):
+        resp = await client.get(f"{url}?sort[]=created_at&order[]=desc", headers=headers)
+        assert resp.status_code == 200, (url, resp.text)
+        assert _tied_ids(resp.json(), ids) == sorted(ids, reverse=True), url
+
+
+async def test_admin_lists_tiebreaker_paging_across_tie(app_client):
+    client, tokens = await _superuser_client(app_client)
+    for url, headers, _ids in await _seed_created_tie(client, tokens):
+        # limit=1 puts a page boundary inside the tie group. Walking the list
+        # one row at a time must reproduce the unpaginated read exactly: no row
+        # repeated, none skipped.
+        full = await client.get(f"{url}?limit=100", headers=headers)
+        assert full.status_code == 200, (url, full.text)
+        paged: list[str] = []
+        for offset in range(int(full.headers["x-total-count"])):
+            page = await client.get(
+                f"{url}?limit=1&offset={offset}&sort[]=created_at&order[]=desc", headers=headers
+            )
+            assert page.status_code == 200, (url, offset, page.text)
+            assert len(page.json()) == 1, (url, offset, page.json())
+            paged.extend(r["id"] for r in page.json())
+        assert len(paged) == len(set(paged)), f"{url}: row repeated across pages"
+        assert paged == [r["id"] for r in full.json()], url
+
+
+async def test_admin_lists_tiebreaker_simple_rest_dialect(app_client):
+    client, tokens = await _superuser_client(app_client)
+    # `admin-users` is not in dataProvider's adminLists map, so it goes through
+    # @refinedev/simple-rest and sends _sort/_order instead.
+    for url, headers, ids in await _seed_created_tie(client, tokens):
+        resp = await client.get(f"{url}?_sort=created_at&_order=desc", headers=headers)
+        assert resp.status_code == 200, (url, resp.text)
+        assert _tied_ids(resp.json(), ids) == sorted(ids, reverse=True), url
+
+
+async def test_admin_lists_tiebreaker_follows_order_direction(app_client):
+    client, tokens = await _superuser_client(app_client)
+    for url, headers, ids in await _seed_created_tie(client, tokens):
+        up = await client.get(f"{url}?sort[]=created_at&order[]=asc", headers=headers)
+        down = await client.get(f"{url}?sort[]=created_at&order[]=desc", headers=headers)
+        assert up.status_code == down.status_code == 200, url
+        assert _tied_ids(up.json(), ids) == sorted(ids), url
+        assert _tied_ids(down.json(), ids) == sorted(ids, reverse=True), url
+
+
 async def test_admin_self_reenable_200(app_client):
     client, tokens = await _superuser_client(app_client)
     me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
@@ -324,3 +445,63 @@ async def test_admin_self_reenable_200(app_client):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["is_active"] is True
+
+
+def test_apply_query_default_sort_cannot_desync():
+    """A multi-term default plus an `order[]`-only caller must not raise.
+
+    `sort_by`/`sort_order` are zipped `strict=True`, so resolving each list with
+    its own `or` fallback let a stray `order[]` pair with no `sort[]` and blow
+    the request up with a `ValueError` -> 500.
+    """
+    default = (("created_at", "desc"), ("email", "asc"))
+    sortable = {"created_at", "email"}
+
+    def order_by(spec: QuerySpec) -> str:
+        stmt = apply_query(
+            select(User), User, spec, sortable=sortable, filterable=set(), default_sort=default
+        )
+        return str(stmt).split("ORDER BY", 1)[1].strip()
+
+    want = "users.created_at DESC, users.email ASC, users.id ASC"
+
+    assert order_by(QuerySpec()) == want, "no-sort caller must get the whole default, in order"
+
+    # `?order[]=desc` with no `sort[]`: the default wins whole, so the client's
+    # stray direction cannot flip `created_at` to ascending.
+    assert order_by(QuerySpec(sort_order=["desc"])) == want
+
+
+async def test_workspace_lists_tiebreaker_on_explicit_sort(app_client):
+    """The tiebreaker is unconditional, so it also covers the call sites that
+    pass no `default_sort` -- those only need a client-supplied sort."""
+    client, tokens = await _superuser_client(app_client)
+    ws = await create_workspace(client, tokens, "Tie Co")
+    headers = ws_headers(tokens, ws["id"])
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+
+    stamp = datetime(2026, 1, 1, tzinfo=UTC)
+    ids = [f"00000000-0000-4000-8000-00000000001{i}" for i in (1, 2, 3)]
+    seeded = [
+        Role(id=i, workspace_id=ws["id"], name=f"tie-role-{i}", permissions=[]) for i in ids
+    ] + [
+        Notification(
+            id=i,
+            user_id=me.json()["id"],
+            workspace_id=ws["id"],
+            type="workspace_invitation",
+            title=f"Tie {i}",
+            created_at=stamp,
+            updated_at=stamp,
+        )
+        for i in ids
+    ]
+    async with SessionFactory() as session:
+        session.add_all(seeded)
+        await session.commit()
+
+    for url in ("/api/v1/roles", "/api/v1/notifications"):
+        resp = await client.get(f"{url}?sort[]=created_at&order[]=desc", headers=headers)
+        assert resp.status_code == 200, (url, resp.text)
+        # Without the `id` tiebreaker the tied ids come back in insertion order.
+        assert _tied_ids(resp.json(), ids) == sorted(ids, reverse=True), url
