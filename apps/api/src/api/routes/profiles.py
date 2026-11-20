@@ -130,11 +130,13 @@ async def get_user_profile(
         if target is None:
             raise HTTPException(status_code=404, detail="user or profile not found")
         profile = await service.get_or_create(user_id)
-        # avatar_url lives on the user row, not the profile, and is editable here.
-        # `custom_data` keeps the `_private*` contract `public_projection` documents.
+        # avatar_url and email live on the user row, not the profile, and the
+        # former is editable here. Email is read-only: no change endpoint
+        # exists, so it is exposed for display only.
         return {
             **profile_to_dict(profile),
             "avatar_url": target.avatar_url,
+            "email": target.email,
             "custom_data": strip_private_custom_data(profile.custom_data),
         }
     proj = await service.get_public_projection(

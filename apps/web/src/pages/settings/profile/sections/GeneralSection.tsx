@@ -270,6 +270,10 @@ export function GeneralSection() {
     return <p className="text-muted-foreground p-4 text-sm">Loading profile…</p>;
   }
 
+  // Email lives on the user row, not the profile: identity for self, the
+  // delegated read for another member. Read-only — no change endpoint exists.
+  const email = targetId ? (profile?.email ?? "") : (identity?.email ?? "");
+
   return (
     <div className="flex flex-col gap-6">
       <Card>
@@ -278,6 +282,10 @@ export function GeneralSection() {
           <CardDescription>Common profile fields and avatar URL.</CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="mb-4 flex flex-col gap-1.5">
+            <Label>Email</Label>
+            <Input value={email} disabled readOnly />
+          </div>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col gap-4">
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

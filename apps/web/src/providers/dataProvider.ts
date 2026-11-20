@@ -220,11 +220,12 @@ async function bulkDelete<TData extends BaseRecord>(
   return { data: results.map(({ data }) => data) };
 }
 
-// `admin-workspaces` / `admin-audit` are virtual resources: the list views
-// read from the superuser-only GET /admin/* endpoints, which speak the same
+// `admin-audit` is a virtual resource: the list view reads from the
+// superuser-only GET /admin/audit endpoint, which speaks the same
 // offset/limit + X-Total-Count dialect as every other list endpoint.
-// They are not real REST resources (detail/toggle use `custom`), so only
-// getList is overridden. (`admin-users` maps through `resourcePath()`.)
+// It is not a real REST resource (detail reads use `custom`), so only
+// getList is overridden. (`admin-users` and `admin-workspaces` map through
+// `resourcePath()`; the workspaces detail route also goes through `custom`.)
 function adminList(path: string): DataProvider["getList"] {
   return async ({ pagination, filters, sorters }) => {
     const { currentPage = 1, pageSize = 10 } = pagination ?? {};
