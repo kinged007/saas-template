@@ -4,7 +4,6 @@ __pycache__/
 *.egg-info/
 .venv/
 .pytest_cache/
-.mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
@@ -60,3 +59,10 @@ crash.log
 # Jigz local state (added by jig setup)
 .jigz/
 /jig
+
+# Generated / agent-local artifacts (untracked per #1791; do not re-add)
+_bmad-output/
+review-artifacts/
+.codesight/
+plans/
+apps/api/pyproject.toml.bak.keep
