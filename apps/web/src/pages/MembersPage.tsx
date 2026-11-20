@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { useCan, useCreate, useCustomMutation, useGetIdentity, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
+import { useCan, useCreate, useCustomMutation, useGetIdentity, useGo, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Link } from "react-router";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
@@ -32,10 +32,11 @@ import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceConte
 import { canResendInvitation, canRevokeInvitation, invitationStatus } from "./invitation-actions";
 import { resolveInviteRole } from "./invite-role";
 import { canReactivateMember, canSuspendMember } from "./member-actions";
-import { assignableRoles, isManagerRoleName, roleCapNoticeText, rolePickerCapNotice } from "./role-picker-cap";
+import { assignableRoles, rolePickerCapNotice } from "./role-picker-cap";
 import { isWorkspaceAdmin } from "./settings/workspace/WorkspaceSettingsLayout";
+import { isManagerRoleName, isOwnerRoleName } from "./role-name";
 import type { Identity, Invitation, Member, Role } from "../types";
-import { getMemberDisplayName } from "../types";
+import { getDisplayNameFromRow } from "../types";
 
 const PAGE_SIZE = 10;
 // The role pickers need every role, ordered by the endpoint. Capped at the
@@ -108,6 +109,9 @@ export function MembersPage() {
   // which leaves the canRevoke gate below unreachable for it.
   const { data: canInvite } = useCan({ resource: "invitations", action: "create" });
   const { data: canRevoke } = useCan({ resource: "invitations", action: "delete" });
+  // Profile editing is a distinct scope from role management (member:update).
+  const { data: canEditProfiles } = useCan({ resource: "member-profiles", action: "edit" });
+  const go = useGo();
   const { result: invitationsResult } = useWorkspaceList<Invitation>({
     resource: "invitations",
     pagination: { currentPage: invitesPage, pageSize: PAGE_SIZE },
@@ -132,7 +136,7 @@ export function MembersPage() {
   // The pickers and the notice count this one list, so the notice can never
   // claim a role the dropdown does not offer.
   const assignable = assignableRoles(roleOptions);
-  const roleCapNotice = roleCapNoticeText(rolePickerCapNotice(rolesResult?.total ?? 0, roleOptions));
+  const roleCapNotice = rolePickerCapNotice(rolesResult?.total ?? 0, roleOptions);
 
   useEffect(() => {
     if (membersPage > membersTotalPages) setMembersPage(membersTotalPages);
@@ -215,7 +219,7 @@ export function MembersPage() {
           </TableHeader>
           <TableBody>
             {rows.map((m) => {
-              const name = getMemberDisplayName(m);
+              const name = getDisplayNameFromRow(m);
               return (
                 <TableRow key={m.membership_id}>
                   <TableCell>
@@ -238,7 +242,7 @@ export function MembersPage() {
                   </TableCell>
                 <TableCell>{m.role}</TableCell>
                 <TableCell>
-                  {canManageRoles && m.role !== "owner" ? (
+                  {canManageRoles && !isOwnerRoleName(m.role) ? (
                     <Select
                       value={m.role_id}
                       onValueChange={(roleId) =>
@@ -273,7 +277,19 @@ export function MembersPage() {
                 <TableCell className="text-muted-foreground">{formatDate(m.joined_at)}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-1">
-                    {canManageRoles && m.role !== "owner" && canSuspendMember(m) && (
+                    {/* The editor targets other members: your own profile lives
+                        in Settings → Profile, where the delegated session and
+                        password routes would refuse to act on you. */}
+                    {canEditProfiles?.can && m.id !== identity?.id && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => go({ to: `/users/${m.id}/settings` })}
+                      >
+                        Edit
+                      </Button>
+                    )}
+                    {canManageRoles && !isOwnerRoleName(m.role) && canSuspendMember(m) && (
                       <Button variant="ghost" size="sm" onClick={() => suspend(m, true)}>
                         Suspend
                       </Button>
@@ -283,7 +299,7 @@ export function MembersPage() {
                         Reactivate
                       </Button>
                     )}
-                    {canDelete?.can && m.role !== "owner" && (
+                    {canDelete?.can && !isOwnerRoleName(m.role) && (
                       <DeleteButton
                         resource="members"
                         recordItemId={m.membership_id}
@@ -354,7 +370,7 @@ export function MembersPage() {
             </div>
             <div className="flex flex-col gap-2">
               <Label>Role</Label>
-              <Select value={inviteRoleId} onValueChange={setInviteRoleId}>
+              <Select value={inviteRole?.id ?? ""} onValueChange={setInviteRoleId}>
                 <SelectTrigger className="w-40" aria-describedby={inviteRoleCapId}>
                   <SelectValue placeholder="Role">{inviteRole?.name ?? ""}</SelectValue>
                 </SelectTrigger>
@@ -482,7 +498,7 @@ export function MembersPage() {
         fallback={
           selectedMember
             ? {
-                display_name: getMemberDisplayName(selectedMember),
+                display_name: getDisplayNameFromRow(selectedMember),
                 email: selectedMember.email,
                 avatar_url: selectedMember.avatar_url,
                 first_name: selectedMember.first_name,

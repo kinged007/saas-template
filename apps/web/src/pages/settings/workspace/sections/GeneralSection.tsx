@@ -41,10 +41,11 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { IDENTITY_QUERY_OPTIONS } from "@/contexts/WorkspaceContext";
 import { useWorkspaceList } from "@/hooks/useWorkspaceQuery";
 import type { Identity, Member } from "@/types";
-import { getMemberDisplayName } from "@/types";
+import { getDisplayNameFromRow, memberOptionLabel } from "@/types";
 import { WorkspaceExportCard } from "@/components/WorkspaceExportCard";
 import { workspaceStore } from "@/utils/storage";
 import { resolveTransferTarget, transferCandidateMessage, transferEligibleMembers } from "./transfer-ownership";
+import { isOwnerRoleName } from "@/pages/role-name";
 
 const schema = z.object({
   name: z.string().min(1, "Name is required").max(150, "Max 150 characters"),
@@ -79,18 +80,17 @@ export function GeneralSection() {
   const invalidate = useInvalidate();
   const [transferId, setTransferId] = useState("");
   const [transferOpen, setTransferOpen] = useState(false);
-  const isOwner = workspace?.role === "owner";
+  const isOwner = isOwnerRoleName(workspace?.role);
   const members = membersResult?.data ?? [];
   const transferCandidates = transferEligibleMembers(members);
   // A transferId that stopped resolving on a refetch leaves transferTarget
   // undefined, which is what disarms the button below.
   // SelectValue without children renders the placeholder forever, so the trigger
-  // needs the picked member as its own text — same expression the options use.
+  // needs the picked member as its own text — the same label the options render
+  // via memberOptionLabel.
   const transferTarget = resolveTransferTarget(transferCandidates, transferId);
-  const transferTargetName = transferTarget ? getMemberDisplayName(transferTarget) : "";
-  const transferTargetLabel = transferTarget
-    ? `${getMemberDisplayName(transferTarget)} (${transferTarget.email})`
-    : "";
+  const transferTargetName = transferTarget ? getDisplayNameFromRow(transferTarget) : "";
+  const transferTargetLabel = transferTarget ? memberOptionLabel(transferTarget) : "";
   // ponytail: the members endpoint clamps `limit` to 100, so the list can be
   // truncated. The UI says so; page the select once a workspace can exceed 100 members.
   const membersTruncated = (membersResult?.total ?? 0) > members.length;
@@ -314,7 +314,7 @@ export function GeneralSection() {
             <div>
               <h4 className="font-semibold text-destructive">Danger zone</h4>
               <p className="text-muted-foreground mt-1 text-sm">
-                The actions below are permanent and cannot be undone.
+                Deleting a workspace is permanent and irreversible.
               </p>
             </div>
 
@@ -338,7 +338,7 @@ export function GeneralSection() {
                       <SelectContent>
                         {transferCandidates.map((m) => (
                           <SelectItem key={m.membership_id} value={m.membership_id}>
-                            {getMemberDisplayName(m)} ({m.email})
+                            {memberOptionLabel(m)}
                           </SelectItem>
                         ))}
                       </SelectContent>

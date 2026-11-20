@@ -15,12 +15,12 @@ Scope: whole API by default. Optional narrow scope: `--folder <path>` or `--file
 # HEALTH = "/api/v1/readyz"        # health path under the API root
 # SPEC = "/openapi.json"           # machine-readable API spec path
 # LOGIN = "/api/v1/auth/login"     # email+password login endpoint (for the auth pass)
-# SEED_USER = "admin@tenantflex.dev"
-# SEED_PASSWORD = "Tenantflex1!"
+# SEED_USER = "admin@example.com"
+# SEED_PASSWORD = "password"
 # TRACKER = "gh issue create"
 ```
 
-For this repo: backend `apps/api/src`, frontend `apps/web/src`, dev `scripts/dev.py` (ports 8000/5173), health `/api/v1/readyz`, spec `/openapi.json`, login `/api/v1/auth/login`, seed `admin@tenantflex.dev` / `Tenantflex1!`, tracker `gh issue create` with label `needs-human` (blocked). Every confirmed hit is a major — file an issue per hit.
+For this repo: backend `apps/api/src`, frontend `apps/web/src`, dev `scripts/dev.py` (ports 8000/5173), health `/api/v1/readyz`, spec `/openapi.json`, login `/api/v1/auth/login`, seed `admin@example.com` / `password`, tracker `gh issue create` with label `needs-human` (blocked). Every confirmed hit is a major — file an issue per hit.
 
 ## Harness / model (defaults; override per run)
 
