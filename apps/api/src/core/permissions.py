@@ -17,6 +17,10 @@ MEMBER_CREATE = "member:create"  # invite
 MEMBER_UPDATE = "member:update"  # change roles
 MEMBER_DELETE = "member:delete"  # remove members, revoke invitations
 
+# Edit another member's profile, notifications and security. Distinct from
+# `member:update` so holding it never implies role changes or removal.
+PROFILE_UPDATE = "profile:update"
+
 ROLE_READ = "role:read"
 ROLE_CREATE = "role:create"  # create + update custom roles
 
@@ -41,6 +45,12 @@ WEBHOOK_DELETE = "webhook:delete"  # unsubscribe
 
 AUDIT_READ = "audit:read"
 
+# 403 detail for a caller that lacks deployment-wide superuser power. deps.py's
+# `require_deployment_admin` gate and `ProfileService.delete_account_superuser`
+# both reject a session without the flag and both answer with this one string, so
+# the reason never drifts into two different words for the same denial.
+SUPERUSER_ACCESS_REQUIRED = "superuser access required"
+
 # API-key-only scopes: never granted to roles, never required of sessions.
 # Declared before PERMISSION_DEFINITIONS so ALL_PERMISSIONS can exclude them.
 #
@@ -61,6 +71,7 @@ PERMISSION_DEFINITIONS: dict[str, dict[str, str]] = {
     MEMBER_CREATE: {"resource": "member", "action": "create"},
     MEMBER_UPDATE: {"resource": "member", "action": "update"},
     MEMBER_DELETE: {"resource": "member", "action": "delete"},
+    PROFILE_UPDATE: {"resource": "profile", "action": "update"},
     ROLE_READ: {"resource": "role", "action": "read"},
     ROLE_CREATE: {"resource": "role", "action": "create"},
     APIKEY_READ: {"resource": "apikey", "action": "read"},
@@ -116,7 +127,10 @@ def permissions_for_role(role_name: str) -> list[str]:
         case "owner":
             return [*all_, "*"]
         case "admin":
-            # everything except deleting the workspace itself
+            # everything except deleting the workspace itself. Adding a
+            # capability here also grants it to every existing unedited admin
+            # role at the next boot (sync_system_role_permissions), so a
+            # takeover-capable scope like profile:update needs a callout.
             return [p for p in all_ if p not in {WORKSPACE_DELETE}]
         case "editor":
             return [

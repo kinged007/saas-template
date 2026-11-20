@@ -7,7 +7,7 @@ from src.core.dates import now_utc
 from src.db.session import SessionFactory
 from src.models.api_key import ApiKey
 from src.models.core import Invitation, Notification
-from src.models.workspace import Role, Workspace, WorkspaceMember
+from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.seed import DEMO_PASSWORD
 from src.seed import main as seed_main
 from src.services.auth import AuthService
@@ -34,14 +34,36 @@ async def test_seed_creates_only_first_workspace_in_single_mode(single_workspace
 
 
 async def test_seed_creates_demo_data_in_clean_single_mode(single_workspace_on):
-    """A clean single-workspace seed still attaches the full demo fixture set."""
+    """On a clean database, single mode seeds only the acme-corp workspace.
+
+    The workspace gets the full demo fixture set, and the assertions pin the
+    exact rows so an extra fixture entry fails here instead of passing
+    silently: three API keys (`ci-deploy`, `automation`, `editor-script`),
+    one invitation (`user2@example.com`) and three notifications
+    (admin/user1/user2). No globex fixture rows, no drift-blind gaps.
+    """
     await seed_main()
 
     async with SessionFactory() as session:
-        keys = await session.execute(select(ApiKey.id))
-        invites = await session.execute(select(Invitation.id))
-        assert keys.scalars().all() != []
-        assert invites.scalars().all() != []
+        api_keys = (await session.execute(select(ApiKey.name))).scalars().all()
+        invites = (await session.execute(select(Invitation.email))).scalars().all()
+        notifications = (
+            await session.execute(
+                select(User.email, Notification.title).join(User, User.id == Notification.user_id)
+            )
+        ).all()
+
+        assert sorted(api_keys) == ["automation", "ci-deploy", "editor-script"], (
+            f"api keys: {api_keys}"
+        )
+        assert invites == ["user2@example.com"], f"invitations: {invites}"
+        # A set, not a list: select order is not pinned, and sorted() cannot
+        # order (email, title) pairs against each other's tuple shape.
+        assert set(notifications) == {
+            ("admin@example.com", "New invitation sent"),
+            ("user1@example.com", "You were invited to Acme Corp"),
+            ("user2@example.com", "You were invited to Acme Corp"),
+        }, f"notifications: {notifications}"
 
 
 async def test_seed_reuses_oldest_workspace_in_single_mode(single_workspace_on, monkeypatch):
@@ -113,8 +135,13 @@ async def test_seed_registers_fixture_when_canonical_workspace_has_no_owner_memb
     owner, and roles cannot be deleted — so the branch is defensive. The test
     reaches it the only way the seed could see it in production: an
     out-of-band write of `role_id`. The demo admin is not a member here, so the
-    fixture attaches on registration and the seed creates API keys,
-    invitations and notifications for the workspace.
+    fixture attaches on registration. Only rows keyed to the admitted
+    acme-corp fixture are created — the admin-keyed ones are gated on
+    membership — and the assertions pin the exact set: one API key
+    (`editor-script`), one invitation (`user2@example.com`) and three
+    notifications (admin/user1/user2). A fifth API_KEYS entry or an extra
+    fixture row for the canonical workspace therefore fails here, instead of
+    only invalidating this docstring's enumeration.
     """
     monkeypatch.setattr(settings, "single_workspace", False)
     async with SessionFactory() as session:
@@ -146,11 +173,37 @@ async def test_seed_registers_fixture_when_canonical_workspace_has_no_owner_memb
 
     assert await _workspaces() == {workspace_id: "first"}
     async with SessionFactory() as session:
-        for model in (ApiKey, Invitation, Notification):
-            result = await session.execute(
-                select(model.id).where(model.workspace_id == workspace_id)
+        api_keys = (
+            (await session.execute(select(ApiKey.name).where(ApiKey.workspace_id == workspace_id)))
+            .scalars()
+            .all()
+        )
+        invites = (
+            (
+                await session.execute(
+                    select(Invitation.email).where(Invitation.workspace_id == workspace_id)
+                )
             )
-            assert result.scalars().all() != [], f"no {model.__name__} rows in {workspace_id}"
+            .scalars()
+            .all()
+        )
+        notifications = (
+            await session.execute(
+                select(User.email, Notification.title)
+                .join(User, User.id == Notification.user_id)
+                .where(Notification.workspace_id == workspace_id)
+            )
+        ).all()
+
+        assert api_keys == ["editor-script"], f"api keys in {workspace_id}: {api_keys}"
+        assert invites == ["user2@example.com"], f"invitations in {workspace_id}: {invites}"
+        # A set, not a list: the fixture rows carry offsets that tie at the
+        # same created_at, so select order is not pinned.
+        assert set(notifications) == {
+            ("admin@example.com", "New invitation sent"),
+            ("user1@example.com", "You were invited to Acme Corp"),
+            ("user2@example.com", "You were invited to Acme Corp"),
+        }, f"notifications in {workspace_id}: {notifications}"
 
 
 async def test_seed_fails_with_a_clear_error_when_owner_role_is_missing(single_workspace_on):
@@ -184,14 +237,13 @@ async def test_seed_keeps_both_workspaces_when_single_mode_is_off(monkeypatch):
 async def test_seed_api_key_guard_looks_for_the_row_not_the_status(single_workspace_on):
     """The seed guard asks whether a member row exists at all, not its status.
 
-    A suspended owner row is still a row, so the guard admits the workspace and
-    ApiKeyService — which resolves the actor with `active_only=True` — is what
-    refuses the mint. With a status-blind default this holds; with an
-    `active_only` default of True and no explicit opt-out the guard would skip
-    the key silently instead.
+    A suspended owner row is still a row, so the guard — `has_member_row`,
+    which ignores status — admits the workspace, and ApiKeyService, which
+    resolves the actor with `get_membership`, is what refuses the mint. An
+    active-only membership check in the guard would skip the key silently
+    instead. That refusal no longer escapes the seed: the keys of a member
+    whose row exists but is suspended are skipped and the run carries on.
     """
-    from src.services.api_keys import ApiKeyForbidden
-
     async with SessionFactory() as session:
         admin = await AuthService(session).register(
             email="admin@example.com",
@@ -207,6 +259,16 @@ async def test_seed_api_key_guard_looks_for_the_row_not_the_status(single_worksp
         )
         member.scalar_one().status = "suspended"
         await session.commit()
+        workspace_id = workspace.id
+        admin_id = admin.id
 
-    with pytest.raises(ApiKeyForbidden):
-        await seed_main()
+    await seed_main()  # the refusal is skipped, not fatal
+
+    async with SessionFactory() as session:
+        result = await session.execute(
+            select(ApiKey.name).where(
+                ApiKey.workspace_id == workspace_id,
+                ApiKey.created_by_user_id == admin_id,
+            )
+        )
+        assert result.scalars().all() == []

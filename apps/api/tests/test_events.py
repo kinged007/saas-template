@@ -1,13 +1,14 @@
 import asyncio
 
-from src.events.inprocess import InProcessEventBus, _subject_matches
+from src.events.bus import subject_matches
+from src.events.inprocess import InProcessEventBus
 
 
 def test_subject_wildcards():
-    assert _subject_matches("notifications.*", "notifications.created")
-    assert _subject_matches("workspaces.>", "workspaces.member.invited")
-    assert not _subject_matches("notifications", "notifications.created")
-    assert not _subject_matches("workspaces.*", "other.created")
+    assert subject_matches("notifications.*", "notifications.created")
+    assert subject_matches("workspaces.>", "workspaces.member.invited")
+    assert not subject_matches("notifications", "notifications.created")
+    assert not subject_matches("workspaces.*", "other.created")
 
 
 async def test_inprocess_pubsub():
@@ -138,6 +139,30 @@ async def test_inprocess_transient_and_durable_are_equivalent():
     await asyncio.sleep(0.05)
     await bus.stop()
     assert len(received) == 1
+
+
+async def test_inprocess_wait_idle_drains_deliveries():
+    bus = InProcessEventBus()
+    received = []
+
+    async def handler(payload, metadata):
+        received.append(payload)
+
+    await bus.subscribe("workspaces.created", handler)
+    await bus.start()
+    await bus.publish("workspaces.created", {"workspace_id": "w1"})
+    await bus.publish("workspaces.created", {"workspace_id": "w2"})
+    await bus.wait_idle()
+    await bus.stop()
+
+    assert received == [{"workspace_id": "w1"}, {"workspace_id": "w2"}]
+
+
+async def test_inprocess_wait_idle_returns_when_idle():
+    bus = InProcessEventBus()
+    await bus.start()
+    await bus.wait_idle()
+    await bus.stop()
 
 
 async def test_workflow_registry_wiring(app_client):
