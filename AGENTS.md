@@ -16,6 +16,23 @@
 
 **Required env vars:** DATABASE_URL
 
+## Product direction — read before proposing or building anything
+
+Before opening an issue or PR that adds or changes behaviour, read
+`docs/product/VISION.md` and apply `docs/product/ADMISSION.md`. Fill in the admission
+section of the PR template; a PR without a verdict line is not ready for review.
+
+Until the first release (`docs/product/VISION.md` §7), build only update-path work, security
+fixes, and fixes that restore documented behaviour. Assess anything else and leave it
+deferred — do not implement it.
+
+Never:
+- add hook, plugin or override layers over template files (`docs/product/DECISIONS.md` D-03);
+- rename, move or delete a file under `apps/` without listing it in the PR's release-note
+  line as `old/path → new/path` or `removed`;
+- create a migration without a 14-digit timestamp revision id (D-04; see Migrations below; the squashed 0001 baseline is the only exception);
+- add credits, branding or promotional text.
+
 ## Dev stack ports
 
 `make dev` runs api on :8000 and web on :5173 by default. If those ports are
@@ -28,13 +45,22 @@ USE_SQLITE=1 make dev API_PORT=8010 WEB_PORT=5273   # open http://localhost:5273
 `API_PORT` / `WEB_PORT` also work on `make api` and `make web`. `scripts/dev.py`
 passes the chosen web origin to the API as `CORS_ORIGINS` / `FRONTEND_URL` (the
 default :5173 stays allowed), and `apps/web/vite.config.ts` proxies `/api/` and
-`/ws` to `API_PORT`. No other port configuration is needed.
+`/ws` to `API_PORT`. No other port configuration is needed. The allowlisted dev
+origin is the web origin on both loopback names (`localhost` and `127.0.0.1`,
+since vite serves both) — open either and the session holds.
 
 ## Migrations
 
 Models are the source of truth; migrations are generated, reviewed, committed.
-After changing any model: `make db-new m="..."`, review the diff (watch for
-accidental drops, wrong nullability, missing server_default), commit the file.
+After changing any model, generate the migration (`make db-new` assigns a
+14-digit UTC timestamp revision id per `docs/product/DECISIONS.md` D-04):
+
+```bash
+make db-new m="acme orders"   # → 20261118104500_acme_orders.py
+```
+
+Review the diff (watch for accidental drops, wrong nullability, missing server_default),
+commit the file.
 `make db-check` (also in CI) fails on multiple heads or models≠migrations.
 Full workflow: `docs/MIGRATIONS.md`.
 

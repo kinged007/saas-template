@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,9 +7,10 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader } from "@/co
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SsoButtons, fetchAuthConfig, type AuthConfig } from "@/components/AuthConfig";
-import { authProvider, seedWorkspace } from "@/providers/authProvider";
+import { afterAuthRedirect, authProvider, seedWorkspace } from "@/providers/authProvider";
 import { API_URL, httpClient } from "@/providers/dataProvider";
-import { identityStore, tokenStore, workspaceStore } from "@/utils/storage";
+import { identityStore, tokenStore } from "@/utils/storage";
+import { postCredentials } from "@/utils/credentialPost";
 import { clearAllCaches, queryClient } from "@/providers/queryClient";
 
 export function LoginPage() {
@@ -22,6 +23,10 @@ export function LoginPage() {
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const [passwordChanged, setPasswordChanged] = useState(false);
   const codeRef = useRef<HTMLInputElement>(null);
+  // Client-side on purpose: the access token exists only in module memory
+  // (tokenStore), so a hard load would drop it and make the new document
+  // re-authenticate through /auth/refresh.
+  const navigate = useNavigate();
 
   useEffect(() => {
     fetchAuthConfig().then(setConfig);
@@ -39,20 +44,19 @@ export function LoginPage() {
     if (challenge) codeRef.current?.focus();
   }, [challenge]);
 
-  // Same token + identity + workspace seeding as a normal login (see
-  // authProvider): without this the identity query settles with no
-  // workspace selected and the app mounts behind a blank gate.
+  // Same reset + workspace seed as authProvider.login, except the reset runs in
+  // postCredentials() ahead of the POST, so the verify request is not scoped to
+  // the outgoing session. The app must still mount with a workspace selected or
+  // the identity query settles behind a blank gate.
   // Access token only — the refresh token lives in the HttpOnly cookie.
   const storeTokens = async (tokens: { access_token: string }) => {
-    workspaceStore.clear();
-    identityStore.set(null);
     clearAllCaches(queryClient);
     tokenStore.setTokens(tokens.access_token);
     try {
       const { data: identity } = await httpClient.get(`${API_URL}/auth/me`);
       await seedWorkspace(identity);
     } catch {
-      identityStore.set(null);
+      identityStore.clear();
     }
   };
 
@@ -65,13 +69,16 @@ export function LoginPage() {
     if (challenge) {
       setPending(true);
       try {
-        const { data } = await httpClient.post(`${API_URL}/auth/2fa/login`, {
-          challenge_token: challenge,
-          code,
-          use_cookies: true,
-        });
+        const { data } = await postCredentials(() =>
+          httpClient.post(`${API_URL}/auth/2fa/login`, {
+            challenge_token: challenge,
+            code,
+            use_cookies: true,
+          }),
+        );
         await storeTokens(data);
-        window.location.assign("/");
+        // replace: Back must not return to a spent sign-in form.
+        navigate(afterAuthRedirect(), { replace: true });
       } catch {
         setChallenge(null);
         setCode("");
@@ -85,7 +92,7 @@ export function LoginPage() {
     try {
       const res = await authProvider.login({ email, password });
       if (res.success) {
-        window.location.assign(res.redirectTo ?? "/");
+        navigate(res.redirectTo ?? "/", { replace: true });
         return;
       }
       // 2FA challenge arrives as "2fa_required:<token>" (see authProvider).

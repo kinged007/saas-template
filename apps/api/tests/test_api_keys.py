@@ -1,5 +1,8 @@
 import hashlib
+from datetime import UTC, datetime
 
+from src.db.session import SessionFactory
+from src.models.api_key import ApiKey
 from tests.conftest import (
     auth_headers,
     create_workspace,
@@ -50,7 +53,39 @@ async def test_owner_can_create_list_and_use_api_key(app_client):
     item = next(k for k in keys.json() if k["id"] == key["id"])
     assert "key" not in item
     assert item["key_prefix"].startswith("sk_live_")
-    assert item["last_used_at"] is not None  # touch() ran on the members call
+    assert item["last_used_at"] is not None  # record_use ran on the members call
+
+
+async def test_api_key_timestamps_are_offset_aware(app_client):
+    """Every timestamp in the payload carries its UTC offset.
+
+    A naive ISO string makes `new Date(...)` parse as local time in the
+    browser, so a key renders at a different wall clock than `Expires`.
+    """
+    client = app_client
+    owner = await register_user(client, "tess@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    key = await _create_key(
+        client,
+        headers,
+        permissions=["member:read"],
+        body={"expires_at": "2027-01-01T00:00:00Z"},
+    )
+    # a real call so record_use populates last_used_at, then revoke
+    key_headers = {"Authorization": f"Bearer {key['key']}", "X-Workspace-ID": ws["id"]}
+    assert (await client.get("/api/v1/members", headers=key_headers)).status_code == 200
+    resp = await client.delete(f"/api/v1/api-keys/{key['id']}", headers=headers)
+    assert resp.status_code == 204
+
+    listed = await client.get("/api/v1/api-keys", headers=headers)
+    assert listed.status_code == 200
+    item = next(k for k in listed.json() if k["id"] == key["id"])
+    for field in ("created_at", "expires_at", "last_used_at", "revoked_at"):
+        assert item[field] is not None, field
+        stamp = datetime.fromisoformat(item[field])
+        assert stamp.utcoffset() is not None, f"{field}: {item[field]}"
 
 
 async def test_api_key_is_capped_by_owner_permissions(app_client):
@@ -310,3 +345,191 @@ async def test_list_requires_workspace_header(app_client):
     await create_workspace(client, owner)
     resp = await client.get("/api/v1/api-keys", headers=auth_headers(owner))
     assert resp.status_code == 400
+
+
+async def test_unsorted_list_defaults_to_created_at_desc(app_client):
+    """No sort in the request must still yield a total order: created_at desc,
+    id desc as tiebreaker. created_at is server_default=now() (second
+    granularity on SQLite), so a burst of keys ties — the tiebreaker is what
+    keeps the order total, and the tie is asserted so it cannot silently go."""
+    client = app_client
+    owner = await register_user(client, "wren@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    for i in range(5):
+        await _create_key(client, headers, name=f"k{i}")
+
+    resp = await client.get("/api/v1/api-keys", params={"limit": 10}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert len({k["created_at"] for k in rows}) < len(rows), "expected a created_at tie"
+
+    expected = sorted(rows, key=lambda k: (k["created_at"], k["id"]), reverse=True)
+    assert [k["id"] for k in rows] == [k["id"] for k in expected]
+
+
+async def test_unsorted_paging_partitions_the_set(app_client):
+    """With the default order, every row lands on exactly one page."""
+    client = app_client
+    owner = await register_user(client, "vera@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    for i in range(5):
+        await _create_key(client, headers, name=f"k{i}")
+
+    async def page(offset, limit):
+        resp = await client.get(
+            "/api/v1/api-keys",
+            params={"offset": offset, "limit": limit},
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    full = await page(0, 10)
+    paged = [k for offset in (0, 2, 4) for k in await page(offset, 2)]
+    assert [k["id"] for k in paged] == [k["id"] for k in full]
+
+
+_TIE_IDS = [f"00000000-0000-4000-8000-00000000000{i}" for i in (1, 2, 3)]
+
+
+async def _seed_created_tie(client, owner, workspace_id, keys):
+    """Insert api keys sharing one explicit `created_at`, as (id, name) pairs
+    given in insertion order.
+
+    Arranged, not hoped for: the stamp is never `func.now()` (second
+    granularity on SQLite) and the ids are supplied, so a test can insert a tie
+    group in an order that disagrees with id order. Without the id
+    tiebreaker the group then comes back as inserted, which is what makes the
+    pre-fix result distinguishable from the post-fix one.
+    """
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(owner))
+    assert me.status_code == 200, me.text
+    stamp = datetime(2026, 1, 1, tzinfo=UTC)
+    rows = [
+        ApiKey(
+            id=i,
+            workspace_id=workspace_id,
+            created_by_user_id=me.json()["id"],
+            name=name,
+            key_prefix=f"sk_live_{n:04d}",
+            key_hash=f"{i}-hash",
+            permissions=[],
+            created_at=stamp,
+            updated_at=stamp,
+        )
+        for n, (i, name) in enumerate(keys)
+    ]
+    async with SessionFactory() as session:
+        session.add_all(rows)
+        await session.commit()
+
+
+async def test_explicit_sort_overrides_the_default_order(app_client):
+    """An explicit sort replaces the default order, and is itself total: the
+    tied `created_at` group comes back ordered by id, in the direction asked
+    for. Ids ascend in insertion order, so `order[]=desc` cannot come back
+    right without the tiebreaker, and ascending already disagrees with the
+    default `created_at DESC, id DESC`."""
+    client = app_client
+    owner = await register_user(client, "xena@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    await _seed_created_tie(
+        client, owner, ws["id"], list(zip(_TIE_IDS, ["k0", "k1", "k2"], strict=True))
+    )
+    await _create_key(client, headers, name="newer")  # a stamp of its own
+
+    for order, reverse in (("asc", False), ("desc", True)):
+        resp = await client.get(
+            "/api/v1/api-keys",
+            params={"sort[]": "created_at", "order[]": order, "limit": 10},
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        rows = resp.json()
+        tied = [k for k in rows if k["id"] in _TIE_IDS]
+        assert len({k["created_at"] for k in tied}) == 1, f"{order}: expected a created_at tie"
+        expected = sorted(rows, key=lambda k: (k["created_at"], k["id"]), reverse=reverse)
+        assert [k["id"] for k in rows] == [k["id"] for k in expected], order
+        assert [k["id"] for k in tied] == sorted(_TIE_IDS, reverse=reverse), order
+
+
+async def test_explicit_sort_paging_partitions_the_set(app_client):
+    """`name` is a plain String(150) with no unique constraint, so an explicit
+    name sort ties. The tie group is inserted back to front, and reading it one
+    row per page must reproduce the unpaginated read: no row repeated, none
+    skipped."""
+    client = app_client
+    owner = await register_user(client, "yuki@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    await _seed_created_tie(client, owner, ws["id"], [(i, "dup") for i in reversed(_TIE_IDS)])
+
+    async def page(offset, limit):
+        resp = await client.get(
+            "/api/v1/api-keys",
+            params={"sort[]": "name", "order[]": "asc", "offset": offset, "limit": limit},
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    rows = await page(0, 10)
+    assert len({k["name"] for k in rows}) < len(rows), "expected a name tie"
+    assert [k["id"] for k in rows] == _TIE_IDS
+
+    paged: list[str] = []
+    for offset in range(len(rows)):
+        chunk = await page(offset, 1)
+        assert len(chunk) == 1, (offset, chunk)
+        paged.extend(k["id"] for k in chunk)
+    assert paged == [k["id"] for k in rows]
+
+
+async def test_create_api_key_strips_padded_name(app_client):
+    client = app_client
+    owner = await register_user(client, "pad-key@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+
+    resp = await client.post(
+        "/api/v1/api-keys", json={"name": "  ci-deploy  ", "permissions": []}, headers=headers
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == "ci-deploy"
+    listed = await client.get("/api/v1/api-keys", headers=headers)
+    assert next(k for k in listed.json() if k["id"] == resp.json()["id"])["name"] == "ci-deploy"
+
+    blank = await client.post(
+        "/api/v1/api-keys", json={"name": "   ", "permissions": []}, headers=headers
+    )
+    assert blank.status_code == 422
+
+
+async def test_api_key_service_stores_trimmed_name(app_client):
+    """The service trims without the schema — seed and internal callers never
+    pass through `ApiKeyCreate`."""
+    from src.db.session import SessionFactory
+    from src.models.api_key import ApiKey
+    from src.services.api_keys import ApiKeyService
+    from src.services.auth import AuthService
+
+    client = app_client
+    owner = await register_user(client, "pad-key-svc@example.com")
+    ws = await create_workspace(client, owner)
+
+    async with SessionFactory() as session:
+        user = await AuthService(session).get_by_email("pad-key-svc@example.com")
+        key, _ = await ApiKeyService(session).create_api_key(
+            workspace_id=ws["id"], name="  ci-deploy  ", permissions=["member:read"], actor=user
+        )
+
+    async with SessionFactory() as session:
+        stored = await session.get(ApiKey, key.id)
+        assert stored.name == "ci-deploy"

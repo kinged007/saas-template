@@ -1,5 +1,6 @@
 import * as React from "react";
-import { defaultUrlTransform, type Components } from "react-markdown";
+import { type Components } from "react-markdown";
+import { MENTION_SCHEME } from "./mentions";
 import { cn } from "./utils";
 
 /**
@@ -79,41 +80,6 @@ function LinkBase({
     <a href={href} target="_blank" rel="noopener noreferrer" className={className} {...domProps}>
       {children}
     </a>
-  );
-}
-
-/** Protocol marker `highlightMentions` emits; `a` overrides turn it into a span. */
-const MENTION_SCHEME = "mention:";
-
-/**
- * react-markdown's default `urlTransform` drops any href without a known
- * scheme, which turns the mention marker into an empty `href` before the `a`
- * override sees it. Keep the marker and defer every other decision to the
- * default transform so javascript:/data: links stay blocked.
- */
-export function mentionUrlTransform(url: string): string {
-  if (url.startsWith(MENTION_SCHEME)) return url;
-  return defaultUrlTransform(url);
-}
-
-/**
- * Rewrite `@Name` occurrences of known people into a marker link so the `a`
- * overrides can style them. The message body itself stays plain markdown —
- * other clients read the raw text.
- *
- * ponytail: plain string replacement, so a name that also appears inside a
- * fenced code block or a URL gets highlighted too. Replace with an AST pass if
- * that ever matters.
- */
-export function highlightMentions(markdown: string, names: string[]): string {
-  // One pass, so a replacement can never be re-matched by a later name.
-  const unique = [...new Set(names.filter(Boolean))].sort((a, b) => b.length - a.length);
-  if (unique.length === 0) return markdown;
-  // Longest first so "Ann Lee" wins over "Ann" at the same position.
-  const alternation = unique.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  return markdown.replace(
-    new RegExp(`@(${alternation})`, "g"),
-    (_match, name: string) => `[@${name}](${MENTION_SCHEME})`,
   );
 }
 

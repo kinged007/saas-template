@@ -65,6 +65,8 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 - **AuditLogEntry** — immutable audit trail for every user/system action
   (actor, IP, action, details), never updated; deleted only when the operator
   explicitly opts into `AUDIT_LOG_RETENTION_DAYS` (see docs/OPERATIONS.md).
+  At most one entry per source event: the bus is at-least-once, so a
+  redelivered event is not filed twice.
 - **StoredSecret** — Fernet-encrypted values at rest (versioned key),
   namespaced per workspace, behind a `SecretStore` interface.
 
@@ -80,6 +82,13 @@ User ──< WorkspaceMember >── Workspace (slug, name)
   - `admin` — manage members, roles, invitations, jobs
   - `editor` — read, manage API keys
   - `viewer` — read-only
+- Role names are stripped on write (`POST /roles`, `PATCH /roles/{id}`) and
+  compared exactly on read, so a row written before the strip existed can hold
+  a padded name that no lookup (auto-join, name-based role lookups) matches.
+  Remediation: rename the row with `PATCH /roles/{id}` — the payload name is
+  stripped and the row's own id is excluded from the duplicate check, so
+  resubmitting the row's padded name rewrites it stripped. A row named `Owner`
+  (any case) is the owner role and refuses every edit with 403.
 - Global (deployment-wide) administration — e.g. global jobs — is gated on
   the bootstrap superuser (`SUPERADMIN_EMAIL`), which does **not** bypass
   workspace-scoped checks.
@@ -88,10 +97,21 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 
 | Flow | Mechanism |
 |---|---|
-| Password (browser) | `POST /auth/login` (`use_cookies: true`) → access JWT in JSON + refresh in `HttpOnly; Secure; SameSite=Lax` cookie; `POST /auth/refresh` reads the cookie (rotating, hashed opaque token in DB); `POST /auth/logout` revokes + clears the cookie |
+| Password (browser) | `POST /auth/login` (`use_cookies: true`) → access JWT in JSON + refresh in `HttpOnly; SameSite=Lax` cookie, `Secure` per `cookie_secure_for()` (`REFRESH_COOKIE_SECURE` if set, else https request, else plain http outside `development`/`test`); `POST /auth/refresh` reads the cookie (rotating, hashed opaque token in DB); `POST /auth/logout` revokes + clears the cookie |
 | Password (non-browser) | `POST /auth/login` → access + refresh in JSON; `POST /auth/refresh` takes `{"refresh_token"}` as before |
 | 2FA / OAuth (browser) | `POST /auth/2fa/login` / `POST /auth/oauth/token` with `use_cookies: true` set the same cookie and omit the JSON refresh; the OAuth one-time code handoff carries only the access token for cookie callers |
 | API keys | `Authorization: Bearer <key>`; permissions resolved per workspace (untouched by the cookie flow) |
+| Identity | `GET /auth/me` → current user + workspaces + permissions + embedded `profile` (auto-created, same shape as `GET /me/profile`). `permissions` is principal-dependent: a session user gets the union of the roles it holds in the listed workspaces, an API key only its own grant — in the top-level field and in each `workspaces[]` entry alike (the nested entries still name the creator's membership role) |
+
+SSO provider config is the `OAUTH_PROVIDERS` JSON list (shapes in `apps/api/.env.example`): OIDC providers come from discovery, non-OIDC (GitHub) lists explicit endpoint URLs; the optional `emails_url` key adds the private-email second lookup — pointed at `https://<host>/api/v3/user/emails` it covers GitHub Enterprise Server with no code.
+
+API key quota: a key with a `usage_quota` is capped per calendar month (UTC).
+`X-API-Key-Quota` / `X-API-Key-Remaining` report the month's limit and the uses
+left in it; the counter resets on the first request of a new month and
+`X-API-Key-Window-Reset` says when. `usage_count` stays the lifetime total.
+The rollover, the quota test and the increment are one `UPDATE` and
+`authenticate` takes the row lock, so concurrent requests on one key cannot
+over-grant the budget.
 
 Browser session storage model: the refresh token is never JS-readable (HttpOnly cookie, path `/api/v1/auth`); the 15-min access JWT lives in frontend memory only (nothing persists, so boot does one silent `POST /auth/refresh` — via the shared `ensureSession()` single-flight used by both `authProvider.check()` and the dataProvider 401 retry — to restore the session after reload, skipped entirely when the `tf_has_session` marker is absent). Cookie refresh/logout require the `X-Requested-With: XMLHttpRequest` header plus an allowlisted `Origin`/`Referer` (CSRF mitigation); non-browser JSON clients are unaffected. Future session endpoints (OAuth/2FA variants) must reuse `src/core/security/cookies.py` rather than reimplementing flags.
 
@@ -100,7 +120,13 @@ Session binding: every authenticated request costs one extra PK lookup
 use a short negative-cache on `(sid -> revoked)` with TTL, not a redesign.
 Pre-deploy access tokens without `sid` are grandfathered (valid until
 expiry, ≤15 min residual window).
-| Identity | `GET /auth/me` → current user + workspaces + permissions + embedded `profile` (auto-created, same shape as `GET /me/profile`) |
+
+Upgrading from a release without the quota window: migration `0019` seeds
+`usage_window_count` from the lifetime `usage_count` and `usage_window_start`
+from the start of the current month, so a key that had already exhausted its
+old lifetime quota stays rejected until the next month boundary.
+From that boundary on every key gets a fresh monthly budget, so a key that had
+*not* exhausted its old lifetime cap is now renewable rather than one-shot.
 
 ## 6. Events & pub/sub
 
@@ -150,9 +176,9 @@ Durable subjects (persisted, one workflow per subject, load-balanced):
 | --- | --- |
 | `workspaces.member.invited` | persist a Notification row for the invitee |
 | `workspaces.member.joined` | notify the inviter + other active members |
-| `workspaces.member.role_changed` | notify the member whose role changed |
+| `workspaces.member.role_changed` | notify the member whose role changed; an ownership transfer emits one event per user whose role actually changed (new owner promotion + previous owner demotion), against a single `workspace.ownership_transferred` audit record (see `docs/WEBHOOKS.md`) |
 | `workspaces.member.removed` | notify the removed member |
-| `workspaces.invitation.created` | email hook for unregistered invites (TODO) |
+| `workspaces.invitation.created` | email unregistered invitees; a failed send is audited (`invitation.email_failed`) |
 | `workspaces.created` | provisioning/analytics hook (TODO) |
 | `audit.entry.created` | persist an AuditLogEntry row |
 | `apikeys.created` / `apikeys.revoked` | security/monitoring hook (TODO) |
@@ -165,10 +191,10 @@ Transient subject (core NATS, realtime fan-out, no persistence):
 
 Every user/automatic action publishes an audit event (`audit.entry.created`):
 `user.register/login/token_refresh/logout`, `workspace.created/updated/deleted`,
-`member.role_changed/removed/left`, `invitation.created/accepted/declined/revoked`, `user.session_revoked/sessions_revoked`,
+`member.role_changed/removed/left`, `invitation.created/resent/accepted/declined/revoked/email_failed`, `user.session_revoked/sessions_revoked/refresh_token_reuse`,
 `role.created`, `apikey.created/revoked`, `notification.acknowledged/
-unacknowledged`, `job.run_*`. The audit workflow persists them (committed) to
-`audit_log_entries`.
+unacknowledged`, `notification.email_failed`, `job.run_*`. The audit workflow persists them (committed) to
+`audit_log_entries`. `notification.email_failed` carries `details.reason` = `no_recipient | no_email | send_failed`.
 
 ## 7. Scheduled jobs
 
@@ -202,17 +228,17 @@ zero-customization data access:
 - `DELETE /{resource}/{id}` → 204
 
 A shared `crud` helper turns Refine params into safe SQLAlchemy queries
-(whitelisted sort/filter fields per resource). List responses are totally
-ordered **where the route passes `default_sort` or the client sends a sort**:
-those terms are followed by an `id` tiebreaker, so offset/limit paging can
-neither repeat nor skip a row. Routes that pass neither still emit no
-`ORDER BY`.
+(whitelisted sort/filter fields per resource). Every sorted list ends on the
+row's primary key, in the direction of the last sort key, so the order is total
+and `offset`/`limit` paging cannot drop or repeat a row when the sorted columns
+tie. Ties resolve by `id`, not by insertion order — the ids are UUIDs. Routes
+that pass neither `default_sort` nor a client sort still emit no `ORDER BY`.
 
 ## 9. Security
 
 - bcrypt password hashing, Fernet-encrypted secrets (versioned keys)
 - CORS allowlist from env (`allow_credentials` on); refresh-token rotation + revocation
-- Browser refresh tokens in `HttpOnly; Secure; SameSite=Lax` cookies (JS cannot exfiltrate them); CSRF covered by SameSite + `Origin`/`Referer` allowlist check + required `X-Requested-With` custom header on cookie-authenticated refresh/logout
+- Browser refresh tokens in `HttpOnly; SameSite=Lax` cookies (JS cannot exfiltrate them); `Secure` is resolved per request by `cookie_secure_for()` — `REFRESH_COOKIE_SECURE` if set, else https, else plain http only when `ENVIRONMENT` is neither `development` nor `test`; CSRF covered by SameSite + `Origin`/`Referer` allowlist check + required `X-Requested-With` custom header on cookie-authenticated refresh/logout
 - HttpOnly narrows theft to the live session — injected JS can still ride the session while the page is open, so CSP and output escaping remain the real XSS defense
 - Permission checks server-side on every workspace-scoped route
 - No secrets in responses; API-key raw values returned once at creation

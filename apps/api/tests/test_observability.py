@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from src.core import metrics
 from src.core.request_id import get_request_id
-from tests.conftest import create_workspace, register_user, ws_headers
+from tests.conftest import create_workspace, register_user, run_job_via_scheduler, ws_headers
 
 
 async def test_request_id_echoed_and_minted(app_client):
@@ -107,32 +107,21 @@ def test_retention_settings_reject_negatives():
 
 
 async def test_retention_cleanup_job_registered_and_runs(app_client, monkeypatch):
+    import uuid
+    from datetime import UTC, datetime, timedelta
+
     from sqlalchemy import select
 
+    from src import settings as settings_module
     from src.db.session import SessionFactory
     from src.jobs.registry import job_registry
-    from src.models.jobs import JobDefinition
+    from src.models.core import Notification
 
     spec = job_registry.get("system.retention_cleanup")
     assert spec is not None and spec.scope == "global"
 
-    async with SessionFactory() as session:
-        definition = (
-            await session.execute(
-                select(JobDefinition).where(JobDefinition.key == "system.retention_cleanup")
-            )
-        ).scalar_one()
-        assert definition.enabled is True
-
     # Old acknowledged notification is removed; unacknowledged is kept.
-    from datetime import UTC, datetime, timedelta
-
-    from src import settings as settings_module
-    from src.models.core import Notification
-
     monkeypatch.setattr(settings_module.settings, "notifications_retention_days", 90)
-
-    import uuid
 
     old = datetime.now(UTC) - timedelta(days=400)
     uid, wid = str(uuid.uuid4()), str(uuid.uuid4())
@@ -157,6 +146,12 @@ async def test_retention_cleanup_job_registered_and_runs(app_client, monkeypatch
             )
         )
         await session.commit()
-        await spec.handler(type("Ctx", (), {"session": lambda self: SessionFactory()})())
+
+    run, messages = await run_job_via_scheduler("system.retention_cleanup")
+
+    assert run.trigger == "scheduled"
+    assert run.status == "success", run.error
+    assert any("1 notification(s)" in m for m in messages), messages
+    async with SessionFactory() as session:
         remaining = (await session.execute(select(Notification.title))).scalars().all()
     assert remaining == ["old-unacked"]
