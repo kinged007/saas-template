@@ -15,6 +15,9 @@ build/
 node_modules/
 apps/web/dist/
 apps/web/.vite/
+apps/web/test-results/
+apps/web/playwright-report/
+apps/web/*.tap
 
 # Env / secrets
 .env
@@ -46,9 +49,14 @@ crash.log
 *.sqlite
 *.sqlite3
 *.db-journal
+*.db-wal
+*.db-shm
 
 # Logs
 *.log
 
 # Sortie
 .sortie/
+# Jigz local state (added by jig setup)
+.jigz/
+/jig

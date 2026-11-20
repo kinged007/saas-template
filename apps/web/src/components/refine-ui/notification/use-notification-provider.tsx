@@ -1,5 +1,6 @@
 import type { NotificationProvider } from "@refinedev/core";
 import { toast } from "sonner";
+import { errorTitle } from "@/components/refine-ui/notification/error-title";
 import { UndoableNotification } from "@/components/refine-ui/notification/undoable-notification";
 
 export function useNotificationProvider(): NotificationProvider {
@@ -22,7 +23,7 @@ export function useNotificationProvider(): NotificationProvider {
           return;
 
         case "error":
-          toast.error(message, {
+          toast.error(errorTitle(message), {
             id: key,
             description,
             richColors: true,

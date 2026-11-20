@@ -6,28 +6,25 @@ import {
   type CrudFilters,
 } from "@refinedev/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EmptyRow, StatusBadge, formatDate } from "@/components/ui";
+import type { AdminUser } from "@/types";
 import { useAdminGuard } from "./AdminLayout";
-
-export type AdminUser = {
-  id: string;
-  email: string;
-  display_name: string;
-  is_superuser: boolean;
-  is_active: boolean;
-  created_at?: string;
-};
-
-type AdminUserDetail = AdminUser & {
-  workspaces: { id: string; name: string; slug: string; role: string }[];
-};
-
-const PAGE_SIZE = 20;
+import {
+  PAGE_SIZE,
+  adminUserPatch,
+  asAdminUserDetail,
+  canToggleUser,
+  pageRange,
+  toggleDisabled,
+  type AdminUserDetail,
+} from "./users-toggle";
+import { errorMessage } from "@/utils/errorMessage";
 
 export function UsersSection() {
   const { identity, isSuperuser } = useAdminGuard();
@@ -55,32 +52,19 @@ export function UsersSection() {
 
   const rows = result?.data ?? [];
   const total = result?.total ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const rawDetail = detailQuery.result?.data;
-  const detail =
-    rawDetail && Array.isArray((rawDetail as AdminUserDetail).workspaces)
-      ? (rawDetail as AdminUserDetail)
-      : undefined;
+  const { from, to, totalPages } = pageRange(current, total);
+  const detail = asAdminUserDetail(detailQuery.result?.data);
 
   const toggle = (user: AdminUserDetail, next: boolean) => {
-    setActive(
-      {
-        url: `admin/users/${user.id}`,
-        method: "patch",
-        values: { is_active: next },
-        successNotification: {
-          message: next ? "Account re-enabled" : "Account disabled",
-          type: "success",
-        },
-        errorNotification: false,
+    setActive(adminUserPatch(user, next), {
+      onSuccess: () => {
+        void query.refetch();
+        void detailQuery.query.refetch();
       },
-      {
-        onSuccess: () => {
-          void query.refetch();
-          void detailQuery.query.refetch();
-        },
+      onError: (e) => {
+        toast.error(errorMessage(e));
       },
-    );
+    });
   };
 
   return (
@@ -143,7 +127,7 @@ export function UsersSection() {
           </div>
           <div className="flex items-center justify-between gap-2">
             <p className="text-muted-foreground text-sm">
-              Showing {total === 0 ? 0 : (current - 1) * PAGE_SIZE + 1}–{Math.min(current * PAGE_SIZE, total)} of {total}
+              Showing {from}–{to} of {total}
             </p>
             <div className="flex items-center gap-1">
               <Button
@@ -175,11 +159,11 @@ export function UsersSection() {
                 <h3 className="font-medium">
                   {detail.email} — {detail.workspaces.length} workspace(s)
                 </h3>
-                {detail.id !== identity?.id && (
+                {canToggleUser(detail, identity?.id) && (
                   <Button
                     variant={detail.is_active ? "destructive" : "default"}
                     size="sm"
-                    disabled={mutation.isPending}
+                    disabled={toggleDisabled(mutation, detailQuery.query)}
                     onClick={() => toggle(detail, !detail.is_active)}
                   >
                     {detail.is_active ? "Disable access" : "Re-enable"}
