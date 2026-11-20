@@ -15,7 +15,11 @@ from alembic import op
 
 revision: str = "0001"
 down_revision: str | None = None
-branch_labels: str | Sequence[str] | None = None
+# Names the template branch. Alembic propagates the label to every revision
+# descending from here, so template@head keeps resolving (and future template
+# revisions need no label of their own). Project revisions are separate roots
+# (down_revision None, depends_on a template rev), so they never inherit this.
+branch_labels: str | Sequence[str] | None = "template"
 depends_on: str | Sequence[str] | None = None
 
 TS = sa.DateTime(timezone=True)
