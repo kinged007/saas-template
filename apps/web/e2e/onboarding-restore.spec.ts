@@ -1,18 +1,7 @@
-import { expect, test as base, type Locator, type Page } from "playwright/test";
+import { expect, type Locator, type Page } from "playwright/test";
 
+import { test } from "./fixtures";
 import { mockApi } from "./mock-api";
-
-const test = base.extend<{ pageerrors: Error[] }>({
-  pageerrors: [
-    async ({ page }, use) => {
-      const errors: Error[] = [];
-      page.on("pageerror", (error) => errors.push(error));
-      await use(errors);
-      expect(errors).toEqual([]);
-    },
-    { auto: true },
-  ],
-});
 
 /** Dashboard with the card already dismissed, so restoring is the only way back. */
 async function dismissedOnboarding(page: Page): Promise<Locator> {
@@ -33,8 +22,14 @@ test.describe("onboarding restore", () => {
     await restore.focus();
     await page.keyboard.press("Enter");
 
-    const heading = page.getByText("Get set up", { exact: true });
+    // By role, not by text: the focus move only announces a heading if the
+    // title is one, and a plain div matches the text query. The level is
+    // pinned because h2 is the level the card's place in the page outline
+    // depends on, and a name-only query also matches h1 or h3.
+    const heading = page.getByRole("heading", { name: "Get set up", level: 2 });
+    await expect(heading).toHaveCount(1);
     await expect(heading).toBeVisible();
+    await expect(heading).toHaveAccessibleName("Get set up");
     // The focus move is what tells a screen reader the card is back, so it has
     // to survive the styling fix.
     await expect(heading).toBeFocused();

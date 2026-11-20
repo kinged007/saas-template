@@ -390,7 +390,7 @@ async def api_key_cleanup(ctx: JobContext) -> None:
         more = len(unpublished) - len(listed)
         raise RuntimeError(
             f"api key cleanup — {revoked} key(s) revoked as expired, but the event or audit "
-            f"entry was not published for {len(unpublished)} of them: {chr(39).join(listed)}"
+            f"entry was not published for {len(unpublished)} of them: {', '.join(listed)}"
             f"{f' (+{more} more)' if more else ''}"
         )
 

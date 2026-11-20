@@ -1,5 +1,6 @@
-import { expect, test as base, type Locator, type Page } from "playwright/test";
+import { expect, type Locator, type Page } from "playwright/test";
 
+import { test } from "./fixtures";
 import { mockApi } from "./mock-api";
 
 /**
@@ -7,6 +8,13 @@ import { mockApi } from "./mock-api";
  * the `title` + `aria-label` pair #332 established in the composer toolbar:
  * `title` paints the hover tooltip, `aria-label` is what a screen reader
  * announces. A control with neither is announced as a bare "button".
+ *
+ * The accessible name is the invariant and `title` duplicates it, so a control
+ * whose two attributes disagree announces one action and hovers another. Align
+ * `title` up to the accessible name, never shorten `aria-label` to the tooltip
+ * (WCAG 2.5.3, Label in Name). #702: the inbox keeps the native `title` rather
+ * than a Radix `Tooltip` (a wrapper span and a portal per button), so the
+ * assertion is against the rendered `title` attribute.
  */
 
 const CONVERSATION = {
@@ -49,6 +57,54 @@ async function mountedButtons(scope: Locator) {
 }
 
 /**
+ * Answer `GET /notifications/unread-count` and `GET
+ * /conversations/unread-count` with fixed counts.
+ *
+ * `mockApi` answers them with an empty array, which the component reads as
+ * zero unread. A route registered later overrides it, so each count is pinned
+ * locally; the pattern is a regex because the call carries a query string,
+ * which a glob ending at the resource name would not match. Both are pinned
+ * because the badge total is the two summed, so a row with only one of them
+ * set still reads a real zero from the other.
+ */
+async function mockUnreadCounts(page: Page, notifications: number, messages: number) {
+  await page.route(/\/api\/v1\/notifications\/unread-count/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ count: notifications }),
+    }),
+  );
+  await page.route(/\/api\/v1\/conversations\/unread-count/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ count: messages }),
+    }),
+  );
+}
+
+/**
+ * The bell's accessible name per unread shape. The badge total is unread
+ * notifications plus unread conversation messages, so the name splits that
+ * total by source: a count asserted as plain "notifications" sends a
+ * screen-reader user to a pane that reports none. The names are literals, not a
+ * copy of the component's wording, so the count cannot be dropped or
+ * misspelled while both sides of the test drift together.
+ */
+const BELL_NAME_BY_UNREAD = [
+  { notifications: 0, messages: 0, unread: 0, name: "Show notifications" },
+  { notifications: 1, messages: 0, unread: 1, name: "Show notifications, 1 unread notification" },
+  { notifications: 3, messages: 0, unread: 3, name: "Show notifications, 3 unread notifications" },
+  {
+    notifications: 1,
+    messages: 2,
+    unread: 3,
+    name: "Show notifications, 1 unread notification and 2 unread messages",
+  },
+];
+
+/**
  * A node line that carries an accessible name: `- button "Search":` for a name
  * computed from aria-label / title / text, or `- combobox: Active` for a Radix
  * trigger named by its value. An unnamed control prints a bare `- button:`.
@@ -59,7 +115,7 @@ const NAMED = /^-\s[\w-]+(?:\s+"[^"]+"|:.*\S)/;
  * Every visible button in `scope` carries an accessible name, read from the
  * accessibility snapshot rather than the JSX so a button named by its own text
  * passes without an aria-label; and every icon-only one carries both
- * `title` and `aria-label`.
+ * `title` and `aria-label`, equal to each other.
  */
 async function expectButtonsNamed(scope: Locator) {
   const iconOnly: Locator[] = [];
@@ -72,10 +128,28 @@ async function expectButtonsNamed(scope: Locator) {
   for (const button of iconOnly) {
     await expect(button).toHaveAttribute("title", /\S/);
     await expect(button).toHaveAttribute("aria-label", /\S/);
+    expect(
+      await button.getAttribute("title"),
+      `title and aria-label disagree — align title to the accessible name: ${await button.evaluate((el) => el.outerHTML)}`,
+    ).toBe(await button.getAttribute("aria-label"));
   }
 }
 
-const test = base;
+/**
+ * The pane toggle names its own action — "Collapse panel" / "Expand panel" —
+ * so its glyph has to follow `leftCollapsed`: a collapsed pane that announces
+ * "Expand panel" while painting `PanelLeftClose` shows one action and says
+ * another. The collapsed pane is `md:hidden` at the viewport this spec runs at,
+ * so the toggle leaves the accessibility tree while staying mounted, and is
+ * read with `includeHidden` to reach that state. #897.
+ */
+async function expectToggleIconTracksName(scope: Locator) {
+  const toggle = scope.getByRole("button", { name: /^(Expand|Collapse) panel$/, includeHidden: true });
+  await expect(toggle.locator("svg")).toHaveClass(/\blucide-panel-left-close\b/);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-label", "Expand panel");
+  await expect(toggle.locator("svg")).toHaveClass(/\blucide-panel-left-open\b/);
+}
 
 test.describe("inbox icon buttons", () => {
   test("every icon-only button in the list pane is named", async ({ page }) => {
@@ -98,5 +172,69 @@ test.describe("inbox icon buttons", () => {
     const header = page.getByRole("heading", { name: "Release plan" }).locator("xpath=../../..");
     await expectButtonsNamed(header);
     await expect(header.getByRole("button", { name: "Edit title", exact: true })).toBeVisible();
+  });
+
+  test("every icon-only button in the notifications pane is named", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    await page.goto("/inbox");
+    // `exact` pins this tab: the header bell opens the same list under the
+    // name "Show notifications", which a case-insensitive non-exact query
+    // would match too.
+    await pageBody(page).getByRole("button", { name: "Notifications", exact: true }).click();
+
+    await expectButtonsNamed(pageBody(page));
+  });
+
+  test("the header bell announces its action, not a bare noun", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    await page.goto("/inbox");
+    // The bell sits in the AppLayout header, outside the panes audited above,
+    // so its name is pinned here: a bare noun is announced as a single stray
+    // word, the name has to state the action like every other control.
+    const bell = page
+      .locator("header")
+      .getByRole("button", { name: "Show notifications", exact: true });
+    await expect(bell).toBeVisible();
+    // The name also promises the action, so the click is asserted to open the
+    // sheet: a refactor that keeps the string while pointing it at something
+    // else leaves the name lying. Assert first, then click — Radix sets
+    // `aria-hidden` on the bell while the sheet is open, so a role query for it
+    // after the click resolves to nothing.
+    await bell.click();
+    await expect(page.getByRole("dialog").getByRole("heading", { name: "Notifications" })).toBeVisible();
+  });
+
+  // The badge is decoration: the count reaches a screen reader only through
+  // the accessible name, so the count is part of the name in the wording of
+  // the number it carries. Zero keeps the bare action name pinned above.
+  for (const { notifications, messages, unread, name } of BELL_NAME_BY_UNREAD) {
+    test(`the bell name reads ${unread} unread from ${notifications} notifications and ${messages} messages`, async ({
+      page,
+    }) => {
+      await mockApi(page, { signedIn: true });
+      await mockUnreadCounts(page, notifications, messages);
+      await page.goto("/inbox");
+      const bell = page.locator("header").getByRole("button", { name, exact: true });
+      await expect(bell).toBeVisible();
+      // The badge paints the same total the name announces, so a name that
+      // keeps its count while the badge loses its digits cannot pass.
+      if (unread > 0) await expect(bell).toHaveText(String(unread));
+    });
+  }
+
+  test("the messages pane toggle paints the icon it announces", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    await page.goto("/inbox");
+    await expect(page.getByRole("button", { name: "Compose", exact: true })).toBeVisible();
+
+    await expectToggleIconTracksName(pageBody(page));
+  });
+
+  test("the notifications pane toggle paints the icon it announces", async ({ page }) => {
+    await mockApi(page, { signedIn: true });
+    await page.goto("/inbox");
+    await pageBody(page).getByRole("button", { name: "Notifications", exact: true }).click();
+
+    await expectToggleIconTracksName(pageBody(page));
   });
 });

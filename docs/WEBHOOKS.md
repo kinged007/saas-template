@@ -12,9 +12,14 @@ backoff until success or exhaustion, and the log is visible in the UI.
 3. Watch the delivery log in the webhooks page; retry failed rows with
    `POST /api/v1/webhooks/deliveries/{id}/redeliver`.
 
+`GET /api/v1/webhooks/subscriptions/{id}` reads one subscription
+(url, events, active — never the secret).
+
 `GET /api/v1/webhooks/events` lists subscribable event names
 (`workspace.created`, `invitation.created`, `member.invited`,
-`member.joined`, `member.role_changed`, `member.removed`,
+`member.joined`, `member.role_changed` (an ownership transfer emits one
+`member.role_changed` event per user whose role actually changed, against a
+single `workspace.ownership_transferred` audit record), `member.removed`,
 `apikey.created`, `apikey.revoked`, `audit.entry.created`,
 `conversation.message.created`). An empty `events` list means all events.
 
@@ -37,12 +42,19 @@ Body envelope:
   "event_id": "01J…",
   "occurred_at": "2026-09-14T12:00:00+00:00",
   "workspace_id": "3fa…",
+  "correlation_id": "9c2…",
   "data": { "workspace_id": "3fa…", "user_id": "9c2…", "...": "original event payload" }
 }
 ```
 
+`correlation_id` groups deliveries from one operation: an ownership transfer
+publishes one `member.role_changed` event per user whose role actually changed
+(promotion + demotion), sharing one id against a single
+`workspace.ownership_transferred` audit record. It is `null` for standalone events.
+
 Delivery is **at-least-once and unordered** across retries — dedupe on
-`X-Webhook-Delivery` / `event_id` before acting on the payload.
+`X-Webhook-Delivery` / `event_id` before acting on the payload. Pair related
+deliveries on `correlation_id`, not `occurred_at` proximity.
 
 ## Verifying signatures
 

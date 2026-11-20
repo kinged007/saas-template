@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -34,9 +35,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useDeleteAccount, useExportProfile, useProfile, useUpdateProfile } from "@/hooks/useProfile";
+import { useDeleteAccount, useExportProfile, useProfile, useTargetUserId, useUpdateProfile } from "@/hooks/useProfile";
 import type { Identity, UserProfile } from "@/types";
 import { getProfileField } from "@/types";
+import { errorMessage } from "@/utils/errorMessage";
 
 const profileSchema = z.object({
   first_name: z.string().max(100, "Max 100 characters").optional().or(z.literal("")),
@@ -131,9 +133,14 @@ function getDetectedTimezone(): string {
 
 export function GeneralSection() {
   const { data: identity } = useGetIdentity<Identity>();
-  const profileHook = useProfile();
-  const profile = (profileHook.data as UserProfile | undefined) ?? identity?.profile;
-  const { mutate, mutation: updateMutation } = useUpdateProfile();
+  // Set when routed as `users/:id/settings/general` (a caller holding
+  // profile:update editing someone else); null on the self-service page.
+  const targetId = useTargetUserId();
+  const profileHook = useProfile(targetId);
+  // For a target, never fall back to identity.profile: that is the signed-in
+  // user, and showing their fields in the member editor is a data leak.
+  const profile = (profileHook.data as UserProfile | undefined) ?? (targetId ? undefined : identity?.profile);
+  const { mutate, mutation: updateMutation } = useUpdateProfile(targetId);
   const isSaving = updateMutation.isPending;
   const { exportMyData } = useExportProfile();
   const { mutate: deleteAccount, mutation: deleteMutation } = useDeleteAccount();
@@ -141,6 +148,8 @@ export function GeneralSection() {
   const { list } = useNavigation();
 
   const [initialized, setInitialized] = useState(false);
+  // A new target means new values: re-initialize the form for them.
+  useEffect(() => setInitialized(false), [targetId]);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [deletePassword, setDeletePassword] = useState("");
@@ -167,8 +176,11 @@ export function GeneralSection() {
   });
 
   // Initialize form when profile loads — preselect detected timezone when empty.
+  // Wait for the query to settle: the first render already carries a truthy
+  // empty result object, and initializing on that would blank the form and
+  // never fill it when the real profile lands.
   useEffect(() => {
-    if (profile && !initialized) {
+    if (profile && !initialized && !profileHook.isLoading) {
       const tzFromProfile = (getProfileField(profile, "timezone", "") as string) || "";
       const localeFromProfile = (getProfileField(profile, "locale", "") as string) || "";
       form.reset({
@@ -181,11 +193,14 @@ export function GeneralSection() {
         date_of_birth: (getProfileField(profile, "date_of_birth", "") as string) || "",
         website_url: (getProfileField(profile, "website_url", "") as string) || "",
         location: (getProfileField(profile, "location", "") as string) || "",
-        avatar_url: (identity?.avatar_url as string) || "",
+        avatar_url:
+          (getProfileField(profile, "avatar_url", "") as string) ||
+          // identity.avatar_url is the signed-in user's: only a fallback here.
+          (targetId ? "" : ((identity?.avatar_url as string) ?? "")),
       });
       setInitialized(true);
     }
-  }, [profile, identity, initialized, form, detectedTimezone]);
+  }, [profile, identity, initialized, form, detectedTimezone, profileHook.isLoading, targetId]);
 
   const onSubmit = (data: ProfileFormData) => {
     const payload: Record<string, unknown> = {};
@@ -222,8 +237,7 @@ export function GeneralSection() {
         toast.success("Profile updated");
       },
       onError: (err: unknown) => {
-        const msg = (err as { message?: string })?.message || String(err);
-        toast.error(msg);
+        toast.error(errorMessage(err));
       },
     });
   };
@@ -233,8 +247,7 @@ export function GeneralSection() {
       await exportMyData();
       toast.success("Export downloaded");
     } catch (e: unknown) {
-      const msg = (e as { message?: string })?.message || String(e);
-      toast.error(msg);
+      toast.error(errorMessage(e));
     }
   };
 
@@ -248,8 +261,7 @@ export function GeneralSection() {
         window.location.assign("/login");
       },
       onError: (err: unknown) => {
-        const msg = (err as { message?: string })?.message || String(err);
-        toast.error(msg);
+        toast.error(errorMessage(err));
       },
     });
   };
@@ -262,7 +274,7 @@ export function GeneralSection() {
     <div className="flex flex-col gap-6">
       <Card>
         <CardHeader>
-          <CardTitle>Personal Information</CardTitle>
+          <CardTitle>{targetId ? "Member Information" : "Personal Information"}</CardTitle>
           <CardDescription>Common profile fields and avatar URL.</CardDescription>
         </CardHeader>
         <CardContent>
@@ -335,7 +347,7 @@ export function GeneralSection() {
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue placeholder="Select timezone">
-                              {field.value || undefined}
+                              {field.value ?? ""}
                             </SelectValue>
                           </SelectTrigger>
                         </FormControl>
@@ -364,7 +376,7 @@ export function GeneralSection() {
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue placeholder="Select locale">
-                              {LOCALE_OPTIONS.find((o) => o.value === field.value)?.label}
+                              {LOCALE_OPTIONS.find((o) => o.value === field.value)?.label ?? field.value ?? ""}
                             </SelectValue>
                           </SelectTrigger>
                         </FormControl>
@@ -438,7 +450,7 @@ export function GeneralSection() {
               />
 
               <div className="flex justify-end gap-2 pt-4">
-                <Button type="button" variant="outline" onClick={() => list("workspaces")}>
+                <Button type="button" variant="outline" onClick={() => list(targetId ? "members" : "workspaces")}>
                   Cancel
                 </Button>
                 <Button type="submit" disabled={isSaving}>
@@ -450,6 +462,8 @@ export function GeneralSection() {
         </CardContent>
       </Card>
 
+      {/* Export and account deletion act on the signed-in user only. */}
+      {!targetId && (
       <Card>
         <CardHeader>
           <CardTitle>Data &amp; Account</CardTitle>
@@ -477,6 +491,7 @@ export function GeneralSection() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent>
