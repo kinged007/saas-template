@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/select";
 import { useGetIdentity, useLogout } from "@refinedev/core";
 import { useWorkspaceCustom } from "../hooks/useWorkspaceQuery";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import {
   Building2,
@@ -48,6 +48,7 @@ import {
   LogOut,
   Mail,
   Plus,
+  Search,
   Settings,
   ShieldCheck,
   Users,
@@ -60,6 +61,7 @@ import { isManagerRoleName } from "../pages/role-name";
 import { ThemeToggle } from "./refine-ui/theme/theme-toggle";
 import { NotificationCenter } from "./NotificationCenter";
 import { PendingInvitationsBadge } from "./PendingInvitations";
+import { WorkspaceSearchDialog } from "./WorkspaceSearchDialog";
 import { cn } from "@/lib/utils";
 import type { Identity } from "../types";
 import { getDisplayName } from "../types";
@@ -101,7 +103,21 @@ const SIDEBAR_GROUPS: { id: string; title?: string; position: "top" | "bottom"; 
   },
 ];
 
-function SidebarNav() {
+// GET /workspaces/search is gated by workspace:read, same as the Dashboard entry.
+const SEARCH_PERMISSION = "workspace:read";
+
+// ⌘K on Apple hardware, Ctrl+K elsewhere.
+const SEARCH_HOTKEY = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl+K";
+
+function SearchShortcut() {
+  return (
+    <kbd className="text-muted-foreground ml-auto rounded border px-1.5 py-0.5 font-mono text-[10px] group-data-[collapsible=icon]:hidden">
+      {SEARCH_HOTKEY}
+    </kbd>
+  );
+}
+
+function SidebarNav({ openSearch }: { openSearch: () => void }) {
   const location = useLocation();
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
   const { workspace } = useWorkspace();
@@ -177,8 +193,22 @@ function SidebarNav() {
   // It takes over the flex classes SidebarContent used to give the groups, so
   // the scroll and collapsed layout are unchanged. Named because the settings
   // pages render a nav of their own.
+  const canSearch = can(SEARCH_PERMISSION);
   return (
     <nav aria-label="Main" className="flex min-h-0 flex-1 flex-col gap-2">
+      {canSearch && (
+        <SidebarGroup>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton onClick={openSearch} tooltip={`Search (${SEARCH_HOTKEY})`}>
+                <Search className="h-4 w-4 shrink-0" />
+                <span>Search</span>
+                <SearchShortcut />
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroup>
+      )}
       {topGroups.map(renderGroup)}
       {topGroups.length > 0 && bottomGroups.length > 0 && <SidebarSeparator />}
       {bottomGroups.map(renderGroup)}
@@ -352,6 +382,26 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const { workspaces } = useWorkspace();
   const single = useSingleWorkspace();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const openSearch = () => setSearchOpen(true);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.key.toLowerCase() !== "k" || !(e.metaKey || e.ctrlKey)) return;
+      // Skip editable targets (Ctrl+K is kill-line in most editors) and any open
+      // dialog/popover, so the palette never hijacks typing nor stacks over a modal.
+      if (
+        (e.target as HTMLElement | null)?.closest(
+          "input, textarea, select, [contenteditable], [role=dialog], [role=listbox], [role=menu]",
+        )
+      )
+        return;
+      e.preventDefault();
+      setSearchOpen(true);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   return (
     <SidebarProvider>
@@ -390,7 +440,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               )}
             </div>
           ) : (
-            <SidebarNav />
+            <SidebarNav openSearch={openSearch} />
           )}
         </SidebarContent>
         <SidebarFooter>
@@ -398,6 +448,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         </SidebarFooter>
         <SidebarRail />
       </Sidebar>
+      <WorkspaceSearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
       <SidebarInset>
         <header
           className={cn(

@@ -112,7 +112,7 @@ test("an explicit retry budget is set only where it is audited", () => {
     .sort();
   assert.deepEqual(hits, [
     "components/WorkspaceExportCard.tsx", // no-storm path: e2e asserts one attempt on network failure
-    "components/WorkspaceSearch.tsx", // key contains the query text, so a retry is always superseded
+    "components/WorkspaceSearchDialog.tsx", // key contains the query text, so a retry is always superseded
     "contexts/WorkspaceContext.tsx", // refine hardcodes retry:false for useGetIdentity
     "pages/InboxPage.tsx", // one attempt on a network failure; the pane renders its own error line
     "providers/queryClient.ts", // the default itself
