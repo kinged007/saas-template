@@ -80,9 +80,11 @@ export function LoginPage() {
         // replace: Back must not return to a spent sign-in form.
         navigate(afterAuthRedirect(), { replace: true });
       } catch {
-        setChallenge(null);
+        // The challenge survives a wrong code (the API consumes it only on
+        // success), so stay on the code form for a retry with the same token.
         setCode("");
-        setError("Verification failed. Sign in again.");
+        setError("Verification failed. Try again.");
+        codeRef.current?.focus();
       } finally {
         setPending(false);
       }
