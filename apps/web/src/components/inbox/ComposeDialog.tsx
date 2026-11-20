@@ -5,6 +5,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { toast } from "sonner";
+import { errorMessage } from "@/utils/errorMessage";
 import { Check, ChevronsUpDown, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -31,11 +32,11 @@ import {
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { TiptapEditor } from "./TiptapEditor";
 import type { Identity, Member, Conversation } from "@/types";
-import { getMemberDisplayName } from "@/types";
+import { getDisplayNameFromRow } from "@/types";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "@/contexts/WorkspaceContext";
 import { cn } from "@/lib/utils";
-import { errorMessage } from "../../utils/errorMessage";
+
 
 const schema = z.object({
   title: z.string().max(300, "Subject must be at most 300 characters").optional(),
@@ -80,6 +81,9 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
 
   const [editorKey, setEditorKey] = useState(0);
   const [comboOpen, setComboOpen] = useState(false);
+  // Lifted from TiptapEditor: the dialog-level Escape handler closes the
+  // link popover instead of the whole compose dialog while it is open.
+  const [linkOpen, setLinkOpen] = useState(false);
 
   const onSubmit = async (data: FormData) => {
     const payload = {
@@ -102,7 +106,7 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
       onOpenChange(false);
       if (conv && onCreated) onCreated(conv);
     } catch (err: unknown) {
-      const msg = (err as { message?: string })?.message || String(err);
+      const msg = errorMessage(err);
       toast.error("Could not create conversation", { description: msg });
     }
   };
@@ -113,10 +117,22 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
         form.reset({ title: "", participantIds: [], initialMessage: "" });
         setEditorKey(k=>k+1);
         setComboOpen(false);
+        setLinkOpen(false);
       }
       onOpenChange(v);
     }}>
-      <DialogContent className="sm:max-w-[600px]">
+      <DialogContent
+        className="sm:max-w-[600px]"
+        onEscapeKeyDown={(e) => {
+          // Radix only lets the topmost layer handle Escape; before the link
+          // popover registers, this dialog is topmost and would close with it.
+          // Close just the popover instead, like its own Escape handling does.
+          if (linkOpen) {
+            e.preventDefault();
+            setLinkOpen(false);
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>New conversation</DialogTitle>
           <DialogDescription>Start a conversation with workspace members. Markdown supported.</DialogDescription>
@@ -162,7 +178,7 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
                                 ) : (
                                   <>
                                     {selectedMembers.slice(0, 3).map((m) => {
-                                      const name = getMemberDisplayName(m);
+                                      const name = getDisplayNameFromRow(m);
                                       return (
                                         <span
                                           key={m.id}
@@ -217,7 +233,7 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
                                   </div>
                                 ) : (
                                   selectableMembers.map((m) => {
-                                    const name = getMemberDisplayName(m);
+                                    const name = getDisplayNameFromRow(m);
                                     const isSelected = selectedIds.includes(m.id);
                                     return (
                                       <CommandItem
@@ -290,6 +306,8 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
                       value={field.value}
                       onChange={(md) => field.onChange(md)}
                       placeholder="Write a message…"
+                      linkOpen={linkOpen}
+                      onLinkOpenChange={setLinkOpen}
                     />
                   </FormControl>
                   <FormMessage />

@@ -18,14 +18,16 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.crud import InvalidQuery, apply_query, parse_query
-from src.api.deps import get_container, require_superuser
+from src.api.crud import CREATED_DESC, InvalidQuery, apply_query, parse_query
+from src.api.deps import get_container, require_superuser, uuid_or_404
+from src.core.dates import iso_or_none
 from src.db.session import get_db
 from src.events.publisher import publish_audit
 from src.models.audit import AuditLogEntry
 from src.models.user_profile import UserProfile
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.schemas.api import AdminUserUpdate, AdminWorkspaceFlags
+from src.services.audit import public_details
 from src.services.profile_helpers import escape_like, format_display_name
 from src.services.serializers import user_to_dict, workspace_to_dict
 
@@ -41,21 +43,11 @@ _AUDIT_SORTABLE = {"created_at", "action", "resource_type"}
 _AUDIT_FILTERABLE = {"action", "resource_type", "actor_user_id", "workspace_id"}
 
 
-def _uuid_or_404(value: str, label: str) -> str:
-    # StringUUID's bind processor raises ValueError (-> 500) on a malformed id,
-    # so validate before it reaches the query.
-    try:
-        uuid.UUID(value)
-    except ValueError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{label} not found") from None
-    return value
-
-
 def _admin_user_dict(u: User) -> dict:
     return {
         **user_to_dict(u),
         "is_active": bool(u.is_active),
-        "created_at": u.created_at.isoformat() if u.created_at else None,
+        "created_at": iso_or_none(u.created_at),
     }
 
 
@@ -79,7 +71,14 @@ async def list_users(
         if not searches and (plain := request.query_params.get("search")):
             searches = [plain]
         spec.filters = [f for f in spec.filters if f[0] != "search"]
-        stmt = apply_query(stmt, User, spec, sortable=_USER_SORTABLE, filterable=_USER_FILTERABLE)
+        stmt = apply_query(
+            stmt,
+            User,
+            spec,
+            sortable=_USER_SORTABLE,
+            filterable=_USER_FILTERABLE,
+            default_sort=CREATED_DESC,
+        )
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     for term in searches:
@@ -92,8 +91,6 @@ async def list_users(
         )
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
-    if not spec.sort_by:
-        stmt = stmt.order_by(User.created_at.desc(), User.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
@@ -106,7 +103,7 @@ async def get_user(
     _=Depends(require_superuser),
     db: AsyncSession = Depends(get_db),
 ):
-    user = await db.get(User, _uuid_or_404(user_id, "user"))
+    user = await db.get(User, uuid_or_404(user_id, "user"))
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     stmt = (
@@ -132,7 +129,7 @@ async def update_user(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    user = await db.get(User, _uuid_or_404(user_id, "user"))
+    user = await db.get(User, uuid_or_404(user_id, "user"))
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     if user.id == admin.id and body.is_active is False:
@@ -164,14 +161,17 @@ async def list_all_workspaces(
     try:
         spec = parse_query(request)
         stmt = apply_query(
-            stmt, Workspace, spec, sortable=_WORKSPACE_SORTABLE, filterable=_WORKSPACE_FILTERABLE
+            stmt,
+            Workspace,
+            spec,
+            sortable=_WORKSPACE_SORTABLE,
+            filterable=_WORKSPACE_FILTERABLE,
+            default_sort=CREATED_DESC,
         )
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
-    if not spec.sort_by:
-        stmt = stmt.order_by(Workspace.created_at.desc(), Workspace.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     workspaces = rows.scalars().all()
@@ -189,14 +189,14 @@ async def list_all_workspaces(
 
 @router.patch("/workspaces/{workspace_id}/flags")
 async def update_workspace_flags(
-    workspace_id: str,
+    workspace_id: uuid.UUID,
     body: AdminWorkspaceFlags,
     request: Request,
     admin=Depends(require_superuser),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
-    workspace = await db.get(Workspace, _uuid_or_404(workspace_id, "workspace"))
+    workspace = await db.get(Workspace, workspace_id)
     if workspace is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
     merged = {**(workspace.flags or {}), **body.flags}
@@ -204,9 +204,9 @@ async def update_workspace_flags(
     await db.commit()
     await publish_audit(
         container.bus,
-        workspace_id=workspace_id,
+        workspace_id=str(workspace_id),
         resource_type="workspace",
-        resource_id=workspace_id,
+        resource_id=str(workspace_id),
         action="workspace.flags_updated",
         actor_user_id=admin.id,
         details={"flags": body.flags},
@@ -232,7 +232,12 @@ async def list_all_audit_logs(
         spec = parse_query(request)
         q = (request.query_params.get("q") or "").strip()
         stmt = apply_query(
-            stmt, AuditLogEntry, spec, sortable=_AUDIT_SORTABLE, filterable=_AUDIT_FILTERABLE
+            stmt,
+            AuditLogEntry,
+            spec,
+            sortable=_AUDIT_SORTABLE,
+            filterable=_AUDIT_FILTERABLE,
+            default_sort=CREATED_DESC,
         )
         if q:
             # Single cross-field search: substring match on workspace name,
@@ -263,8 +268,6 @@ async def list_all_audit_logs(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
-    if not spec.sort_by:
-        stmt = stmt.order_by(AuditLogEntry.created_at.desc(), AuditLogEntry.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
@@ -289,9 +292,9 @@ async def list_all_audit_logs(
                 "resource_type": entry.resource_type,
                 "resource_id": entry.resource_id,
                 "action": entry.action,
-                "details": entry.details,
+                "details": public_details(entry.details),
                 "ip_address": entry.ip_address,
-                "created_at": entry.created_at.isoformat() if entry.created_at else None,
+                "created_at": iso_or_none(entry.created_at),
             }
         )
     return out

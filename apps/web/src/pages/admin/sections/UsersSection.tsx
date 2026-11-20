@@ -21,8 +21,10 @@ import {
   asAdminUserDetail,
   canToggleUser,
   pageRange,
+  toggleDisabled,
   type AdminUserDetail,
 } from "./users-toggle";
+import { userDetailMessage } from "./user-detail-message";
 import { errorMessage } from "@/utils/errorMessage";
 
 export function UsersSection() {
@@ -53,6 +55,7 @@ export function UsersSection() {
   const total = result?.total ?? 0;
   const { from, to, totalPages } = pageRange(current, total);
   const detail = asAdminUserDetail(detailQuery.result?.data);
+  const detailMessage = userDetailMessage(detail, selectedId !== null, detailQuery.query);
 
   const toggle = (user: AdminUserDetail, next: boolean) => {
     setActive(adminUserPatch(user, next), {
@@ -163,7 +166,7 @@ export function UsersSection() {
                   <Button
                     variant={detail.is_active ? "destructive" : "default"}
                     size="sm"
-                    disabled={mutation.isPending}
+                    disabled={toggleDisabled(mutation, detailQuery.query)}
                     onClick={() => toggle(detail, !detail.is_active)}
                   >
                     {detail.is_active ? "Disable access" : "Re-enable"}
@@ -178,6 +181,9 @@ export function UsersSection() {
                 ))}
               </ul>
             </div>
+          )}
+          {detailMessage && (
+            <p className="text-muted-foreground text-sm">{detailMessage}</p>
           )}
         </CardContent>
       </Card>

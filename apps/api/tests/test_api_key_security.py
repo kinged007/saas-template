@@ -21,6 +21,7 @@ Covers, end to end over the HTTP API:
     export, and the deployment-admin flag all refuse a key
 """
 
+import pytest
 from sqlalchemy import select
 
 from src.core.permissions import ALL_PERMISSIONS, JOB_READ, JOB_UPDATE, permissions_for_role
@@ -60,11 +61,10 @@ async def _add_member(client, owner_headers, ws_id, email, role_name):
 
 
 async def _create_key(client, headers, name, permissions, usage_quota=None):
-    resp = await client.post(
-        "/api/v1/api-keys",
-        json={"name": name, "permissions": permissions, "usage_quota": usage_quota},
-        headers=headers,
-    )
+    body = {"name": name, "permissions": permissions}
+    if usage_quota is not None:
+        body["usage_quota"] = usage_quota
+    resp = await client.post("/api/v1/api-keys", json=body, headers=headers)
     assert resp.status_code == 201, resp.text
     return resp.json()
 
@@ -80,7 +80,7 @@ async def _user_id(client, tokens) -> str:
 
 
 async def _seed_runs(workspace_id: str) -> dict[str, str]:
-    """A global run plus a workspace run, inserted directly so the tests do
+    """A global run plus two workspace runs, inserted directly so the tests do
     not depend on job provisioning."""
     import uuid
 
@@ -101,6 +101,9 @@ async def _seed_runs(workspace_id: str) -> dict[str, str]:
         for name, ws_id, definition_id in (
             ("global", None, str(uuid.uuid4())),
             ("workspace", workspace_id, definition.id),
+            # A second own-workspace run, under its own definition_id so the
+            # runs route of `definition` still counts exactly one.
+            ("workspace_2", workspace_id, str(uuid.uuid4())),
         ):
             run = JobRun(
                 id=str(uuid.uuid4()),
@@ -262,6 +265,46 @@ async def test_key_reads_within_its_permission_scope(app_client):
     resp = await client.get("/api/v1/workspaces", headers=_key_headers(wkey["key"], ws["id"]))
     assert resp.status_code == 200
     assert [w["id"] for w in resp.json()] == [ws["id"]]
+
+
+async def test_non_canonical_workspace_header_still_authorises_a_key(app_client):
+    """The header is parsed as a UUID, so an uppercase spelling matches the stored
+    lowercase id. Before the UUID annotation the string comparison 403'd."""
+    client = app_client
+    owner = await register_user(client, "umi@example.com")
+    ws = await create_workspace(client, owner)
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "upper", ["workspace:read"])
+
+    resp = await client.get(
+        "/api/v1/workspaces", headers=_key_headers(key["key"], ws["id"].upper())
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert [w["id"] for w in resp.json()] == [ws["id"]]
+
+
+@pytest.mark.parametrize("grant", [["workspace:read"], ["workspace:read", "member:read"]])
+async def test_workspaces_list_reports_the_keys_grant_for_key_principals(app_client, grant):
+    """GET /workspaces for a key reports the key's own grant, like /auth/me.
+
+    The two endpoints must agree on the shape: `permissions` is what this
+    principal can do, not the creator's role. `[]` is a real grant, never a
+    fallback to the role.
+    """
+    client = app_client
+    owner = await register_user(client, "ws-grant@example.com")
+    ws = await create_workspace(client, owner, "Ws Grant Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "ws-granted", grant)
+
+    resp = await client.get("/api/v1/workspaces", headers=_key_headers(key["key"], ws["id"]))
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()) == 1
+    assert resp.json()[0]["permissions"] == sorted(grant)
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    assert me_key.json()["workspaces"][0]["permissions"] == resp.json()[0]["permissions"]
+    assert me_key.json()["permissions"] == resp.json()[0]["permissions"]
 
 
 async def test_key_cannot_read_outside_its_permission_scope(app_client):
@@ -988,14 +1031,118 @@ async def test_auth_me_reports_the_principals_scope_not_the_owners(app_client):
     assert me_key.status_code == 200, me_key.text
     assert [w["id"] for w in me_key.json()["workspaces"]] == [ws["id"]]
 
-    # The owner's own session still sees the whole inventory, and it is the
-    # reference for what a key may read back: the roles it holds in the one
-    # workspace the key is scoped to, never the union across all of them.
+    # The owner's own session still sees the whole inventory, and its
+    # top-level union is still the union of the roles it holds there.
     me_owner = await client.get("/api/v1/auth/me", headers=auth_headers(owner))
     assert me_owner.status_code == 200, me_owner.text
     assert {w["id"] for w in me_owner.json()["workspaces"]} == {ws["id"], other_ws["id"]}
-    in_scope = next(w for w in me_owner.json()["workspaces"] if w["id"] == ws["id"])
-    assert set(me_key.json()["permissions"]) == set(in_scope["permissions"])
+    assert set(me_owner.json()["permissions"]) == {
+        p for w in me_owner.json()["workspaces"] for p in w["permissions"]
+    }
+
+    # The key's top-level `permissions` is its own grant — the same list
+    # deps.py authorizes it on — and never the creator's role, which for an
+    # owner is the wildcard.
+    assert me_key.json()["permissions"] == sorted(key["permissions"])
+    assert "*" not in me_key.json()["permissions"]
+
+
+@pytest.mark.parametrize("grant", [[], ["member:read"]])
+async def test_auth_me_reports_the_keys_own_grant_not_the_owners_role(app_client, grant):
+    """A key's authority is the grant it was minted with, so `/me` reports it.
+
+    `[]` is the case a truthiness check gets wrong: an empty grant is a real
+    grant, not a missing one, and must not fall back to the creator's role.
+    """
+    client = app_client
+    owner = await register_user(client, "grant@example.com")
+    ws = await create_workspace(client, owner, "Granted Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "granted", grant)
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    assert me_key.json()["permissions"] == sorted(grant)
+    assert me_key.json()["is_superuser"] is False
+
+    # Same user, same endpoint: the creator's session still answers with its
+    # own role union, so the narrowing belongs to the principal, not the route.
+    me_owner = await client.get("/api/v1/auth/me", headers=auth_headers(owner))
+    assert me_owner.status_code == 200, me_owner.text
+    assert "*" in me_owner.json()["permissions"]
+    assert me_key.json()["permissions"] != me_owner.json()["permissions"]
+
+
+@pytest.mark.parametrize("grant", [[], ["member:read"]])
+async def test_auth_me_narrows_workspace_permissions_to_the_keys_grant(app_client, grant):
+    """For a key principal, `workspaces[].permissions` is the key's own grant.
+
+    The nested field used to carry the creator's role set, so a client
+    reading it (like the web's `active?.permissions ?? identity?.permissions`)
+    got a capability the key does not have. `[]` pins the same truthiness
+    trap as the top-level fix: an empty grant stays `[]`, not the role.
+    """
+    client = app_client
+    owner = await register_user(client, "narrow@example.com")
+    ws = await create_workspace(client, owner, "Narrow Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "narrowed", grant)
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    body = me_key.json()
+    assert len(body["workspaces"]) == 1
+    assert body["workspaces"][0]["permissions"] == sorted(grant)
+    assert body["workspaces"][0]["permissions"] == body["permissions"]
+
+    me_owner = await client.get("/api/v1/auth/me", headers=auth_headers(owner))
+    assert me_owner.status_code == 200, me_owner.text
+    assert "*" in me_owner.json()["workspaces"][0]["permissions"]
+    assert body["workspaces"][0]["permissions"] != me_owner.json()["workspaces"][0]["permissions"]
+
+
+async def test_auth_me_passes_a_wildcard_grant_through_verbatim(app_client):
+    """A wildcard key is the highest-stakes pass-through: `['*']` reaches both
+    the nested entry and the top-level field unfiltered. No inequality-vs-owner
+    assertion here — an owner's role is also `*`, which is why the equality
+    parametrization above skips this grant."""
+    client = app_client
+    owner = await register_user(client, "wild@example.com")
+    ws = await create_workspace(client, owner, "Wild Grant Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "wild", ["*"])
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    body = me_key.json()
+    assert len(body["workspaces"]) == 1
+    assert body["workspaces"][0]["permissions"] == ["*"]
+    assert body["permissions"] == ["*"]
+
+
+async def test_auth_me_drops_a_keys_grant_when_its_membership_is_suspended(app_client):
+    """`permissions` is what the gate authorizes on, and the gate also checks
+    the membership: a key whose creator's membership is not active gets no
+    workspaces, so it must get no permissions either."""
+    client = app_client
+    owner = await register_user(client, "susp-owner@example.com")
+    ws = await create_workspace(client, owner, "Susp Grant Inc")
+    owner_headers = ws_headers(owner, ws["id"])
+    # The key's creator is the admin, not the owner: the owner cannot be
+    # suspended (nor suspend themselves), and a key belongs to whoever minted
+    # it, so the membership under test has to be the second one.
+    admin = await _add_member(client, owner_headers, ws["id"], "susp-admin@example.com", "admin")
+    key = await _create_key(client, ws_headers(admin, ws["id"]), "granted", ["member:read"])
+
+    membership_id = next(
+        m["membership_id"]
+        for m in (await client.get("/api/v1/members", headers=owner_headers)).json()
+        if m["email"] == "susp-admin@example.com"
+    )
+    suspended = await client.post(f"/api/v1/members/{membership_id}/suspend", headers=owner_headers)
+    assert suspended.status_code == 200, suspended.text
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    assert me_key.json()["workspaces"] == []
+    assert me_key.json()["permissions"] == []
 
 
 async def test_job_run_access_uses_the_keys_own_permissions(app_client):
@@ -1011,19 +1158,23 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     foreign = (await _seed_runs(foreign_ws["id"]))["workspace"]
 
     # A key without jobs:read is refused even though its creator holds the
-    # permission through the workspace owner role.
+    # permission through the workspace owner role, and the refusal is the same
+    # for both of the key's own runs — the answer must not depend on which
+    # own-workspace id was asked for.
     narrow = await _create_key(client, headers, "no-jobs", ["member:read"])
-    resp = await client.get(
-        f"/api/v1/jobs/runs/{runs['workspace']}", headers=_key_headers(narrow["key"], ws["id"])
-    )
-    assert resp.status_code == 403, resp.text
-    assert JOB_READ in resp.json()["detail"]
+    narrow_headers = _key_headers(narrow["key"], ws["id"])
+    own_refusals = set()
+    for run_id in (runs["workspace"], runs["workspace_2"]):
+        resp = await client.get(f"/api/v1/jobs/runs/{run_id}", headers=narrow_headers)
+        own_refusals.add((resp.status_code, resp.json().get("detail")))
+    assert own_refusals == {(403, f"missing permission: {JOB_READ}")}, own_refusals
 
     # A foreign X-Workspace-ID header does not widen the key's own scope.
     resp = await client.get(
         f"/api/v1/jobs/runs/{foreign}", headers=_key_headers(narrow["key"], foreign_ws["id"])
     )
-    assert resp.status_code == 404, resp.text
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == "deployment administration is not available to API keys"
 
     viewer = await _create_key(client, headers, "jobs-read", ["jobs:read"])
     viewer_headers = _key_headers(viewer["key"], ws["id"])
@@ -1032,61 +1183,84 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     logs = await client.get(f"/api/v1/jobs/runs/{runs['workspace']}/logs", headers=viewer_headers)
     assert logs.status_code == 200, logs.text
 
-    # ... but the same key never reaches a global run or another workspace.
+    # ... but the same key never reaches a global run or another workspace, and
+    # one refusal covers both.
     for url in [
         f"/api/v1/jobs/runs/{runs['global']}",
         f"/api/v1/jobs/runs/{runs['global']}/logs",
+        f"/api/v1/jobs/runs/{foreign}",
     ]:
         resp = await client.get(url, headers=viewer_headers)
         assert resp.status_code == 403, (url, resp.text)
-    resp = await client.get(f"/api/v1/jobs/runs/{foreign}", headers=viewer_headers)
-    assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == (
+            "deployment administration is not available to API keys"
+        ), url
 
-    # usage_quota = 0 buys nothing: the conditional UPDATE's
-    # `usage_count < usage_quota` is `0 < 0`, so the very first request is
-    # refused and the counter stays put. The 403 is what pins the predicate —
-    # relax it to `<=` and the zero row matches on the first unit, so the
-    # request returns 200 instead. The row read is the separate guard: a
-    # refusal must not spend the unit it refuses.
-    zero = await _create_key(client, headers, "quota-zero", [JOB_READ], usage_quota=0)
-    refused = await client.get(
-        f"/api/v1/jobs/runs/{runs['workspace']}",
-        headers=_key_headers(zero["key"], ws["id"]),
+    # usage_quota = 0 is refused at the counter: the conditional UPDATE's
+    # `usage_count < usage_quota` would be `0 < 0`, so the key the mint would
+    # hand back could never authenticate. No key is returned at all.
+    refused = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "quota-zero", "permissions": [JOB_READ], "usage_quota": 0},
+        headers=headers,
     )
-    assert refused.status_code == 403, refused.text
-    assert "quota" in refused.json()["detail"].lower(), refused.text
-    async with SessionFactory() as db:
-        row = await db.get(ApiKey, zero["id"])
-        assert row.usage_count == 0, "a zero-quota key must not spend a unit"
+    assert refused.status_code == 422, refused.text
 
     # A key-authorized hit is metered like any other key route: every read and
     # write route spends one unit and reports what is left. Regression test for
     # #311 — the key branch of _require_run_access and _require_job_access used
-    # to return without record_key_use. Each key carries only what its own
-    # route needs — a GET is gated on jobs:read, a write on jobs:update — so
-    # the second request's refusal can only be the quota's doing.
-    for method, url, key_name, charged_status, body, refused_body in [
-        ("get", f"/api/v1/jobs/runs/{runs['workspace']}", "quota-run", 200, None, None),
-        ("get", f"/api/v1/jobs/runs/{runs['workspace']}/logs", "quota-logs", 200, None, None),
-        ("get", f"/api/v1/jobs/{runs['definition']}", "quota-definition", 200, None, None),
-        ("get", f"/api/v1/jobs/{runs['definition']}/runs", "quota-runs", 200, None, None),
+    # to return without record_key_use. Each row names the permission its route
+    # requires, so the key carries exactly that and no more — the second
+    # request's refusal can then only be the quota's doing.
+    for method, url, key_name, required, charged_status, body, refused_body in [
+        ("get", f"/api/v1/jobs/runs/{runs['workspace']}", "quota-run", JOB_READ, 200, None, None),
+        (
+            "get",
+            f"/api/v1/jobs/runs/{runs['workspace']}/logs",
+            "quota-logs",
+            JOB_READ,
+            200,
+            None,
+            None,
+        ),
+        (
+            "get",
+            f"/api/v1/jobs/{runs['definition']}",
+            "quota-definition",
+            JOB_READ,
+            200,
+            None,
+            None,
+        ),
+        (
+            "get",
+            f"/api/v1/jobs/{runs['definition']}/runs",
+            "quota-runs",
+            JOB_READ,
+            200,
+            None,
+            None,
+        ),
         (
             "patch",
             f"/api/v1/jobs/{runs['definition']}",
             "quota-patch",
+            JOB_UPDATE,
             200,
             {"cron_schedule": "30 4 * * *"},
             {"cron_schedule": "45 5 * * *"},
         ),
-        ("post", f"/api/v1/jobs/{runs['definition']}/execute", "quota-execute", 201, {}, {}),
+        (
+            "post",
+            f"/api/v1/jobs/{runs['definition']}/execute",
+            "quota-execute",
+            JOB_UPDATE,
+            201,
+            {},
+            {},
+        ),
     ]:
-        capped = await _create_key(
-            client,
-            headers,
-            key_name,
-            [JOB_READ if method == "get" else JOB_UPDATE],
-            usage_quota=1,
-        )
+        capped = await _create_key(client, headers, key_name, [required], usage_quota=1)
         capped_headers = _key_headers(capped["key"], ws["id"])
         first = await client.request(method, url, json=body, headers=capped_headers)
         assert first.status_code == charged_status, (url, first.text)
@@ -1096,15 +1270,70 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
             # the charge must not clobber the list route's own header
             assert first.headers["X-Total-Count"] == "1", url
 
-        # quota exhausted → 403, and the refusal does not spend again
+        # quota exhausted → 403, and the refusal does not spend again: the
+        # charge happens in the access helper before the handler body, and a
+        # refused call neither increments nor commits.
         second = await client.request(method, url, json=refused_body, headers=capped_headers)
         assert second.status_code == 403, (url, second.text)
         assert "quota" in second.json()["detail"].lower(), url
+        async with SessionFactory() as db:
+            row = await db.get(ApiKey, capped["id"])
+            assert row.usage_count == 1, (url, "a refused request must not spend a unit")
 
     # The refused PATCH never reached the write: the definition still holds
     # the schedule the charged request set.
     after = await client.get(f"/api/v1/jobs/{runs['definition']}", headers=auth_headers(owner))
     assert after.json()["cron_schedule"] == "30 4 * * *", after.text
+
+
+async def test_key_cannot_probe_global_run_existence(app_client):
+    """A run id that resolves to nothing must not answer differently for a key.
+
+    The run routes used to fetch the run first, so a key got 403 on an
+    existing global run and 404 on an id that matched none — a run-existence
+    oracle on a surface it can never read. Three states a key may not read
+    (global run, another workspace's run, no such run) must all be the one
+    deployment-admin refusal. Regression test for #856.
+    """
+    import uuid
+
+    client = app_client
+    owner = await register_user(client, "probe-owner@example.com")
+    ws = await create_workspace(client, owner, "Probe Inc")
+    runs = await _seed_runs(ws["id"])
+    other = await register_user(client, "probe-other@example.com")
+    foreign_ws = await create_workspace(client, other, "Probe Other Inc")
+    foreign = (await _seed_runs(foreign_ws["id"]))["workspace"]
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "prober", [JOB_READ])
+    kh = _key_headers(key["key"], ws["id"])
+
+    missing = str(uuid.uuid4())
+    for url in [
+        f"/api/v1/jobs/runs/{runs['global']}",
+        f"/api/v1/jobs/runs/{runs['global']}/logs",
+        f"/api/v1/jobs/runs/{foreign}",
+        f"/api/v1/jobs/runs/{foreign}/logs",
+        f"/api/v1/jobs/runs/{missing}",
+        f"/api/v1/jobs/runs/{missing}/logs",
+    ]:
+        resp = await client.get(url, headers=kh)
+        assert resp.status_code == 403, (url, resp.status_code, resp.text)
+        assert resp.json()["detail"] == (
+            "deployment administration is not available to API keys"
+        ), url
+
+    # The same key still reads the run it is entitled to, so the collapsed
+    # answer is not the route refusing everything.
+    ok = await client.get(f"/api/v1/jobs/runs/{runs['workspace']}", headers=kh)
+    assert ok.status_code == 200, ok.text
+
+    # A session caller is unaffected: a missing run is still a 404 for it.
+    missing_session = await client.get(f"/api/v1/jobs/runs/{missing}", headers=auth_headers(owner))
+    assert missing_session.status_code == 404, missing_session.text
+    global_session = await client.get(
+        f"/api/v1/jobs/runs/{runs['global']}", headers=auth_headers(owner)
+    )
+    assert global_session.status_code == 403, global_session.text
 
 
 async def test_one_quota_unit_cannot_be_spent_twice(app_client):
@@ -1127,22 +1356,23 @@ async def test_one_quota_unit_cannot_be_spent_twice(app_client):
         one, two = await first.get(ApiKey, capped["id"]), await second.get(ApiKey, capped["id"])
         assert (one.usage_count, two.usage_count) == (0, 0)
 
-        assert await ApiKeyService(first).touch(one) is True
-        assert await ApiKeyService(second).touch(two) is False
+        assert await ApiKeyService(first).record_use(one) is True
+        assert await ApiKeyService(second).record_use(two) is False
 
     async with SessionFactory() as verify:
         row = await verify.get(ApiKey, capped["id"])
         assert row.usage_count == 1, "a refused charge must not be spent"
 
 
-async def _seed_definition(workspace_id: str) -> str:
-    """A workspace-scoped definition row, bypassing async provisioning."""
+async def _seed_definition(workspace_id: str | None, key: str = "test.echo") -> str:
+    """A definition row owned by `workspace_id` (None for a global one),
+    bypassing async provisioning."""
     import uuid
 
     async with SessionFactory() as session:
         definition = JobDefinition(
             id=str(uuid.uuid4()),
-            key="test.echo",
+            key=key,
             workspace_id=workspace_id,
             name="Echo",
             description="",
@@ -1158,7 +1388,8 @@ async def _seed_definition(workspace_id: str) -> str:
 
 async def test_job_definition_access_uses_the_keys_own_permissions(app_client):
     """A definition is authorized against the key's own permission list and its
-    own workspace — a foreign-workspace key gets 404, never the definition."""
+    own workspace — a foreign-workspace key gets the deployment-admin refusal,
+    the same one it gets for a global definition, and never the definition."""
     client = app_client
     owner = await register_user(client, "jobdef-owner@example.com")
     ws = await create_workspace(client, owner, "Jobdef Owner Inc")
@@ -1176,7 +1407,10 @@ async def test_job_definition_access_uses_the_keys_own_permissions(app_client):
         resp = await client.get(
             f"/api/v1/jobs/{definition_id}", headers=_key_headers(key["key"], header_ws)
         )
-        assert resp.status_code == 404, (header_ws, resp.status_code, resp.text)
+        assert resp.status_code == 403, (header_ws, resp.status_code, resp.text)
+        assert resp.json()["detail"] == (
+            "deployment administration is not available to API keys"
+        ), header_ws
 
     # The owner's own key still reads its own definition, and not the other one.
     own = await _create_key(client, headers, "jobdef-own", [JOB_READ])
@@ -1188,7 +1422,183 @@ async def test_job_definition_access_uses_the_keys_own_permissions(app_client):
     resp = await client.get(
         f"/api/v1/jobs/{foreign_id}", headers=_key_headers(own["key"], ws["id"])
     )
-    assert resp.status_code == 404, resp.text
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == "deployment administration is not available to API keys"
+
+
+async def test_key_cannot_probe_definition_existence(app_client):
+    """A definition id that resolves to nothing must not answer differently for
+    a key, on any of the four definition routes.
+
+    The route bodies used to resolve the definition first and raise
+    `404 "job not found"` on a miss, while `_require_job_access` answered a
+    global definition with the deployment-admin 403 and another workspace's
+    with a 404 — three states a key may not read, three answers, so the pair
+    told the key which state produced it. All three must be the one refusal,
+    exactly as the run routes do it. Regression test for #1033.
+    """
+    import uuid
+
+    client = app_client
+    owner = await register_user(client, "defprobe-owner@example.com")
+    ws = await create_workspace(client, owner, "Def Probe Inc")
+    entitled = await _seed_definition(ws["id"])
+    global_id = await _seed_definition(None)
+    other = await register_user(client, "defprobe-other@example.com")
+    foreign_ws = await create_workspace(client, other, "Def Probe Other Inc")
+    foreign = await _seed_definition(foreign_ws["id"])
+    key = await _create_key(
+        client, ws_headers(owner, ws["id"]), "def-prober", [JOB_READ, JOB_UPDATE], usage_quota=50
+    )
+    kh = _key_headers(key["key"], ws["id"])
+
+    missing = str(uuid.uuid4())
+    answers = set()
+    for definition_id in (global_id, foreign, missing):
+        for method, url, body in [
+            ("get", f"/api/v1/jobs/{definition_id}", None),
+            ("patch", f"/api/v1/jobs/{definition_id}", {"cron_schedule": "30 4 * * *"}),
+            ("post", f"/api/v1/jobs/{definition_id}/execute", {}),
+            ("get", f"/api/v1/jobs/{definition_id}/runs", None),
+        ]:
+            resp = await client.request(method, url, json=body, headers=kh)
+            answers.add((resp.status_code, resp.json().get("detail")))
+            # A refusal carries no second signal: the quota headers and the
+            # list route's X-Total-Count are set only on an authorizing branch.
+            # These four asserts cannot fail today — Starlette builds a fresh
+            # response when a route raises, so what was written to the
+            # injected Response is discarded. They document the contract and
+            # would catch a future route that raises after setting them; the
+            # `usage_count` asserts below are the ones that detect a charge on
+            # the refusal path.
+            for header in (
+                "X-API-Key-Quota",
+                "X-API-Key-Remaining",
+                "X-API-Key-Window-Reset",
+                "X-Total-Count",
+            ):
+                assert header not in resp.headers, (url, header)
+
+    assert answers == {(403, "deployment administration is not available to API keys")}, answers
+
+    # Twelve refusals must not spend a unit: the row may show only what the
+    # four entitled calls below charge.
+    async with SessionFactory() as db:
+        row = await db.get(ApiKey, key["id"])
+        assert (row.usage_quota, row.usage_count) == (50, 0), (row.usage_quota, row.usage_count)
+
+    # The same key still reads, edits, runs and lists runs for the definition
+    # it is entitled to, so the collapsed answer is not the routes refusing
+    # everything.
+    ok = await client.get(f"/api/v1/jobs/{entitled}", headers=kh)
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["id"] == entitled
+    edited = await client.patch(
+        f"/api/v1/jobs/{entitled}", json={"cron_schedule": "45 5 * * *"}, headers=kh
+    )
+    assert edited.status_code == 200, edited.text
+    executed = await client.post(f"/api/v1/jobs/{entitled}/execute", json={}, headers=kh)
+    assert executed.status_code == 201, executed.text
+    listed = await client.get(f"/api/v1/jobs/{entitled}/runs", headers=kh)
+    assert listed.status_code == 200, listed.text
+
+    # ...four authorized calls, four units, whatever the refusals did.
+    async with SessionFactory() as db:
+        row = await db.get(ApiKey, key["id"])
+        assert row.usage_count == 4, row.usage_count
+
+    # A session caller is unaffected: a missing definition is still a 404, and
+    # a global one still the superuser gate.
+    missing_session = await client.get(f"/api/v1/jobs/{missing}", headers=auth_headers(owner))
+    assert missing_session.status_code == 404, missing_session.text
+    global_session = await client.get(f"/api/v1/jobs/{global_id}", headers=auth_headers(owner))
+    assert global_session.status_code == 403, global_session.text
+
+
+async def test_permission_refusal_stays_distinct_from_the_deployment_admin_refusal(app_client):
+    """The one answer a key may still be told apart is the permission it lacks
+    inside its own workspace, and nothing else.
+
+    `test_key_cannot_probe_definition_existence` pins the three states a key
+    may never read — global, another workspace's, no such id — as one
+    deployment-admin refusal. Inside the key's own workspace the answer is
+    deliberately different: `403 "missing permission: jobs:read"` (or
+    `jobs:update`), the string `require_permission` returns on every other key
+    route, naming the actionable fix. A key scoped to the workspace is
+    entitled to the existence of a definition id inside its own workspace, not
+    to the definition's contents, so the residual existence channel inside it
+    is the accepted consequence, not a gap to close; what must not happen is
+    that either branch changes unnoticed. Regression test for #1118.
+    """
+    import uuid
+
+    client = app_client
+    owner = await register_user(client, "split-owner@example.com")
+    ws = await create_workspace(client, owner, "Split Inc")
+    headers = ws_headers(owner, ws["id"])
+    own_a = await _seed_definition(ws["id"])
+    own_b = await _seed_definition(ws["id"], key="test.echo.second")
+    global_id = await _seed_definition(None)
+    other = await register_user(client, "split-other@example.com")
+    foreign_ws = await create_workspace(client, other, "Split Other Inc")
+    foreign = await _seed_definition(foreign_ws["id"])
+    missing = str(uuid.uuid4())
+    writer = await _create_key(client, headers, "split-writer", [JOB_UPDATE])
+    wh = _key_headers(writer["key"], ws["id"])
+    reader = await _create_key(client, headers, "split-reader", [JOB_READ])
+    rh = _key_headers(reader["key"], ws["id"])
+
+    # Own workspace: the answer names the permission the route needs, and is
+    # the same string for both own ids — it does not depend on which of them
+    # the caller asked for.
+    own_refusals = set()
+    for definition_id in (own_a, own_b):
+        for method, url, body, key_headers, required in [
+            ("get", f"/api/v1/jobs/{definition_id}", None, wh, JOB_READ),
+            ("get", f"/api/v1/jobs/{definition_id}/runs", None, wh, JOB_READ),
+            (
+                "patch",
+                f"/api/v1/jobs/{definition_id}",
+                {"cron_schedule": "30 4 * * *"},
+                rh,
+                JOB_UPDATE,
+            ),
+            ("post", f"/api/v1/jobs/{definition_id}/execute", {}, rh, JOB_UPDATE),
+        ]:
+            resp = await client.request(method, url, json=body, headers=key_headers)
+            assert resp.status_code == 403, (url, resp.text)
+            own_refusals.add((required, resp.json()["detail"]))
+    assert own_refusals == {
+        (JOB_READ, f"missing permission: {JOB_READ}"),
+        (JOB_UPDATE, f"missing permission: {JOB_UPDATE}"),
+    }, own_refusals
+
+    # Everything else a key may not read keeps the single deployment-admin
+    # answer on all four routes, for either key.
+    for key_headers in (wh, rh):
+        for definition_id in (global_id, foreign, missing):
+            for method, url, body in [
+                ("get", f"/api/v1/jobs/{definition_id}", None),
+                ("patch", f"/api/v1/jobs/{definition_id}", {"cron_schedule": "30 4 * * *"}),
+                ("post", f"/api/v1/jobs/{definition_id}/execute", {}),
+                ("get", f"/api/v1/jobs/{definition_id}/runs", None),
+            ]:
+                resp = await client.request(method, url, json=body, headers=key_headers)
+                assert (resp.status_code, resp.json()["detail"]) == (
+                    403,
+                    "deployment administration is not available to API keys",
+                ), (url, resp.text)
+
+    # The entitled side still answers, on both sides of the split: this is two
+    # refusals drawn in the right place, not the routes refusing everything.
+    read = await client.get(f"/api/v1/jobs/{own_a}", headers=rh)
+    assert read.status_code == 200, read.text
+    edited = await client.patch(
+        f"/api/v1/jobs/{own_b}", json={"cron_schedule": "45 5 * * *"}, headers=wh
+    )
+    assert edited.status_code == 200, edited.text
+    executed = await client.post(f"/api/v1/jobs/{own_a}/execute", json={}, headers=wh)
+    assert executed.status_code == 201, executed.text
 
 
 async def test_key_cannot_touch_two_factor(app_client):

@@ -6,11 +6,14 @@ appending migrations exactly like now.
 
 ## Daily workflow
 
-Change models, then generate:
+Change models, then generate (14-digit UTC timestamp id per DECISIONS D-04):
 
 ```bash
 make db-new m="add index on users.email"
 ```
+
+This writes `apps/api/alembic/versions/<YYYYMMDDHHMMSS>_<slug>.py` with a
+matching `revision` id.
 
 **Review the generated diff before committing.** Autogenerate catches
 tables, columns, indexes, constraints — it does not judge intent. Check
@@ -22,21 +25,75 @@ Merge conflicts on `versions/`: two PRs branching a migration off the same
 parent produce two heads. `make db-check` fails CI — the later-merged PR
 repoints its `down_revision` to the new head. One line.
 
+## Two branches: template + project
+
+Template migrations stay linear in `apps/api/alembic/versions/`. Project
+migrations live in `apps/api/alembic/project_versions/` on the `project`
+branch, so a project revision id can never collide with a template one:
+
+```bash
+make db-new-project m="acme orders"
+```
+
+This writes
+`apps/api/alembic/project_versions/<YYYYMMDDHHMMSS>_<slug>.py` with
+`branch_labels = "project"` and `down_revision = None` — a separate root on
+purpose — plus `depends_on` pointing at the template revision it needs (the
+current `template@head` for the first project migration; later ones descend
+from `project@head`, which already carries that ordering transitively).
+`alembic heads` then reports exactly two heads, and
+`alembic upgrade heads` applies both branches, template first.
+
+`make db-check` passes with exactly those two heads and fails on one or on
+three or more. If you ever want one linear history again, merge the branches
+— the merge revision lands in `versions/`:
+
+```bash
+cd apps/api && uv run alembic merge template@head project@head
+```
+
 ## Checks
 
 ```bash
-make db-check     # single head + autogenerate-empty on a scratch DB
-make db-history   # show the chain
+make db-check     # template + project heads, autogenerate-empty on a scratch DB
+make db-history   # show both branches
 ```
 
-`db-check` migrates a scratch embedded postgres to head, then asserts
+`db-check` migrates a scratch embedded postgres to both heads, then asserts
 `alembic revision --autogenerate` produces no `op.*` calls — i.e. no
-"changed models, forgot migration". It runs in CI on every PR. It never
-touches your dev database (`EMBEDDED_DB_DIR` points at a temp dir).
+"changed models, forgot migration" (checks 1–2). It also migrates a scratch
+SQLite file and pins the check-constraint names the chain lands on both
+dialects (check 3, below). It runs in CI on every PR. It never touches your
+dev database (`EMBEDDED_DB_DIR` points at a temp dir).
 
 Known limitation: `env.py` disables `compare_type` / `compare_server_default`
 (legacy VARCHAR-vs-String spellings render as phantom drift). Silent column
 narrowings are not caught — reviewers check type changes by eye.
+
+### Dialect branches (SQLite vs Postgres)
+
+SQLite cannot `ALTER` a table to add or drop a constraint, so such a migration
+branches on `bind.dialect.name` and takes the SQLite path through
+`op.batch_alter_table()`. The naming convention in `src/db/base.py`
+(`ck_%(table_name)s_%(constraint_name)s`) applies to the name of every
+check-constraint operation — batch and plain paths alike — so passing the full
+name doubles it to `ck_refresh_tokens_ck_refresh_tokens_revoke_reason` on both
+dialects. Every path therefore passes the bare suffix and the constraint lands
+on the clean `ck_refresh_tokens_revoke_reason`; the models spell the bare
+suffix too, so `create_all` and squash baselines land the same name. See
+`0020`:
+
+```python
+_SUFFIX = "revoke_reason"
+_CONSTRAINT = f"ck_refresh_tokens_{_SUFFIX}"
+```
+
+`db-check` check 3 migrates the chain on SQLite and on the scratch Postgres
+and asserts the exact check-constraint name set on both dialects — extend that
+assert when your migration adds a check constraint. The assert survives
+squashing: a baseline has no dialect branches, and its `create_table` names
+render off the models through the same convention, so they land the same clean
+names.
 
 ## Release squashes
 
@@ -84,14 +141,22 @@ every column kept its exact type and server default. Review type changes in
 the squashed diff by eye, as with any migration.
 
 Open PRs that branched pre-squash repoint `down_revision` to `0001` (or
-delete their file if the change is already in the baseline). Consumers
-upgrading past a squash: their `alembic_version` names a deleted revision —
-`stamp` to the baseline, then `upgrade head`. Document the stamp target in
-the release notes.
+delete their file if the change is already in the baseline).
+
+A squash replaces the template chain, so every project revision's
+`depends_on` dangles afterwards — until it is repointed, every alembic
+command fails while loading the revision map. Repoint each `depends_on` to
+the new baseline in the same change. Consumers upgrading past a squash stamp
+to the baseline, then upgrade both heads (`alembic stamp heads &&
+alembic upgrade heads`), stamping only the branches their database already
+reflects — a database that never applied the project branch upgrades it
+instead of stamping it. Document the stamp target in the release notes.
+`make db-squash` itself never changes `project_versions/` content: it only
+moves the files aside for the baseline proof and restores them.
 
 ## Fresh installs vs upgrades
 
-- Fresh: `create_all` + `alembic stamp head` + seed (no replay).
-- Update: `alembic upgrade head` only.
+- Fresh: `create_all` + `alembic stamp heads` + seed (no replay).
+- Update: `alembic upgrade heads` only.
 - Never `create_all` at app startup: hides drift, races replicas, needs
   elevated DB privileges.

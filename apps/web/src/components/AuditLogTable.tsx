@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EmptyRow, ReadError, formatDate } from "@/components/ui";
+import { errorMessage } from "@/utils/errorMessage";
 import type { AuditLogEntry } from "@/types";
 
 export type AuditEntry = AuditLogEntry & {
@@ -74,12 +75,23 @@ export function AuditLogTable({
     pagination: { currentPage: current, pageSize: PAGE_SIZE, mode: "server" },
     filters,
     sorters: [{ field: "created_at", order: "desc" }],
+    // The failure row below reports the reason itself, so refine's error
+    // notification would only repeat it in a toast.
+    errorNotification: false,
   });
 
   const rows = result?.data ?? [];
   const total = result?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const isLoading = query.isPending;
+  // refine types the query result without `isError`; without it a refusal falls
+  // through to `rows.length === 0` and claims the log is empty. Gating on the
+  // row count keeps a failed background refetch from blanking loaded rows.
+  const { isError = false, error } = query as unknown as {
+    isError?: boolean;
+    error?: unknown;
+  };
+  const failed = isError && rows.length === 0;
   const colSpan = showWorkspace ? 6 : 5;
 
   return (
@@ -117,6 +129,15 @@ export function AuditLogTable({
           <TableBody>
             {isLoading ? (
               <EmptyRow colSpan={colSpan}>Loading…</EmptyRow>
+            ) : failed ? (
+              <EmptyRow colSpan={colSpan}>
+                Could not load audit entries. {errorMessage(error)}{" "}
+                <Button variant="outline" size="sm" onClick={() => query.refetch()}>
+                  Try again
+                </Button>
+              </EmptyRow>
+            ) : rows.length === 0 ? (
+              <EmptyRow colSpan={colSpan}>No audit entries yet.</EmptyRow>
             ) : (
               rows.map((entry) => (
                 <TableRow
@@ -167,41 +188,40 @@ export function AuditLogTable({
                 </TableRow>
               ))
             )}
-            {!isLoading && rows.length === 0 && (
-              <EmptyRow colSpan={colSpan}>No audit entries yet.</EmptyRow>
-            )}
           </TableBody>
         </Table>
       </div>
-      <div className="flex items-center justify-between border-t px-4 py-3">
-        <span className="text-muted-foreground text-sm">
-          Showing {total === 0 ? 0 : (current - 1) * PAGE_SIZE + 1}–
-          {Math.min(current * PAGE_SIZE, total)} of {total}
-        </span>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={current <= 1}
-            onClick={() => setCurrent((c) => Math.max(1, c - 1))}
-          >
-            <ChevronLeft className="h-4 w-4" />
-            Previous
-          </Button>
-          <span className="text-muted-foreground px-2 text-sm">
-            Page {current} of {totalPages}
+      {!failed && (
+        <div className="flex items-center justify-between border-t px-4 py-3">
+          <span className="text-muted-foreground text-sm">
+            Showing {total === 0 ? 0 : (current - 1) * PAGE_SIZE + 1}–
+            {Math.min(current * PAGE_SIZE, total)} of {total}
           </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={current >= totalPages}
-            onClick={() => setCurrent((c) => Math.min(totalPages, c + 1))}
-          >
-            Next
-            <ChevronRight className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={current <= 1}
+              onClick={() => setCurrent((c) => Math.max(1, c - 1))}
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Previous
+            </Button>
+            <span className="text-muted-foreground px-2 text-sm">
+              Page {current} of {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={current >= totalPages}
+              onClick={() => setCurrent((c) => Math.min(totalPages, c + 1))}
+            >
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       <Dialog open={viewing !== null} onOpenChange={(open) => !open && setViewing(null)}>
         <DialogContent className="max-w-lg">

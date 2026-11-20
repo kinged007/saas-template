@@ -307,7 +307,16 @@ export function JobDetailPage() {
     result: runsResult,
     query: runsQuery,
   } = useWorkspaceCustom<JobRun[]>({
-    url: `jobs/${jobId}/runs?limit=50&sort[]=scheduled_at&order[]=desc`,
+    url: `jobs/${jobId}/runs`,
+    // simple-rest's custom composes `${url}?` + the serialized config segments
+    // without checking for an existing query string, so params inlined in the
+    // url go out as `...&order[]=desc?` and the API 422s ("sort order must be
+    // 'asc' or 'desc': desc?"). Pass them via config so simple-rest does the
+    // serialization.
+    config: {
+      sorters: [{ field: "scheduled_at", order: "desc" }],
+      query: { limit: 50 },
+    },
     method: "get",
     queryOptions: { enabled: !!job },
   });

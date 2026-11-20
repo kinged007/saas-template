@@ -2,8 +2,10 @@ import { useMemo } from "react";
 import { useCustom, useCustomMutation } from "@refinedev/core";
 import { toast } from "sonner";
 
+import { errorMessage } from "@/utils/errorMessage";
+
 import type { NotificationChannel, NotificationPreferences } from "../types";
-import { errorMessage } from "../utils/errorMessage";
+
 
 export const KNOWN_NOTIFICATION_TYPES = [
   "workspace_invitation",
@@ -44,10 +46,17 @@ export function humanizeType(type: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/** Fetch + update notification delivery preferences. Shared by Inbox and profile settings. */
-export function useNotificationPreferences(extraTypes: string[] = [], enabled = true) {
+/** Fetch + update notification delivery preferences. Shared by Inbox and profile settings.
+ *
+ * `baseUrl` targets another member's preferences for callers holding
+ * `profile:update`; it defaults to the signed-in user's own. */
+export function useNotificationPreferences(
+  extraTypes: string[] = [],
+  enabled = true,
+  baseUrl = "notifications/preferences"
+) {
   const { result: prefsResult, query: prefsQuery } = useCustom<NotificationPreferences>({
-    url: "notifications/preferences",
+    url: baseUrl,
     method: "get",
     // The delivery form has no in-body error state — it keeps the toast.
     errorNotification: (error) => ({ type: "error", message: errorMessage(error) }),
@@ -70,7 +79,7 @@ export function useNotificationPreferences(extraTypes: string[] = [], enabled = 
     try {
       await savePrefsAsync(
         {
-          url: "notifications/preferences",
+          url: baseUrl,
           method: "put",
           values: { channels: { [type]: channel } },
           successNotification: false,
@@ -79,7 +88,7 @@ export function useNotificationPreferences(extraTypes: string[] = [], enabled = 
         { onSuccess: () => prefsQuery.refetch() },
       );
     } catch (e) {
-      toast.error(String((e as { message?: string })?.message ?? e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -87,7 +96,7 @@ export function useNotificationPreferences(extraTypes: string[] = [], enabled = 
     try {
       await savePrefsAsync(
         {
-          url: "notifications/preferences",
+          url: baseUrl,
           method: "put",
           values: { digest_enabled: enabled },
           successNotification: {
@@ -99,7 +108,7 @@ export function useNotificationPreferences(extraTypes: string[] = [], enabled = 
         { onSuccess: () => prefsQuery.refetch() },
       );
     } catch (e) {
-      toast.error(String((e as { message?: string })?.message ?? e));
+      toast.error(errorMessage(e));
     }
   };
 

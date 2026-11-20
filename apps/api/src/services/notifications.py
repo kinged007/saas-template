@@ -9,7 +9,7 @@ from typing import Any, TypedDict
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.events.bus import EventBus
+from src.events.bus import SOURCE_EVENT_KEY, EventBus
 from src.events.publisher import publish_audit
 from src.events.subjects import Subjects
 from src.models.core import Notification, NotificationPreference
@@ -22,11 +22,30 @@ DIGEST_TYPE = "*"
 DIGEST_EXCLUDED_TYPES = ("conversation_message",)
 CHANNELS = ("in-app", "email", "off")
 DEFAULT_CHANNEL = "in-app"
+# Preferences may only be written for a type the notification workflows emit,
+# so nobody can fill a member's table with rows nothing ever reads.
+KNOWN_TYPES = (
+    "workspace_invitation",
+    "member_joined",
+    "member_role_changed",
+    "member_removed",
+    *DIGEST_EXCLUDED_TYPES,
+)
 
 
 def unsubscribe_url_for(token: str, type: str, frontend_url: str) -> str:
     base = (frontend_url or "").rstrip("/")
     return f"{base}/api/v1/notifications/unsubscribe?token={token}&type={type}"
+
+
+def preferences_response(prefs) -> dict:
+    """Wire shape for `GET|PUT /preferences` and its target-scoped twin, so both
+    routes answer identically. It lives here because it needs `DIGEST_TYPE`, and
+    `services.serializers` already imports this module."""
+    return {
+        "channels": {p.type: p.channel for p in prefs if p.type != DIGEST_TYPE},
+        "digest_enabled": next((p.digest_enabled for p in prefs if p.type == DIGEST_TYPE), False),
+    }
 
 
 class NotificationSpec(TypedDict):
@@ -55,16 +74,36 @@ class NotificationService:
         body: str | None = None,
         metadata: dict | None = None,
         correlation_id: str | None = None,
+        source_event_id: str | None = None,
     ) -> Notification:
+        """Persist one notification and fan it out.
+
+        `source_event_id` makes the insert idempotent: the bus is at-least-once,
+        so a redelivered event returns the notification the first delivery
+        created instead of a second row for the same recipient. The key is
+        reserved — `metadata[source_event_id]` is overwritten when it is set.
+        """
         if not workspace_id:
             raise ValueError("notifications require a workspace_id")
+        spec: NotificationSpec = {
+            "user_id": user_id,
+            "workspace_id": workspace_id,
+            "type": type,
+            "title": title,
+            "body": body,
+            "metadata": metadata,
+        }
+        if source_event_id and (
+            existing := await self._find_by_source_event([spec], source_event_id)
+        ):
+            return existing[0]
         n = Notification(
             user_id=user_id,
             workspace_id=workspace_id,
             type=type,
             title=title,
             body=body,
-            payload=metadata or {},
+            payload=self._payload(metadata, source_event_id),
         )
         self._session.add(n)
         await self._session.commit()
@@ -85,6 +124,7 @@ class NotificationService:
         specs: Sequence[NotificationSpec],
         *,
         correlation_id: str | None = None,
+        source_event_id: str | None = None,
     ) -> list[Notification]:
         """Persist many notifications in a single transaction and fan them out.
 
@@ -92,11 +132,37 @@ class NotificationService:
         concurrently after it, so callers never pay per-notification
         round-trips. Used by the conversation-message workflow, where a group
         conversation would otherwise mean one transaction per participant.
+        `source_event_id` drops the recipients this event already notified
+        (see `create`).
+
+        Returns the rows it created, so the count is below `len(specs)`
+        whenever a recipient was already notified; the drop is logged here
+        rather than reported through the return value, the way
+        `AuditService.record` reports a suppressed audit entry.
         """
-        rows: list[Notification] = []
-        for spec in specs:
+        pending = list(specs)
+        for spec in pending:
             if not spec["workspace_id"]:
                 raise ValueError("notifications require a workspace_id")
+        if source_event_id:
+            already = {
+                (n.user_id, n.workspace_id, n.type)
+                for n in await self._find_by_source_event(pending, source_event_id)
+            }
+            pending = [
+                s for s in pending if (s["user_id"], s["workspace_id"], s["type"]) not in already
+            ]
+            if len(pending) != len(specs):
+                logger.info(
+                    "notification fan-out for source event %s dropped %d of %d "
+                    "already-notified recipients (correlation %s)",
+                    source_event_id,
+                    len(specs) - len(pending),
+                    len(specs),
+                    correlation_id or "-",
+                )
+        rows: list[Notification] = []
+        for spec in pending:
             rows.append(
                 Notification(
                     user_id=spec["user_id"],
@@ -104,7 +170,7 @@ class NotificationService:
                     type=spec["type"],
                     title=spec["title"],
                     body=spec.get("body"),
-                    payload=spec.get("metadata") or {},
+                    payload=self._payload(spec.get("metadata"), source_event_id),
                 )
             )
         if not rows:
@@ -293,9 +359,12 @@ class NotificationService:
     async def upsert_channels(
         self, user_id: str, channels: dict[str, str]
     ) -> list[NotificationPreference]:
-        """Bulk upsert of per-type channels; generates tokens on email opt-in."""
+        """Bulk upsert of per-type channels; generates tokens on email opt-in.
+        Raises ValueError on an unknown type or channel."""
         rows: list[NotificationPreference] = []
         for type, channel in channels.items():
+            if type not in KNOWN_TYPES:
+                raise ValueError(f"unknown type {type!r}")
             if channel not in CHANNELS:
                 raise ValueError(f"invalid channel {channel!r}")
             result = await self._session.execute(
@@ -427,3 +496,31 @@ class NotificationService:
             stmt = stmt.where(Notification.workspace_id == workspace_id)
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
+
+    @staticmethod
+    def _payload(metadata: dict | None, source_event_id: str | None) -> dict:
+        payload = dict(metadata or {})
+        if source_event_id:
+            payload[SOURCE_EVENT_KEY] = source_event_id
+        return payload
+
+    async def _find_by_source_event(
+        self, specs: Sequence[NotificationSpec], source_event_id: str
+    ) -> list[Notification]:
+        """Rows this source event already created for the given (user, workspace, type)."""
+        keys = {(s["user_id"], s["workspace_id"], s["type"]) for s in specs}
+        if not keys:
+            return []
+        user_ids, workspace_ids, types = zip(*keys, strict=True)
+        # One predicate, then match the exact triples in Python: an OR of
+        # per-spec ANDs grows with the recipient count and hits SQLite's
+        # expression depth limit on a large conversation fan-out.
+        result = await self._session.execute(
+            select(Notification).where(
+                Notification.payload[SOURCE_EVENT_KEY].as_string() == source_event_id,
+                Notification.user_id.in_(user_ids),
+                Notification.workspace_id.in_(workspace_ids),
+                Notification.type.in_(types),
+            )
+        )
+        return [n for n in result.scalars() if (n.user_id, n.workspace_id, n.type) in keys]

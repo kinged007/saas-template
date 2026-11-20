@@ -36,6 +36,8 @@ export function WorkspaceSearch() {
     url: "workspaces/search",
     method: "get",
     config: { query: { q } },
+    // The query key carries the search text, so a retry only ever re-issues a
+    // superseded keystroke's request.
     queryOptions: { enabled: q.length >= 2, retry: false },
   });
   const results = result?.data?.results ?? [];

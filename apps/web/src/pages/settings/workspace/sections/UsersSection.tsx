@@ -1,17 +1,22 @@
-import {  } from "@refinedev/core";
+import { useCan, useGetIdentity, useGo } from "@refinedev/core";
 import { useWorkspaceList } from "../../../../hooks/useWorkspaceQuery";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
 import { EmptyRow, ReadError, formatDate } from "@/components/ui";
 import { UserAvatar } from "@/components/ui/user-avatar";
-import type { Member } from "@/types";
-import { getMemberDisplayName } from "@/types";
+import type { Identity, Member } from "@/types";
+import { getDisplayNameFromRow } from "@/types";
 
 export function UsersSection() {
   const { result, query } = useWorkspaceList<Member>({ resource: "members" });
   const rows = result?.data ?? [];
   const isLoading = query.isPending;
+  // Profile editing is a distinct scope from role management (member:update).
+  const { data: canEditProfiles } = useCan({ resource: "member-profiles", action: "edit" });
+  const { data: identity } = useGetIdentity<Identity>();
+  const go = useGo();
 
   return (
     <div className="flex flex-col gap-4">
@@ -34,7 +39,8 @@ export function UsersSection() {
           <div className="rounded-lg border p-4">
             <h4 className="font-medium">Workspace users</h4>
             <p className="text-muted-foreground text-sm">
-              Full member management (roles, invites, removal) lives on the Members page. This overview is read-only.
+              Full member management (roles, invites, removal) lives on the Members page. This overview is read-only
+              apart from the per-member editor.
             </p>
             <div className="mt-4 overflow-x-auto rounded-lg border">
               <Table>
@@ -44,14 +50,15 @@ export function UsersSection() {
                     <TableHead>Role</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Joined</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {isLoading ? (
-                    <EmptyRow colSpan={4}>Loading…</EmptyRow>
+                    <EmptyRow colSpan={5}>Loading…</EmptyRow>
                   ) : (
                     rows.map((m) => {
-                      const name = getMemberDisplayName(m);
+                      const name = getDisplayNameFromRow(m);
                       return (
                         <TableRow key={m.membership_id}>
                           <TableCell>
@@ -74,11 +81,24 @@ export function UsersSection() {
                           <TableCell>{m.role}</TableCell>
                           <TableCell className="capitalize">{m.status}</TableCell>
                           <TableCell className="text-muted-foreground">{formatDate(m.joined_at)}</TableCell>
+                          <TableCell className="text-right">
+                            {/* The editor targets other members: your own profile
+                                lives in Settings → Profile. */}
+                            {canEditProfiles?.can && m.id !== identity?.id && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => go({ to: `/users/${m.id}/settings` })}
+                              >
+                                Edit
+                              </Button>
+                            )}
+                          </TableCell>
                         </TableRow>
                       );
                     })
                   )}
-                  {!isLoading && rows.length === 0 && <EmptyRow colSpan={4}>No members yet.</EmptyRow>}
+                  {!isLoading && rows.length === 0 && <EmptyRow colSpan={5}>No members yet.</EmptyRow>}
                 </TableBody>
               </Table>
             </div>

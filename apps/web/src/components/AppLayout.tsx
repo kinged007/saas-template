@@ -56,6 +56,7 @@ import type { LucideIcon } from "lucide-react";
 
 import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "../contexts/WorkspaceContext";
 import { activeWorkspacePermissions } from "../utils/permissions";
+import { isManagerRoleName } from "../pages/role-name";
 import { ThemeToggle } from "./refine-ui/theme/theme-toggle";
 import { NotificationCenter } from "./NotificationCenter";
 import { PendingInvitationsBadge } from "./PendingInvitations";
@@ -65,7 +66,10 @@ import { getDisplayName } from "../types";
 import { errorMessage } from "../utils/errorMessage";
 
 type MenuItem = {
-  key: string;
+  /** React key. Independent of `to`, so re-routing an item keeps its identity. */
+  id: string;
+  /** Route target. `"#"` renders a dead link that goes nowhere. */
+  to: string;
   label: string;
   icon: LucideIcon;
   permission: string | null;
@@ -76,28 +80,33 @@ type MenuItem = {
  * two sides. Omit `title` for an unlabelled group. Adding a group is a data
  * change only; `SidebarNav` does not need to know about it.
  */
-const SIDEBAR_GROUPS: { id: string; title?: string; position: "top" | "bottom"; items: MenuItem[] }[] = [
+const SIDEBAR_GROUPS: {
+  id: string;
+  title?: string;
+  position: "primary" | "secondary";
+  items: MenuItem[];
+}[] = [
   {
     id: "main",
-    position: "top",
+    position: "primary",
     items: [
-      { key: "/", label: "Dashboard", icon: LayoutDashboard, permission: "workspace:read" },
-      { key: "/inbox", label: "Inbox", icon: Inbox, permission: null },
+      { id: "dashboard", to: "/", label: "Dashboard", icon: LayoutDashboard, permission: "workspace:read" },
+      { id: "inbox", to: "/inbox", label: "Inbox", icon: Inbox, permission: null },
     ],
   },
   {
     id: "demo",
     title: "Demo",
-    position: "top",
+    position: "primary",
     items: [
-      { key: "#", label: "Sample page", icon: FileText, permission: null },
-      { key: "#", label: "Support", icon: LifeBuoy, permission: null },
+      { id: "sample-page", to: "#", label: "Sample page", icon: FileText, permission: null },
+      { id: "support", to: "#", label: "Support", icon: LifeBuoy, permission: null },
     ],
   },
   {
     id: "workspace",
-    position: "bottom",
-    items: [{ key: "/members", label: "Members", icon: Users, permission: "member:read" }],
+    position: "secondary",
+    items: [{ id: "members", to: "/members", label: "Members", icon: Users, permission: "member:read" }],
   },
 ];
 
@@ -132,8 +141,7 @@ function SidebarNav() {
 
   const renderGroup = (group: (typeof visibleGroups)[number]) => (
     <SidebarGroup key={group.id}>
-      {/* The label element is the heading. `h2` matches the level the app gives its
-          landmark titles (ListView, PageHeader); the sidebar sits beside <main>, so
+      {/* The label element is the heading. The sidebar sits beside <main>, so
           a group title is not subordinate to the page heading. */}
       {group.title && (
         <SidebarGroupLabel asChild>
@@ -141,30 +149,36 @@ function SidebarNav() {
         </SidebarGroupLabel>
       )}
       <SidebarMenu>
-        {group.items.map((item, index) => {
+        {group.items.map((item) => {
           const Icon = item.icon;
-          const active = isActive(item.key);
-          const isInbox = item.key === "/inbox";
-          const badgeCount = isInbox ? convUnreadCount : 0;
-          return (
-            <SidebarMenuItem key={`${group.id}-${item.key}-${index}`}>
-              <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
-                <Link to={item.key}>
-                  <span className="relative">
-                    <Icon className="h-4 w-4 shrink-0" />
-                    {badgeCount > 0 && (
-                      <span className="absolute -right-1.5 -top-1.5 hidden h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-0.5 text-[10px] font-medium leading-none text-destructive-foreground group-data-[collapsible=icon]:flex">
-                        {badgeCount > 99 ? "99+" : badgeCount}
-                      </span>
-                    )}
+          const active = isActive(item.to);
+          const badgeCount = item.id === "inbox" ? convUnreadCount : 0;
+          const content = (
+            <>
+              <span className="relative">
+                <Icon className="h-4 w-4 shrink-0" />
+                {badgeCount > 0 && (
+                  <span className="absolute -right-1.5 -top-1.5 hidden h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-0.5 text-[10px] font-medium leading-none text-destructive-foreground group-data-[collapsible=icon]:flex">
+                    {badgeCount > 99 ? "99+" : badgeCount}
                   </span>
-                  <span>{item.label}</span>
-                  {badgeCount > 0 && (
-                    <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-xs font-medium text-destructive-foreground group-data-[collapsible=icon]:hidden">
-                      {badgeCount > 99 ? "99+" : badgeCount}
-                    </span>
-                  )}
-                </Link>
+                )}
+              </span>
+              <span>{item.label}</span>
+              {badgeCount > 0 && (
+                <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-xs font-medium text-destructive-foreground group-data-[collapsible=icon]:hidden">
+                  {badgeCount > 99 ? "99+" : badgeCount}
+                </span>
+              )}
+            </>
+          );
+          return (
+            <SidebarMenuItem key={item.id}>
+              <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
+                {/* A `to` of "#" is a placeholder: a plain anchor keeps the href
+                    literal, where `<Link to="#">` resolves to the current
+                    pathname (React Router drops a bare "#") and silently
+                    no-ops. Real routes keep client-side navigation. */}
+                {item.to === "#" ? <a href={item.to}>{content}</a> : <Link to={item.to}>{content}</Link>}
               </SidebarMenuButton>
             </SidebarMenuItem>
           );
@@ -173,8 +187,8 @@ function SidebarNav() {
     </SidebarGroup>
   );
 
-  const topGroups = visibleGroups.filter((g) => g.position === "top");
-  const bottomGroups = visibleGroups.filter((g) => g.position === "bottom");
+  const primaryGroups = visibleGroups.filter((g) => g.position === "primary");
+  const secondaryGroups = visibleGroups.filter((g) => g.position === "secondary");
 
   // The landmark belongs at the call site, not in the shared shadcn primitive.
   // It takes over the flex classes SidebarContent used to give the groups, so
@@ -182,9 +196,9 @@ function SidebarNav() {
   // pages render a nav of their own.
   return (
     <nav aria-label="Main" className="flex min-h-0 flex-1 flex-col gap-2">
-      {topGroups.map(renderGroup)}
-      {topGroups.length > 0 && bottomGroups.length > 0 && <SidebarSeparator />}
-      {bottomGroups.map(renderGroup)}
+      {primaryGroups.map(renderGroup)}
+      {primaryGroups.length > 0 && secondaryGroups.length > 0 && <SidebarSeparator />}
+      {secondaryGroups.map(renderGroup)}
     </nav>
   );
 }
@@ -280,7 +294,7 @@ function UserMenu() {
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
   const isWorkspaceAdmin =
     identity?.is_superuser === true ||
-    (myRole !== undefined && ["owner", "admin"].includes(myRole)) ||
+    isManagerRoleName(myRole) ||
     permissions.includes("*") ||
     permissions.includes("workspace:update");
   const showWorkspaceSettings = isWorkspaceAdmin && identity?.single_workspace !== true;
