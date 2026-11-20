@@ -6,10 +6,10 @@ appending migrations exactly like now.
 
 ## Daily workflow
 
-Change models, then generate:
+Change models, then generate (14-digit UTC timestamp id per DECISIONS D-04; make db-new does not set the id yet, so do not use it until it does):
 
 ```bash
-make db-new m="add index on users.email"
+cd apps/api && uv run alembic revision --autogenerate --rev-id "$(date -u +%Y%m%d%H%M%S)" -m "add index on users.email"
 ```
 
 **Review the generated diff before committing.** Autogenerate catches
@@ -31,12 +31,39 @@ make db-history   # show the chain
 
 `db-check` migrates a scratch embedded postgres to head, then asserts
 `alembic revision --autogenerate` produces no `op.*` calls — i.e. no
-"changed models, forgot migration". It runs in CI on every PR. It never
-touches your dev database (`EMBEDDED_DB_DIR` points at a temp dir).
+"changed models, forgot migration" (checks 1–2). It also migrates a scratch
+SQLite file and pins the check-constraint names the chain lands on both
+dialects (check 3, below). It runs in CI on every PR. It never touches your
+dev database (`EMBEDDED_DB_DIR` points at a temp dir).
 
 Known limitation: `env.py` disables `compare_type` / `compare_server_default`
 (legacy VARCHAR-vs-String spellings render as phantom drift). Silent column
 narrowings are not caught — reviewers check type changes by eye.
+
+### Dialect branches (SQLite vs Postgres)
+
+SQLite cannot `ALTER` a table to add or drop a constraint, so such a migration
+branches on `bind.dialect.name` and takes the SQLite path through
+`op.batch_alter_table()`. The naming convention in `src/db/base.py`
+(`ck_%(table_name)s_%(constraint_name)s`) applies to the name of every
+check-constraint operation — batch and plain paths alike — so passing the full
+name doubles it to `ck_refresh_tokens_ck_refresh_tokens_revoke_reason` on both
+dialects. Every path therefore passes the bare suffix and the constraint lands
+on the clean `ck_refresh_tokens_revoke_reason`; the models spell the bare
+suffix too, so `create_all` and squash baselines land the same name. See
+`0020`:
+
+```python
+_SUFFIX = "revoke_reason"
+_CONSTRAINT = f"ck_refresh_tokens_{_SUFFIX}"
+```
+
+`db-check` check 3 migrates the chain on SQLite and on the scratch Postgres
+and asserts the exact check-constraint name set on both dialects — extend that
+assert when your migration adds a check constraint. The assert survives
+squashing: a baseline has no dialect branches, and its `create_table` names
+render off the models through the same convention, so they land the same clean
+names.
 
 ## Release squashes
 
@@ -71,7 +98,12 @@ would otherwise point at the head being replaced), and the import of
 `src.db.base` (alembic renders a custom column type as the dotted path to its
 class and never emits the matching import, so the file would not import as
 generated). The generated `downgrade()` is kept as-is — it already drops
-every table, which is what a baseline should do.
+every table, which is what a baseline should do. The baseline is then linted
+with `uv run --extra dev ruff format` / `ruff check --fix`, which sync the dev
+extra on demand and therefore need PyPI reachable on a checkout that has not
+run `make api-install`; if ruff cannot run or reports an unfixable diagnostic,
+the squash aborts and restores the old chain instead of shipping a baseline CI
+would reject.
 
 Known limitation: `env.py` disables `compare_type` / `compare_server_default`,
 so both proofs confirm tables, columns, indexes and constraints — not that

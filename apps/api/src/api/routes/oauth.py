@@ -3,8 +3,11 @@
 Flow: GET /auth/oauth/{provider}/authorize → provider → GET
 /auth/oauth/{provider}/callback?code&state → 302 to
 {FRONTEND_URL}/oauth/callback?code=<one-time> → POST /auth/oauth/token.
-Tokens never sit in URL logs; the one-time code is single-use, 5-minute TTL,
-stored in the shared container cache.
+The two legs are joined by the PKCE verifier kept in the server-side state
+entry. The verifier never leaves the server, so a captured authorization code
+is not redeemable with the client secret alone. Tokens never sit in URL logs;
+the one-time code is single-use, 5-minute TTL, stored in the shared
+container cache.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import get_container
 from src.api.routes.auth import (
     _client_ip,
-    _maybe_join_single_workspace,
+    _join_single_workspace_best_effort,
     _user_agent,
 )
 from src.core.security.cookies import browser_flow, set_refresh_cookie
@@ -30,6 +33,7 @@ from src.services.auth import AuthError, AuthService
 from src.services.oauth import (
     CODE_TTL_HINT,
     OAuthError,
+    _single_line,
     build_authorize_url,
     claims_from_id_token,
     consume_state,
@@ -106,6 +110,8 @@ async def oauth_callback(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
+    # Checks a bucket this module never charges; see the rule in
+    # src/core/security/ratelimit.py.
     get_auth_limiter().check(f"oauth:{_client_ip(request) or 'unknown'}:{provider_id}")
     container = get_container(request)
     code = request.query_params.get("code")
@@ -124,16 +130,28 @@ async def oauth_callback(
         from src.services.oauth import _discovery
 
         doc = await _discovery(provider, container.cache)
-        tokens = await exchange_code(provider, doc, code=code, redirect_uri=redirect_uri)
+        tokens = await exchange_code(
+            provider,
+            doc,
+            code=code,
+            redirect_uri=redirect_uri,
+            code_verifier=saved["code_verifier"],
+        )
         claims = None
         if tokens.get("id_token"):
-            claims = claims_from_id_token(provider, doc, tokens["id_token"])
+            claims = await claims_from_id_token(provider, doc, tokens["id_token"], container.cache)
         userinfo = {}
         if tokens.get("access_token"):
             userinfo = await fetch_userinfo(provider, doc, tokens["access_token"])
         identity = normalize_identity(provider_id=provider_id, claims=claims, userinfo=userinfo)
     except OAuthError as exc:
-        logger.warning("oauth callback failed provider=%s: %s", provider_id, exc)
+        # provider_id is the percent-decoded path param and exc can embed it,
+        # so both get the same control-char flattening as the service logs.
+        logger.warning(
+            "oauth callback failed provider=%s: %s",
+            _single_line(provider_id),
+            _single_line(exc),
+        )
         return _error_redirect("sign-in failed")
     service = AuthService(db, container.bus)
     try:
@@ -146,8 +164,23 @@ async def oauth_callback(
             last_name=identity["last_name"],
         )
     except AuthError as exc:
-        logger.info("oauth signup rejected provider=%s: %s", provider_id, exc)
+        logger.info(
+            "oauth signup rejected provider=%s: %s",
+            _single_line(provider_id),
+            _single_line(exc),
+        )
         return _error_redirect("registration is disabled")
+    # Join before the 2FA branch and before issue_tokens, as POST /auth/login
+    # does. A failed join stays log-only and the 302 happens either way; the
+    # helper can hand back a re-read instance, so bind it and read from that.
+    try:
+        user = await _join_single_workspace_best_effort(db, container, user)
+    except HTTPException as exc:
+        # The helper's "account no longer exists" guard (auth.py) is the
+        # only HTTPException it raises; anything else must not be masked.
+        if exc.status_code != status.HTTP_401_UNAUTHORIZED:
+            raise
+        return _error_redirect("sign-in failed")
     if user.totp_enabled:
         # Passwordless SSO still honors 2FA: park the user id behind the
         # one-time code and let the frontend complete the challenge.
@@ -164,11 +197,6 @@ async def oauth_callback(
     except Exception:
         logger.exception("oauth token issue failed user=%s", user.id)
         return _error_redirect("sign-in failed")
-    try:
-        await _maybe_join_single_workspace(db, container, user)
-    except Exception:
-        await db.rollback()
-        logger.exception("failed to join single workspace for oauth user %s", user.id)
     one_time = secrets.token_urlsafe(32)
     container.cache.set(
         CODE_TTL_HINT + one_time,
@@ -205,24 +233,7 @@ async def oauth_token(
         # The callback parked a minted refresh token in the cache entry; move
         # it into the HttpOnly cookie so JS only ever sees the access token.
         if entry.get("refresh_token"):
-            try:
-                service = AuthService(db, container.bus)
-                old = entry.get("refresh_token")
-                user = await service.get_user_by_refresh_token(old)
-                if user is not None:
-                    await service.revoke_refresh(old)
-                    pair = await service.issue_tokens(
-                        user,
-                        ip_address=_client_ip(request),
-                        user_agent=_user_agent(request),
-                    )
-                    set_refresh_cookie(response, pair.refresh_token)
-                    return {
-                        "access_token": pair.access_token,
-                        "token_type": "Bearer",
-                    }
-            except Exception:
-                logger.exception("oauth cookie reissue failed")
+            set_refresh_cookie(response, entry["refresh_token"], request=request)
         return {
             "access_token": entry.get("access_token"),
             "token_type": "Bearer",

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   useCan,
   useCustom,
@@ -9,10 +9,11 @@ import {
 import { useForm } from "@refinedev/react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Check, Copy } from "lucide-react";
 import { Navigate } from "react-router";
 import { toast } from "sonner";
 
+import { CopyButton } from "@/components/CopyButton";
+import { errorMessage } from "@/utils/errorMessage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -59,6 +60,10 @@ export function WebhookCreatePage() {
 
   const [created, setCreated] = useState<WebhookSubscriptionCreated | null>(null);
   const [copied, setCopied] = useState(false);
+  // One timer owns the 1.5 s confirmation: a second click restarts it instead of
+  // stacking one that ends it early, and it dies with the component.
+  const copyTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
   const {
     refineCore: { onFinish, formLoading },
@@ -70,6 +75,7 @@ export function WebhookCreatePage() {
       resource: "webhooks",
       action: "create",
       redirect: false,
+      errorNotification: false,
       successNotification: {
         message: "Webhook created",
         description: "Copy the signing secret now — it won't be shown again.",
@@ -90,8 +96,7 @@ export function WebhookCreatePage() {
       }
     } catch (err) {
       toast.error("Could not create webhook", {
-        description: String((err as { message?: string })?.message ?? err),
-        // ponytail: refine already toasts the FastAPI `detail`; drop ours when noisy.
+        description: errorMessage(err),
       });
     }
   };
@@ -185,18 +190,29 @@ export function WebhookCreatePage() {
             <Badge variant="outline" className="font-mono text-xs break-all">
               {created?.secret}
             </Badge>
-            <Button
-              variant="outline"
+            <CopyButton
+              copied={copied}
+              label="Copy signing secret"
               size="sm"
               onClick={async () => {
                 if (!created) return;
-                await navigator.clipboard.writeText(created.secret);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
+                // Clear before the write so the previous window dies even if this
+                // one never reaches the clipboard.
+                window.clearTimeout(copyTimer.current);
+                try {
+                  await navigator.clipboard.writeText(created.secret);
+                  setCopied(true);
+                  copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
+                } catch (err) {
+                  // A denied write must not leave a stale confirmation: the timer
+                  // above was already cleared, so nothing would reset `copied`.
+                  setCopied(false);
+                  toast.error("Could not copy signing secret", {
+                    description: errorMessage(err),
+                  });
+                }
               }}
-            >
-              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            </Button>
+            />
           </div>
           <DialogFooter>
             <Button onClick={() => list("webhooks")}>Done</Button>

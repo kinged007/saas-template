@@ -24,7 +24,7 @@ from src.core.permissions import WEBHOOK_CREATE, WEBHOOK_DELETE, WEBHOOK_READ, W
 from src.db.session import get_db
 from src.events.publisher import publish_audit
 from src.events.webhook_events import webhook_event_names
-from src.models.webhook import WebhookDelivery
+from src.models.webhook import WebhookDelivery, WebhookSubscription
 from src.schemas.api import WebhookSubscriptionCreate, WebhookSubscriptionUpdate
 from src.services.webhooks import (
     WebhookError,
@@ -40,6 +40,8 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 _SUB_SORTABLE = {"created_at", "url"}
 _SUB_FILTERABLE = {"active", "url"}
+# Newest first, id breaking created_at ties — matches the two delivery lists.
+_SUB_DEFAULT_ORDER = (WebhookSubscription.created_at.desc(), WebhookSubscription.id.desc())
 _DELIVERY_SORTABLE = {"created_at", "status", "attempt_count"}
 _DELIVERY_FILTERABLE = {"status", "event_type", "subscription_id"}
 
@@ -60,8 +62,6 @@ async def list_subscriptions(
     _=Depends(require_permission(WEBHOOK_READ)),
     db: AsyncSession = Depends(get_db),
 ):
-    from src.models.webhook import WebhookSubscription
-
     stmt = select(WebhookSubscription).where(WebhookSubscription.workspace_id == workspace_id)
     try:
         spec = parse_query(request)
@@ -72,10 +72,26 @@ async def list_subscriptions(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(*_SUB_DEFAULT_ORDER)
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
     return [subscription_to_dict(s) for s in rows.scalars().all()]
+
+
+@router.get("/subscriptions/{subscription_id}")
+async def get_subscription(
+    subscription_id: str,
+    workspace_id: str = Depends(get_current_workspace_id),
+    _=Depends(require_permission(WEBHOOK_READ)),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        sub = await WebhookService(db).get_subscription(workspace_id, subscription_id)
+    except WebhookError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    return subscription_to_dict(sub)
 
 
 @router.post("/subscriptions", status_code=201)

@@ -3,7 +3,7 @@ SHELL := /bin/bash
 
 SUDO := $(shell [ "$$(id -u)" -eq 0 ] 2>/dev/null && echo "" || echo sudo)
 
-.PHONY: help setup dev api api-install api-migrate api-seed api-test api-lint web web-install web-build web-typecheck hooks-install db-check db-squash db-new db-history infra-up infra-down nats-up nats-down nats-status nats-logs
+.PHONY: help setup check-node dev api api-install api-migrate api-seed api-test api-lint web web-install web-build web-test web-typecheck web-test-e2e hooks-install db-check db-squash db-new db-history infra-up infra-down nats-up nats-down nats-status nats-logs
 
 # USE_SQLITE=1 (env or `make <target> USE_SQLITE=1`): use the per-checkout
 # sqlite dev DB (apps/api/dev.db) instead of embedded postgres. Exported so it
@@ -16,17 +16,23 @@ endif
 API_PORT ?= 8000
 WEB_PORT ?= 5173
 
+# Node floor for apps/web — keep in sync with apps/web/package.json "engines".
+# The API is Python, so it has no Node requirement.
+WEB_NODE_MAJOR := 22
+WEB_NODE_MINOR := 18
+
 help:
 	@echo "SaaS Template targets (development runs from the terminal — no docker needed):"
 	@echo "  make setup        one-time: install uv + Node.js if missing (fnm -> apt -> nvm)"
+	@echo "  make check-node   warn if Node is below the apps/web floor ($(WEB_NODE_MAJOR).$(WEB_NODE_MINOR))"
 	@echo "  make dev          install deps, migrate, seed, then run api (:$(API_PORT)) + web (:$(WEB_PORT))"
 	@echo "  make dev API_PORT=8010 WEB_PORT=5273   use other ports (e.g. when :8000/:5173 are taken)"
-	@echo "  make api-install  install backend deps (uv sync)"
+	@echo "  make api-install  install backend deps + dev tooling (uv sync --extra dev)"
 	@echo "  make api-migrate  run alembic migrations (starts embedded postgres)"
 	@echo "  USE_SQLITE=1 make dev  sqlite dev DB (apps/api/dev.db) instead of postgres"
 	@echo "  make api-seed     seed default demo users + workspaces"
 	@echo "  make api          run backend (uvicorn, :$(API_PORT))"
-	@echo "  make api-test     run backend tests (sqlite in-memory)"
+	@echo "  make api-test     run backend tests (scratch sqlite file, no docker required)"
 	@echo "  make api-lint     ruff check + format check (same as pre-commit hook)"
 	@echo "  make hooks-install install pre-commit hooks (uv tool install pre-commit first)"
 	@echo "  make db-check     migration hygiene: single head + models match migrations"
@@ -36,6 +42,9 @@ help:
 	@echo "  make web-install  install frontend deps"
 	@echo "  make web          run frontend (vite, :$(WEB_PORT))"
 	@echo "  make web-build    type-check + build frontend"
+	@echo "  make web-test     run frontend unit tests (node --test, stdlib only)"
+	@echo "  make web-typecheck type-check frontend (tsc --noEmit)"
+	@echo "  make web-test-e2e run frontend e2e tests (playwright; no API needed)"
 	@echo ""
 	@echo "Optional (prod-like testing with NATS, requires docker — no compose needed):"
 	@echo "  make nats-up      start a NATS JetStream container (plain docker run)"
@@ -53,10 +62,7 @@ setup:
 	fi
 	@if command -v node >/dev/null 2>&1; then \
 		echo "==> Node.js already installed: $$(node --version)"; \
-		NODE_MAJOR=$$(node --version | cut -d. -f1 | tr -d v); \
-		if [ "$$NODE_MAJOR" -lt 18 ]; then \
-			echo "    warning: Vite 5 needs Node >= 18"; \
-		fi; \
+		$(MAKE) --no-print-directory check-node; \
 	else \
 		echo "==> Node.js not found — trying installers (fnm, then apt, then nvm)..."; \
 		FNM_BIN=""; \
@@ -85,8 +91,24 @@ setup:
 		fi; \
 		if command -v node >/dev/null 2>&1; then \
 			echo "==> Node.js ready: $$(node --version)"; \
+			$(MAKE) --no-print-directory check-node; \
 		else \
 			echo "==> Done — open a new terminal (or run: source ~/.bashrc) so node is on PATH"; \
+		fi; \
+	fi
+
+# Warns (never fails) when the running Node is below the floor apps/web declares:
+# Node 22.18+ strips TS types natively, which `make web-test` relies on.
+check-node:
+	@if command -v node >/dev/null 2>&1; then \
+		NODE_VERSION=$$(node --version); NODE_VERSION=$${NODE_VERSION#v}; \
+		NODE_MAJOR=$${NODE_VERSION%%.*}; \
+		NODE_MINOR=$${NODE_VERSION#*.}; NODE_MINOR=$${NODE_MINOR%%.*}; NODE_MINOR=$${NODE_MINOR:-0}; \
+		case "$$NODE_MAJOR$$NODE_MINOR" in *[!0-9]*) exit 0;; esac; \
+		if [ "$$NODE_MAJOR" -lt $(WEB_NODE_MAJOR) ] || \
+		   { [ "$$NODE_MAJOR" -eq $(WEB_NODE_MAJOR) ] && [ "$$NODE_MINOR" -lt $(WEB_NODE_MINOR) ]; }; then \
+			echo "    warning: apps/web requires Node >= $(WEB_NODE_MAJOR).$(WEB_NODE_MINOR) (found $$NODE_VERSION) — 'make web-test' needs its native TS type stripping"; \
+			echo "             the API has no Node requirement; only apps/web needs $(WEB_NODE_MAJOR).$(WEB_NODE_MINOR)"; \
 		fi; \
 	fi
 
@@ -130,10 +152,10 @@ api:
 	cd apps/api && uv run uvicorn src.main:app --reload --port $(API_PORT)
 
 api-test:
-	cd apps/api && uv run pytest
+	cd apps/api && uv run --extra dev pytest
 
 api-lint:
-	cd apps/api && uv run ruff check . && uv run ruff format --check .
+	cd apps/api && uv run --extra dev ruff check . && uv run --extra dev ruff format --check .
 
 web-install:
 	cd apps/web && npm install
@@ -142,10 +164,19 @@ web:
 	cd apps/web && API_PORT=$(API_PORT) WEB_PORT=$(WEB_PORT) npm run dev
 
 web-build:
+	@$(MAKE) --no-print-directory check-node
 	cd apps/web && npm run build
 
+web-test:
+	@$(MAKE) --no-print-directory check-node
+	cd apps/web && npm test
+
 web-typecheck:
+	@if [ ! -x apps/web/node_modules/.bin/tsc ]; then echo "error: apps/web/node_modules/.bin/tsc missing — run 'make web-install' first"; exit 1; fi
 	cd apps/web && npx tsc -p tsconfig.json --noEmit
+
+web-test-e2e:
+	cd apps/web && npx playwright install chromium && npm run test:e2e
 
 hooks-install:
 	pre-commit install --config .pre-commit-config.yaml
@@ -170,4 +201,4 @@ nats-logs:
 
 api-test-nats:
 	./scripts/nats.sh start
-	cd apps/api && uv run pytest tests/test_nats_integration.py -v
+	cd apps/api && uv run --extra dev pytest tests/test_nats_integration.py -v

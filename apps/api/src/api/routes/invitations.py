@@ -14,9 +14,10 @@ from src.api.deps import (
     get_optional_workspace_id,
     require_key_permission,
     require_permission,
+    require_session_user,
     resolve_auth_principal,
 )
-from src.core.dates import ensure_utc, now_utc
+from src.core.dates import ensure_utc, iso_or_none, now_utc
 from src.core.permissions import MEMBER_CREATE, MEMBER_DELETE
 from src.db.session import get_db
 from src.models.core import Invitation
@@ -25,6 +26,7 @@ from src.schemas.api import InvitationCreate
 from src.services.workspaces import (
     WorkspaceConflict,
     WorkspaceError,
+    WorkspaceForbidden,
     WorkspaceService,
 )
 
@@ -34,6 +36,8 @@ router = APIRouter(prefix="/invitations", tags=["invitations"])
 
 _INVITATION_FILTERABLE = {"status", "email"}
 _INVITATION_SORTABLE = {"created_at", "status", "expires_at"}
+# Newest first, id breaking created_at ties — see _MEMBER_DEFAULT_ORDER.
+_INVITATION_DEFAULT_ORDER = (Invitation.created_at.desc(), Invitation.id.desc())
 
 
 def _invite_dict(i: Invitation) -> dict:
@@ -48,9 +52,9 @@ def _invite_dict(i: Invitation) -> dict:
         "invited_by_user_id": i.invited_by_user_id,
         "token": i.token,
         "status": i.status,
-        "expires_at": i.expires_at.isoformat() if i.expires_at else None,
-        "accepted_at": i.accepted_at.isoformat() if i.accepted_at else None,
-        "created_at": i.created_at.isoformat() if i.created_at else None,
+        "expires_at": iso_or_none(i.expires_at),
+        "accepted_at": iso_or_none(i.accepted_at),
+        "created_at": iso_or_none(i.created_at),
         "expired": expired,
     }
 
@@ -73,6 +77,8 @@ async def list_invitations(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
+    if not spec.sort_by:
+        stmt = stmt.order_by(*_INVITATION_DEFAULT_ORDER)
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
@@ -114,7 +120,9 @@ async def revoke_invitation(
     invitation_id: str,
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
-    user=Depends(get_current_user),
+    # Session-only: the service-layer guard is an owner/admin *role* check, which
+    # an API key would inherit from its creator.
+    user=Depends(require_session_user),
     _=Depends(require_permission(MEMBER_DELETE)),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
@@ -126,6 +134,8 @@ async def revoke_invitation(
             actor=user,
             ip_address=request.client.host if request.client else None,
         )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
     except WorkspaceError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
 
@@ -179,6 +189,34 @@ async def my_invitations(
         }
         for i, w, u in rows
     ]
+
+
+@router.post("/{invitation_id}/resend", status_code=200)
+async def resend_invitation(
+    invitation_id: str,
+    request: Request,
+    workspace_id: str = Depends(get_current_workspace_id),
+    # Session-only: the service-layer guard is an owner/admin *role* check, which
+    # an API key would inherit from its creator and use to act as the owner.
+    user=Depends(require_session_user),
+    _=Depends(require_permission(MEMBER_CREATE)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    try:
+        invite = await WorkspaceService(db, container.bus).resend_invitation(
+            workspace_id,
+            invitation_id,
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
+    except WorkspaceForbidden as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+    except WorkspaceConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    except WorkspaceError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    return _invite_dict(invite)
 
 
 @router.post("/{invitation_id}/decline")
