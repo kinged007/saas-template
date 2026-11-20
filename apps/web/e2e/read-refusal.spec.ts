@@ -32,7 +32,7 @@ test("a refused job fetch renders the server's reason and no toast", async ({ pa
     page.getByText("you are not a member of this workspace"),
   ).toBeVisible();
   await expect(page.getByText("Job not found.")).toHaveCount(0);
-  expect(await toasts(page).count()).toBe(0);
+  await expect(toasts(page)).toHaveCount(0);
 });
 
 test("a refused list fetch renders the reason in the list page", async ({ page }) => {
@@ -45,7 +45,7 @@ test("a refused list fetch renders the reason in the list page", async ({ page }
   await page.goto("/api-keys");
 
   await expect(page.getByRole("alert")).toContainText("internal error");
-  expect(await toasts(page).count()).toBe(0);
+  await expect(toasts(page)).toHaveCount(0);
 });
 
 test("a successful list fetch renders no alert and no toast", async ({ page }) => {
@@ -67,5 +67,5 @@ test("a successful list fetch renders no alert and no toast", async ({ page }) =
 
   await expect(page.getByRole("row").filter({ hasText: "CI" })).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
-  expect(await toasts(page).count()).toBe(0);
+  await expect(toasts(page)).toHaveCount(0);
 });
