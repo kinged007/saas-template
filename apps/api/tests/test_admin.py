@@ -172,6 +172,22 @@ async def test_admin_flags_reject_non_bool(app_client):
     assert "invites_enabled" not in row["flags"]
 
 
+async def test_admin_flags_reject_malformed_workspace_id(app_client):
+    """The path param reaches db.get(Workspace, ...) — a bad id must be a 422, not a 500."""
+    client, tokens = await _superuser_client(app_client)
+
+    resp = await client.patch(
+        "/api/v1/admin/workspaces/not-a-uuid/flags",
+        json={"flags": {"invites_enabled": False}},
+        headers=auth_headers(tokens),
+    )
+
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"][0]
+    assert detail["type"] == "uuid_parsing", resp.text
+    assert detail["loc"] == ["path", "workspace_id"], resp.text
+
+
 async def test_admin_audit_cross_workspace(app_client):
     import asyncio
 
@@ -226,11 +242,15 @@ async def test_admin_audit_cross_workspace(app_client):
 
 
 async def test_admin_malformed_id_404(app_client):
+    # The workspace case is not here: that path param is annotated UUID, so a
+    # malformed id is a 422 (test_admin_flags_reject_malformed_workspace_id).
+    # 404-on-malformed only exists to avoid an existence oracle, and the admin
+    # surface is superuser-only — nothing to hide from a caller who can already
+    # list every workspace.
     client, tokens = await _superuser_client(app_client)
     for method, url, kwargs in [
         ("get", "/api/v1/admin/users/not-a-uuid", {}),
         ("patch", "/api/v1/admin/users/not-a-uuid", {"json": {"is_active": False}}),
-        ("patch", "/api/v1/admin/workspaces/not-a-uuid/flags", {"json": {"flags": {}}}),
     ]:
         resp = await client.request(method, url, headers=auth_headers(tokens), **kwargs)
         assert resp.status_code == 404, (method, url, resp.text)

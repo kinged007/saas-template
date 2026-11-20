@@ -17,6 +17,7 @@ import { useNavigate } from "react-router";
 import type { Notification } from "../types";
 import { formatDate } from "./ui";
 import { stripMarkdown, truncate } from "@/lib/markdown";
+import { notificationLinkUrl } from "@/lib/notificationLink";
 import { liveChannels, subscribeLive } from "../providers/liveProvider";
 
 function truncateEscaped(text: string | undefined, max: number): string {
@@ -108,11 +109,8 @@ export function NotificationCenter() {
     );
   };
 
-  const linkUrl = (n: Notification) =>
-    (n.payload as Record<string, unknown> | undefined)?.url as string | undefined;
-
   const openNotification = (n: Notification) => {
-    const url = linkUrl(n);
+    const url = notificationLinkUrl(n);
     if (!url) return;
     setOpen(false);
     navigate(url);
@@ -138,7 +136,7 @@ export function NotificationCenter() {
   };
 
   const renderItem = (n: Notification) => {
-    const url = linkUrl(n);
+    const url = notificationLinkUrl(n);
     const isMessage = n.type === "conversation_message";
     const payload = n.payload as Record<string, unknown> | undefined;
     const senderName = payload?.sender_name as string | undefined;
@@ -218,18 +216,45 @@ export function NotificationCenter() {
     );
   };
 
+  // The badge total is unread notifications plus unread conversation messages, so
+  // the name splits that total by source rather than attributing all of it to
+  // notifications: with 1 notification and 2 messages, the sheet opens on "No
+  // unread notifications."
+  const sources: string[] = [];
+  if (notifCount > 0) sources.push(`${notifCount} unread notification${notifCount === 1 ? "" : "s"}`);
+  if (convUnreadMessages > 0) sources.push(`${convUnreadMessages} unread message${convUnreadMessages === 1 ? "" : "s"}`);
+  const unreadPhrase = sources.join(" and ");
+
+  const bellName = unreadPhrase ? `Show notifications, ${unreadPhrase}` : "Show notifications";
+
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
-        <Button variant="outline" size="icon" className="relative" aria-label="notifications">
+        <Button
+          variant="outline"
+          size="icon"
+          className="relative"
+          aria-label={bellName}
+          title={bellName}
+        >
           <Bell className="h-4 w-4" />
           {unread > 0 && (
-            <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-xs text-destructive-foreground">
+            <span
+              aria-hidden="true"
+              className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-xs text-destructive-foreground"
+            >
               {unread}
             </span>
           )}
         </Button>
       </SheetTrigger>
+      {/* `aria-label` is not a live region: a count that ticks up while the
+          bell is out of focus is never announced. Always mounted — a live
+          region has to be in the accessibility tree before its text changes
+          to be announced — and `sr-only` keeps the idle text out of layout. */}
+      <span role="status" className="sr-only">
+        {unreadPhrase}
+      </span>
       <SheetContent side="right" className="w-full overflow-y-auto sm:w-[440px] sm:max-w-none">
         <SheetHeader>
           <SheetTitle>Notifications</SheetTitle>
