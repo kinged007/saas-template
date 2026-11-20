@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { useWorkspace } from "../contexts/WorkspaceContext";
 import { pendingInvitationStore } from "../utils/storage";
+import { errorMessage } from "@/utils/errorMessage";
 
 /**
  * Landing page for the emailed invite link (`/invitations/accept?token=…`).
@@ -42,7 +43,7 @@ export function InvitationAcceptPage() {
         },
         onError: (err) => {
           pendingInvitationStore.clear();
-          setError(String((err as { message?: string })?.message ?? err));
+          setError(errorMessage(err));
         },
       },
     );

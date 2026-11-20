@@ -7,13 +7,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.crud import InvalidQuery, apply_query, parse_query
+from src.api.crud import CREATED_DESC, InvalidQuery, apply_query, parse_query
 from src.api.deps import get_current_workspace_id, require_permission
+from src.core.dates import iso_or_none
 from src.core.permissions import AUDIT_READ
 from src.db.session import get_db
 from src.models.audit import AuditLogEntry
 from src.models.user_profile import UserProfile
 from src.models.workspace import User
+from src.services.audit import public_details
 from src.services.profile_helpers import format_display_name
 
 logger = logging.getLogger(__name__)
@@ -44,9 +46,9 @@ def _audit_to_dict(
         "resource_type": entry.resource_type,
         "resource_id": entry.resource_id,
         "action": entry.action,
-        "details": entry.details,
+        "details": public_details(entry.details),
         "ip_address": entry.ip_address,
-        "created_at": entry.created_at.isoformat() if entry.created_at else None,
+        "created_at": iso_or_none(entry.created_at),
     }
 
 
@@ -67,7 +69,12 @@ async def list_audit_logs(
     try:
         spec = parse_query(request)
         stmt = apply_query(
-            stmt, AuditLogEntry, spec, sortable=_AUDIT_SORTABLE, filterable=_AUDIT_FILTERABLE
+            stmt,
+            AuditLogEntry,
+            spec,
+            sortable=_AUDIT_SORTABLE,
+            filterable=_AUDIT_FILTERABLE,
+            default_sort=CREATED_DESC,
         )
         q = (request.query_params.get("q") or "").strip()
         if q:
@@ -99,8 +106,6 @@ async def list_audit_logs(
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
 
-    if not spec.sort_by:
-        stmt = stmt.order_by(AuditLogEntry.created_at.desc(), AuditLogEntry.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)

@@ -9,23 +9,10 @@ from src.events.bus import (
     EventEnvelope,
     EventMetadata,
     SubscriberHandler,
+    subject_matches,
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _subject_matches(subscription: str, subject: str) -> bool:
-    """Support NATS-style wildcards: '*' single token, '>' rest."""
-    sub_tokens = subscription.split(".")
-    subj_tokens = subject.split(".")
-    for i, tok in enumerate(sub_tokens):
-        if tok == ">":
-            return True
-        if i >= len(subj_tokens):
-            return False
-        if tok != "*" and tok != subj_tokens[i]:
-            return False
-    return len(sub_tokens) == len(subj_tokens)
 
 
 class InProcessEventBus(EventBus):
@@ -73,7 +60,7 @@ class InProcessEventBus(EventBus):
         )
         matched = 0
         for sub, queue in list(self._queues.items()):
-            if _subject_matches(sub, subject):
+            if subject_matches(sub, subject):
                 queue.put_nowait(envelope)
                 matched += 1
         logger.debug("published %s (%d subscriber queues)", subject, matched)
@@ -134,6 +121,16 @@ class InProcessEventBus(EventBus):
                 await task
             except asyncio.CancelledError:
                 pass
+
+    async def wait_idle(self) -> None:
+        """Wait until every queued delivery has run its handler.
+
+        `Queue.join` tracks items from the synchronous `put_nowait` in
+        `publish` until the matching `task_done` after the handler finishes,
+        so unlike polling `_in_flight` there is no gap between `queue.get()`
+        and the `_in_flight += 1` in `_consume`.
+        """
+        await asyncio.gather(*(q.join() for q in list(self._queues.values())))
 
     async def _consume(
         self, subject: str, queue: asyncio.Queue[EventEnvelope], handler: SubscriberHandler
