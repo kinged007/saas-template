@@ -6,10 +6,10 @@ appending migrations exactly like now.
 
 ## Daily workflow
 
-Change models, then generate:
+Change models, then generate (14-digit UTC timestamp id per DECISIONS D-04; make db-new does not set the id yet, so do not use it until it does):
 
 ```bash
-make db-new m="add index on users.email"
+cd apps/api && uv run alembic revision --autogenerate --rev-id "$(date -u +%Y%m%d%H%M%S)" -m "add index on users.email"
 ```
 
 **Review the generated diff before committing.** Autogenerate catches
