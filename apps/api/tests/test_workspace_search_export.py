@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from src.db.session import SessionFactory
 from src.models.audit import AuditLogEntry
+from src.services.search_export import CSV_RESOURCES
 from tests.conftest import (
     create_workspace,
     register_user,
@@ -475,13 +476,14 @@ def test_export_csv_leaves_safe_values_untouched():
     assert row["avatar_url"] == ""
 
 
-async def test_export_members_csv_neutralises_injected_display_name(app_client):
+@pytest.mark.parametrize("lead", ["=", "＝", "＋", "－", "＠"])
+async def test_export_members_csv_neutralises_injected_display_name(app_client, lead):
     """End to end: a formula-shaped display_name is prefixed in the response."""
     from src.db.session import SessionFactory
     from src.models.workspace import User
 
     client, h, ws, conv = await _setup(app_client)
-    payload = "=cmd|' /C calc'!A0"
+    payload = f"{lead}cmd|' /C calc'!A0"
     async with SessionFactory() as session:
         user_id = (
             (
@@ -598,3 +600,25 @@ async def test_export_requires_audit_read(app_client):
     # Owner keeps export access.
     owner_export = await client.get("/api/v1/workspaces/export", headers=h)
     assert owner_export.status_code == 200, owner_export.text
+
+
+def test_export_csv_prefixes_only_the_leading_full_width_character():
+    from src.services.search_export import SearchExportService
+
+    out = SearchExportService.export_csv(
+        {"invitations": [{"email": "＝a＝b@example.com"}, {"email": "Ada ＝ Lovelace"}]},
+        "invitations",
+    )
+    emails = [r["email"] for r in csv.DictReader(io.StringIO(out))]
+    assert emails == ["'＝a＝b@example.com", "Ada ＝ Lovelace"]
+
+
+@pytest.mark.parametrize("resource", sorted(CSV_RESOURCES))
+def test_column_drift_is_caught_when_the_resource_has_no_rows(monkeypatch, resource):
+    from src.services import search_export
+
+    monkeypatch.setitem(
+        search_export.CSV_RESOURCES, resource, [*search_export.CSV_RESOURCES[resource], "phantom"]
+    )
+    with pytest.raises(ValueError, match=f"{resource} projection and columns differ"):
+        search_export.SearchExportService.export_csv({resource: []}, resource)

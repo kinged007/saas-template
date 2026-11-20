@@ -217,6 +217,48 @@ def _mock_oauth(monkeypatch, *, sub="sub-1", email=SSO_EMAIL):
     monkeypatch.setattr(oauth_routes, "fetch_userinfo", fake_userinfo)
 
 
+def _mock_discovery(monkeypatch, doc):
+    """Real fetch_userinfo / exchange_code against a canned discovery document."""
+
+    async def fake_discovery(provider, cache):
+        return dict(doc)
+
+    async def fake_exchange(provider, doc, *, code, redirect_uri, code_verifier):
+        return {"access_token": "at", "id_token": None}
+
+    monkeypatch.setattr(oauth_svc, "_discovery", fake_discovery)
+    import src.api.routes.oauth as oauth_routes
+
+    monkeypatch.setattr(oauth_routes, "exchange_code", fake_exchange)
+
+
+# A discovery-mode provider: no explicit endpoints, one anchor host (idp.example).
+DISCOVERY = {
+    "id": "oidcidp",
+    "display_name": "OIDC IdP",
+    "discovery_url": "https://idp.example/.well-known/openid-configuration",
+    "emails_url": "https://userinfo.idp.example/user/emails",
+    "client_id": "cid",
+    "client_secret": "csecret",
+}
+
+
+@pytest.fixture
+def oidc_on(monkeypatch):
+    def _set(emails_url: str) -> None:
+        monkeypatch.setattr(
+            settings,
+            "oauth_providers",
+            json.dumps([{**DISCOVERY, "emails_url": emails_url}]),
+        )
+        monkeypatch.setattr(settings, "auth_allow_registration", True)
+
+    _set(DISCOVERY["emails_url"])
+    yield _set
+    monkeypatch.setattr(settings, "oauth_providers", "")
+    monkeypatch.setattr(settings, "auth_allow_registration", True)
+
+
 async def _callback(app_client, monkeypatch, state="s", provider="testidp"):
     # Seed a valid state entry the way /authorize would.
     import src.api.routes.oauth as oauth_routes
@@ -719,6 +761,361 @@ async def test_verified_email_edge_branches(payload, status, expected):
     else:
         got = await oauth_svc._verified_email(client, "https://api.github.com/user/emails", {})
         assert got == expected
+
+
+async def _github_sign_in(app_client, monkeypatch, *, user, emails, state):
+    """One GitHub callback round-trip: (requested URLs, response, user count before)."""
+    calls = _fake_httpx(monkeypatch, user=user, emails=emails)
+    before = await _user_count()
+    _, resp = await _callback(app_client, monkeypatch, state=state, provider="github")
+    return calls, resp, before
+
+
+async def _account_email(app_client, resp):
+    tokens = await app_client.post(
+        "/api/v1/auth/oauth/token", json={"code": resp.headers["location"].split("code=")[1]}
+    )
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens.json()))
+    assert me.status_code == 200, me.text
+    return me.json()["email"]
+
+
+@pytest.fixture
+def github_with_emails_url(monkeypatch):
+    """github_on, but with emails_url pointed at an operator-chosen URL."""
+
+    def _set(url: str) -> None:
+        monkeypatch.setattr(
+            settings, "oauth_providers", json.dumps([{**GITHUB, "emails_url": url}])
+        )
+        monkeypatch.setattr(settings, "auth_allow_registration", True)
+
+    _set(GITHUB["emails_url"])
+    yield _set
+    monkeypatch.setattr(settings, "oauth_providers", "")
+    monkeypatch.setattr(settings, "auth_allow_registration", True)
+
+
+# A provider that serialises the flag as a non-empty string is not thereby
+# claiming verification: only an affirmative value counts, everything else is
+# refused so an unverified address is never taken.
+async def test_github_refuses_string_false_verified(app_client, github_on, monkeypatch):
+    _, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=[{"email": "octo@example.com", "primary": True, "verified": "false"}],
+        state="gsf",
+    )
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+@pytest.mark.parametrize("flag", [True, 1, "1", "true", "TRUE", "True", "yes", "Yes", " true "])
+async def test_verified_flag_accepts_affirmative_serialisations(
+    app_client, github_on, monkeypatch, flag
+):
+    _, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=[{"email": "octo@example.com", "primary": True, "verified": flag}],
+        state="gok",
+    )
+    assert "/oauth/callback?code=" in resp.headers["location"]
+    assert await _user_count() == before + 1
+
+
+@pytest.mark.parametrize("flag", [False, "false", "False", "FALSE", 0, "0", "no", "No", "", None])
+async def test_verified_flag_refuses_every_other_value(app_client, github_on, monkeypatch, flag):
+    _, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=[{"email": "octo@example.com", "primary": True, "verified": flag}],
+        state="gno",
+    )
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+async def test_verified_flag_refuses_when_key_absent(app_client, github_on, monkeypatch):
+    _, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=[{"email": "octo@example.com", "primary": True}],
+        state="gabs",
+    )
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+async def test_github_ignores_string_false_primary(app_client, github_on, monkeypatch):
+    _, resp, _ = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=[
+            {"email": "octo@example.com", "primary": "false", "verified": True},
+            {"email": "Alt@Example.com", "primary": True, "verified": True},
+        ],
+        state="gp",
+    )
+    assert await _account_email(app_client, resp) == "alt@example.com"
+
+
+async def test_github_whitespace_profile_email_falls_back_to_emails_endpoint(
+    app_client, github_on, monkeypatch
+):
+    calls, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": "  ", "name": "The Octocat"},
+        emails=[{"email": " Octo@Example.com ", "primary": True, "verified": True}],
+        state="gws",
+    )
+    assert "https://api.github.com/user/emails" in calls
+    assert "/oauth/callback?code=" in resp.headers["location"]
+    assert await _account_email(app_client, resp) == "octo@example.com"
+    assert await _user_count() == before + 1
+
+
+async def test_github_refuses_whitespace_only_email(app_client, github_on, monkeypatch):
+    _, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": " "},
+        emails=[{"email": "  ", "primary": True, "verified": True}],
+        state="gwo",
+    )
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://api.github.com.evil.com/user/emails",
+        "https://api.github.com@evil.com/user/emails",
+    ],
+)
+async def test_emails_url_off_provider_host_is_refused(
+    app_client, github_with_emails_url, monkeypatch, url
+):
+    github_with_emails_url(url)
+    # emails=None raises if /emails is hit at all, so the call list is the proof
+    # of whether the bearer token left the process.
+    calls, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=None,
+        state="gx",
+    )
+    assert not [c for c in calls if "evil.com" in c]
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+async def test_emails_url_on_non_default_port_of_config_host_passes(
+    app_client, github_with_emails_url, monkeypatch
+):
+    # hostname ignores the port, so a provider on :8443 is still its own host.
+    github_with_emails_url("https://api.github.com:8443/user/emails")
+    calls, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=[{"email": "octo@example.com", "primary": True, "verified": True}],
+        state="gport",
+    )
+    assert "https://api.github.com:8443/user/emails" in calls
+    assert "/oauth/callback?code=" in resp.headers["location"]
+    assert await _user_count() == before + 1
+
+
+async def test_emails_url_of_wrong_type_is_refused(app_client, github_with_emails_url, monkeypatch):
+    # A number in the config must not reach urlsplit() as a 500.
+    github_with_emails_url(123)
+    calls, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=None,
+        state="gtype",
+    )
+    assert not [c for c in calls if c.endswith("/emails")]
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+def test_untrusted_emails_urls_reports_bad_config_at_boot(github_with_emails_url):
+    github_with_emails_url("https://api.github.com.evil.com/user/emails")
+    assert oauth_svc.untrusted_emails_urls() == ["github"]
+    github_with_emails_url("https://api.github.com/user/emails")
+    assert oauth_svc.untrusted_emails_urls() == []
+
+
+async def test_discovery_doc_endpoint_anchors_emails_url(app_client, oidc_on, monkeypatch):
+    # emails_url sits on userinfo.idp.example, which the config never names; the
+    # discovery document does, via its token endpoint.
+    oidc_on("https://userinfo.idp.example/user/emails")
+    _mock_discovery(
+        monkeypatch,
+        {
+            "authorization_endpoint": "https://idp.example/authorize",
+            "token_endpoint": "https://userinfo.idp.example/token",
+            "userinfo_endpoint": "https://idp.example/userinfo",
+        },
+    )
+    calls = _fake_httpx(
+        monkeypatch,
+        user={"id": 4242, "sub": "4242", "email": None},
+        emails=[{"email": "octo@example.com", "primary": True, "verified": True}],
+    )
+    _, resp = await _callback(app_client, monkeypatch, state="o1", provider="oidcidp")
+    assert "https://userinfo.idp.example/user/emails" in calls
+    assert "/oauth/callback?code=" in resp.headers["location"]
+
+
+async def test_discovery_doc_anchors_cross_host_userinfo_endpoint(app_client, oidc_on, monkeypatch):
+    # Google serves userinfo from openidconnect.googleapis.com and Entra from
+    # graph.microsoft.com, hosts their issuer never names: the document comes from
+    # the operator's own https config, so the endpoints it states are anchors too.
+    oidc_on("")
+    _mock_discovery(
+        monkeypatch,
+        {
+            "authorization_endpoint": "https://idp.example/authorize",
+            "token_endpoint": "https://idp.example/token",
+            "userinfo_endpoint": "https://userinfo.idp.example/userinfo",
+        },
+    )
+    calls = _fake_httpx(
+        monkeypatch,
+        user={"id": 4242, "sub": "4242", "email": "octo@example.com", "name": "Octo"},
+        emails=None,
+    )
+    _, resp = await _callback(app_client, monkeypatch, state="o2", provider="oidcidp")
+    assert "https://userinfo.idp.example/userinfo" in calls
+    assert await _account_email(app_client, resp) == "octo@example.com"
+
+
+async def test_discovery_over_plain_http_is_refused(monkeypatch):
+    # A forged document is what could name a third party's endpoints, so one is
+    # never fetched over plaintext: no request leaves the process at all.
+    calls = _fake_httpx(monkeypatch, user={}, emails=[])
+    cfg = oauth_svc.ProviderConfig(
+        id="oidcidp",
+        display_name="OIDC IdP",
+        client_id="cid",
+        client_secret="csecret",
+        discovery_url="http://idp.example/.well-known/openid-configuration",
+    )
+    with pytest.raises(oauth_svc.OAuthError, match="must be https"):
+        await oauth_svc._discovery(cfg, oauth_svc.TtlCache())
+    assert calls == []
+
+
+async def test_plaintext_token_endpoint_is_refused(monkeypatch):
+    # client_secret is posted to the token endpoint, so it is origin-checked like
+    # the bearer ones. The config is the trust root, so the host rule cannot bite
+    # here; the scheme rule is what refuses a plaintext secret.
+    calls = _fake_httpx(monkeypatch, user={}, emails=[])
+    provider = oauth_svc.ProviderConfig(
+        id="oidcidp",
+        display_name="OIDC IdP",
+        client_id="cid",
+        client_secret="csecret",
+        discovery_url="https://idp.example/.well-known/openid-configuration",
+    )
+    with pytest.raises(oauth_svc.OAuthError, match="token endpoint"):
+        await oauth_svc.exchange_code(
+            provider,
+            {"token_endpoint": "http://idp.example/token"},
+            code="c",
+            redirect_uri="http://app.test/cb",
+            code_verifier="verifier-abc",
+        )
+    assert calls == []
+    # Control: the same endpoint over https is posted to.
+    ok = await oauth_svc.exchange_code(
+        provider,
+        {"token_endpoint": "https://idp.example/token"},
+        code="c",
+        redirect_uri="http://app.test/cb",
+        code_verifier="verifier-abc",
+    )
+    assert ok["access_token"] == "at" and calls == ["https://idp.example/token"]
+
+
+async def test_plaintext_userinfo_endpoint_is_refused(app_client, oidc_on, monkeypatch):
+    # The bearer never leaves over plaintext either, config-named host or not.
+    oidc_on("")
+    _mock_discovery(
+        monkeypatch,
+        {
+            "authorization_endpoint": "https://idp.example/authorize",
+            "token_endpoint": "https://idp.example/token",
+            "userinfo_endpoint": "http://idp.example/userinfo",
+        },
+    )
+    calls = _fake_httpx(monkeypatch, user={"sub": "1", "email": "octo@example.com"}, emails=None)
+    before = await _user_count()
+    _, resp = await _callback(app_client, monkeypatch, state="o3", provider="oidcidp")
+    assert not [c for c in calls if c.startswith("http://")]
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+def test_boot_check_is_config_only_and_may_be_conservative(oidc_on):
+    # The document cannot be fetched at boot, so a doc-anchored emails_url is
+    # named there and accepted at the callback; main.py says "may fail".
+    oidc_on("https://userinfo.idp.example/user/emails")
+    assert oauth_svc.untrusted_emails_urls() == ["oidcidp"]
+
+
+def test_untrusted_emails_urls_skips_entries_that_cannot_be_selected(monkeypatch):
+    # get_provider() matches a raw id against a route string, so a numeric id and
+    # a non-dict entry are not providers at all and are not reported as broken.
+    monkeypatch.setattr(
+        settings,
+        "oauth_providers",
+        json.dumps(
+            [
+                {"id": 123, "emails_url": "https://api.github.com.evil.com/user/emails"},
+                "not-a-dict",
+            ]
+        ),
+    )
+    assert oauth_svc.untrusted_emails_urls() == []
+
+
+async def test_non_string_provider_email_is_refused(app_client, github_on, monkeypatch):
+    _fake_httpx(
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=[{"email": ["octo@example.com"], "primary": True, "verified": True}],
+    )
+    before = await _user_count()
+    _, resp = await _callback(app_client, monkeypatch, state="g6", provider="github")
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
+
+
+async def test_emails_url_plain_http_is_refused(app_client, github_with_emails_url, monkeypatch):
+    github_with_emails_url("http://api.github.com/user/emails")
+    calls, resp, before = await _github_sign_in(
+        app_client,
+        monkeypatch,
+        user={"id": 4242, "login": "octocat", "email": None},
+        emails=None,
+        state="ghttp",
+    )
+    assert not [c for c in calls if c.endswith("/emails")]
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=sign-in%20failed")
+    assert await _user_count() == before
 
 
 async def test_github_public_email_skips_emails_endpoint(app_client, github_on, monkeypatch):

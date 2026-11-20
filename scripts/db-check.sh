@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
-# Migration hygiene checks: single linear head + models match migrations.
+# Migration hygiene checks: template + project heads, models match migrations.
 #
 # Usage:
 #   scripts/db-check.sh        # from repo root; uses a scratch embedded postgres
 #
 # What it does:
-#   1. `alembic heads` must report exactly one head (catches two PRs both
-#      branching a migration off the same parent).
-#   2. Migrates a scratch DB to head, then runs
+#   1. `alembic heads` must report exactly two heads, one per branch: the
+#      template head (`versions/`, branch label `template`) and the project
+#      head (`project_versions/`, branch label `project`). Anything else —
+#      one head, three or more, a missing label — fails (catches two template
+#      revisions branching off the same parent, and a lost branch label).
+#   2. Migrates a scratch DB to both heads, then runs
 #      `alembic revision --autogenerate` — the generated file must contain no
 #      `op.*` calls (catches "changed models, forgot migration").
-#   3. Migrates a scratch SQLite DB to head and pins the check-constraint
-#      names the dialect-branched migrations land on both paths: the sqlite
-#      file exercises the batch branches, the scratch postgres from checks
-#      1-2 the plain ones (see docs/MIGRATIONS.md, "Dialect branches").
+#   3. Migrates a scratch SQLite DB to both heads and pins the
+#      check-constraint names the dialect-branched migrations land on both
+#      paths: the sqlite file exercises the batch branches, the scratch
+#      postgres from checks 1-2 the plain ones (see docs/MIGRATIONS.md,
+#      "Dialect branches").
 #
 # The scratch DB is a fresh embedded postgres in a temp dir (EMBEDDED_DB_DIR),
 # so this never touches your dev database.
@@ -28,17 +32,20 @@ cd "$(dirname "$0")/../apps/api"
 export EMBEDDED_DB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/saas-dbcheck-XXXXXX")"
 trap 'rm -rf "$EMBEDDED_DB_DIR"' EXIT
 
-echo "==> check 1/3: single migration head"
-HEADS="$(uv run alembic heads 2>/dev/null | grep -cE '^[0-9a-f]{4,} \(head\)' || true)"
-if [ "$HEADS" -ne 1 ]; then
-  echo "FAIL: expected 1 head, found $HEADS — repoint the newer migration's down_revision"
+echo "==> check 1/3: template + project heads"
+HEADS="$(uv run alembic heads 2>/dev/null)"
+HEAD_COUNT="$(echo "$HEADS" | grep -cE '.' || true)"
+TEMPLATE_HEADS="$(echo "$HEADS" | grep -cF '(template)' || true)"
+PROJECT_HEADS="$(echo "$HEADS" | grep -cF '(project)' || true)"
+if [ "$HEAD_COUNT" -ne 2 ] || [ "$TEMPLATE_HEADS" -ne 1 ] || [ "$PROJECT_HEADS" -ne 1 ]; then
+  echo "FAIL: expected exactly the template + project heads, found:"
   uv run alembic heads 2>/dev/null
   exit 1
 fi
-echo "    ok: single head"
+echo "    ok: template + project"
 
-echo "==> migrating scratch DB to head"
-if ! uv run alembic upgrade head >/dev/null 2>&1; then
+echo "==> migrating scratch DB to both heads"
+if ! uv run alembic upgrade heads >/dev/null 2>&1; then
   echo "FAIL: postgres migration failed"
   exit 1
 fi
@@ -46,7 +53,7 @@ echo "    ok"
 
 echo "==> check 2/3: autogenerate must be empty"
 BEFORE="$(ls alembic/versions/*.py)"
-uv run alembic revision --autogenerate -m _dbcheck_tmp >/dev/null 2>&1
+uv run alembic revision --autogenerate --head template@head -m _dbcheck_tmp >/dev/null 2>&1
 NEW="$(comm -23 <(ls alembic/versions/*.py | sort) <(echo "$BEFORE" | sort) | head -1 || true)"
 if [ -z "${NEW:-}" ]; then
   echo "FAIL: autogenerate produced no file — check alembic output manually"
@@ -67,7 +74,7 @@ echo "==> check 3/3: constraint names on both dialect paths"
 # Autogenerate does not compare check constraints, so this pass pins the names
 # the chain actually lands (see docs/MIGRATIONS.md, "Dialect branches").
 export DATABASE_URL="sqlite+aiosqlite:///$EMBEDDED_DB_DIR/dbcheck-sqlite.db"
-if ! uv run alembic upgrade head >/dev/null; then
+if ! uv run alembic upgrade heads >/dev/null; then
   echo "FAIL: sqlite migration failed"
   exit 1
 fi
