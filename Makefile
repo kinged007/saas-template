@@ -143,7 +143,12 @@ db-squash:
 	./scripts/db-squash.sh
 
 db-new:
-	cd apps/api && uv run alembic revision --autogenerate -m "$(m)"
+	@REV_ID=$$(date -u +%Y%m%d%H%M%S); \
+	while ls apps/api/alembic/versions/$${REV_ID}_*.py >/dev/null 2>&1 || grep -rq "^revision = '$${REV_ID}'" apps/api/alembic/versions/ 2>/dev/null; do \
+		sleep 1; \
+		REV_ID=$$(date -u +%Y%m%d%H%M%S); \
+	done; \
+	cd apps/api && uv run alembic revision --autogenerate --rev-id "$${REV_ID}" -m "$(m)"
 
 db-history:
 	cd apps/api && uv run alembic history

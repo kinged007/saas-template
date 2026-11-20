@@ -75,8 +75,7 @@ migrations created in the same hour would share it, which is the unrecoverable c
 decision exists to remove. Fourteen digits narrows the window to one second. Width accepted
 2026-11-18. The one exception is the squashed release baseline, which `make db-squash` writes as `alembic/versions/0001_<slug>.py` with `revision = "0001"` (see `docs/MIGRATIONS.md`).
 
-`make db-new` does not generate these ids yet; until it does, pass the id explicitly
-(see `AGENTS.md`, Migrations).
+`make db-new` generates these ids (see `AGENTS.md`, Migrations).
 
 ---
 
