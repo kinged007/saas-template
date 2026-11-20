@@ -2,7 +2,7 @@
 
 > **Navigation aid.** Route list and file locations extracted via AST. Read the source files listed below before implementing or modifying this subsystem.
 
-The Profiles subsystem handles **8 routes** and touches: db.
+The Profiles subsystem handles **8 routes** and touches: db, auth.
 
 ## Routes
 
@@ -12,7 +12,7 @@ The Profiles subsystem handles **8 routes** and touches: db.
   `apps/api/src/api/routes/profiles.py`
 - `PATCH` `/me/profile` → in: ProfileUpdate [db]
   `apps/api/src/api/routes/profiles.py`
-- `GET` `/users/{user_id}/profile` params(user_id) → in: Use
+- `GET` `/users/{user_id}/profile` params(user_id) → in: Use [auth]
   `apps/api/src/api/routes/profiles.py`
 - `GET` `/me/export` → in: Use
   `apps/api/src/api/routes/profiles.py`

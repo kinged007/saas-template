@@ -131,8 +131,7 @@ function SidebarNav() {
 
   const renderGroup = (group: (typeof visibleGroups)[number]) => (
     <SidebarGroup key={group.id}>
-      {/* The label element is the heading. `h2` matches the level the app gives its
-          landmark titles (ListView, PageHeader); the sidebar sits beside <main>, so
+      {/* The label element is the heading. The sidebar sits beside <main>, so
           a group title is not subordinate to the page heading. */}
       {group.title && (
         <SidebarGroupLabel asChild>

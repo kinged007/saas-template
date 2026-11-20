@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate } from "./ui";
 import { useWorkspace } from "../contexts/WorkspaceContext";
+import { errorMessage } from "@/utils/errorMessage";
 import type { Invitation } from "../types";
 
 /**
@@ -65,7 +66,7 @@ export function PendingInvitationsCard() {
         onError: (err) => {
           setBusyId(null);
           toast.error("Could not accept invitation", {
-            description: String((err as { message?: string })?.message ?? err),
+            description: errorMessage(err),
           });
           void refetch();
         },

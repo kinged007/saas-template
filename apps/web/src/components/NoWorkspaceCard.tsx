@@ -2,7 +2,7 @@ import { PlusCircle } from "lucide-react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 
 /** What a user who cannot create a workspace is told to do instead. */
 export const ASK_AN_ADMIN = "Ask an administrator to add you to it.";
@@ -21,7 +21,11 @@ export function NoWorkspaceCard({ single }: { single: boolean }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>No workspace yet</CardTitle>
+        {/* CardTitle renders a div, so the title is spelled out as a heading
+            with the classes CardTitle applies; card-title-classes.test.ts
+            keeps the copy in step with the primitive. This card returns
+            before the dashboard page title, so the card title is the page h1. */}
+        <h1 className="font-semibold leading-none tracking-tight">No workspace yet</h1>
         <CardDescription>
           {single
             ? `This deployment allows one workspace. ${ASK_AN_ADMIN}`

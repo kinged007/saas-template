@@ -16,6 +16,23 @@
 
 **Required env vars:** DATABASE_URL
 
+## Product direction — read before proposing or building anything
+
+Before opening an issue or PR that adds or changes behaviour, read
+`docs/product/VISION.md` and apply `docs/product/ADMISSION.md`. Fill in the admission
+section of the PR template; a PR without a verdict line is not ready for review.
+
+Until the first release (`docs/product/VISION.md` §7), build only update-path work, security
+fixes, and fixes that restore documented behaviour. Assess anything else and leave it
+deferred — do not implement it.
+
+Never:
+- add hook, plugin or override layers over template files (`docs/product/DECISIONS.md` D-03);
+- rename, move or delete a file under `apps/` without listing it in the PR's release-note
+  line as `old/path → new/path` or `removed`;
+- create a migration without a 14-digit timestamp revision id (D-04; see Migrations below; the squashed 0001 baseline is the only exception);
+- add credits, branding or promotional text.
+
 ## Dev stack ports
 
 `make dev` runs api on :8000 and web on :5173 by default. If those ports are
@@ -35,10 +52,19 @@ since vite serves both) — open either and the session holds.
 ## Migrations
 
 Models are the source of truth; migrations are generated, reviewed, committed.
-After changing any model: `make db-new m="..."`, review the diff (watch for
-accidental drops, wrong nullability, missing server_default), commit the file.
+After changing any model, generate the migration with a 14-digit UTC timestamp
+revision id (`docs/product/DECISIONS.md` D-04):
+
+```bash
+cd apps/api && uv run alembic revision --autogenerate \
+  --rev-id "$(date -u +%Y%m%d%H%M%S)" -m "acme orders"   # → 20261118104500_acme_orders.py
+```
+
+`make db-new` does not set the id yet, so do not use it for new migrations until it does — it writes Alembic's default random hex id, which violates D-04. Use the `--rev-id` command above.
+Review the diff (watch for accidental drops, wrong nullability, missing server_default),
+commit the file.
 `make db-check` (also in CI) fails on multiple heads or models≠migrations.
-Full workflow: `docs/MIGRATIONS.md`.
+Full workflow: `docs/MIGRATIONS.md`, except its Daily workflow still shows `make db-new`: use the `--rev-id` command above for the id until that file is fixed.
 
 ---
 
