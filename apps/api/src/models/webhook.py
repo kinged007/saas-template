@@ -55,7 +55,7 @@ class WebhookDelivery(Base, TimestampMixin):
     workspace_id: Mapped[str] = mapped_column(StringUUID(), index=True, nullable=False)
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     subject: Mapped[str] = mapped_column(String(100), nullable=False)
-    # v1 envelope {event, event_id, occurred_at, workspace_id, data}.
+    # v1 envelope {event, event_id, occurred_at, workspace_id, correlation_id, data}.
     payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(
         String(20), default=WebhookDeliveryStatus.PENDING, index=True, nullable=False

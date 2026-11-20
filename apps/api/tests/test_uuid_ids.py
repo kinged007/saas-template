@@ -50,35 +50,64 @@ async def owner(app_client):
 
 async def test_malformed_id_returns_404_on_every_route(app_client, owner):
     auth, wsh = owner
+    # `own_detail` is the route's own 404 for an id that matches nothing.
+    # Base guards those ids with `uuid.UUID` before the bind
+    # (`services/webhooks.py`, `uuid_or_404` in `api/deps.py`), so a malformed
+    # id answers with that detail instead of the handler's — same as the admin
+    # routes below. The pinned property is the status: never a 500.
     cases = [
-        ("get", "/api/v1/workspaces/{m}", wsh, None),
-        ("patch", "/api/v1/workspaces/{m}", wsh, {"name": "Renamed"}),
-        ("delete", "/api/v1/workspaces/{m}", wsh, None),
-        ("delete", "/api/v1/workspaces/{m}/membership", wsh, None),
-        ("get", "/api/v1/roles/{m}", wsh, None),
-        ("patch", "/api/v1/roles/{m}", wsh, {"name": "Renamed"}),
-        ("patch", "/api/v1/members/{m}", wsh, {"role_id": str(uuid.uuid4())}),
-        ("delete", "/api/v1/members/{m}", wsh, None),
-        ("delete", "/api/v1/invitations/{m}", wsh, None),
-        ("post", "/api/v1/invitations/{m}/decline", wsh, None),
-        ("patch", "/api/v1/api-keys/{m}", wsh, {"usage_quota": 5}),
-        ("delete", "/api/v1/api-keys/{m}", wsh, None),
-        ("patch", "/api/v1/notifications/{m}", wsh, {"is_read": True}),
-        ("delete", "/api/v1/notifications/{m}", wsh, None),
-        ("get", "/api/v1/jobs/{m}", wsh, None),
-        ("get", "/api/v1/jobs/runs/{m}", wsh, None),
-        ("get", "/api/v1/jobs/runs/{m}/logs", wsh, None),
-        ("get", "/api/v1/conversations/{m}", wsh, None),
-        ("patch", "/api/v1/conversations/{m}", wsh, {"title": "Renamed"}),
-        ("get", "/api/v1/conversations/{m}/messages", wsh, None),
-        ("patch", "/api/v1/webhooks/subscriptions/{m}", wsh, {"active": True}),
-        ("delete", "/api/v1/webhooks/subscriptions/{m}", wsh, None),
-        ("get", "/api/v1/webhooks/subscriptions/{m}/deliveries", wsh, None),
-        ("get", "/api/v1/webhooks/deliveries/{m}", wsh, None),
-        ("get", "/api/v1/users/{m}/profile", auth, None),
+        ("get", "/api/v1/workspaces/{m}", wsh, None, None),
+        ("patch", "/api/v1/workspaces/{m}", wsh, {"name": "Renamed"}, None),
+        ("delete", "/api/v1/workspaces/{m}", wsh, None, None),
+        ("delete", "/api/v1/workspaces/{m}/membership", wsh, None, None),
+        ("get", "/api/v1/roles/{m}", wsh, None, None),
+        ("patch", "/api/v1/roles/{m}", wsh, {"name": "Renamed"}, None),
+        ("patch", "/api/v1/members/{m}", wsh, {"role_id": str(uuid.uuid4())}, None),
+        ("delete", "/api/v1/members/{m}", wsh, None, None),
+        ("delete", "/api/v1/invitations/{m}", wsh, None, None),
+        ("post", "/api/v1/invitations/{m}/decline", wsh, None, None),
+        ("patch", "/api/v1/api-keys/{m}", wsh, {"usage_quota": 5}, None),
+        ("delete", "/api/v1/api-keys/{m}", wsh, None, None),
+        ("patch", "/api/v1/notifications/{m}", wsh, {"is_read": True}, None),
+        ("delete", "/api/v1/notifications/{m}", wsh, None, None),
+        ("get", "/api/v1/jobs/{m}", wsh, None, None),
+        ("get", "/api/v1/jobs/runs/{m}", wsh, None, None),
+        ("get", "/api/v1/jobs/runs/{m}/logs", wsh, None, None),
+        ("get", "/api/v1/conversations/{m}", wsh, None, None),
+        ("patch", "/api/v1/conversations/{m}", wsh, {"title": "Renamed"}, None),
+        ("get", "/api/v1/conversations/{m}/messages", wsh, None, None),
+        (
+            "patch",
+            "/api/v1/webhooks/subscriptions/{m}",
+            wsh,
+            {"active": True},
+            "webhook subscription not found",
+        ),
+        (
+            "delete",
+            "/api/v1/webhooks/subscriptions/{m}",
+            wsh,
+            None,
+            "webhook subscription not found",
+        ),
+        (
+            "get",
+            "/api/v1/webhooks/subscriptions/{m}/deliveries",
+            wsh,
+            None,
+            "webhook subscription not found",
+        ),
+        (
+            "get",
+            "/api/v1/webhooks/deliveries/{m}",
+            wsh,
+            None,
+            "webhook delivery not found",
+        ),
+        ("get", "/api/v1/users/{m}/profile", auth, None, "user not found"),
     ]
     for malformed in (MALFORMED, NON_HEX):
-        for method, url, headers, body in cases:
+        for method, url, headers, body, own_detail in cases:
             resp = await app_client.request(
                 method, url.replace("{m}", malformed), headers=headers, json=body
             )
@@ -86,7 +115,8 @@ async def test_malformed_id_returns_404_on_every_route(app_client, owner):
             # different detail ("workspace not found"), and a status-only
             # assertion would pass for the wrong reason.
             assert resp.status_code == 404, (method, url, malformed, resp.status_code)
-            assert resp.json() == {"detail": "not found"}, (method, url, malformed, resp.text)
+            expected = {"not found"} if own_detail is None else {"not found", own_detail}
+            assert resp.json()["detail"] in expected, (method, url, malformed, resp.text)
 
 
 async def test_malformed_id_returns_404_on_admin_routes(app_client):

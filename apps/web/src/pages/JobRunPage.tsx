@@ -6,12 +6,7 @@ import { ArrowLeft, RefreshCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  EmptyRow,
-  JobRunStatusBadge,
-  formatDate,
-  formatDuration,
-} from "../components/ui";
+import { JobRunStatusBadge, formatDate, formatDuration } from "../components/ui";
 import type { JobLogEntry, JobRun, ScheduledJob } from "../types";
 
 export function JobRunPage() {
@@ -160,9 +155,9 @@ export function JobRunPage() {
       </div>
       <div className="overflow-hidden rounded-lg border">
         {logs.length === 0 ? (
-          <EmptyRow colSpan={1}>
+          <p className="text-muted-foreground p-4 text-sm">
             {isActive ? "Waiting for output…" : "No output was captured."}
-          </EmptyRow>
+          </p>
         ) : (
           <pre className="bg-muted/30 max-h-[480px] overflow-auto p-4 font-mono text-xs leading-relaxed">
             {logs.map((entry) => (

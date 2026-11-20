@@ -15,12 +15,12 @@ Scope: whole API by default. Optional narrow scope: `--folder <path>` or `--file
 # HEALTH = "/api/v1/readyz"        # health path under the API root
 # SPEC = "/openapi.json"           # machine-readable API spec path
 # LOGIN = "/api/v1/auth/login"     # email+password login endpoint (for the auth pass)
-# SEED_USER = "admin@tenantflex.dev"
-# SEED_PASSWORD = "Tenantflex1!"
+# SEED_USER = "admin@example.com"
+# SEED_PASSWORD = "password"
 # TRACKER = "gh issue create"
 ```
 
-For this repo: backend `apps/api/src`, frontend `apps/web/src`, dev `scripts/dev.py` (ports 8000/5173), health `/api/v1/readyz`, spec `/openapi.json`, login `/api/v1/auth/login`, seed `admin@tenantflex.dev` / `Tenantflex1!`, tracker `gh issue create` with label `needs-human` (blocked). Every confirmed hit is a major — file an issue per hit.
+For this repo: backend `apps/api/src`, frontend `apps/web/src`, dev `scripts/dev.py` (ports 8000/5173), health `/api/v1/readyz`, spec `/openapi.json`, login `/api/v1/auth/login`, seed `admin@example.com` / `password`, tracker `gh issue create` with label `needs-human` (blocked). Every confirmed hit is a major — file an issue per hit.
 
 ## Harness / model (defaults; override per run)
 
@@ -42,17 +42,15 @@ A good repo documents all of this — read before discovering. Order matters: re
 
 ## Process lifecycle and cleanup (MANDATORY)
 
-Never finish a run with a process started by the agent still running. This includes the API/frontend stack, supervisors, watchers, test servers, `obscura serve`, and CDP clients. Stop every owned process on success, failure, cancellation, timeout, and every early `STOP` path. A timeout is only a safety net, not cleanup.
+Never finish a run with a process started by the agent still running. This includes the API/frontend stack, supervisors, watchers, and test servers. Stop every owned process on success, failure, cancellation, timeout, and every early `STOP` path. A timeout is only a safety net, not cleanup.
 
 Run long-lived commands in the foreground when possible. If backgrounding is necessary, give the command a finite budget and record its PID. For this repo, use `python3 scripts/dev.py` directly after setup rather than backgrounding `make dev`; the supervisor handles `SIGINT` and `SIGTERM` and kills its child process groups.
 
-Use a task-appropriate cap for every background service. `obscura fetch` is one-shot and exits by itself. `obscura serve` has no built-in duration option, so use a one-hour cap and a session-specific storage directory:
+Use a task-appropriate cap for every background service.
 
-```bash
-timeout --signal=TERM --kill-after=15s 1h obscura serve --allow-private-network --storage-dir <session-dir>
-```
+Browser automation is not a background service: per `.agents/browser.md`, each script launches and closes its own chromium inside a `timeout`, so it leaves nothing behind.
 
-At every exit path, stop every process started in this run, including the stack supervisor, Obscura, and any CDP client. Send `SIGTERM` to the exact process you started, wait for it, and use `SIGKILL` only if it remains alive. Check its children and the ports it owns. Never kill an unknown process or clear a port you did not open. Remove temporary PID/log/browser files. If cleanup cannot be verified, do not report the run as complete.
+At every exit path, stop every process started in this run, including the stack supervisor. Send `SIGTERM` to the exact process you started, wait for it, and use `SIGKILL` only if it remains alive. Check its children and the ports it owns. Never kill an unknown process or clear a port you did not open. Remove temporary PID/log/browser files. If cleanup cannot be verified, do not report the run as complete.
 
 ## 1. Own the stack
 
@@ -75,13 +73,9 @@ sleep 25 && check <HEALTH> returns 2xx  # find the health endpoint first (grep h
 
 Keep `DEV_PID` and `runtime_dir`; do not lose them. Verify the stack serves the reviewed tree: `git rev-parse --short HEAD` matches the checkout the server started from (same shell, same `git status -sb` as above — if you pulled or switched branches after starting, restart). If a port re-binds right after your kill, stop and ask — another live session may own it.
 
-If browser verification is required, start Obscura separately under the same process policy. `obscura serve` has no built-in duration flag, so use a one-hour cap and a session-specific storage directory:
+If browser verification is required, use Playwright per `.agents/browser.md` against the running stack. Follow that file's setup step to locate the frontend app, then run each script from there inside a `timeout`; it launches and closes its own chromium, so there is no browser process to stop at exit.
 
-```bash
-timeout --signal=TERM --kill-after=15s 1h obscura serve --allow-private-network --storage-dir "$runtime_dir/obscura"
-```
-
-Use a task-appropriate cap for the application stack as well. At every exit path, stop every process started in this run, including the stack supervisor, Obscura, and any CDP client. Send `SIGTERM` to the exact process you started, wait for it, and use `SIGKILL` only if it remains alive. Check its children and the ports it owns. Never kill an unknown process or clear a port you did not open. Remove temporary PID/log/browser files. If cleanup cannot be verified, do not report the run as complete.
+Use a task-appropriate cap for the application stack as well. At every exit path, stop every process started in this run, including the stack supervisor. Send `SIGTERM` to the exact process you started, wait for it, and use `SIGKILL` only if it remains alive. Check its children and the ports it owns. Never kill an unknown process or clear a port you did not open. Remove temporary PID/log/browser files. If cleanup cannot be verified, do not report the run as complete.
 
 ## 2. Install vigolium (once per machine)
 
