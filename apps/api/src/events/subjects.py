@@ -6,6 +6,9 @@ class EventBusDriver(StrEnum):
     NATS = "nats"
 
 
+OWNERSHIP_TRANSFER_REASON = "ownership_transfer"
+
+
 class Subjects:
     """NATS-style subject namespaces for domain events.
 

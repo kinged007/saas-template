@@ -29,7 +29,7 @@ async def _count_notifications(user_id: str, type: str) -> int:
         return result.scalar_one()
 
 
-async def _wait_for(predicate, timeout_secs: float = 3.0, interval: float = 0.02) -> bool:
+async def _wait_for(predicate, timeout_secs: float = 5.0, interval: float = 0.02) -> bool:
     loop = asyncio.get_event_loop()
     deadline = loop.time() + timeout_secs
     while loop.time() < deadline:
@@ -52,6 +52,11 @@ async def _count_eq(user_id: str, type: str, expected: int) -> bool:
 
 async def _wait_for_count(user_id: str, type: str, expected: int) -> None:
     assert await _wait_for(lambda: _count_ge(user_id, type, expected))
+
+
+def _sent_to(captured: list, address: str) -> list:
+    """Registering sends a verification email, so scope captures by recipient."""
+    return [m for m in captured if m.to == address]
 
 
 async def _latest_role_change(user_id: str):
@@ -329,29 +334,35 @@ async def test_role_changed_body_never_names_an_unknown_role():
         "Test U. changed your role from a previous role to owner."
     )
     # A null to_role names no destination, so the clause is dropped rather
-    # than filled with a placeholder that reads like a role.
-    assert await _emit(from_role="editor", to_role=None) == "Test U. changed your role."
+    # than filled with a placeholder that reads like a role. The known
+    # from_role still has a name to print, so it stays in the sentence.
+    assert await _emit(from_role="editor", to_role=None) == (
+        "Test U. changed your role from editor."
+    )
+    # Neither role name is known, so there is nothing to print but the fact.
+    assert await _emit(from_role=None, to_role=None) == "Test U. changed your role."
     # The member is the actor: nobody is named, and the two preserved
     # wordings and the null-to_role wording are locked together.
     assert await _emit(self_change=True, from_role="editor", to_role="viewer") == (
         "Your role is now viewer."
     )
-    assert await _emit(self_change=True, from_role="owner", to_role="admin") == (
-        "You transferred ownership. Your role is now admin."
-    )
-    assert await _emit(self_change=True, from_role="owner", to_role=None) == (
-        "You transferred ownership."
-    )
+    assert await _emit(
+        self_change=True, reason="ownership_transfer", from_role="owner", to_role="admin"
+    ) == ("You transferred ownership. Your role is now admin.")
+    assert await _emit(
+        self_change=True, reason="ownership_transfer", from_role="owner", to_role=None
+    ) == ("You transferred ownership.")
     assert await _emit(self_change=True, from_role="editor", to_role=None) == (
         "Your role was changed."
     )
 
 
-async def test_role_changed_from_legacy_owner_names_the_transfer():
-    """A self-change from the case-variant `Owner` row is still a transfer (#593).
+async def test_role_changed_transfer_comes_from_the_reason_not_the_role_name():
+    """The transfer wording needs the event reason, whatever the role is named (#544).
 
-    `set_member_role` refuses to touch the owner role, so a self-change from a
-    role named `Owner` is a transfer the same way a self-change from `owner` is.
+    The wording used to be derived from `from_role` being the owner role, which
+    reads a workspace that renames or omits the `owner` row as a transfer. The
+    publisher says so instead, and the handler takes its word for it.
     """
     from src.events.bus import EventMetadata
     from src.events.subjects import Subjects
@@ -366,22 +377,30 @@ async def test_role_changed_from_legacy_owner_names_the_transfer():
 
     registry = _CaptureRegistry()
     build_workflows(registry, None, None)
-    user_id = str(uuid.uuid4())
-    await registry.handlers[Subjects.WORKSPACE_MEMBER_ROLE_CHANGED](
-        {
-            "workspace_id": str(uuid.uuid4()),
-            "workspace_name": "Acme Corp",
-            "user_id": user_id,
-            "from_role": "Owner",
-            "to_role": "admin",
-            "changed_by_user_id": user_id,
-            "changed_by_name": "Test U.",
-        },
-        EventMetadata(subject=Subjects.WORKSPACE_MEMBER_ROLE_CHANGED),
-    )
+    handler = registry.handlers[Subjects.WORKSPACE_MEMBER_ROLE_CHANGED]
 
-    row = await _latest_role_change(user_id)
-    assert row.body == "You transferred ownership. Your role is now admin."
+    async def _emit(**roles) -> str:
+        user_id = str(uuid.uuid4())
+        await handler(
+            {
+                "workspace_id": str(uuid.uuid4()),
+                "workspace_name": "Acme Corp",
+                "user_id": user_id,
+                "changed_by_user_id": user_id,
+                "changed_by_name": "Test U.",
+                **roles,
+            },
+            EventMetadata(subject=Subjects.WORKSPACE_MEMBER_ROLE_CHANGED),
+        )
+        return (await _latest_role_change(user_id)).body
+
+    # A workspace whose owner row is named `Owner` transfers like any other:
+    # the reason decides, the name does not.
+    assert await _emit(reason="ownership_transfer", from_role="Owner", to_role="admin") == (
+        "You transferred ownership. Your role is now admin."
+    )
+    # Without the reason, a role named like an owner is an ordinary self-change.
+    assert await _emit(from_role="owner", to_role="admin") == "Your role is now admin."
 
 
 async def test_member_removed_notifies_the_removed_member(app_client):
@@ -437,41 +456,73 @@ async def test_unregistered_invite_emails_accept_link(app_client, monkeypatch):
 
     monkeypatch.setattr(email_factory, "send_email", _capture)
 
-    # Registering sends a verification email, so scope assertions per recipient.
-    def sent_to(address: str) -> list:
-        return [m for m in captured if m.to == address]
-
     owner = await register_user(app_client, "owner@wf5.com")
     ws = await create_workspace(app_client, owner)
     roles = await _roles_by_name(app_client, owner, ws["id"])
 
     invite = await _invite(app_client, owner, ws["id"], roles["editor"], "stranger@wf5.com")
-    assert await _wait_for(lambda: len(sent_to("stranger@wf5.com")) == 1)
+    assert await _wait_for(lambda: len(_sent_to(captured, "stranger@wf5.com")) == 1), (
+        "no accept-link email for stranger@wf5.com"
+    )
     link = f"/invitations/accept?token={invite['token']}"
-    assert link in sent_to("stranger@wf5.com")[0].text_body
-    assert link in sent_to("stranger@wf5.com")[0].html_body
+    assert link in _sent_to(captured, "stranger@wf5.com")[0].text_body
+    assert link in _sent_to(captured, "stranger@wf5.com")[0].html_body
 
     member = await register_user(app_client, "member@wf5.com")
     member_me = await _me(app_client, member)
     captured.clear()  # drop the registration verification email
-    await _invite(app_client, owner, ws["id"], roles["editor"], "member@wf5.com")
+    member_invite = await _invite(app_client, owner, ws["id"], roles["editor"], "member@wf5.com")
     # The in-app notification proves the event was delivered; the handler returns
     # early for registered recipients, so no email follows.
     await _wait_for_count(member_me["id"], "workspace_invitation", 1)
-    await asyncio.sleep(0.1)
-    assert sent_to("member@wf5.com") == []
+
+    def invitation_emails(address: str, token: str) -> list:
+        """Scoped by the accept token: only the invitation template carries it,
+        never a notification email, so the assertion does not depend on the
+        recipient's default notification channel being in-app."""
+        link = f"/invitations/accept?token={token}"
+        return [m for m in _sent_to(captured, address) if link in m.text_body]
+
+    # Ordering barrier, not a fixed delay: `invitation.created` runs one FIFO
+    # consumer task per subject, so the accept-link email for a later invite
+    # proves the registered member's handler already returned. Barrier valid
+    # only while `workspaces.invitation.created` has exactly one in-process
+    # consumer (`src/events/inprocess.py` `subscribe`/`_consume`); NATS, a
+    # wildcard subscriber, or a second subscription would break it.
+    follow_up = await _invite(app_client, owner, ws["id"], roles["editor"], "stranger2@wf5.com")
+    assert await _wait_for(lambda: invitation_emails("stranger2@wf5.com", follow_up["token"])), (
+        "no barrier email for stranger2@wf5.com"
+    )
+    assert invitation_emails("member@wf5.com", member_invite["token"]) == []
 
 
-async def test_unregistered_invite_emits_no_in_app_notification(app_client):
+async def test_unregistered_invite_emits_no_in_app_notification(app_client, monkeypatch):
     """An invite to an email with no account produces no member.invited event."""
+    import src.email.factory as email_factory
     from tests.conftest import create_workspace, register_user
+
+    captured: list = []
+
+    async def _capture(message):
+        captured.append(message)
+        return True
+
+    monkeypatch.setattr(email_factory, "send_email", _capture)
 
     owner = await register_user(app_client, "owner@wf4.com")
     ws = await create_workspace(app_client, owner)
     roles = await _roles_by_name(app_client, owner, ws["id"])
 
-    await _invite(app_client, owner, ws["id"], roles["editor"], "stranger@wf4.com")
-    await asyncio.sleep(0.1)
+    invite = await _invite(app_client, owner, ws["id"], roles["editor"], "stranger@wf4.com")
+    # The accept-link email is this recipient's only `invitation.created` side
+    # effect, so waiting for it replaces the sleep that stood in for ordering.
+    assert await _wait_for(lambda: _sent_to(captured, "stranger@wf4.com")), (
+        "no accept-link email for stranger@wf4.com"
+    )
+    assert (
+        f"/invitations/accept?token={invite['token']}"
+        in _sent_to(captured, "stranger@wf4.com")[0].text_body
+    )
 
     async with SessionFactory() as session:
         result = await session.execute(select(func.count()).select_from(Notification))

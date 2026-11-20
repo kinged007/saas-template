@@ -11,12 +11,14 @@ from datetime import UTC, datetime
 
 import pytest
 
+from src.core.dates import iso_or_none
 from src.db.session import SessionFactory
 from src.events.subjects import Subjects
-from src.services.api_keys import ApiKeyService, _payload_iso
+from src.services.api_keys import ApiKeyService
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
 from tests.bus_doubles import RecordingBus
+from tests.conftest import expire_invitation
 
 
 @pytest.fixture
@@ -48,18 +50,6 @@ async def _create_workspace(bus, owner_id, *, slug, name="Acme Corp"):
             description=None,
             owner=await AuthService(session, bus).get_user(owner_id),
         )
-
-
-async def _expire(invitation_id: str) -> None:
-    from datetime import timedelta
-
-    from src.core.dates import now_utc
-    from src.models.core import Invitation
-
-    async with SessionFactory() as session:
-        row = await session.get(Invitation, invitation_id)
-        row.expires_at = now_utc() - timedelta(minutes=5)
-        await session.commit()
 
 
 async def _invite_member(bus, owner_id, workspace, email, role_name="editor"):
@@ -156,6 +146,7 @@ async def test_workspace_update_emits_audit_only_when_changed(bus, owner):
     assert bus.actions() == ["workspace.updated"]
     assert bus.by_subject(Subjects.WORKSPACE_CREATED) == []
     audit = bus.audit()[0][0]
+    assert audit["actor_user_id"] == owner.id
     assert audit["details"]["name"] == {"from": "Acme Corp", "to": "Acme Renamed"}
 
     bus.events.clear()
@@ -174,6 +165,7 @@ async def test_workspace_delete_emits_audit(bus, owner):
         await WorkspaceService(session, bus).delete_workspace(workspace.id, actor=owner)
     assert bus.actions() == ["workspace.deleted"]
     assert bus.audit()[0][0]["resource_id"] == workspace.id
+    assert bus.audit()[0][0]["actor_user_id"] == owner.id
 
 
 # --------------------------------------------------------------- invitations
@@ -226,7 +218,7 @@ async def test_resend_invitation_emits_delivery_event(bus, owner):
     invite = await _invite_member(bus, owner.id, workspace, "stranger@example.com")
     bus.events.clear()
     async with SessionFactory() as session:
-        await _expire(invite.id)
+        await expire_invitation(invite.id)
         service = WorkspaceService(session, bus)
         await service.resend_invitation(workspace.id, invite.id, actor=owner)
 
@@ -301,6 +293,9 @@ async def test_role_change_emits_event_and_audit(bus, owner):
     assert payload["from_role"] == "editor"
     assert payload["to_role"] == "viewer"
     assert payload["changed_by_user_id"] == owner.id
+    # Only transfer_ownership says the change is a transfer; an ordinary role
+    # change carries no reason, so the workflow cannot read one into it.
+    assert "reason" not in payload
 
     assert bus.actions() == ["member.role_changed"]
     audit = bus.audit()[0][0]
@@ -333,7 +328,13 @@ async def test_transfer_ownership_emits_event_for_both_members(bus, owner):
     assert by_user[heir.id]["to_role"] == "owner"
     assert by_user[owner.id]["from_role"] == "owner"
     assert by_user[owner.id]["to_role"] == "admin"
+    assert all(p["reason"] == "ownership_transfer" for p, _, _ in changed)
     assert all(p["changed_by_user_id"] == owner.id for p, _, _ in changed)
+    # Both halves of the transfer share one correlation id so a subscriber
+    # receiving two member.role_changed events can pair them.
+    correlation_ids = {c for _, c, _ in changed}
+    assert len(correlation_ids) == 1
+    assert next(iter(correlation_ids))
 
     assert bus.actions() == ["workspace.ownership_transferred"]
 
@@ -441,8 +442,8 @@ async def test_api_key_created_event_expiry_is_offset_aware(bus, owner):
 def test_api_key_expiry_payload_normalizes_a_naive_attribute():
     """A naive expiry — what SQLite returns for `DateTime(timezone=True)` —
     must not reach a consumer as a local-time ISO string."""
-    assert _payload_iso(datetime(2027, 1, 1)) == "2027-01-01T00:00:00+00:00"
-    assert _payload_iso(None) is None
+    assert iso_or_none(datetime(2027, 1, 1)) == "2027-01-01T00:00:00+00:00"
+    assert iso_or_none(None) is None
 
 
 # ------------------------------------------------------------------- roles
@@ -463,6 +464,7 @@ async def test_custom_role_create_emits_audit(bus, owner):
     assert bus.actions() == ["role.created"]
     audit = bus.audit()[0][0]
     assert audit["workspace_id"] == workspace.id
+    assert audit["actor_user_id"] == owner.id
     assert audit["resource_type"] == "role"
     assert audit["details"]["name"] == "billing"
 

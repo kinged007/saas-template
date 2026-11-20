@@ -1,6 +1,12 @@
 """Conversation participants: the message:update route guard, set_participants,
 and mention-driven participant additions."""
 
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import update
+
+from src.db.session import SessionFactory
+from src.models.conversation import Conversation, Message
 from tests.conftest import (
     auth_headers,
     create_workspace,
@@ -255,3 +261,104 @@ async def test_message_without_mentions_leaves_participants_alone(app_client):
         f"/api/v1/conversations/{conv['id']}", headers=ws_headers(owner["tokens"], ws["id"])
     )
     assert _ids(after.json()) == {owner["id"], members[0]["id"], members[1]["id"]}
+
+
+# ------------------------------------------------------------- list sort guard
+
+
+async def test_list_rejects_malformed_sort(app_client):
+    """Both conversation list routes reject what `apply_query` rejects (#969).
+
+    These two sites read `sort_order[0]` instead of calling `apply_query`, so a
+    surplus order was 422 on `/api/v1/workspaces` and 200 here. `sort[]` with no
+    order still works: `parse_query` pads it to `asc`.
+    """
+    client = app_client
+    owner, ws, members = await _setup(client)
+    conv = await _open_conversation(client, owner, ws, members)
+    headers = ws_headers(owner["tokens"], ws["id"])
+    paths = ("/api/v1/conversations", f"/api/v1/conversations/{conv['id']}/messages")
+
+    for path in paths:
+        for query in (
+            "sort[]=title&order[]=asc&order[]=desc",
+            "_sort=title&_order=asc,desc",
+            "order[]=desc",
+            "_order=desc",
+        ):
+            resp = await client.get(f"{path}?{query}", headers=headers)
+            assert resp.status_code == 422, (path, query, resp.text)
+            assert "same number of entries" in resp.json()["detail"]
+
+        resp = await client.get(f"{path}?sort[]=created_at", headers=headers)
+        assert resp.status_code == 200, resp.text
+
+
+async def test_list_sorts_by_uppercase_order(app_client):
+    """`_order=DESC` must sort like `desc` on both service-layer routes (#963).
+
+    Both routes read `spec.sort_order[0]` and hand it to the service, which
+    compares it against the literal "desc", so the direction has to arrive
+    normalized from `parse_query`; an unnormalized `DESC` took the asc branch
+    there. The seeded stamps run against the insertion order, so a desc read
+    must reverse it while a rowid-ordered read would leave it unchanged.
+    """
+    client = app_client
+    owner, ws, members = await _setup(client)
+    conv = await _open_conversation(client, owner, ws, members)
+    other = await _open_conversation(client, owner, ws, members)
+    headers = ws_headers(owner["tokens"], ws["id"])
+    sent = []
+    for body in ("first", "second"):
+        resp = await client.post(
+            f"/api/v1/conversations/{conv['id']}/messages", json={"body": body}, headers=headers
+        )
+        assert resp.status_code == 201, resp.text
+        sent.append(resp.json()["id"])
+
+    old_stamp = datetime(2026, 1, 1, tzinfo=UTC)
+    async with SessionFactory() as session:
+        # Every row starts at the base stamp, then each gets a distinct later
+        # one, so no pair ties. `conv` precedes `other` and the initial message
+        # precedes the posted ones, so the desc read is the reverse of the
+        # insertion order a rowid-ordered read would return.
+        await session.execute(
+            update(Conversation)
+            .where(Conversation.id == conv["id"])
+            .values(created_at=old_stamp, updated_at=old_stamp)
+        )
+        await session.execute(
+            update(Conversation)
+            .where(Conversation.id == other["id"])
+            .values(created_at=old_stamp + timedelta(days=2), updated_at=old_stamp)
+        )
+        await session.execute(
+            update(Message)
+            .where(Message.conversation_id == conv["id"])
+            .values(created_at=old_stamp, updated_at=old_stamp)
+        )
+        await session.execute(
+            update(Message)
+            .where(Message.id == sent[0])
+            .values(created_at=old_stamp + timedelta(days=1), updated_at=old_stamp)
+        )
+        await session.execute(
+            update(Message)
+            .where(Message.id == sent[1])
+            .values(created_at=old_stamp + timedelta(days=2), updated_at=old_stamp)
+        )
+        await session.commit()
+
+    resp = await client.get(
+        "/api/v1/conversations", params={"_sort": "created_at", "_order": "DESC"}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert [c["id"] for c in resp.json()] == [other["id"], conv["id"]]
+
+    resp = await client.get(
+        f"/api/v1/conversations/{conv['id']}/messages",
+        params={"_sort": "created_at", "_order": "DESC"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert [m["id"] for m in resp.json()] == [sent[1], sent[0], conv["first_message"]["id"]]

@@ -13,6 +13,7 @@ from src.api.deps import (
     get_current_workspace_id,
     require_permission,
 )
+from src.core.dates import iso_or_none
 from src.core.permissions import MEMBER_DELETE, MEMBER_READ, MEMBER_UPDATE
 from src.db.session import get_db
 from src.models.user_profile import UserProfile
@@ -60,7 +61,7 @@ def _member_dict(
             "role_id": role.id,
             "role": role.name,
             "status": member.status,
-            "joined_at": member.created_at.isoformat() if member.created_at else None,
+            "joined_at": iso_or_none(member.created_at),
         }
     )
     return data
