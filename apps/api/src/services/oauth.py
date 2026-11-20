@@ -3,12 +3,18 @@
 One config shape covers every enterprise IdP: OIDC discovery
 (discovery_url or issuer) for Google/Microsoft Entra/Okta/GitLab, or
 explicit authorize/token/userinfo URLs for non-OIDC providers like GitHub.
-Secrets come from env (OAUTH_PROVIDERS JSON); only ids and display names
-ever leave the server.
+The authorization-code flow uses PKCE (S256) on every provider; the verifier
+lives in the server-side state entry, never in the browser. Unconditional on
+purpose: RFC 6749 §3.1 obliges a compliant authorization server to ignore
+unknown authorize params, so a per-provider toggle only helps an AS that
+rejects them. Secrets come from env
+(OAUTH_PROVIDERS JSON); only ids and display names ever leave the server.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import secrets
 from dataclasses import dataclass
@@ -17,7 +23,7 @@ from typing import Any
 import httpx
 import jwt
 
-from src.core.cache import TtlCache
+from src.core.cache import SingleFlight, TtlCache
 from src.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -26,6 +32,10 @@ STATE_TTL_HINT = "oauth:state:"
 CODE_TTL_HINT = "oauth:code:"
 
 DEFAULT_SCOPES = "openid email profile"
+
+# One shared in-flight fetch per cache key, so a burst of callers that miss the
+# cache (or bypass it for a refresh) costs the IdP one request, not one per caller.
+_inflight = SingleFlight()
 
 
 class OAuthError(Exception):
@@ -92,15 +102,33 @@ async def _discovery(provider: ProviderConfig, cache: TtlCache) -> dict[str, Any
     cached = cache.get(key)
     if cached is not None:
         return cached
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            doc = resp.json()
-    except Exception as exc:
-        raise OAuthError(f"could not load discovery document for '{provider.id}'") from exc
-    cache.set(key, doc)
-    return doc
+
+    async def fetch() -> dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                doc = resp.json()
+        except Exception as exc:
+            raise OAuthError(
+                f"could not load discovery document for '{provider.id}': {_failure_detail(exc)}"
+            ) from exc
+        if not isinstance(doc, dict):
+            raise OAuthError(f"discovery document for '{provider.id}' is not an object")
+        cache.set(key, doc)
+        return doc
+
+    return await _inflight.run(key, fetch)
+
+
+def _pkce_pair() -> tuple[str, str]:
+    """RFC 7636 verifier + its S256 challenge; token_urlsafe(64) is 86
+    unreserved characters, inside the 43..128 the RFC allows."""
+    verifier = secrets.token_urlsafe(64)
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    )
+    return verifier, challenge
 
 
 def build_authorize_url(
@@ -110,7 +138,11 @@ def build_authorize_url(
     if not endpoint:
         raise OAuthError(f"oauth provider '{provider.id}' has no authorize endpoint")
     state = secrets.token_urlsafe(32)
-    cache.set(STATE_TTL_HINT + state, {"provider": provider.id, "redirect_uri": redirect_uri})
+    verifier, challenge = _pkce_pair()
+    cache.set(
+        STATE_TTL_HINT + state,
+        {"provider": provider.id, "redirect_uri": redirect_uri, "code_verifier": verifier},
+    )
     params = httpx.QueryParams(
         {
             "response_type": "code",
@@ -118,6 +150,8 @@ def build_authorize_url(
             "redirect_uri": redirect_uri,
             "scope": provider.scopes,
             "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
         }
     )
     return f"{endpoint}?{params}"
@@ -129,7 +163,7 @@ def consume_state(cache: TtlCache, state: str) -> dict[str, Any]:
         raise OAuthError("invalid or expired state")
     # Single-use: drop so a replayed callback cannot mint another code.
     cache.delete(STATE_TTL_HINT + state)
-    if not isinstance(entry, dict) or not entry.get("provider"):
+    if not isinstance(entry, dict) or not entry.get("provider") or not entry.get("code_verifier"):
         raise OAuthError("invalid or expired state")
     return entry
 
@@ -140,6 +174,7 @@ async def exchange_code(
     *,
     code: str,
     redirect_uri: str,
+    code_verifier: str,
 ) -> dict[str, Any]:
     endpoint = doc.get("token_endpoint") or provider.token_url
     if not endpoint:
@@ -154,40 +189,144 @@ async def exchange_code(
                     "redirect_uri": redirect_uri,
                     "client_id": provider.client_id,
                     "client_secret": provider.client_secret,
+                    "code_verifier": code_verifier,
                 },
                 headers={"Accept": "application/json"},
             )
             resp.raise_for_status()
-            return resp.json()
+            tokens = resp.json()
     except Exception as exc:
-        raise OAuthError("code exchange failed") from exc
+        # The body names the cause the status cannot ("invalid_grant" vs. a
+        # rejected code_verifier); log-only, the redirect detail stays
+        # allowlisted. CR and LF are flattened so a provider cannot forge lines.
+        body = getattr(getattr(exc, "response", None), "text", "")
+        if body:
+            logger.warning(
+                "oauth token endpoint error body provider=%s: %s",
+                provider.id,
+                _single_line(body),
+            )
+        raise OAuthError(f"code exchange failed: {_failure_detail(exc)}") from exc
+    # The callback reads id_token and access_token off the result and catches
+    # only OAuthError, so a list, string or null body has to fail here: its
+    # AttributeError would escape as a 500.
+    if not isinstance(tokens, dict):
+        raise OAuthError(f"token response for '{provider.id}' is not an object")
+    return tokens
 
 
-def _jwks_client(provider: ProviderConfig, doc: dict[str, Any]) -> jwt.PyJWKClient | None:
+async def _jwks(
+    provider: ProviderConfig, doc: dict[str, Any], cache: TtlCache, refresh: bool = False
+) -> dict[str, Any]:
+    """The provider's key set, cached next to discovery so a login does not refetch it.
+
+    Fetched over httpx rather than `jwt.PyJWKClient` so the round trip is awaited
+    (PyJWKClient fetches with blocking urllib) and covered by the same 10s timeout
+    as the module's other IdP calls.
+
+    `refresh=True` skips only the cache read, so a kid the provider does not
+    publish still costs one extra IdP round trip per login that meets it.
+    Concurrent misses share a single in-flight fetch; a sequential miss after a
+    completed fetch pays its own request, because a failed or unusable set is
+    never cached (#1024). Bounding the sequential case needs a fetch timestamp
+    on the cached document; the cost is kept because the path requires a
+    completed code exchange.
+    """
     uri = doc.get("jwks_uri") or provider.jwks_uri
-    if not uri:
-        return None
-    return jwt.PyJWKClient(uri)
+    # The non-string case is refused here rather than left to httpx, whose TypeError
+    # does not say which provider published it.
+    if not isinstance(uri, str) or not uri:
+        raise OAuthError(f"oauth provider '{provider.id}' has no usable jwks_uri")
+    key = f"oauth:jwks:{provider.id}"
+    cached = None if refresh else cache.get(key)
+    if cached is not None:
+        return cached
+
+    async def fetch() -> dict[str, Any]:
+        try:
+            # `PyJWKClient` fetched through urllib, which follows redirects; httpx does not
+            # follow them by default.
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                resp = await client.get(uri)
+                resp.raise_for_status()
+                keys = resp.json()
+            # Parsed and checked before it is cached: a body that is not an object, or a
+            # set with no key a token could verify against, would otherwise sit in the
+            # cache for its whole TTL and cost a refetch on every login that meets it.
+            # Both gates raise OAuthError, which the re-raise below passes through with
+            # its reason intact; anything else raised here is flattened by
+            # `_failure_detail` to "HTTP <status>" or a bare type name, which is why
+            # `_signing_candidates` has to stay inside the try.
+            if not isinstance(keys, dict):
+                raise OAuthError(f"key set for '{provider.id}' is not an object")
+            if not _signing_candidates(keys):
+                raise OAuthError(f"no key published for signing by '{provider.id}'")
+        except OAuthError:
+            raise
+        except Exception as exc:
+            raise OAuthError(f"could not load signing keys: {_failure_detail(exc)}") from exc
+        cache.set(key, keys)
+        return keys
+
+    return await _inflight.run(key, fetch)
 
 
-def claims_from_id_token(
-    provider: ProviderConfig, doc: dict[str, Any], id_token: str
+def _signing_candidates(jwks_doc: dict[str, Any]) -> list[jwt.PyJWK]:
+    """The published keys a token could be verified against.
+
+    Mirrors `jwt.PyJWKClient.get_signing_key`: only keys published for signing that
+    carry a kid are candidates.
+    """
+    return [
+        k
+        for k in jwt.PyJWKSet.from_dict(jwks_doc).keys
+        if k.public_key_use in (None, "sig") and k.key_id
+    ]
+
+
+def _signing_key(jwks_doc: dict[str, Any], id_token: str) -> jwt.PyJWK | None:
+    """The signing key whose kid the token names, or None when the set has no match.
+
+    A token without a kid is refused rather than verified against the sole published key.
+    """
+    kid = jwt.get_unverified_header(id_token).get("kid")
+    return next((k for k in _signing_candidates(jwks_doc) if k.key_id == kid), None)
+
+
+async def claims_from_id_token(
+    provider: ProviderConfig, doc: dict[str, Any], id_token: str, cache: TtlCache
 ) -> dict[str, Any] | None:
     """Verify the id_token signature via JWKS; None when unverifiable."""
-    client = _jwks_client(provider, doc)
-    if client is None:
-        return None
+    # The document's issuer is what the IdP itself states, so it wins over the
+    # configured one; the config covers providers that skip discovery.
+    issuer = doc.get("issuer") or provider.issuer
+    if not issuer:
+        # Nothing to compare `iss` against, so only its presence is enforced.
+        logger.warning("no issuer configured for provider %s; id_token iss not pinned", provider.id)
     try:
-        key = client.get_signing_key_from_jwt(id_token).key
+        key = _signing_key(await _jwks(provider, doc, cache), id_token)
+        if key is None:
+            # A kid the cached set has never seen is the one case a refetch can fix.
+            key = _signing_key(await _jwks(provider, doc, cache, refresh=True), id_token)
+        if key is None:
+            raise OAuthError("no matching signing key")
         return jwt.decode(
             id_token,
             key,
             algorithms=["RS256", "ES256"],
             audience=provider.client_id,
+            issuer=issuer,
             options={"require": ["exp", "iss", "sub"]},
         )
-    except Exception:
-        logger.warning("id_token verification failed for provider %s", provider.id)
+    except Exception as exc:
+        # The message can echo token-supplied header data (an unknown `crit`
+        # extension echoes its name), so it is flattened like the body above.
+        logger.warning(
+            "id_token verification failed for provider %s: %s",
+            provider.id,
+            _single_line(exc),
+            exc_info=logger.isEnabledFor(logging.DEBUG),
+        )
         return None
 
 
@@ -206,8 +345,25 @@ async def _verified_email(client: httpx.AsyncClient, url: str, headers: dict[str
         if isinstance(data, list)
         else []
     )
+    # No primary flag: fall back to the provider's list order, so the winner
+    # is deterministic only while that ordering is stable.
     chosen = next((e for e in entries if e.get("primary")), None) or next(iter(entries), None)
     return str(chosen["email"]) if chosen else ""
+
+
+_CC_CONTROLS = "".join(map(chr, [*range(0x20), *range(0x7F, 0xA0)]))
+_CC_TO_SPACE = str.maketrans(_CC_CONTROLS, " " * len(_CC_CONTROLS))
+
+
+def _single_line(text: object, limit: int = 200) -> str:
+    """Flatten every Cc control char to a space, then truncate: no log forging, no ANSI escapes."""
+    return str(text).translate(_CC_TO_SPACE)[:limit]
+
+
+def _failure_detail(exc: Exception) -> str:
+    """HTTP status when the provider answered, else the exception type."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return f"HTTP {status}" if status else type(exc).__name__
 
 
 async def fetch_userinfo(
@@ -216,19 +372,38 @@ async def fetch_userinfo(
     endpoint = doc.get("userinfo_endpoint") or provider.userinfo_url
     if not endpoint:
         return {}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            headers = {"Authorization": f"Bearer {access_token}"}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        headers = {"Authorization": f"Bearer {access_token}"}
+        try:
             resp = await client.get(endpoint, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-            if not isinstance(data, dict):
-                return {}
-            if not data.get("email") and provider.emails_url:
+        except Exception as exc:
+            raise OAuthError(
+                f"could not fetch user info for '{provider.id}' from {endpoint}: "
+                f"{_failure_detail(exc)}"
+            ) from exc
+        if not isinstance(data, dict):
+            return {}
+        if not data.get("email") and provider.emails_url:
+            try:
                 data["email"] = await _verified_email(client, provider.emails_url, headers)
-            return data
-    except Exception as exc:
-        raise OAuthError("could not fetch user info") from exc
+            except Exception as exc:
+                # Branch on the status itself: the rendered detail is wording,
+                # and rewording it must not silence the hint below.
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                detail = _failure_detail(exc)
+                # GitHub answers 404 on /user/emails when the token lacks the
+                # email scope: a config fix, so name the scopes to compare.
+                if status == 404:
+                    detail = (
+                        f"HTTP 404, token likely lacks an email scope (asked: {provider.scopes})"
+                    )
+                raise OAuthError(
+                    f"could not fetch verified email for '{provider.id}' from "
+                    f"{provider.emails_url}: {detail}"
+                ) from exc
+        return data
 
 
 def normalize_identity(

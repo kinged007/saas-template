@@ -54,6 +54,7 @@ export const TabbedPageHeader = ({
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
             <h2 className="text-2xl font-bold truncate">{title}</h2>
+            {/* Deliberate && below (see #731): JSX children drop "", unlike the inspected RoleCapNotice return fixed in #711. */}
             {subtitle && <p className="text-muted-foreground mt-1">{subtitle}</p>}
           </div>
           <div className="flex items-center gap-2 shrink-0">

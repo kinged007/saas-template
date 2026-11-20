@@ -1,6 +1,6 @@
 """Password recovery + email verification (issue #12)."""
 
-from tests.conftest import auth_headers, register_user
+from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
 
 
 async def test_register_sends_verification_and_verify_flow(app_client, monkeypatch):
@@ -188,3 +188,156 @@ async def test_login_not_blocked_when_unverified(app_client):
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(login_tokens))
     assert me.json()["email_verified"] is False
     _ = tokens
+
+
+async def test_resend_verification_rate_limited(app_client, monkeypatch):
+    """#1289: resend spends the auth-limiter budget per (IP, email)."""
+    import src.email.factory as factory
+    from src.settings import settings
+
+    sent = []
+
+    async def _send(message):
+        sent.append(message)
+        return True
+
+    monkeypatch.setattr(factory, "send_email", _send)
+    monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 2)
+    tokens = await register_user(app_client, "resend-limit@example.com")
+    sent.clear()
+    headers = auth_headers(tokens)
+    for _ in range(2):
+        resp = await app_client.post("/api/v1/auth/resend-verification", headers=headers)
+        assert resp.status_code == 202, resp.text
+    assert len(sent) == 2
+    resp = await app_client.post("/api/v1/auth/resend-verification", headers=headers)
+    assert resp.status_code == 429, resp.text
+    assert "Retry-After" in resp.headers
+    assert len(sent) == 2  # throttled call sends nothing
+
+
+async def test_resend_verification_key_reachable_but_rate_limited(app_client, monkeypatch):
+    """#1289: the route stays key-reachable by design, but each send now spends
+    the auth-limiter budget, so a key cannot trigger mail per call without
+    bound. Quota is still uncharged — the route never reaches `record_key_use`.
+    """
+    import src.email.factory as factory
+    from src.settings import settings
+
+    sent = []
+
+    async def _send(message):
+        sent.append(message)
+        return True
+
+    monkeypatch.setattr(factory, "send_email", _send)
+    monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 2)
+    tokens = await register_user(app_client, "key-resend@example.com")
+    ws = await create_workspace(app_client, tokens, "Resend Inc")
+    owner_headers = ws_headers(tokens, ws["id"])
+
+    resp = await app_client.post(
+        "/api/v1/api-keys",
+        json={"name": "resender", "permissions": ["notification:read"]},
+        headers=owner_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    key = resp.json()
+    key_headers = {"Authorization": f"Bearer {key['key']}", "X-Workspace-ID": ws["id"]}
+
+    sent.clear()
+    for _ in range(2):
+        resp = await app_client.post("/api/v1/auth/resend-verification", headers=key_headers)
+        assert resp.status_code == 202, resp.text
+    assert len(sent) == 2
+    resp = await app_client.post("/api/v1/auth/resend-verification", headers=key_headers)
+    assert resp.status_code == 429, resp.text
+
+    keys = await app_client.get("/api/v1/api-keys", headers=owner_headers)
+    mine = next(k for k in keys.json() if k["id"] == key["id"])
+    assert mine["usage_count"] == 0  # rate-limited, still not quota-charged
+
+
+async def test_forgot_password_rate_limited(app_client, monkeypatch):
+    """#1313: forgot-password spends the auth-limiter budget per (IP, email)."""
+    import src.email.factory as factory
+    from src.settings import settings
+
+    sent = []
+
+    async def _send(message):
+        sent.append(message)
+        return True
+
+    monkeypatch.setattr(factory, "send_email", _send)
+    monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 2)
+    await register_user(app_client, "forgot-limit@example.com")
+    sent.clear()
+    for _ in range(2):
+        resp = await app_client.post(
+            "/api/v1/auth/forgot-password", json={"email": "forgot-limit@example.com"}
+        )
+        assert resp.status_code == 202, resp.text
+    assert len(sent) == 2
+    resp = await app_client.post(
+        "/api/v1/auth/forgot-password", json={"email": "forgot-limit@example.com"}
+    )
+    assert resp.status_code == 429, resp.text
+    assert "Retry-After" in resp.headers
+    assert len(sent) == 2  # throttled call sends nothing
+
+
+async def test_forgot_unknown_email_spends_budget(app_client, monkeypatch):
+    """#1313: unknown addresses spend the same budget — no existence oracle."""
+    import src.email.factory as factory
+    from src.settings import settings
+
+    sent = []
+
+    async def _send(message):
+        sent.append(message)
+        return True
+
+    monkeypatch.setattr(factory, "send_email", _send)
+    monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 2)
+    for _ in range(2):
+        resp = await app_client.post(
+            "/api/v1/auth/forgot-password", json={"email": "forgot-ghost@example.com"}
+        )
+        assert resp.status_code == 202, resp.text
+    assert sent == []
+    resp = await app_client.post(
+        "/api/v1/auth/forgot-password", json={"email": "forgot-ghost@example.com"}
+    )
+    assert resp.status_code == 429, resp.text
+
+
+async def test_forgot_password_budget_is_per_email(app_client, monkeypatch):
+    """#1313: exhausting one email's budget leaves a sibling email under the
+    same IP unthrottled."""
+    import src.email.factory as factory
+    from src.settings import settings
+
+    sent = []
+
+    async def _send(message):
+        sent.append(message)
+        return True
+
+    monkeypatch.setattr(factory, "send_email", _send)
+    monkeypatch.setattr(settings, "auth_rate_limit_max_attempts", 1)
+    await register_user(app_client, "forgot-a@example.com")
+    await register_user(app_client, "forgot-b@example.com")
+    sent.clear()
+    resp = await app_client.post(
+        "/api/v1/auth/forgot-password", json={"email": "forgot-a@example.com"}
+    )
+    assert resp.status_code == 202, resp.text
+    resp = await app_client.post(
+        "/api/v1/auth/forgot-password", json={"email": "forgot-a@example.com"}
+    )
+    assert resp.status_code == 429, resp.text
+    resp = await app_client.post(
+        "/api/v1/auth/forgot-password", json={"email": "forgot-b@example.com"}
+    )
+    assert resp.status_code == 202, resp.text

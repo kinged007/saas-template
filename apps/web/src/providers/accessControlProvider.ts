@@ -18,6 +18,12 @@ const PERMISSION_MAP: Record<string, Record<string, string>> = {
     edit: "member:update",
     delete: "member:delete",
   },
+  // Editing another member's profile/notifications/security. Separate from
+  // `members.edit` (role management) so a profile editor cannot change roles.
+  "member-profiles": {
+    show: "member:read",
+    edit: "profile:update",
+  },
   invitations: {
     list: "member:create",
     create: "member:create",
