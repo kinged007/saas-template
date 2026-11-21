@@ -146,6 +146,14 @@ class TwoFactorService:
             raise TwoFactorError("challenge expired or invalid")
         return entry[0]
 
+    def peek_challenge(self, token: str) -> str:
+        """Return the user_id for a valid challenge without consuming it."""
+        _prune(_challenges, now_utc())
+        entry = _challenges.get(token, None)
+        if entry is None:
+            raise TwoFactorError("challenge expired or invalid")
+        return entry[0]
+
     async def verify_login_code(self, user: User, *, code: str) -> bool:
         """Verify a TOTP code or backup code. Backup codes are single-use."""
         result = await self._session.execute(
