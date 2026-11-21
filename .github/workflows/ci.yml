@@ -39,6 +39,19 @@ jobs:
       - run: cd apps/api && uv sync --extra dev
       - run: make db-check
 
+  # The conf is only parsed by a container at deploy time, so run nginx -t on the image
+  # Dockerfile.web builds, with the conf at the path that Dockerfile copies it to.
+  nginx-conf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # api is the proxy_pass upstream; nginx resolves it while parsing the conf, so
+      # give it a loopback address or nginx -t fails on a valid conf.
+      - run: |
+          docker run --rm --add-host api:127.0.0.1 \
+            -v "${{ github.workspace }}/infra/docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro" \
+            nginx:1.27-alpine nginx -t
+
   web-build:
     runs-on: ubuntu-latest
     steps:
