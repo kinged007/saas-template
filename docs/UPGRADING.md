@@ -10,9 +10,16 @@ produces 9–11 add/add conflicts on an unchanged tree only ten commits later
 
 1. Pick a release (see `CHANGELOG.md` / GitHub releases) and record its tag and
    commit SHA. That pair is your seed version — pin it, do not use "latest".
-2. Create your project from exactly that tag (download the tag archive, or
-   GitHub "Use this template" at that ref), then commit:
-   `git init && git add -A && git commit -m "seed from template vX.Y.Z (<sha>)"`.
+2. Create your project at exactly that tag. Clone the tag and drop the template
+   history, then commit:
+   ```bash
+   git clone --branch vX.Y.Z https://github.com/kinged007/saas-template.git myapp
+   cd myapp && rm -rf .git
+   git init && git add -A && git commit -m "seed from template vX.Y.Z (<sha>)"
+   ```
+   GitHub's "Use this template" is not this path: it seeds from the template's
+   default branch and offers no ref selector, so it cannot pin a tag. The tag
+   archive download is equivalent to the clone above.
 3. Link the template history, read-only — never push to it:
    ```bash
    git remote add template https://github.com/kinged007/saas-template.git
@@ -27,18 +34,27 @@ Each update merges one release tag on its own branch:
 ```bash
 git fetch template --tags
 git checkout -b template-sync/vX.Y.Z
-git merge template/vX.Y.Z
+git merge vX.Y.Z
 ```
+
+Merge the **tag**, not `template/vX.Y.Z`: `git fetch --tags` writes the release
+to `refs/tags/vX.Y.Z` and does not create a `refs/remotes/template/vX.Y.Z`
+branch, so the remote-tracking name does not exist and the merge fails with
+"not something we can merge".
 
 The first-ever sync is the one exception: your project and the template share
 no history yet, so add the one-time flag
-`git merge --allow-unrelated-histories template/vX.Y.Z`. Every later sync is a
-plain merge, because the first sync joined the histories.
+`git merge --allow-unrelated-histories vX.Y.Z`. Every later sync is a plain
+merge, because the first sync joined the histories.
 
 Then review before you merge to your main branch:
 
-1. Read the release notes for the tag (sliced by area: `api` / `web` / `db` /
-   `infra`), and take only the slices you want.
+1. Read the release notes for the tag, which are grouped by area (`api` /
+   `web` / `db` / `infra`) so you can see what a release touches. The merge
+   itself takes the whole tag — there is no slice-taking command, and a manual
+   partial port is not a supported update. If a release contains something you
+   do not want, merge it anyway and revert that part in a commit of your own,
+   which keeps the next merge clean.
 2. Inspect what changed since what you run:
    `git diff <previous-tag>..<tag>`.
 3. Renames are announced in the release-note line (a silent rename breaks
