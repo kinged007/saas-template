@@ -1,4 +1,5 @@
-"""Malformed ids in StringUUID columns must be 404, not 500.
+"""Malformed path ids are 422 on framework-validated UUID params and 404
+elsewhere; well-formed but unknown ids are always 404.
 
 `StringUUID.process_bind_param` (`src/db/base.py`) parses the id while
 SQLAlchemy binds it, so an unparseable id raises before any route-level
@@ -26,6 +27,20 @@ MALFORMED = "not-a-uuid"
 # Same length as a real id, one non-hex digit: the failure mode a typo produces.
 NON_HEX = "12345678-1234-1234-1234-1234567890zz"
 
+# Route class split: params the framework validates as UUID (FastAPI rejects an
+# unparseable value with 422 before any lookup runs) vs params looked up as
+# strings (the bind-time 404 handler answers). A future `uuid.UUID`-annotated
+# path param belongs in this set with a 422 expectation.
+FRAMEWORK_VALIDATED_UUID_ROUTES = frozenset(
+    {
+        ("get", "/api/v1/workspaces/{m}"),
+        ("patch", "/api/v1/workspaces/{m}"),
+        ("delete", "/api/v1/workspaces/{m}"),
+        ("delete", "/api/v1/workspaces/{m}/membership"),
+        ("patch", "/api/v1/admin/workspaces/{m}/flags"),
+    }
+)
+
 
 class _SQLiteDialect:
     """`process_bind_param` only reads `dialect.name`."""
@@ -48,7 +63,7 @@ async def owner(app_client):
     return auth_headers(tokens), ws_headers(tokens, workspace["id"])
 
 
-async def test_malformed_id_returns_404_on_every_route(app_client, owner):
+async def test_malformed_id_status_on_every_route(app_client, owner):
     auth, wsh = owner
     # `own_detail` is the route's own 404 for an id that matches nothing.
     # Base guards those ids with `uuid.UUID` before the bind
@@ -111,22 +126,36 @@ async def test_malformed_id_returns_404_on_every_route(app_client, owner):
             resp = await app_client.request(
                 method, url.replace("{m}", malformed), headers=headers, json=body
             )
-            # The body matters: several of these routes 404 on their own with a
-            # different detail ("workspace not found"), and a status-only
-            # assertion would pass for the wrong reason.
-            assert resp.status_code == 404, (method, url, malformed, resp.status_code)
-            expected = {"not found"} if own_detail is None else {"not found", own_detail}
-            assert resp.json()["detail"] in expected, (method, url, malformed, resp.text)
+            # Framework-validated UUID params answer 422 before any lookup;
+            # string-then-look-up routes answer the bind-time 404.
+            expected_status = 422 if (method, url) in FRAMEWORK_VALIDATED_UUID_ROUTES else 404
+            assert resp.status_code == expected_status, (
+                method,
+                url,
+                malformed,
+                resp.status_code,
+            )
+            if expected_status == 404:
+                # The body matters: several of these routes 404 on their own with a
+                # different detail ("workspace not found"), and a status-only
+                # assertion would pass for the wrong reason.
+                expected = {"not found"} if own_detail is None else {"not found", own_detail}
+                assert resp.json()["detail"] in expected, (
+                    method,
+                    url,
+                    malformed,
+                    resp.text,
+                )
 
 
-async def test_malformed_id_returns_404_on_admin_routes(app_client):
+async def test_malformed_id_status_on_admin_routes(app_client):
     await register_user(app_client, "root@example.com")  # SUPERADMIN_EMAIL
     admin = auth_headers(await login(app_client, "root@example.com"))
     # Each of these routes looks its id up with `db.get` and owns a 404 detail
     # for an id that matches nothing ("user not found", "workspace not found").
-    # A malformed id is a 404 either way, and which of the two details answers
-    # depends on whether the bind raises before the route's lookup completes, so
-    # the pinned property is the status: no malformed id becomes a 500.
+    # String-param routes answer a malformed id with 404 (bind-time handler or
+    # the route's own guard); the flags route's param is framework-validated
+    # UUID, so it answers 422. The pinned property is the status: never a 500.
     cases = [
         ("get", "/api/v1/admin/users/{m}", None, "user not found"),
         ("patch", "/api/v1/admin/users/{m}", {"is_active": False}, "user not found"),
@@ -137,22 +166,29 @@ async def test_malformed_id_returns_404_on_admin_routes(app_client):
             resp = await app_client.request(
                 method, url.replace("{m}", malformed), headers=admin, json=body
             )
-            assert resp.status_code == 404, (method, url, malformed, resp.status_code)
-            assert resp.json()["detail"] in {"not found", own_detail}, (
+            expected_status = 422 if (method, url) in FRAMEWORK_VALIDATED_UUID_ROUTES else 404
+            assert resp.status_code == expected_status, (
                 method,
                 url,
                 malformed,
-                resp.text,
+                resp.status_code,
             )
+            if expected_status == 404:
+                assert resp.json()["detail"] in {"not found", own_detail}, (
+                    method,
+                    url,
+                    malformed,
+                    resp.text,
+                )
 
 
-async def test_unknown_id_returns_the_same_404(app_client, owner):
-    """A well-formed id matching nothing must be indistinguishable.
+async def test_unknown_id_stays_404(app_client, owner):
+    """A well-formed id matching nothing is always 404.
 
-    Otherwise a caller can tell a malformed id from an unknown one and use the
-    difference to probe which ids parse. Only the status is compared: a lookup
-    route answers an unknown id with its own 404 ("workspace not found"), and
-    the pinned property is that neither status is a 500.
+    A malformed id follows the route class: 422 on framework-validated UUID
+    params, 404 on string-then-look-up routes. Only the status is compared: a
+    lookup route answers an unknown id with its own 404 ("workspace not
+    found"), and the pinned property is that neither status is a 500.
     """
     _, wsh = owner
     for url in [
@@ -163,7 +199,9 @@ async def test_unknown_id_returns_the_same_404(app_client, owner):
         for malformed in (MALFORMED, NON_HEX):
             bad = await app_client.get(url.replace("{m}", malformed), headers=wsh)
             unknown = await app_client.get(url.replace("{m}", str(uuid.uuid4())), headers=wsh)
-            assert bad.status_code == unknown.status_code == 404, url
+            assert unknown.status_code == 404, url
+            expected_bad = 422 if ("get", url) in FRAMEWORK_VALIDATED_UUID_ROUTES else 404
+            assert bad.status_code == expected_bad, (url, malformed, bad.status_code)
 
 
 async def test_body_sourced_role_id_is_a_request_error(app_client, owner):
