@@ -16,6 +16,8 @@
 
 **Required env vars:** DATABASE_URL
 
+Fleet labels: `docs/FLEET_LABELS.md` is the single source for every `agent:*` label — read it before adding, removing, or renaming one.
+
 ## Product direction — read before proposing or building anything
 
 Before opening an issue or PR that adds or changes behaviour, read
