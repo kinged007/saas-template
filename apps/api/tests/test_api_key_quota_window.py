@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from src.db.base import Base
-from src.db.session import SessionFactory, engine
+from src.db.session import SessionFactory
 from src.models.api_key import ApiKey
 from src.services.api_keys import ApiKeyService
 from tests.conftest import create_workspace, register_user, ws_headers
@@ -36,7 +36,7 @@ async def _mint_key(
 
 
 async def _set_window_start(key_id: str, value: datetime) -> None:
-    async with AsyncSession(engine) as db:
+    async with SessionFactory() as db:
         key = await db.get(ApiKey, key_id)
         assert key is not None
         key.usage_window_start = value

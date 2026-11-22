@@ -6,8 +6,10 @@ import os  # noqa: E402
 from datetime import timedelta  # noqa: E402
 from typing import TYPE_CHECKING  # noqa: E402
 
-_TEST_DB_NAME = "test_saas_template.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///./{_TEST_DB_NAME}"
+# Only selects the sqlite branch of settings.resolved_database_url. The module-level
+# engine built from it is never connected to — the autouse fixture below rebinds it
+# per test — so no file is created at this path.
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite://"
 os.environ["SECRET_KEY"] = "test-secret-key-not-for-production"
 os.environ["FERNET_KEYS"] = "test-fernet-key-value"
 os.environ["EVENT_BUS_DRIVER"] = "inprocess"
@@ -15,67 +17,46 @@ os.environ["ENVIRONMENT"] = "test"
 os.environ["CORS_ORIGINS"] = "http://localhost:5173"
 os.environ["SUPERADMIN_EMAIL"] = "root@example.com"
 
-from pathlib import Path  # noqa: E402
-
 import pytest  # noqa: E402
 from asgi_lifespan import LifespanManager  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
-from sqlalchemy.engine import make_url  # noqa: E402
+from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 
 from src import models as _models  # noqa: E402,F401  (register tables on Base.metadata)
 from src.core.security.ratelimit import get_register_limiter  # noqa: E402
+from src.db import session as session_module  # noqa: E402
 from src.db.base import Base  # noqa: E402
-from src.db.session import engine  # noqa: E402
-from src.settings import settings  # noqa: E402
+from src.db.session import SessionFactory  # noqa: E402
 
 if TYPE_CHECKING:  # noqa: E402
     from src.models.jobs import JobRun
 
 
-def _db_path() -> Path:
-    """Filesystem path of the sqlite file the suite shares.
-
-    sqlite resolves a relative URL against the cwd, so the unlink must use the
-    same path the engine opens. The name is pinned to the suite's scratch file:
-    if DATABASE_URL is ever pointed at a real database, this fails loudly here
-    instead of silently deleting it.
-    """
-    url = make_url(settings.resolved_database_url)
-    assert url.get_backend_name() == "sqlite", f"expected a sqlite test database, got {url}"
-    path = Path(url.database or "")
-    assert path.name == _TEST_DB_NAME, f"refusing to unlink {path}"
-    return path
-
-
-async def _discard_db_file() -> None:
-    """Take the sqlite file away from every connection that is still open."""
-    await engine.dispose()  # close this suite's pooled connections first
-    path = _db_path()
-    path.unlink(missing_ok=True)
-    for suffix in ("-journal", "-wal", "-shm"):  # sidecars outlive the db file
-        path.with_name(path.name + suffix).unlink(missing_ok=True)
-
-
-async def _fresh_db() -> None:
-    """Hand the test a database no other connection can be looking at.
-
-    # ponytail: unlink rather than drop_all, so a background bus worker or job
-    # task still draining at the end of a test keeps its lock and its stale
-    # read snapshot on an inode nobody else can open. Ceiling: POSIX-only (a
-    # Windows box cannot unlink a file sqlite has open). Upgrade path: a
-    # per-test path plus rebinding `engine`, which needs the >=8 src modules
-    # that bind `SessionFactory` by name at import.
-    """
-    await _discard_db_file()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-
 @pytest.fixture(autouse=True)
-async def _clean_db():
-    await _fresh_db()
-    yield
-    await _discard_db_file()
+async def _clean_db(tmp_path):
+    """Give every test its own SQLite file, rebound over the shared SessionFactory.
+
+    One file for the whole session plus a drop_all between tests made full-suite runs
+    fail spuriously: a background event-bus worker still draining its last transaction
+    could hold the file lock when the drop ran. A fresh file per test removes the
+    shared state and the contention at once — a late writer only ever touches a
+    database nobody reads again.
+
+    `SessionFactory.configure` reaches every `src` consumer (all modules importing it
+    hold the same object); the module-attribute rebind is what `tests/test_ws_auth.py`
+    reads. `timeout` matches src/db/session.py: busy-wait on the write lock, no WAL.
+    """
+    test_engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path}/test.db", connect_args={"timeout": 30}
+    )
+    session_module.engine = test_engine
+    SessionFactory.configure(bind=test_engine)
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        yield
+    finally:
+        await test_engine.dispose()
 
 
 @pytest.fixture
