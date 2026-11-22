@@ -90,6 +90,13 @@ jobs:
           # the run failed before Playwright did, which the default `warn` hides.
           if-no-files-found: error
 
+  label-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check fleet label contract
+        run: ./scripts/check-label-contract.sh
+
   trailing-newline:
     runs-on: ubuntu-latest
     steps:
