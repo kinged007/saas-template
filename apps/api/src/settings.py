@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     # Secret store driver: "db" (encrypted table) | "vault" (future adapter)
     secret_store_driver: str = "db"
 
+    # Project extensions (update-path seam, see src/extensions.py): comma-separated
+    # module paths loaded by main.py (routers/jobs at import, workflows in the
+    # lifespan) and by src/models (their `.models` submodule). The default ships
+    # the in-template demo area; empty means no extensions.
+    extension_modules: str = "src.project"
+
     # Events
     event_bus_driver: EventBusDriver = EventBusDriver.INPROCESS
     nats_url: str = "nats://localhost:4222"
@@ -182,6 +188,10 @@ class Settings(BaseSettings):
         # Dev and tests serve plain http:// — a Secure cookie would never
         # store. Production-like envs default to Secure.
         return self.environment not in ("development", "test")
+
+    @property
+    def extension_module_list(self) -> list[str]:
+        return [m.strip() for m in (self.extension_modules or "").split(",") if m.strip()]
 
     @property
     def _cors_origin_entries(self) -> list[str]:
