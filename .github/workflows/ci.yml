@@ -99,9 +99,6 @@ jobs:
           set -eo pipefail
           failed=0
           while IFS= read -r -d '' f; do
-            case "$f" in
-              .codesight/*|review-artifacts/*) continue ;;
-            esac
             [ -s "$f" ] || continue
             if [ -n "$(tail -c1 "$f")" ]; then
               echo "no trailing newline: $f"
