@@ -56,7 +56,12 @@ Then review before you merge to your main branch:
    do not want, merge it anyway and revert that part in a commit of your own,
    which keeps the next merge clean.
 2. Inspect what changed since what you run:
-   `git diff <previous-tag>..<tag>`.
+   `git diff <previous-tag>..<tag>`. For the ownership-filtered view with
+   renames announced explicitly, run:
+   `bash scripts/check-template-paths.sh <previous-tag> <tag>`
+   (skips the project-owned paths in `TEMPLATE_PATHS`:
+   `apps/*/src/project/**`, `apps/api/alembic/project_versions/**`, `.env`).
+   Then verify loudly with the four commands in §3 before merging.
 3. Renames are announced in the release-note line (a silent rename breaks
    imports with exit 0 — see `docs/product/UPDATE-PATH.md` §3). If the notes
    announce one, update your imports to the new path.

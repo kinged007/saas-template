@@ -1,0 +1,17 @@
+# TEMPLATE_PATHS — ownership manifest for template updates.
+#
+# Each non-comment, non-blank line is a project-owned path pattern (relative to
+# the repo root). Files matching these lines belong to the adopter: template
+# releases never touch them, and scripts/check-template-paths.sh skips them
+# when reporting what an update touches. Every other tracked file is
+# template-owned: a template release may change, move or delete it, and the
+# adopter merges those changes (docs/UPGRADING.md §2).
+#
+# This manifest is not the `src/project/` code loader of the same name
+# (docs/UPGRADING.md §4) — it is the file the path-check script reads.
+#
+# Keep in sync with docs/UPGRADING.md §2 and docs/product/ADMISSION.md Gate 2.
+
+apps/*/src/project/**
+apps/api/alembic/project_versions/**
+.env
