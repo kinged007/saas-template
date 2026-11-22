@@ -7,10 +7,14 @@ hand-written deletes; parent tables (Conversation, JobRun, JobDefinition)
 are deleted last in `delete_workspace`, after their children.
 AuditLogEntry is the only exempt workspace-scoped
 table (append-only compliance trail — nothing ever deletes audit rows).
+Extension tables join automatically below: any project model with a
+`workspace_id` column is cascade-deleted with its workspace, so project rows
+can never be orphaned and no per-feature edit is needed here.
 """
 
 from __future__ import annotations
 
+from src.extensions import load_extension_cascade_models
 from src.models.api_key import ApiKey
 from src.models.audit import AuditLogEntry
 from src.models.conversation import (
@@ -37,6 +41,10 @@ WORKSPACE_CASCADE = (
     JobRun,
     JobDefinition,
 )
+
+# Project extension tables (update-path seam): appended once here, contributed
+# by the extensions themselves — never hand-edited per feature.
+WORKSPACE_CASCADE = (*WORKSPACE_CASCADE, *load_extension_cascade_models())
 
 CONVERSATION_CHILDREN = (Message, ConversationParticipant)
 

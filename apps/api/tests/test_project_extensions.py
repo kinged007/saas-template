@@ -150,3 +150,30 @@ def test_empty_extension_modules_loads_nothing(monkeypatch):
     assert extension_module_names() == []
     assert load_extension_modules() == []
     load_extension_models()  # must not raise
+
+
+async def test_demo_rows_deleted_with_workspace(app_client):
+    from sqlalchemy import func, select
+
+    from src.db.session import SessionFactory
+    from src.project.models import DemoWidget
+
+    client = app_client
+    owner = await register_user(client, "demo-cascade-owner@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    resp = await client.post("/api/v1/demo/widgets", json={"name": "doomed"}, headers=headers)
+    assert resp.status_code == 201, resp.text
+
+    resp = await client.delete("/api/v1/workspaces/" + ws["id"], headers=headers)
+    assert resp.status_code == 204, resp.text
+
+    async with SessionFactory() as session:
+        remaining = (
+            await session.execute(
+                select(func.count())
+                .select_from(DemoWidget)
+                .where(DemoWidget.workspace_id == ws["id"])
+            )
+        ).scalar_one()
+    assert remaining == 0

@@ -62,15 +62,48 @@ def load_extension_models() -> None:
 
     Called once from `src/models/__init__.py`; the import registers project
     models on `Base.metadata` for Alembic autogenerate and `create_all`.
+    An extension with no `.models` submodule is fine (router-only project).
     """
     for name in extension_module_names():
         models_name = f"{name}.models"
         try:
             importlib.import_module(models_name)
         except ModuleNotFoundError as exc:
-            if exc.name in {name, models_name} and _missing_is_absent_default(name, exc):
+            if exc.name == models_name:
+                continue  # no models in this extension; nothing to register
+            if exc.name == name and _missing_is_absent_default(name, exc):
                 continue
             raise RuntimeError(f"extension module {name!r} models failed to load: {exc}") from exc
+
+
+def load_extension_cascade_models() -> list[type]:
+    """Workspace-scoped project models for the workspace-delete cascade.
+
+    Any model defined in an extension's `.models` submodule carrying a
+    `workspace_id` column is deleted with its workspace (see
+    `src/db/cascade.py`) — the same rule the template applies to its own
+    tables, so project rows can never be orphaned and no per-feature
+    template edit is needed.
+    """
+    from src.db.base import Base
+
+    load_extension_models()  # ensure extension tables are registered first
+    names = extension_module_names()
+    if not names:
+        return []
+    out: list[type] = []
+    for mapper in Base.registry.mappers:
+        cls = mapper.class_
+        if not hasattr(cls, "__tablename__"):
+            continue
+        table = cls.__table__
+        if "workspace_id" not in table.c:
+            continue
+        module = cls.__module__ or ""
+        if not any(module == name or module.startswith(name + ".") for name in names):
+            continue
+        out.append(cls)
+    return out
 
 
 def register_extension_routes(app) -> None:
