@@ -183,7 +183,11 @@ export function ApiKeyCreatePage() {
                   <div className="flex max-h-52 flex-col gap-1 overflow-y-auto rounded border p-2">
                     {assignable.length === 0 ? (
                       <p className="text-muted-foreground text-sm">
-                        No permissions to assign.
+                        {permissionsQuery.isPending
+                          ? 'Loading permissions…'
+                          : permissionsQuery.error
+                            ? 'Could not load permissions.'
+                            : 'No permissions to assign.'}
                       </p>
                     ) : (
                       assignable.map((p) => (
