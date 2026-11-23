@@ -43,13 +43,18 @@ Source: ARCHITECTURE.md §6, `apps/api/src/events/`, `apps/api/src/workflows/__i
 - **CONV-EVT-02** The subject is a `Subjects.*` constant from `apps/api/src/events/subjects.py`,
   never a string literal. A new subject is added to `Subjects` and to `ALL`.
   Why: one list of subjects; a typo cannot create a subject nobody consumes.
-  Check: `grep -rPzl "\.publish\(\s*['\"]|publish_event\(\s*[\w.]+,\s*['\"]" apps/api/src --include=*.py` returns nothing.
+  Check: `grep -rPzl "\.publish\(\s*['\"]|publish_event\(\s*[\w.]+,\s*['\"]" apps/api/src --include=*.py` returns nothing;
+  `grep -rnE "Subjects\.[A-Z_0-9]+ *\+" apps/api/src` prints only
+  `apps/api/src/services/conversations.py` (CONV-EVT-02 in Known deviations).
 - **CONV-EVT-03** Every durable subject has exactly one workflow registered with
   `registry.register(Subjects.X, handler)` in `build_workflows`
   (`apps/api/src/workflows/__init__.py`). The set is asserted in
   `apps/api/tests/test_events.py::test_workflow_registry_wiring`; a new registration updates it.
   Why: a durable subject with no consumer accumulates in the JetStream stream.
   Check: `cd apps/api && uv run --extra dev pytest tests/test_events.py::test_workflow_registry_wiring -q` passes.
+  The test asserts the registered set equals a fixed list; it does not compare against
+  `Subjects.ALL`, so a durable subject added to `ALL` with no registration still passes (third
+  row of CI check candidates).
 - **CONV-EVT-04** A transient subject (realtime fan-out, nothing persisted) is listed in
   `TRANSIENT_SUBJECTS`, is published with `transient=True`, and its workflow is registered with
   `fanout=True`. A durable subject is none of these.
@@ -173,8 +178,11 @@ Source: ARCHITECTURE.md §4 and §9, `apps/api/src/api/deps.py`, `apps/api/src/c
   needs a permission gets a `PERMISSION_MAP` entry. The backend is the final authority.
   Why: the UI hides what the server would refuse; the server still refuses.
   Check: `grep -rn "PERMISSION_MAP" apps/web/src | grep -v "accessControlProvider.ts"` returns
-  nothing; read: each new `resources` entry in `App.tsx` that maps to a permission has a
-  `PERMISSION_MAP` key.
+  nothing. Four `resources` entries have no key: `notifications` (those routes are gated by the
+  key-only scopes in `KEY_ONLY_PERMISSIONS`, which no role holds) and `admin-users`,
+  `admin-workspaces`, `admin-audit` (`AdminLayout` blocks every non-superuser). A new resource is
+  not added to this list unless it is one of those two kinds; read: each new `resources` entry in
+  `App.tsx` that maps to a permission has a `PERMISSION_MAP` key.
 - **CONV-AUTH-06** A page does not handle tokens or sessions. Token and session code lives in
   `apps/web/src/providers/authProvider.ts` and `apps/web/src/utils/storage.ts`; only the sign-in
   and OAuth callback screens call it.
@@ -229,9 +237,9 @@ Source: `apps/web/src/App.tsx`, `apps/web/src/pages/`, `apps/web/src/components/
 These rules apply to all new pages; a touched page that is listed under FE in Known deviations
 is migrated.
 
-- **CONV-FE-01** Register `create` on every resource in `apps/web/src/App.tsx`
-  (`{ name: "x", list: "/x", create: "/x/create" }`). Create is a page, never a dialog on the
-  list page.
+- **CONV-FE-01** Register `create` on every resource that has a create flow, in
+  `apps/web/src/App.tsx` (`{ name: "x", list: "/x", create: "/x/create" }`). Create is a page,
+  never a dialog on the list page.
   Why: Refine links the `CreateButton` to the create route; a dialog cannot be linked.
   Check: `grep -n "create:" apps/web/src/App.tsx` prints `workspaces`, `api-keys`, `webhooks`;
   read: a new create flow has a `<Route path="x/create">` and no `Dialog` import in the list page.
@@ -309,13 +317,14 @@ adding a new one needs a DECISIONS entry.
 
 | Rule | Deviation |
 |---|---|
+| CONV-EVT-02 | `apps/api/src/services/conversations.py:746` builds the subject as `Subjects.CONVERSATIONS + ".renamed"` behind a `hasattr` fallback. The constant exists, so the fallback is dead code. |
 | CONV-EVT-03 | `Subjects.CONVERSATION_CREATED` (`conversations.created`) is in `ALL`, is not published anywhere, and has no workflow. |
 | CONV-API-02 | `apps/api/src/api/routes/conversations.py` builds its list queries without `apply_query`. |
 | CONV-API-04 | `apps/api/src/services/profile_helpers.py`, `profiles.py` and `search_export.py` import `HTTPException`. |
 | CONV-AUTH-03 | `apps/api/src/api/routes/jobs.py` (lines 237 and 280) checks `api_key.permissions` inside the route for the `/jobs/{id}` and run routes. |
 | CONV-DATA-05 | `apps/api/src/api/routes/admin.py` (two routes) and `notifications.py` call `db.commit()`. |
 | CONV-CFG-02 | `AUTH_IP_MAIL_MAX_ATTEMPTS` and `AUTH_IP_MAIL_WINDOW_SECONDS` are settings with no `.env.example` entry. |
-| CONV-FE-01, 02, 03 | `pages/settings/workspace/sections/RolesSection.tsx` (formerly `RolesPage`) creates roles in a dialog with `useCreate`. `MembersPage.tsx` uses `ListView` but invites in a dialog with `useCreate`. `WorkspaceCreatePage.tsx` uses `PageHeader` and `useCreate` instead of `CreateView` and `useForm`. `ReceivedInvitationsPage.tsx` complies. |
+| CONV-FE-01, 02, 03 | `pages/settings/workspace/sections/RolesSection.tsx` (formerly `RolesPage`) creates roles in a dialog with `useCreate`. `MembersPage.tsx` uses `ListView` but invites from an inline form with `useCreate`. `WorkspaceCreatePage.tsx` uses `PageHeader` and `useCreate` instead of `CreateView` and `useForm`. `ReceivedInvitationsPage.tsx` complies. |
 | CONV-FE-04 | `useNavigate` is used in `AuthConfig.tsx`, `AppLayout.tsx`, `NotificationCenter.tsx`, `NotFoundPage.tsx`, `LoginPage.tsx`, `InvitationAcceptPage.tsx`, `WorkspaceCreatePage.tsx` and `settings/workspace/sections/GeneralSection.tsx`. |
 | CONV-FE-05 | `ForgotPasswordPage.tsx`, `ResetPasswordPage.tsx` and `VerifyEmailPage.tsx` call `fetch` directly; they run before a session exists. |
 
@@ -327,7 +336,7 @@ not create them.
 
 | Rule | Proposed mechanism |
 |---|---|
-| CONV-EVT-02, 05, 06 | The three `grep` commands above as one `make conventions-check` target, run in the `ci` workflow. |
+| CONV-EVT-02, 05, 06 | The `grep` commands above, including the `Subjects.X +` one, as one `make conventions-check` target, run in the `ci` workflow. |
 | CONV-EVT-03 | Pytest test: every durable subject in `Subjects.ALL` has a registered workflow; every transient subject is in `TRANSIENT_SUBJECTS` and registered with `fanout=True`. Fails today on `CONVERSATION_CREATED` until it is fixed or removed. |
 | CONV-AUTH-01 | Pytest test over each router's `routes`: every route that depends on `get_current_workspace_id` also depends on a `require_permission` or `require_key_permission` checker, with an allowlist for the routes under Known deviations and the guards named in CONV-AUTH-01. |
 | CONV-AUTH-03 | `grep` in the `make conventions-check` target, with the jobs routes allowlisted until they move into `deps.py`. |
