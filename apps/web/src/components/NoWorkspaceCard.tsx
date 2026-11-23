@@ -7,6 +7,9 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 /** What a user who cannot create a workspace is told to do instead. */
 export const ASK_AN_ADMIN = "Ask an administrator to add you to it.";
 
+/** Why creation is unavailable in single-workspace deployments. */
+export const SINGLE_WORKSPACE_LIMIT = "This deployment allows one workspace.";
+
 /**
  * The zero-workspace state, shared by the two surfaces the workspace guard
  * cannot cover: the dashboard and the profile workspaces list.
@@ -28,7 +31,7 @@ export function NoWorkspaceCard({ single }: { single: boolean }) {
         <h1 className="font-semibold leading-none tracking-tight">No workspace yet</h1>
         <CardDescription>
           {single
-            ? `This deployment allows one workspace. ${ASK_AN_ADMIN}`
+            ? `${SINGLE_WORKSPACE_LIMIT} ${ASK_AN_ADMIN}`
             : "Create a workspace to get started with managing your team."}
         </CardDescription>
       </CardHeader>

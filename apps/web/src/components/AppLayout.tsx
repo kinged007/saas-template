@@ -58,7 +58,7 @@ import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "../contexts/WorkspaceConte
 import { activeWorkspacePermissions } from "../utils/permissions";
 import { isManagerRoleName } from "../pages/role-name";
 import { ThemeToggle } from "./refine-ui/theme/theme-toggle";
-import { ASK_AN_ADMIN } from "./NoWorkspaceCard";
+import { ASK_AN_ADMIN, SINGLE_WORKSPACE_LIMIT } from "./NoWorkspaceCard";
 import { NotificationCenter } from "./NotificationCenter";
 import { PendingInvitationsBadge } from "./PendingInvitations";
 import { cn } from "@/lib/utils";
@@ -379,7 +379,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                   workspace-scoped ones /App.tsx redirects to the dashboard, so
                   it is where a locked-out user learns why. */}
               <p className="text-muted-foreground text-sm">
-                {single ? ASK_AN_ADMIN : "You're not a member of any workspace yet."}
+                {single
+                  ? `${SINGLE_WORKSPACE_LIMIT} ${ASK_AN_ADMIN}`
+                  : "You're not a member of any workspace yet."}
               </p>
               {/* /workspaces/create redirects home while the flag is set, so the
                   button would navigate nowhere. */}

@@ -46,3 +46,13 @@ test("the ask-an-admin sentence has one home", () => {
     `AppLayout.tsx and the pages must import ASK_AN_ADMIN, not inline "${sentence}"`,
   );
 });
+
+test("the single-workspace limit sentence has one home", () => {
+  const [, sentence] = /export const SINGLE_WORKSPACE_LIMIT = "([^"]+)"/.exec(card) ?? [];
+  assert.ok(sentence, "NoWorkspaceCard.tsx must export SINGLE_WORKSPACE_LIMIT");
+  assert.deepEqual(
+    [dashboard, section, layout].filter((s) => s.includes(sentence)),
+    [],
+    `AppLayout.tsx and the pages must import SINGLE_WORKSPACE_LIMIT, not inline "${sentence}"`,
+  );
+});

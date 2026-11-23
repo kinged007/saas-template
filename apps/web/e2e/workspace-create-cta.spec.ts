@@ -19,19 +19,22 @@ const noWorkspaces = { ...IDENTITY, single_workspace: false, workspaces: [] };
 /** Asserts on the pathname, so a redirect may add a query string. */
 const path = (page: Page) => expect.poll(() => new URL(page.url()).pathname);
 
-/** Sidebar copy when no workspace can be created; `exact` leaves the card's longer sentence out. */
+/** Sidebar copy when no workspace can be created; now the full locked-out sentence. */
 const ASK_AN_ADMIN = "Ask an administrator to add you to it.";
 
-/** The card's locked-out sentence, which the sidebar does not repeat. */
+/** The card's locked-out sentence, now also rendered by the sidebar. */
 const LOCKED_OUT_CARD = "This deployment allows one workspace.";
+
+/** The full locked-out sentence rendered by both the card and the sidebar. */
+const LOCKED_OUT_FULL = `${LOCKED_OUT_CARD} ${ASK_AN_ADMIN}`;
 
 test.describe("workspace create call to action", () => {
   test("single-workspace mode offers no way to create one", async ({ page }) => {
     await mockApi(page, { signedIn: true, identity: lockedOut });
     await page.goto("/");
 
-    await expect(page.getByText(ASK_AN_ADMIN, { exact: true })).toBeVisible();
-    await expect(page.getByText(LOCKED_OUT_CARD)).toBeVisible();
+    // Both the sidebar and the card render the full locked-out sentence.
+    await expect(page.getByText(LOCKED_OUT_FULL)).toHaveCount(2);
     // Sidebar empty state (button) and the dashboard "No workspace yet" card
     // (a link) are both affordances for the same route.
     await expect(page.getByRole("button", { name: "Create workspace" })).toHaveCount(0);
@@ -50,8 +53,7 @@ test.describe("workspace create call to action", () => {
     await mockApi(page, { signedIn: true, identity: lockedOut });
     await page.goto("/settings/profile/workspaces");
 
-    await expect(page.getByText(ASK_AN_ADMIN, { exact: true })).toBeVisible();
-    await expect(page.getByText(LOCKED_OUT_CARD)).toBeVisible();
+    await expect(page.getByText(LOCKED_OUT_FULL)).toHaveCount(2);
     await expect(page.getByRole("button", { name: "Create workspace" })).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Create workspace" })).toHaveCount(0);
   });
