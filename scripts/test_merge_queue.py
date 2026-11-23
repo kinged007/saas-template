@@ -192,6 +192,38 @@ class CommandStringTest(unittest.TestCase):
         self.assertNotIn("GITHUB_TOKEN", src)
 
 
+class RedDevRecoveryTest(unittest.TestCase):
+    def test_closing_issues_filters_by_state(self):
+        q = mq.MergeQueue(repo="o/r", base="dev")
+        nodes = '[{"number": 11, "state": "CLOSED"}, {"number": 12, "state": "OPEN"}]'
+        q._read = lambda args: nodes  # noqa: SLF001
+        self.assertEqual(q.closing_issues(7), [12])
+        self.assertEqual(q.closing_issues(7, want="CLOSED"), [11])
+
+    def test_handle_red_dev_reopens_closed_issues(self):
+        q = mq.MergeQueue(repo="o/r", base="dev")
+        calls = {}
+        q.rerun_failed = lambda run_id: calls.setdefault("rerun", run_id)  # noqa: SLF001
+        q.wait_for_rerun_start = lambda run_id, **kw: True  # noqa: SLF001
+        q.wait_for_run = lambda run_id, **kw: "failure"  # noqa: SLF001
+        q.dev_head = lambda: "sha1"  # noqa: SLF001
+        q._read = lambda args: "Add thing (#12)"  # noqa: SLF001 - git log subject
+        q.revert_newest = lambda *a: calls.setdefault("revert", a)  # noqa: SLF001
+        seen = {}
+        def fake_closing(n, want="OPEN"):
+            seen["want"] = want
+            self.assertEqual(n, 12)
+            return [11]
+        q.closing_issues = fake_closing  # noqa: SLF001
+        q.reopen_issues = lambda nums, url: seen.update(numbers=nums, url=url)  # noqa: SLF001
+        run = {"databaseId": 99, "url": "https://run/9", "headSha": "sha1"}
+        self.assertEqual(q.handle_red_dev(run), "reverted")
+        self.assertEqual(calls["rerun"], 99)
+        self.assertIn("revert", calls)
+        self.assertEqual(seen["want"], "CLOSED")
+        self.assertEqual(seen["numbers"], [11])
+        self.assertEqual(seen["url"], "https://run/9")
+
 class DryRunNoMutationTest(unittest.TestCase):
     def test_dry_run_performs_no_mutation(self):
         calls = []

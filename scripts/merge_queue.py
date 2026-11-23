@@ -287,8 +287,8 @@ class MergeQueue:
         ])
         return (out.strip() not in ("", "0"))
 
-    def closing_issues(self, n):
-        """Open issue numbers the PR resolves (GraphQL closingIssuesReferences)."""
+    def closing_issues(self, n, want="OPEN"):
+        """Issue numbers the PR resolves (GraphQL closingIssuesReferences)."""
         owner, name = self.repo.split("/", 1)
         query = (
             "{repository(owner:%s,name:%s){pullRequest(number:%d)"
@@ -303,7 +303,7 @@ class MergeQueue:
         except json.JSONDecodeError:
             return []
         return [x["number"] for x in nodes
-                if x.get("state") == "OPEN" and isinstance(x.get("number"), int)]
+                if x.get("state") == want and isinstance(x.get("number"), int)]
 
     # -- live mutations --------------------------------------------------
 
@@ -372,7 +372,7 @@ class MergeQueue:
         subject = self._read(["git", "log", "-1", "--format=%s", head]) if head else "unknown"
         self.revert_newest(subject, head, run["url"])
         match = re.search(r"\(#(\d+)\)\s*$", subject or "")
-        numbers = self.closing_issues(int(match.group(1))) if match else []
+        numbers = self.closing_issues(int(match.group(1)), want="CLOSED") if match else []
         self.reopen_issues(numbers, run["url"])
         return "reverted"
 
