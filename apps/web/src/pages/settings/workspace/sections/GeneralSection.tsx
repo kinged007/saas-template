@@ -415,7 +415,7 @@ export function GeneralSection() {
                   <p className="text-muted-foreground text-xs sm:col-span-2">
                     Showing the first {members.length} of {membersResult?.total} members. Members beyond the first{" "}
                     {members.length} are not listed here — the list is newest first, so those are the oldest members.
-                    Any active member can take the transfer.{" "}
+                    Any other active member can take the transfer.{" "}
                     <Link className="underline" to={listUrl("members")}>
                       See all members
                     </Link>
