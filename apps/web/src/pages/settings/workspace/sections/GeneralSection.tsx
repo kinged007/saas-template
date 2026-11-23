@@ -3,8 +3,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { toast } from "sonner";
-import { useCan, useCustomMutation, useDelete, useGetIdentity, useInvalidate } from "@refinedev/core";
-import { useNavigate } from "react-router";
+import { useCan, useCustomMutation, useDelete, useGetIdentity, useInvalidate, useNavigation } from "@refinedev/core";
+import { Link, useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -101,9 +101,14 @@ export function GeneralSection() {
   const transferTarget = resolveTransferTarget(transferCandidates, transferId);
   const transferTargetName = transferTarget ? getDisplayNameFromRow(transferTarget) : "";
   const transferTargetLabel = transferTarget ? memberOptionLabel(transferTarget) : "";
-  // ponytail: the members endpoint clamps `limit` to 100, so the list can be
-  // truncated. The UI says so; page the select once a workspace can exceed 100 members.
+  // The members endpoint clamps `limit` to 100 and orders by created_at desc,
+  // so this page holds the newest rows and the rows it drops are the oldest
+  // ones. The notice says both and links the member table, which pages through
+  // every candidate `transfer_ownership` accepts.
+  // ponytail: the picker itself is still one page; page the select if a
+  // workspace above 100 members makes hunting an owner the common case.
   const membersTruncated = (membersResult?.total ?? 0) > members.length;
+  const { listUrl } = useNavigation();
   const candidatesMessage = transferCandidateMessage({
     isPending: membersQuery.isPending,
     isError: membersQuery.isError,
@@ -409,7 +414,11 @@ export function GeneralSection() {
                 {membersTruncated && (
                   <p className="text-muted-foreground text-xs sm:col-span-2">
                     Showing the first {members.length} of {membersResult?.total} members. Members beyond the first{" "}
-                    {members.length} are not listed here.
+                    {members.length} are not listed here — the list is newest first, so those are the oldest members.
+                    Any other active member can take the transfer.{" "}
+                    <Link className="underline" to={listUrl("members")}>
+                      See all members
+                    </Link>
                   </p>
                 )}
               </div>

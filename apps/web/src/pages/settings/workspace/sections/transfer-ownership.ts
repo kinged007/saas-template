@@ -62,7 +62,7 @@ export const transferCandidateMessage = ({
   // object is not copy to put in front of the owner.
   if (isError) return "Could not load members. Reload the page to try again.";
   if (total > loaded) {
-    return `No eligible members in the ${loaded} members loaded here. The other ${total - loaded} are not listed, so this workspace may still have an owner to transfer to.`;
+    return `No eligible members in the ${loaded} members loaded here. The other ${total - loaded} are not listed, so this workspace may still have an owner to transfer to. The list is newest first, so the ones left out are the oldest members.`;
   }
   return "No eligible members to transfer to. Transferring needs another active member in this workspace — invite one first.";
 };
