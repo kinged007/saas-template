@@ -111,7 +111,7 @@ If a review was submitted since the last code change (compare review `submittedA
 Otherwise review thoroughly against:
 
 - the repo's architecture docs plus related `docs/`; the project's context map / wiki if present, then the actual source files; check blast radius before touching widely-imported files.
-- Correctness, tests, error handling, security, migration safety. Classify every finding as **major** (blocks merge: bugs, data loss, security, broken tests, arch violations) or **minor/deferred** (nits, follow-ups, polish).
+- Correctness, tests, error handling, security, migration safety. Classify every finding as **major** (blocks merge: bugs, data loss, security, broken tests, arch violations = a failed `CONV-*` rule) or **minor/deferred** (nits, follow-ups, polish).
 
 The agent MUST NOT use `gh pr review --request-changes`. To request changes, it MUST post a normal PR comment; this comment is the handoff that the next agent reads before acting. Post the review with this structure — every section is required:
 
@@ -136,7 +136,7 @@ gh pr comment <n> --body "$(cat <<'EOF'
 ## Detailed Analysis
 
 ### Architecture & API Design
-[Findings from the design and interface pass]
+[Findings from the design and interface pass, then one line per relevant rule: `CONV-<AREA>-NN pass|fail|n.a. - <evidence>`]
 
 ### Implementation Quality
 [Findings from the implementation pass]
@@ -154,6 +154,8 @@ gh pr comment <n> --body "$(cat <<'EOF'
 EOF
 )"
 ```
+
+Architecture check: for every `CONV-*` rule in `docs/architecture/CONVENTIONS.md` that the diff can affect, give pass, fail or n.a. in "Architecture & API Design". Run the rule's **Check** yourself; do not rely on the plan's "Conventions touched" list, and read the diff for rules the plan omitted. A fail is a **major** finding (an arch violation) unless `docs/product/DECISIONS.md` has an entry that names the rule. A new deviation that is not in the Known deviations table is also a fail.
 
 Be thorough but focus on the most impactful issues. Every finding needs a `file:line` reference and a concrete suggested fix.
 

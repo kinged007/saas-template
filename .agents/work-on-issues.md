@@ -114,6 +114,7 @@ Context to read:
 - the repo's architecture docs; check `docs/` for related docs on the area being touched.
 - the project's context map / wiki if present, then the source files it lists. Never plan from the wiki alone.
 - check blast radius before touching widely-imported files.
+- `docs/architecture/CONVENTIONS.md`: the plan's "Conventions touched" section lists the `CONV-<AREA>-NN` rule IDs the change touches, or `none`. A change that has to break a rule needs a `docs/product/DECISIONS.md` entry; that is an architectural change, so apply `needs-human` as below.
 - Follow the repo's own instructions (tooling, make targets, no new dependencies without asking).
 - Post the plan as an issue comment before writing code:
 
@@ -124,6 +125,8 @@ gh issue comment <n> --body "## Plan
 ...
 ### Files to touch
 ...
+### Conventions touched
+CONV-... IDs from docs/architecture/CONVENTIONS.md, or none
 ### Acceptance (from issue)
 ..."
 ```
