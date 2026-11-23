@@ -2,8 +2,11 @@
 
 Spec: `specs/1818-fleet-dev-base-no-merge/spec.md` (Draft; written from the issue
 description + owner sequencing comment + `docs/architecture/CI-CD.md` §4.2/§9 —
-no spec-stage questions were needed). No `plan-check` revise verdict exists, so
-this is a fresh plan, not a fix-up.
+no spec-stage questions were needed). This is round 2: a fix-up addressing
+the `plan-check` revise verdict (round 1) — critical F1 (script change needs
+coverage: T005 + CHK005 + non-blocking `q-label-script`, unanswered so taken
+as Yes) and high F2 (plan.md/tasks.md/checklist.md now exist with explicit
+T↔FR/AC mapping). Medium F3 and low F4 are also resolved below.
 
 ## Approach
 
@@ -16,8 +19,12 @@ change surface:
 2. `.agents/review_pr.md` §7: approval becomes `gh pr review <n> --approve`
    plus an approval comment carrying the verdict line and the approved head SHA
    (resolved via `gh pr view`), then add `agent:merge`, remove `in-progress`.
-   Delete `gh pr merge` from the brief. High-risk path (step 3, `needs-human`)
-   and escalation (§6) stay byte-identical.
+   Keep applying `agent:done` alongside `agent:merge` (F3 decision): the step-1
+   skip list (lines 50-56) already excludes `agent:done`, so no step-1 edit is
+   needed and the approved PR is not re-picked; this matches the high-risk
+   path precedent (lines 99-104: `needs-human` + `agent:done`) and keeps
+   `review_pr.md:5` true. Delete `gh pr merge` from the brief. High-risk path
+   (step 3, `needs-human`) and escalation (§6) stay byte-identical.
 3. `.github/pull_request_template.md`: add literal `Area: ` and `Release-note: `
    lines at line start in the Release-note section. The CICD-13 check greps
    `^Area: |^Release-note: `, so the existing bold `**Area:**` line alone does
@@ -31,9 +38,11 @@ change surface:
    the starts-no-work list, which contradicts FR-008's new meaning. This is the
    only file outside the four the issue names, and only AC-5 requires it.
 
-Base of the built PR is `main` (CI-CD.md §9 row 2; fleet reads its brief from
-the default branch). Sequencing is a build-stage gate, not a code gate: the PR
-must carry `needs-human` and must not merge before #1817 (piece 5).
+Base of the built PR is `main` per `docs/architecture/CI-CD.md` §9 Table row 2;
+fleet config is read from `main`. Sequencing is a build-stage gate, not a code
+gate: the PR must carry `needs-human` and must not merge before #1817 (piece 5,
+per the owner sequencing comment "Depends on #1817 (piece 5, merge queue). Do
+not merge before it.").
 
 ## Files to change
 
@@ -80,10 +89,11 @@ The compliance checks in `docs/architecture/COMPLIANCE-CHECKLIST.md` (lines
   approval sets `agent:merge` with no queue consuming it until #1817 lands —
   hence the `needs-human` sequencing gate (FR-009). Mitigation is process, not
   code: do not merge early.
-- `review_pr.md:5` and `docs/FLEET_LABELS.md:59-61` describe `agent:done` as
-  part of the old approval path; if the rewritten §7 drops `agent:done`, those
-  sentences become stale. The build sweeps `agent:merge`/`agent:done`
-  references for contradictions (T006).
+- `review_pr.md:5` stays true because the rewritten §7 keeps applying
+  `agent:done`; `docs/FLEET_LABELS.md:59-61` ("Ready to merge ... then merge")
+  needs only its "then merge" tail reworded to the queue handoff, since
+  `agent:done` still arrives via the approval path. The build sweeps remaining
+  `agent:merge`/`agent:done` references for contradictions (T006).
 - Stale-approval edge (spec): commits landing after approval invalidate the
   recorded head SHA; enforcement is queue-side (piece 5), not here.
 

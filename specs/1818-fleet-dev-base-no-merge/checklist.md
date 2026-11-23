@@ -10,3 +10,7 @@
 - [x] CHK008 Is area context reported missing? Yes — no `.agents/areas/` directory exists and the item carries no `area:` label; spec scoped from the files triage named.
 - [x] CHK009 Does the template edit satisfy the CICD-13 grep contract (`^Area: ` line-start, not bold)? Yes — T004 requires plain line-start machine-read lines.
 - [x] CHK010 Is the sequencing gate (FR-009/AC-8, owner comment, depends-on #1817) a build task, not just prose? Yes — T009 labels the PR `needs-human` and forbids merging before piece 5.
+- [x] CHK011 (revise F1) Is the 5th-file script change covered without changing spec requirements? Yes — T005 + plan Approach step 5 cover it; round-1 `q-label-script` was unanswered so taken as Yes, and a round-2 non-blocking question records the spec-FR gap for the spec owner instead of editing the spec.
+- [x] CHK012 (revise F2) Do plan.md/tasks.md/checklist.md exist with explicit T↔FR/AC mapping? Yes — all three files committed next to spec.md; CHK003–CHK004 trace every FR and AC to a task.
+- [x] CHK013 (revise F3) Is the `agent:done` fate decided? Yes — approval keeps `agent:done` alongside `agent:merge` (step-1 skip list already excludes it; high-risk path precedent; contract-safe since `agent:done` is in the consumed table); pinned in Approach step 2, T003 and T006.
+- [x] CHK014 (revise F4) Is the stale default-branch parenthetical gone? Yes — plan states base `main` per §9 Table row 2 without claiming it is the default.
