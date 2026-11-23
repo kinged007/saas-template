@@ -13,6 +13,7 @@ import { Navigate } from "react-router";
 import { toast } from "sonner";
 
 import { CopyButton } from "@/components/CopyButton";
+import { ReadError } from "@/components/ui";
 import { errorMessage } from "@/utils/errorMessage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -63,7 +64,7 @@ type ApiKeyFormData = z.infer<typeof apiKeySchema>;
 export function ApiKeyCreatePage() {
   const { list } = useNavigation();
   const { data: can } = useCan({ resource: "api-keys", action: "create" });
-  const { result: permissionsResult } = useCustom<{ permissions: string[] }>({
+  const { result: permissionsResult, query: permissionsQuery } = useCustom<{ permissions: string[] }>({
     url: "api-keys/effective-permissions",
     method: "get",
   });
@@ -147,6 +148,7 @@ export function ApiKeyCreatePage() {
   return (
     <CreateView>
       <CreateViewHeader title="Create API key" />
+      <ReadError error={permissionsQuery.error} />
       <Form {...form}>
         <form
           onSubmit={form.handleSubmit(onSubmit)}
@@ -181,7 +183,11 @@ export function ApiKeyCreatePage() {
                   <div className="flex max-h-52 flex-col gap-1 overflow-y-auto rounded border p-2">
                     {assignable.length === 0 ? (
                       <p className="text-muted-foreground text-sm">
-                        No permissions to assign.
+                        {permissionsQuery.isPending
+                          ? 'Loading permissions…'
+                          : permissionsQuery.error
+                            ? 'Could not load permissions.'
+                            : 'No permissions to assign.'}
                       </p>
                     ) : (
                       assignable.map((p) => (

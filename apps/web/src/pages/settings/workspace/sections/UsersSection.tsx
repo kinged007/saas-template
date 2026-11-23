@@ -4,7 +4,7 @@ import { useWorkspaceList } from "../../../../hooks/useWorkspaceQuery";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { EmptyRow, formatDate } from "@/components/ui";
+import { EmptyRow, ReadError, formatDate } from "@/components/ui";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import type { Identity, Member } from "@/types";
 import { getDisplayNameFromRow } from "@/types";
@@ -20,6 +20,7 @@ export function UsersSection() {
 
   return (
     <div className="flex flex-col gap-4">
+      <ReadError error={query.error} className="p-0" />
       <Card>
         <CardHeader>
           <CardTitle>Users</CardTitle>

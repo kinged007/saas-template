@@ -1,6 +1,7 @@
 import { useLayoutEffect, useReducer, useRef } from "react";
 import { useCan, useGetIdentity, useList } from "@refinedev/core";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
+import { ReadError } from "@/components/ui";
 import { CheckCircle2, Circle, PlusCircle, X } from "lucide-react";
 import { Link } from "react-router";
 
@@ -67,13 +68,13 @@ export function DashboardPage() {
   // list, so a custom role holding `apikey:create` without `apikey:read` could
   // never complete it and its count request would come back 403.
   const canTrackKeyStep = canCreateKey?.can === true && canReadKeys?.can === true;
-  const { result: keysResult } = useList<ApiKey>({
+  const { result: keysResult, query: keysQuery } = useList<ApiKey>({
     resource: "api-keys",
     // The count only decides this card's key step, so it is fetched only when
     // that step is one the user has.
     queryOptions: { enabled: !!workspace && canTrackKeyStep },
   });
-  const { result: invitationsResult } = useList<Invitation>({
+  const { result: invitationsResult, query: invitationsQuery } = useList<Invitation>({
     resource: "invitations",
     queryOptions: { enabled: !!workspace && !!canInvite?.can },
   });
@@ -129,6 +130,7 @@ export function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      <ReadError error={keysQuery.error ?? invitationsQuery.error} className="p-0" />
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">{workspace?.name ?? "Workspace"}</h1>

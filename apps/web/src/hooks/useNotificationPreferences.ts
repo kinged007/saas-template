@@ -6,6 +6,7 @@ import { errorMessage } from "@/utils/errorMessage";
 
 import type { NotificationChannel, NotificationPreferences } from "../types";
 
+
 export const KNOWN_NOTIFICATION_TYPES = [
   "workspace_invitation",
   "member_joined",
@@ -57,6 +58,8 @@ export function useNotificationPreferences(
   const { result: prefsResult, query: prefsQuery } = useCustom<NotificationPreferences>({
     url: baseUrl,
     method: "get",
+    // The delivery form has no in-body error state — it keeps the toast.
+    errorNotification: (error) => ({ type: "error", message: errorMessage(error) }),
     queryOptions: { enabled },
   });
   const { mutateAsync: savePrefsAsync, mutation: savePrefsMutation } =

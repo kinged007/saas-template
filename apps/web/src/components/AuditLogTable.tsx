@@ -14,7 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { EmptyRow, formatDate } from "@/components/ui";
+import { EmptyRow, ReadError, formatDate } from "@/components/ui";
 import { errorMessage } from "@/utils/errorMessage";
 import type { AuditLogEntry } from "@/types";
 
@@ -96,6 +96,7 @@ export function AuditLogTable({
 
   return (
     <>
+      <ReadError error={query.error} className="p-0" />
       {searchEnabled && (
         <form
           className="flex gap-2 px-4"

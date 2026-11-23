@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/table";
 import { DeleteButton } from "../components/refine-ui/buttons/delete";
 import { ListView, ListViewHeader } from "../components/refine-ui/views/list-view";
-import { EmptyRow, StatusBadge, formatDate } from "../components/ui";
+import { EmptyRow, ReadError, StatusBadge, formatDate } from "../components/ui";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { UserProfileDialog } from "@/components/UserProfileDialog";
 
@@ -92,12 +92,12 @@ export function MembersPage() {
   const [invitesPage, setInvitesPage] = useState(1);
   const { workspace } = useWorkspace();
   const { data: identity } = useGetIdentity<Identity>({ queryOptions: IDENTITY_QUERY_OPTIONS });
-  const { result: membersResult } = useWorkspaceList<Member>({
+  const { result: membersResult, query: membersQuery } = useWorkspaceList<Member>({
     resource: "members",
     pagination: { currentPage: membersPage, pageSize: PAGE_SIZE },
     sorters: [{ field: "created_at", order: "desc" }],
   });
-  const { result: rolesResult } = useWorkspaceList<Role>({
+  const { result: rolesResult, query: rolesQuery } = useWorkspaceList<Role>({
     resource: "roles",
     pagination: { currentPage: 1, pageSize: ROLES_PAGE_SIZE },
   });
@@ -112,7 +112,7 @@ export function MembersPage() {
   // Profile editing is a distinct scope from role management (member:update).
   const { data: canEditProfiles } = useCan({ resource: "member-profiles", action: "edit" });
   const go = useGo();
-  const { result: invitationsResult } = useWorkspaceList<Invitation>({
+  const { result: invitationsResult, query: invitationsQuery } = useWorkspaceList<Invitation>({
     resource: "invitations",
     pagination: { currentPage: invitesPage, pageSize: PAGE_SIZE },
     sorters: [{ field: "created_at", order: "desc" }],
@@ -198,6 +198,10 @@ export function MembersPage() {
   return (
     <ListView>
       <ListViewHeader title="Members" canCreate={false} />
+      <ReadError
+        error={membersQuery.error ?? rolesQuery.error ?? invitationsQuery.error}
+        className="p-0"
+      />
       {canManageRoles && (
         <RoleCapNotice
           id={MEMBERS_ROLE_CAP_ID}

@@ -37,6 +37,7 @@ import { UserAvatar } from "@/components/ui/user-avatar";
 import { useWorkspace, IDENTITY_QUERY_OPTIONS } from "@/contexts/WorkspaceContext";
 import { cn } from "@/lib/utils";
 
+
 const schema = z.object({
   title: z.string().max(300, "Subject must be at most 300 characters").optional(),
   participantIds: z.array(z.string()).min(1, "Select at least one participant").max(19, "Max 19 other participants"),
@@ -59,6 +60,8 @@ export function ComposeDialog({ open, onOpenChange, onCreated }: Props) {
   const { result } = useWorkspaceList<Member>({
     resource: "members",
     pagination: { pageSize: 100 },
+    // No in-body surface for the picker — it keeps refine's error toast.
+    errorNotification: (error) => ({ type: "error", message: errorMessage(error) }),
     queryOptions: { enabled: open && !!workspace?.id },
   });
   const members = result?.data ?? [];

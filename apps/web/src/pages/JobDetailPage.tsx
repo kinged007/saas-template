@@ -35,9 +35,11 @@ import {
 import {
   EmptyRow,
   JobRunStatusBadge,
+  ReadError,
   formatDate,
   formatDuration,
 } from "../components/ui";
+import { errorMessage } from "../utils/errorMessage";
 import type { Identity, JobParamSpec, JobRun, ScheduledJob } from "../types";
 
 const MASK = "••••••••";
@@ -332,7 +334,13 @@ export function JobDetailPage() {
     return <p className="text-muted-foreground p-4 text-sm">Loading…</p>;
   }
   if (!job) {
-    return <p className="text-muted-foreground p-4 text-sm">Job not found.</p>;
+    // refine raises no toast for a failed read — the body's copy is the
+    // report, so it has to carry the reason, not just "nothing here".
+    return (
+      <p role="alert" className="text-muted-foreground p-4 text-sm">
+        {jobQuery.error ? errorMessage(jobQuery.error) : "Job not found."}
+      </p>
+    );
   }
 
   return (
@@ -471,6 +479,7 @@ export function JobDetailPage() {
           Refresh
         </Button>
       </div>
+      <ReadError error={runsQuery.error} className="p-0" />
       <div className="border-border overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>

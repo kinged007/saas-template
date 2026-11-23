@@ -41,6 +41,7 @@ export async function mockApi(
     signedIn,
     identity = IDENTITY,
     lists = {},
+    failures = {},
     revokeOn = [],
   }: {
     signedIn: boolean;
@@ -54,6 +55,8 @@ export async function mockApi(
      * key sets the object's prototype, not a key.
      */
     lists?: Record<string, unknown>;
+    /** Path (without `/api/v1/`, query string dropped) → the status and detail it answers with. */
+    failures?: Record<string, { status: number; detail: string }>;
     /** Path suffixes answered 401 `{detail: "session revoked"}` once, then normal — mid-session sign-out. */
     revokeOn?: string[];
   },
@@ -99,6 +102,10 @@ export async function mockApi(
       }
     }
     const resource = pathname.slice("/api/v1/".length);
+    if (Object.prototype.hasOwnProperty.call(failures, resource)) {
+      const { status, detail } = failures[resource];
+      return reply(status, { detail });
+    }
     // simple-rest pages every list with `_start`/`_end`; honor the window so a
     // seed longer than one page reproduces the backend's capped pages, and
     // report the fixture length as the total. A `0` total falls back to

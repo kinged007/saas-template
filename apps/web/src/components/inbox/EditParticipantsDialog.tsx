@@ -54,6 +54,8 @@ export function EditParticipantsDialog({
   const { result } = useWorkspaceList<Member>({
     resource: "members",
     pagination: { pageSize: 100 },
+    // No in-body surface for the picker — it keeps refine's error toast.
+    errorNotification: (error) => ({ type: "error", message: errorMessage(error) }),
     queryOptions: { enabled: open && !!workspace?.id },
   });
   const members = result?.data ?? [];

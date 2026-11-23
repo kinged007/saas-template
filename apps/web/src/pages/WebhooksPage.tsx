@@ -20,7 +20,7 @@ import {
   ListView,
   ListViewHeader,
 } from "../components/refine-ui/views/list-view";
-import { EmptyRow, formatDate } from "../components/ui";
+import { EmptyRow, ReadError, formatDate } from "../components/ui";
 import type { WebhookDelivery, WebhookSubscription } from "../types";
 import { useWebhookDeliveries, useWebhookRedeliver } from "./webhooks-hooks";
 
@@ -165,6 +165,7 @@ export function WebhooksPage() {
       <ListViewHeader title="Webhooks">
         <CreateButton resource="webhooks">New webhook</CreateButton>
       </ListViewHeader>
+      <ReadError error={query.error} className="p-0" />
       <div className="border-border overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>

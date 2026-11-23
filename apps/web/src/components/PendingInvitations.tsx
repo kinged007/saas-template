@@ -5,7 +5,7 @@ import { Mail } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatDate } from "./ui";
+import { ReadError, formatDate } from "./ui";
 import { useWorkspace } from "../contexts/WorkspaceContext";
 import { errorMessage } from "@/utils/errorMessage";
 import type { Invitation } from "../types";
@@ -16,18 +16,28 @@ import type { Invitation } from "../types";
  * needs to see pending invites. `invitations/mine` takes an optional workspace
  * id, so it resolves with none. Both call sites share one cache entry.
  */
-export function usePendingInvitations() {
+export function usePendingInvitations({ toastOnError = false }: { toastOnError?: boolean } = {}) {
   const { result, query } = useCustom<Invitation[]>({
     url: "invitations/mine",
     method: "get",
+    // The badge has no in-body surface, so it keeps the error toast. The card
+    // reports in-body instead — a hook-level toast would say it twice there.
+    ...(toastOnError
+      ? {
+          errorNotification: (error) => ({
+            type: "error",
+            message: errorMessage(error),
+          }),
+        }
+      : {}),
   });
   const rows = Array.isArray(result?.data) ? result.data : [];
   const pending = rows.filter((inv) => inv.status === "pending" && !inv.expired);
-  return { pending, refetch: query.refetch };
+  return { pending, error: query.error, refetch: query.refetch };
 }
 
 export function PendingInvitationsBadge() {
-  const { pending } = usePendingInvitations();
+  const { pending } = usePendingInvitations({ toastOnError: true });
   if (pending.length === 0) return null;
   return (
     <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-xs font-medium text-destructive-foreground">
@@ -42,7 +52,7 @@ export function PendingInvitationsBadge() {
  */
 export function PendingInvitationsCard() {
   const { refresh: refreshIdentity } = useWorkspace();
-  const { pending, refetch } = usePendingInvitations();
+  const { pending, error, refetch } = usePendingInvitations();
   const { mutate: action } = useCustomMutation();
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -74,7 +84,7 @@ export function PendingInvitationsCard() {
     );
   };
 
-  if (pending.length === 0) return null;
+  if (pending.length === 0) return error ? <ReadError error={error} /> : null;
 
   return (
     <Card>

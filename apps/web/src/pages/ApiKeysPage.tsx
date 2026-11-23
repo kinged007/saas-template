@@ -3,6 +3,7 @@ import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 import { KeyRound } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -16,7 +17,7 @@ import {
   ListView,
   ListViewHeader,
 } from "../components/refine-ui/views/list-view";
-import { EmptyRow, formatDate } from "../components/ui";
+import { EmptyRow, ReadError, formatDate } from "../components/ui";
 import type { ApiKey } from "../types";
 
 /** Past its expiry the key already fails auth, before the job revokes it. */
@@ -25,7 +26,7 @@ function isExpired(key: ApiKey): boolean {
 }
 
 export function ApiKeysPage() {
-  const { result } = useWorkspaceList<ApiKey>({ resource: "api-keys" });
+  const { result, query } = useWorkspaceList<ApiKey>({ resource: "api-keys" });
   const { data: canManage } = useCan({ resource: "api-keys", action: "delete" });
 
   const rows = result?.data ?? [];
@@ -33,6 +34,7 @@ export function ApiKeysPage() {
   return (
     <ListView>
       <ListViewHeader title="API Keys" />
+      <ReadError error={query.error} className="p-0" />
       <div className="border-border overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>
@@ -114,8 +116,19 @@ export function ApiKeysPage() {
                 </TableCell>
               </TableRow>
             ))}
-            {rows.length === 0 && (
+            {rows.length === 0 && !query.isError ? (
               <EmptyRow colSpan={7}>No API keys yet.</EmptyRow>
+            ) : null}
+            {query.isError && (
+              <EmptyRow colSpan={7}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => query.refetch()}
+                >
+                  Try again
+                </Button>
+              </EmptyRow>
             )}
           </TableBody>
         </Table>

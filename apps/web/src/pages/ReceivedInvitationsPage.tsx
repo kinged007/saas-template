@@ -12,7 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ListView, ListViewHeader } from "../components/refine-ui/views/list-view";
-import { EmptyRow, StatusBadge, formatDate } from "../components/ui";
+import { EmptyRow, ReadError, StatusBadge, formatDate } from "../components/ui";
 import { invitationStatus, isActionableInvitation } from "./invitation-actions";
 import { useWorkspace } from "../contexts/WorkspaceContext";
 import { errorMessage } from "@/utils/errorMessage";
@@ -93,6 +93,7 @@ export function ReceivedInvitationsPage() {
   return (
     <ListView>
       <ListViewHeader title="Invitations" canCreate={false} />
+      <ReadError error={query.error} className="p-0" />
       <div className="border-border overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>

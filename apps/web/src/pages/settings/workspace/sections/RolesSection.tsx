@@ -17,6 +17,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ReadError } from "@/components/ui";
 import {
   Table,
   TableBody,
@@ -161,11 +162,11 @@ function PermissionPicker({
 }
 
 export function RolesSection() {
-  const { result } = useWorkspaceList<Role>({
+  const { result, query } = useWorkspaceList<Role>({
     resource: "roles",
     pagination: { currentPage: 1, pageSize: ROLES_PAGE_SIZE },
   });
-  const { result: catalogResult } = useWorkspaceCustom<CatalogResponse>({
+  const { result: catalogResult, query: catalogQuery } = useWorkspaceCustom<CatalogResponse>({
     url: "roles/permission-catalog",
     method: "get",
   });
@@ -301,6 +302,7 @@ export function RolesSection() {
 
   return (
     <div className="flex flex-col gap-4">
+      <ReadError error={query.error ?? catalogQuery.error} className="p-0" />
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <div>

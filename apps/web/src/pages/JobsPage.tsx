@@ -16,7 +16,7 @@ import {
   ListView,
   ListViewHeader,
 } from "../components/refine-ui/views/list-view";
-import { EmptyRow, formatDate } from "../components/ui";
+import { EmptyRow, ReadError, formatDate } from "../components/ui";
 import type { Identity, ScheduledJob } from "../types";
 
 function JobTable({
@@ -130,12 +130,12 @@ export function JobsPage() {
   const { data: canEdit } = useCan({ resource: "jobs", action: "edit" });
   const canEditWorkspaceJobs = canEdit?.can ?? false;
 
-  const { result: workspaceJobs } = useWorkspaceList<ScheduledJob>({
+  const { result: workspaceJobs, query: jobsQuery } = useWorkspaceList<ScheduledJob>({
     resource: "jobs",
   });
   // Global jobs exist outside any workspace role; superusers only.
   // refine v5 useCustom surfaces EMPTY_OBJECT while pending — guard with Array.isArray to avoid {}.map crash.
-  const { result: globalResult } = useCustom<ScheduledJob[]>({
+  const { result: globalResult, query: globalQuery } = useCustom<ScheduledJob[]>({
     url: "jobs/global",
     method: "get",
     queryOptions: { enabled: isSuperuser },
@@ -146,6 +146,7 @@ export function JobsPage() {
   return (
     <ListView>
       <ListViewHeader title="Scheduled Jobs" resource="jobs" canCreate={false} />
+      <ReadError error={jobsQuery.error ?? globalQuery.error} className="p-0" />
       <p className="text-muted-foreground -mt-2 max-w-3xl text-sm">
         Recurring jobs configured for this workspace. Open a job to edit its
         schedule and parameters, or inspect execution history. Cron schedules
