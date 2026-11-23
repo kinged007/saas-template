@@ -33,26 +33,26 @@ export function ListPager({
   return (
     <div className="flex items-center justify-between gap-2">
       <p className="text-muted-foreground text-sm">
-        Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total}
+        Showing {(clamped - 1) * pageSize + 1}–{Math.min(clamped * pageSize, total)} of {total}
       </p>
       <div className="flex items-center gap-1">
         <Button
           variant="outline"
           size="sm"
-          disabled={page <= 1}
-          onClick={() => onPageChange(Math.max(1, page - 1))}
+          disabled={clamped <= 1}
+          onClick={() => onPageChange(Math.max(1, clamped - 1))}
         >
           <ChevronLeft className="h-4 w-4" />
           Previous
         </Button>
         <span className="text-muted-foreground px-2 text-sm">
-          Page {page} of {pages}
+          Page {clamped} of {pages}
         </span>
         <Button
           variant="outline"
           size="sm"
-          disabled={page >= pages}
-          onClick={() => onPageChange(Math.min(pages, page + 1))}
+          disabled={clamped >= pages}
+          onClick={() => onPageChange(Math.min(pages, clamped + 1))}
         >
           Next
           <ChevronRight className="h-4 w-4" />
