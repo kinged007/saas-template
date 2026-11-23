@@ -94,7 +94,7 @@ def select_candidate(prs):
     """Oldest P0 PR with agent:merge, else oldest agent:merge (FIFO)."""
     if not prs:
         return None
-    key = lambda p: (p.get("merge_labeled_at") or "", p["number"])  # noqa: E731
+    key = lambda p: (p.get("merge_labeled_at") or "\U0010FFFF", p["number"])  # noqa: E731
     p0 = [p for p in prs if p.get("is_p0")]
     pool = p0 if p0 else list(prs)
     return sorted(pool, key=key)[0]
