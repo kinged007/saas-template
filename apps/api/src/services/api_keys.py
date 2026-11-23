@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import operator
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import Select, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +23,7 @@ from src.models.api_key import (
 )
 from src.models.workspace import User
 from src.services.workspaces import WorkspaceService
+from src.settings import settings
 
 
 class ApiKeyError(Exception):
@@ -35,6 +36,11 @@ class ApiKeyForbidden(ApiKeyError):
 
 class ApiKeyNotFound(ApiKeyError):
     pass
+
+
+# Sentinel default for update_api_key: an omitted field (leave alone) must
+# differ from an explicit null (clear quota/expiry).
+_UNSET: object = object()
 
 
 def _quota(usage_quota: int | None) -> int | None:
@@ -141,6 +147,10 @@ class ApiKeyService:
         usage_quota = _quota(usage_quota)
         if expires_at is not None and ensure_utc(expires_at) <= now_utc():
             raise ApiKeyError("expiry must be in the future")
+        # Server-side default expiry (api_key_expire_days): an explicit
+        # expires_at always wins; 0 disables the default.
+        if expires_at is None and settings.api_key_expire_days > 0:
+            expires_at = now_utc() + timedelta(days=settings.api_key_expire_days)
 
         raw = self.generate()
         key = ApiKey(
@@ -273,6 +283,99 @@ class ApiKeyService:
         )
         return key
 
+    async def rotate_api_key(
+        self,
+        workspace_id: str,
+        api_key_id: str,
+        *,
+        actor: User | None = None,
+        ip_address: str | None = None,
+    ) -> tuple[ApiKey, str, datetime]:
+        """Issue a new secret for a key and let the old one lapse.
+
+        The replacement is a new row with the old key's name, permissions,
+        quota grant and owner, and a fresh default expiry, so the trail of
+        each secret stays its own; usage counters start over. The old row
+        keeps working for `api_key_rotation_grace_hours` (its expiry is
+        pulled forward to then, never pushed back) so the caller can swap
+        the secret out of their deployments without an outage; a grace of 0
+        revokes it at once. Returns (new_key, raw_secret, grace_expires_at);
+        the raw secret is only ever returned once.
+
+        Personal scope, like revoke: only the key's owner may rotate it (404,
+        not 403, so another user's key id is not leaked). Rotating a revoked
+        or expired key is a 409: the key is dead, revoke semantics apply.
+        """
+        key = await self._session.get(ApiKey, api_key_id)
+        if key is None or key.workspace_id != workspace_id:
+            raise ApiKeyNotFound("api key not found")
+        if actor is not None and key.created_by_user_id != actor.id:
+            raise ApiKeyNotFound("api key not found")
+        now = now_utc()
+        if key.revoked_at is not None:
+            raise ApiKeyError("a revoked key cannot be rotated")
+        if key.expires_at is not None and ensure_utc(key.expires_at) <= now:
+            raise ApiKeyError("an expired key cannot be rotated")
+        raw = self.generate()
+        new = ApiKey(
+            workspace_id=workspace_id,
+            name=key.name,
+            key_prefix=self._prefix(raw),
+            key_hash=self._hash(raw),
+            permissions=list(key.permissions),
+            created_by_user_id=key.created_by_user_id,
+            usage_quota=key.usage_quota,
+            expires_at=(
+                now + timedelta(days=settings.api_key_expire_days)
+                if settings.api_key_expire_days > 0
+                else None
+            ),
+        )
+        self._session.add(new)
+        grace_hours = settings.api_key_rotation_grace_hours
+        if grace_hours == 0:
+            key.revoked_at = now
+            key.expires_at = now
+            grace_expires_at = now
+        else:
+            grace_expires_at = now + timedelta(hours=grace_hours)
+            if key.expires_at is not None:
+                grace_expires_at = min(grace_expires_at, ensure_utc(key.expires_at))
+            key.expires_at = grace_expires_at
+        await self._session.commit()
+        await publish_event(
+            self._bus,
+            Subjects.APIKEY_CREATED,
+            {
+                "apikey_id": new.id,
+                "workspace_id": workspace_id,
+                "name": new.name,
+                "key_prefix": new.key_prefix,
+                "permissions": new.permissions,
+                "created_by_user_id": new.created_by_user_id,
+                "created_by_name": actor.display_name if actor else None,
+                "expires_at": iso_or_none(new.expires_at),
+                "rotated_from": key.id,
+            },
+        )
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="apikey",
+            resource_id=new.id,
+            action="apikey.rotated",
+            actor_user_id=actor.id if actor else None,
+            details={
+                "name": new.name,
+                "key_prefix": new.key_prefix,
+                "rotated_from": key.id,
+                "previous_key_prefix": key.key_prefix,
+                "grace_expires_at": iso_or_none(grace_expires_at),
+            },
+            ip_address=ip_address,
+        )
+        return new, raw, grace_expires_at
+
     async def authenticate(self, raw: str) -> ApiKey | None:
         """Resolve a raw bearer secret to an active key, or None.
 
@@ -378,13 +481,67 @@ class ApiKeyService:
 
         Personal scope, like revoke: only the key's owner may change its
         quota (404, not 403, so another user's key id is not leaked)."""
+        return await self.update_api_key(
+            workspace_id,
+            api_key_id,
+            usage_quota=usage_quota,
+            actor=actor,
+            ip_address=ip_address,
+        )
+
+    async def update_api_key(
+        self,
+        workspace_id: str,
+        api_key_id: str,
+        *,
+        name: str | None | object = _UNSET,
+        usage_quota: int | None | object = _UNSET,
+        expires_at: datetime | None | object = _UNSET,
+        actor: User | None = None,
+        ip_address: str | None = None,
+    ) -> ApiKey:
+        """Edit a key's name, quota and expiry. Only called-out fields change:
+        the route passes the sentinel default for omitted fields, while an
+        explicit null clears quota/expiry. A null name is rejected.
+
+        Personal scope, like revoke: only the key's owner may edit it (404,
+        not 403, so another user's key id is not leaked). Publishes only when
+        something actually changed."""
         key = await self._session.get(ApiKey, api_key_id)
         if key is None or key.workspace_id != workspace_id:
             raise ApiKeyNotFound("api key not found")
         if actor is not None and key.created_by_user_id != actor.id:
             raise ApiKeyNotFound("api key not found")
-        usage_quota = _quota(usage_quota)
-        key.usage_quota = usage_quota
+        changes: dict = {}
+        if name is not _UNSET:
+            if name is None:
+                raise ApiKeyError("name is required")
+            name = name.strip()
+            if not name:
+                raise ApiKeyError("name is required")
+            if name != key.name:
+                changes["name"] = {"from": key.name, "to": name}
+                key.name = name
+        if usage_quota is not _UNSET:
+            quota = _quota(usage_quota)  # type: ignore[arg-type]
+            if quota != key.usage_quota:
+                changes["usage_quota"] = {"from": key.usage_quota, "to": quota}
+                key.usage_quota = quota
+        if expires_at is not _UNSET:
+            if expires_at is not None and ensure_utc(expires_at) <= now_utc():
+                raise ApiKeyError("expiry must be in the future")
+            # Normalize to UTC on write: SQLite's DateTime drops the offset and
+            # stores the wall clock, which would shift the instant auth compares.
+            new_expiry = ensure_utc(expires_at) if expires_at is not None else None
+            old_expiry = ensure_utc(key.expires_at) if key.expires_at is not None else None
+            if new_expiry != old_expiry:
+                changes["expires_at"] = {
+                    "from": iso_or_none(key.expires_at),
+                    "to": iso_or_none(new_expiry),
+                }
+                key.expires_at = new_expiry
+        if not changes:
+            return key
         await self._session.commit()
         await publish_event(
             self._bus,
@@ -394,7 +551,8 @@ class ApiKeyService:
                 "workspace_id": workspace_id,
                 "name": key.name,
                 "key_prefix": key.key_prefix,
-                "usage_quota": usage_quota,
+                "usage_quota": key.usage_quota,
+                "expires_at": iso_or_none(key.expires_at),
                 "updated_by_user_id": actor.id if actor else None,
             },
         )
@@ -408,7 +566,7 @@ class ApiKeyService:
             details={
                 "name": key.name,
                 "key_prefix": key.key_prefix,
-                "usage_quota": usage_quota,
+                **changes,
             },
             ip_address=ip_address,
         )

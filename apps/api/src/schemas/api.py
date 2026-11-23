@@ -222,7 +222,9 @@ class ApiKeyCreate(BaseModel):
     permissions: list[str] = Field(default_factory=list)
     usage_quota: QuotaAtLeastOne = Field(default=None, ge=1, le=MAX_QUOTA)
     # Optional hard expiry. Naive input is rejected: without an offset the
-    # instant is ambiguous, and the service compares against UTC.
+    # instant is ambiguous, and the service compares against UTC. An explicit
+    # null is the same as omitting: the API_KEY_EXPIRE_DAYS default still
+    # applies — clear it after create via PATCH for a never-expiring key.
     expires_at: datetime | None = Field(default=None, examples=["2027-01-01T00:00:00Z"])
 
     @field_validator("expires_at")
@@ -233,8 +235,24 @@ class ApiKeyCreate(BaseModel):
         return value
 
 
-class ApiKeyQuotaUpdate(BaseModel):
+class ApiKeyUpdate(BaseModel):
+    """Partial key edit. The route applies only explicitly sent fields
+    (`model_fields_set`): a sent null quota or expiry clears it, a sent name
+    must be non-blank, and a sent expiry must be a future aware datetime.
+    Permissions are fixed at mint and never editable — mint a new key."""
+
+    name: StrippedName | None = Field(default=None, max_length=150)
     usage_quota: QuotaAtLeastOne = Field(default=None, ge=1, le=MAX_QUOTA)
+    # Optional hard expiry. Naive input is rejected: without an offset the
+    # instant is ambiguous, and the service compares against UTC.
+    expires_at: datetime | None = Field(default=None, examples=["2027-01-01T00:00:00Z"])
+
+    @field_validator("expires_at")
+    @classmethod
+    def _expires_at_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("expires_at must include a timezone offset (e.g. 2027-01-01T00:00Z)")
+        return value
 
 
 class NotificationAck(BaseModel):

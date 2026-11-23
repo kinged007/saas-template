@@ -14,6 +14,9 @@ os.environ["EVENT_BUS_DRIVER"] = "inprocess"
 os.environ["ENVIRONMENT"] = "test"
 os.environ["CORS_ORIGINS"] = "http://localhost:5173"
 os.environ["SUPERADMIN_EMAIL"] = "root@example.com"
+# A dev checkout's .env may enable MFA_REQUIRED; the suite must not inherit
+# it — MFA tests opt in per-test via monkeypatch instead.
+os.environ["MFA_REQUIRED"] = "false"
 
 from pathlib import Path  # noqa: E402
 

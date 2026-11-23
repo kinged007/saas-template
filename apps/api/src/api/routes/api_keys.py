@@ -23,7 +23,7 @@ from src.core.permissions import (
 )
 from src.db.session import get_db
 from src.models.api_key import ApiKey
-from src.schemas.api import ApiKeyCreate, ApiKeyQuotaUpdate
+from src.schemas.api import ApiKeyCreate, ApiKeyUpdate
 from src.services.api_keys import ApiKeyError, ApiKeyForbidden, ApiKeyNotFound, ApiKeyService
 from src.services.workspaces import WorkspaceService
 
@@ -141,11 +141,49 @@ async def create_api_key(
     return {**_key_dict(key), "key": raw}
 
 
-# APIKEY_DELETE is the key-lifecycle guard: it covers quota changes and revoke.
+# APIKEY_DELETE is the key-lifecycle guard: it covers edits, quota changes,
+# rotation, and revoke.
 @router.patch("/{api_key_id}")
-async def set_api_key_quota(
+async def update_api_key(
     api_key_id: str,
-    body: ApiKeyQuotaUpdate,
+    body: ApiKeyUpdate,
+    request: Request,
+    workspace_id: str = Depends(get_current_workspace_id),
+    user=Depends(get_current_user),
+    _=Depends(require_permission(APIKEY_DELETE)),
+    db: AsyncSession = Depends(get_db),
+    container=Depends(get_container),
+):
+    # Personal scope is owned by the service (404, not 403, so another
+    # user's key id is not leaked) — same as the revoke route below.
+    # Only explicitly sent fields change: a sent null clears quota/expiry.
+    provided = body.model_fields_set
+    if not provided:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "nothing to update")
+    try:
+        key = await ApiKeyService(db, container.bus).update_api_key(
+            workspace_id,
+            api_key_id,
+            **{
+                field: getattr(body, field)
+                for field in ("name", "usage_quota", "expires_at")
+                if field in provided
+            },
+            actor=user,
+            ip_address=request.client.host if request.client else None,
+        )
+    except ApiKeyNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    except ApiKeyError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    return _key_dict(key)
+
+
+# APIKEY_DELETE is the key-lifecycle guard: it covers quota changes, rotation,
+# and revoke.
+@router.post("/{api_key_id}/rotate", status_code=201)
+async def rotate_api_key(
+    api_key_id: str,
     request: Request,
     workspace_id: str = Depends(get_current_workspace_id),
     user=Depends(get_current_user),
@@ -156,18 +194,22 @@ async def set_api_key_quota(
     # Personal scope is owned by the service (404, not 403, so another
     # user's key id is not leaked) — same as the revoke route below.
     try:
-        key = await ApiKeyService(db, container.bus).set_quota(
+        new, raw, grace_expires_at = await ApiKeyService(db, container.bus).rotate_api_key(
             workspace_id,
             api_key_id,
-            body.usage_quota,
             actor=user,
             ip_address=request.client.host if request.client else None,
         )
     except ApiKeyNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     except ApiKeyError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
-    return _key_dict(key)
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    return {
+        **_key_dict(new),
+        "key": raw,
+        "rotated_from": api_key_id,
+        "grace_expires_at": iso_or_none(grace_expires_at),
+    }
 
 
 @router.delete("/{api_key_id}", status_code=204)

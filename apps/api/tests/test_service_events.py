@@ -17,6 +17,7 @@ from src.events.subjects import Subjects
 from src.services.api_keys import ApiKeyService
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
+from src.settings import settings
 from tests.bus_doubles import RecordingBus
 from tests.conftest import expire_invitation
 
@@ -416,9 +417,11 @@ async def test_api_key_create_and_revoke_emit_events_and_audit(bus, owner):
     assert audit["ip_address"] == "10.0.0.1"
 
 
-async def test_api_key_created_event_expiry_is_offset_aware(bus, owner):
+async def test_api_key_created_event_expiry_is_offset_aware(bus, owner, monkeypatch):
     """`apikey.created` publishes the exact expiry string, or None for a key
     without one."""
+    # Isolate from the server-side default: the forever key must stay expiry-less.
+    monkeypatch.setattr(settings, "api_key_expire_days", 0)
     workspace = await _create_workspace(bus, owner.id, slug="acme8")
     async with SessionFactory() as session:
         await ApiKeyService(session, bus).create_api_key(

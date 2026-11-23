@@ -167,6 +167,13 @@ class Settings(BaseSettings):
     # Days a revoked or expired API key is kept before the apikeys.cleanup job
     # hard-deletes it. 0 disables deletion.
     api_key_retention_days: int = Field(default=30, ge=0)
+    # Default hard expiry for a key created without an explicit expires_at, in
+    # days. 0 means keys never expire unless the caller sets expires_at.
+    api_key_expire_days: int = Field(default=365, ge=0)
+    # Grace after rotation during which the old secret keeps working, in
+    # hours (0 revokes it at once, max 30 days). The old expiry is only ever
+    # pulled forward, never pushed back.
+    api_key_rotation_grace_hours: int = Field(default=24, ge=0, le=24 * 30)
 
     @property
     def database_url_sqlite(self) -> bool:
