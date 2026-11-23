@@ -162,10 +162,20 @@ def get_mail_limiter() -> SlidingWindowLimiter:
     from src.settings import settings
 
     global mail_limiter
-    wanted = (settings.auth_ip_mail_max_attempts, settings.auth_ip_mail_window_seconds)
-    current = (mail_limiter.max_attempts, mail_limiter.window_seconds)
+    wanted = (
+        settings.auth_ip_mail_max_attempts,
+        settings.auth_ip_mail_window_seconds,
+        settings.auth_rate_limit_lockout_seconds,
+    )
+    current = (
+        mail_limiter.max_attempts,
+        mail_limiter.window_seconds,
+        mail_limiter.lockout_seconds,
+    )
     if wanted != current:
-        mail_limiter = SlidingWindowLimiter(max_attempts=wanted[0], window_seconds=wanted[1])
+        mail_limiter = SlidingWindowLimiter(
+            max_attempts=wanted[0], window_seconds=wanted[1], lockout_seconds=wanted[2]
+        )
     return mail_limiter
 
 
