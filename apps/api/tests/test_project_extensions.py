@@ -57,6 +57,12 @@ async def test_demo_widgets_served_and_authorized(app_client):
     # Authorized: viewer (no demo permission) is denied, owner (star) passes.
     resp = await client.get("/api/v1/demo/widgets", headers=ws_headers(viewer, ws["id"]))
     assert resp.status_code == 403, resp.text
+    resp = await client.post(
+        "/api/v1/demo/widgets",
+        json={"name": "denied"},
+        headers=ws_headers(viewer, ws["id"]),
+    )
+    assert resp.status_code == 403, resp.text
 
     # Model: created rows persist and list back workspace-scoped.
     resp = await client.post("/api/v1/demo/widgets", json={"name": "first"}, headers=headers)
@@ -162,6 +168,14 @@ async def test_demo_rows_deleted_with_workspace(app_client):
     owner = await register_user(client, "demo-cascade-owner@example.com")
     ws = await create_workspace(client, owner)
     headers = ws_headers(owner, ws["id"])
+    other_owner = await register_user(client, "demo-cascade-other@example.com")
+    other_ws = await create_workspace(client, other_owner, name="Other Corp")
+    resp = await client.post(
+        "/api/v1/demo/widgets",
+        json={"name": "survivor"},
+        headers=ws_headers(other_owner, other_ws["id"]),
+    )
+    assert resp.status_code == 201, resp.text
     resp = await client.post("/api/v1/demo/widgets", json={"name": "doomed"}, headers=headers)
     assert resp.status_code == 201, resp.text
 
@@ -176,4 +190,12 @@ async def test_demo_rows_deleted_with_workspace(app_client):
                 .where(DemoWidget.workspace_id == ws["id"])
             )
         ).scalar_one()
+        surviving = (
+            await session.execute(
+                select(func.count())
+                .select_from(DemoWidget)
+                .where(DemoWidget.workspace_id == other_ws["id"])
+            )
+        ).scalar_one()
     assert remaining == 0
+    assert surviving == 1
