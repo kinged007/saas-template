@@ -342,6 +342,17 @@ class MergeQueue:
             time.sleep(interval_s)
         return "timed_out"
 
+    def wait_for_rerun_start(self, run_id, timeout_s=120, interval_s=5):
+        """Wait until the rerun leaves `completed` (API lag guard)."""
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            out = self._read(["gh", "run", "view", str(run_id), "--repo", self.repo,
+                              "--json", "status", "-q", ".status"])
+            if out.strip() != "completed":
+                return True
+            time.sleep(interval_s)
+        return False
+
     def revert_newest(self, subject, sha, run_url):
         self._mutate(["git", "revert", "--no-commit", sha])
         self._mutate(["git", "commit", "-m", build_revert_subject(subject),
@@ -364,6 +375,7 @@ class MergeQueue:
         if self.dry_run:
             print("  [dry-run] gate 1 (red-dev path): would poll, then revert on red")
             return "dry-run"
+        self.wait_for_rerun_start(run["databaseId"])
         conclusion = self.wait_for_run(run["databaseId"])
         if conclusion == "success":
             print("retry green — no revert, resuming")
