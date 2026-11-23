@@ -108,6 +108,21 @@ def get_auth_limiter() -> SlidingWindowLimiter:
     return auth_limiter
 
 
+mail_limiter = SlidingWindowLimiter()
+
+
+def get_mail_limiter() -> SlidingWindowLimiter:
+    """IP-wide mail-volume backstop (#1346), same settings-diff rebuild."""
+    from src.settings import settings
+
+    global mail_limiter
+    wanted = (settings.auth_ip_mail_max_attempts, settings.auth_ip_mail_window_seconds)
+    current = (mail_limiter.max_attempts, mail_limiter.window_seconds)
+    if wanted != current:
+        mail_limiter = SlidingWindowLimiter(max_attempts=wanted[0], window_seconds=wanted[1])
+    return mail_limiter
+
+
 register_limiter = SlidingWindowLimiter()
 
 
