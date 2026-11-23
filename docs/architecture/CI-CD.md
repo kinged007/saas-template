@@ -2,7 +2,8 @@
 
 > **Status:** Proposed. Becomes binding when merged by the maintainer, together with
 > [DECISIONS.md D-07](../product/DECISIONS.md).
-> **Revision:** 2026-11-20 · measured against `main` @ `372755d3`
+> **Revision:** 2026-11-23 · `dev` is the default branch until the first release (§2 rule 2) ·
+> first written 2026-11-20 against `main` @ `372755d3`
 > **Read with:** [VISION.md](../product/VISION.md) §4 (the update guarantees this serves) ·
 > [ADMISSION.md](../product/ADMISSION.md) (the per-change gate) ·
 > [COMPLIANCE-CHECKLIST.md](COMPLIANCE-CHECKLIST.md) (how to check an implementation of this
@@ -36,7 +37,7 @@ Constraints measured on 2026-11-20:
 - `e2e.yml` runs only on pushes to `main` and on manual dispatch. No change is e2e-tested before
   it reaches `main`.
 - `.agents/review_pr.md` §7 merges approved PRs with `gh pr merge --merge`, and
-  `.agents/work-on-issues.md` §8 opens PRs against the default branch (`main`).
+  `.agents/work-on-issues.md` §8 opens PRs against the default branch (`main` when this was measured; `dev` since 2026-11-23).
 
 ---
 
@@ -61,8 +62,18 @@ Rules:
 
 1. **One writer per branch.** No agent pushes to `dev`, `staging` or `main`. No person pushes to
    `dev` or `staging`.
-2. **`main` stays the default branch.** "Use this template" and the seed path (VISION §4.4) copy
-   the default branch, so it must hold only promoted work. Agents set `--base dev` explicitly.
+2. **`dev` is the default branch until the first release; `main` is the default from then on.**
+   While `dev` is the default, new work branches from it, `gh pr create` targets it, `Closes #N`
+   closes issues when a PR merges into it, and `schedule` / `workflow_run` triggers fire from it.
+   The cost: "Use this template", a plain `git clone` and the seed path (VISION §4.4) copy the
+   default branch, so they hand out unpromoted work. Before the first release there are no
+   adopters, so that cost is zero. Switching the default to `main` is a precondition of the first
+   release tag. The pipeline does not depend on which branch is the default, so the switch needs
+   no code change:
+   - agents set `--base dev` explicitly (§4.2);
+   - the merge queue closes linked issues itself (§4.3);
+   - workflows land on `dev` like every other change and reach `main` by promotion, so the
+     scheduled workflows exist on both branches and fire from whichever one is the default.
 3. **No fix is committed to `staging` or `main`.** A fix lands on `dev` as a normal PR and is
    promoted. A commit made only on `staging` makes it diverge from `dev`, and the next promotion
    conflicts.
@@ -135,7 +146,7 @@ comment. Added rules:
 
 ### 4.3 Merge into `dev` — `merge-queue.yml`
 
-A workflow, not an agent, **living on `main`** so `schedule` and `workflow_run` fire (those triggers only evaluate on the default branch). Triggered on `labeled` (`agent:merge`), on completion of `ci` for
+A workflow, not an agent. It lands on `dev` and reaches `main` by promotion; `schedule` and `workflow_run` fire from the default branch (§2 rule 2). Triggered on `labeled` (`agent:merge`), on completion of `ci` for
 `dev` (`workflow_run`), and every 30 minutes as a fallback. `concurrency: merge-queue`
 serializes it, so at most one merge is in flight.
 
@@ -163,8 +174,9 @@ On any failure it swaps `agent:merge` for the label in the table, posts one comm
 the failed check, and moves to the next PR.
 
 After the merge it closes the PR's linked issues itself (`gh issue close` with a comment
-naming the squash SHA). GitHub closes issues from `Closes #N` only when a PR merges into the
-default branch, and `dev` is not the default branch.
+naming the squash SHA), skipping any issue that is already closed. GitHub closes issues from
+`Closes #N` only when a PR merges into the default branch. That covers `dev` until the first
+release and stops covering it when the default moves to `main` (§2 rule 2).
 
 **No rebase before merge.** GitHub's squash merge applies the PR onto the current `dev` tip;
 check 3 stops textual conflicts. Semantic conflicts (both sides merge cleanly, the result is
@@ -191,7 +203,7 @@ The PR is not reopened; its branch is deleted on merge. The fix is a new PR for 
 ### 4.5 Promotion — `promote.yml`
 
 Triggered on a cron (default **daily, 04:00 UTC = 06:00 SAST**) and on `workflow_dispatch`
-(the expedite path, §6) — **lives on `main`** so the cron fires (GitHub only evaluates `schedule` on the default branch).
+(the expedite path, §6). The cron fires from the default branch (§2 rule 2).
 
 1. **Freeze.** Record the current `dev` head SHA. If `staging` already contains it, exit.
    Merges that land after this point go into the next promotion.
@@ -338,19 +350,22 @@ Built in this order. Each row is one PR against the branch named.
 
 | # | Piece | Content | Depends on | Base |
 |---|---|---|---|---|
-| 1 | Branches + secret | create `dev` and `staging` at `main`; add `FLEET_TOKEN`; `delete_branch_on_merge=true`; `allow_rebase_merge=false` | — | settings, no PR |
-| 2 | Fleet briefs | `work-on-issues.md` §8: `--base dev`. `review_pr.md` §7: approval sets `agent:merge` and records the approved SHA; no merge. PR template: `Area:` / `Release-note:` lines | 1 | `main` |
-| 3 | CI triggers | `ci.yml`: `push` on `dev`, `staging`, `main`; `pull_request` on `dev` and `main`; `workflow_call` with `sha` input. `e2e.yml`: `workflow_call` with `sha` input; `pull_request` with base `main` | 1 | `main` |
+| 1 | Branches + secret | create `dev` and `staging` at `main`; make `dev` the default branch; add `FLEET_TOKEN`; `allow_rebase_merge=false`; `delete_branch_on_merge` stays `false` until `staging` is excluded (§8 step 3) | — | settings, no PR |
+| 2 | Fleet briefs | `work-on-issues.md` §8: `--base dev`. `review_pr.md` §7: merge with `--squash` instead of `--merge`. PR template: `Area:` / `Release-note:` lines | 1 | `dev` |
+| 3 | CI triggers | `ci.yml`: `push` on `dev`, `staging`, `main`; `pull_request` on `dev` and `main`; `workflow_call` with `sha` input. `e2e.yml`: `workflow_call` with `sha` input; `pull_request` with base `main` | 1 | `dev` |
 | 4 | `make release-notes BASE= HEAD=` | `scripts/release-notes.sh`: read `Area:` / `Release-note:` from `git log --no-merges BASE..HEAD`, drop pairs where one commit's `This reverts commit <sha>.` line names the other; a revert whose target is outside the range is listed under `Reverted`; group by area, print markdown | 2 | `dev` |
-| 5 | `merge-queue.yml` | §4.3 checks, squash with explicit message, auto-revert §4.4 — **lives on `main`** (GitHub evaluates `schedule` and `workflow_run` only on the default branch; a copy on `dev` never fires its 30-minute fallback or its `workflow_run` retry) | 2, 3 | `main` |
-| 6 | `promote.yml` | §4.5; cron + `workflow_dispatch` — **lives on `main`** (same trigger reason; the cron promotion and `workflow_dispatch` expedite both fire from the default branch) | 3, 4 | `main` |
+| 5 | `merge-queue.yml` | §4.3 checks, squash with explicit message, auto-revert §4.4. The same PR changes `review_pr.md` §7: approval sets `agent:merge` and records the approved SHA; no merge | 2, 3 | `dev` |
+| 6 | `promote.yml` | §4.5; cron + `workflow_dispatch` | 3, 4 | `dev` |
 | 7 | `branch-guard.yml` | §7 rules | 1 | `dev` |
 | 8 | `make release-candidate SHA=` | worktree at SHA, `make setup`, `make db-check`, seed, run the app, print the latest promotion checklist; documented in `docs/OPERATIONS.md` | 4 | `dev` |
-| 9 | Retarget open PRs | `gh pr edit <n> --base dev` for every open PR not in `backlog` | 1, 2 | — |
+| 9 | Retarget open PRs | `gh pr edit <n> --base dev` for every open PR not in `backlog` | 1 | — |
 | 10 | Autopilot prompts | explicit assignee (§7); loop brief: WIP limit, staleness, audit, reverts, no merging | 2 | Multica, not this repo |
 
-Pieces 2 and 3 target `main`, because the fleet and CI read their configuration from the
-branch that runs them; until 2 and 3 land, `dev` does not exist as a working base. After 2 and 3 land, fast-forward `dev` (and `staging`) to that `main` head as an explicit step before piece 4, so `dev` carries the updated `ci.yml` (`push` on `dev`), the `--base dev` briefs and the template lines — otherwise `dev` never receives them and check 1 can never see a `ci` run for the current `dev` head. From piece 4 onward, everything goes through the pipeline it builds.
+Every piece targets `dev`, the default branch, and reaches `main` by promotion. Piece 9 runs
+as soon as `dev` is the default: until it does, the review agent still merges approved PRs
+into `main`. Until piece 5 lands, the review agent's merge (`review_pr.md` §7) is the only
+writer into `dev`; piece 5 replaces it in one PR, so there is no window in which approved PRs
+have no merger. Until piece 3 lands, `ci` does not run on pushes to `dev`.
 
 Stage 2 (§8) is separate and has no code beyond ruleset settings.
 
@@ -373,7 +388,7 @@ machine until it does not); a CI split into fast and full jobs (the ~8 minute ru
 | e2e flakes | `promote.yml` | no promotion that cycle | `Promotion blocked` issue; rerun with `workflow_dispatch` |
 | An agent pushes to `dev`, `staging` or `main` | `branch-guard.yml` | red run + `needs-human` issue | maintainer reverts the push with a new commit; never force-push |
 | `FLEET_TOKEN` expires | merge queue and promotion fail to push | queue stops; nothing is merged unverified | rotate the secret |
-| The merge queue workflow is broken | PRs stay at `agent:merge` | no merges | the loop reports queue age; fix the workflow on `main` |
+| The merge queue workflow is broken | PRs stay at `agent:merge` | no merges | the loop reports queue age; fix the workflow on the default branch |
 | A promotion PR is left unmerged | the PR's age | later promotions add to it | none needed; it is one PR whatever its size |
 
 ---
