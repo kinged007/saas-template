@@ -432,12 +432,23 @@ async def claims_from_id_token(
         if issuer and _norm_issuer(claims["iss"]) != issuer:
             raise jwt.InvalidIssuerError("Issuer does not match")
         return claims
-    except Exception as exc:
+
+    except (OAuthError, jwt.PyJWTError) as exc:
+        # Only these two are verification failures, so only these two mean "no
+        # claims". OAuthError is `_jwks` reporting the IdP side — unreachable, an
+        # HTTP error, a body that is not a usable key set, a non-JSON or non-UTF-8
+        # body, a response cut off mid-body — and the "no matching signing key"
+        # below. PyJWTError is `jwt.decode` refusing the token: expired, wrong
+        # audience or issuer, or signed by another key. Anything else is a defect
+        # in this module or in the provider config and has to reach the traceback
+        # instead of being reported as a rejected login.
+
         # The message can echo token-supplied header data (an unknown `crit`
         # extension echoes its name), so it is flattened like the body above.
         logger.warning(
-            "id_token verification failed for provider %s: %s",
+            "id_token verification failed for provider %s: %s: %s",
             provider.id,
+            type(exc).__name__,
             _single_line(exc),
             exc_info=logger.isEnabledFor(logging.DEBUG),
         )

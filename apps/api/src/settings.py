@@ -108,6 +108,16 @@ class Settings(BaseSettings):
     # Auth brute-force protection: failures allowed per (IP, account) per window.
     auth_rate_limit_max_attempts: int = 10
     auth_rate_limit_window_seconds: int = 300
+    # Coarse backstop on total mail one IP can trigger through the mail-sending
+    # auth routes (register, forgot-password, resend-verification) across all
+    # recipient addresses, on top of the per-(IP, account) budget above.
+    # #1346. Tradeoff: a shared egress (office/café NAT, CGNAT) where more
+    # than this many people need verification/reset mail in one window gets
+    # 429 + Retry-After; it self-heals as the window slides and nothing locks
+    # out permanently. Genuine bulk onboarding goes through workspace
+    # invitations, which are outside this cap.
+    auth_ip_mail_max_attempts: int = 20
+    auth_ip_mail_window_seconds: int = 300
     # Registration mail budget (#1343), keyed on the IP alone: distinct from
     # auth_rate_limit_* because the registrant owns every fresh address, and
     # tests that tighten the auth pair must not collapse this window.
