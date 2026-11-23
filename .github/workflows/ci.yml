@@ -42,6 +42,35 @@ jobs:
       - run: cd apps/api && uv sync --extra dev
       - run: make db-check
 
+  # Advisory in derived projects (a red report is review input, never a gate),
+  # skipped as a report in the template repo itself (where it runs the script's
+  # self-test instead). Derived projects reach this job through the template
+  # remote + tags set up below; the origin check tells the two cases apart.
+  template-paths:
+    runs-on: ubuntu-latest
+    # Advisory only in derived projects; the template repo's self-test must fail the workflow.
+    continue-on-error: ${{ github.repository != 'kinged007/saas-template' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: report template-owned changes (self-test in the template repo)
+        run: |
+          set -eo pipefail
+          origin="$(git remote get-url origin 2>/dev/null || true)"
+          case "$origin" in
+            *kinged007/saas-template*)
+              echo "template repo itself: running check-template-paths self-test"
+              bash scripts/check-template-paths.test.sh
+              ;;
+            *)
+              git remote add template https://github.com/kinged007/saas-template.git 2>/dev/null || true
+              git fetch template --tags --quiet || echo "warning: could not fetch template tags"
+              bash scripts/check-template-paths.sh
+              ;;
+          esac
+
   # One matrix over the three frontend checks, so the checkout, setup-node and
   # npm ci block exists once instead of three times. The name keeps the
   # previous check names (web-build, web-test, web-e2e) for branch protection.
