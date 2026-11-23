@@ -25,6 +25,9 @@ Rule IDs are `CONV-<AREA>-NN`. IDs are never reused. A removed rule keeps its nu
   ([ADMISSION.md §5](../product/ADMISSION.md#5-what-needs-the-maintainer)).
 - **Check:** every command runs from the repo root. `returns nothing` means exit status 1 and
   no output.
+- **Expected values:** a Check that prints a count or a file list states the value on `main`. A
+  compliant change that moves the number or the list updates the expected value in the same PR;
+  the reviewer judges whether the difference is the effect of the diff, not the number itself.
 
 ---
 
@@ -43,7 +46,7 @@ Source: ARCHITECTURE.md §6, `apps/api/src/events/`, `apps/api/src/workflows/__i
 - **CONV-EVT-02** The subject is a `Subjects.*` constant from `apps/api/src/events/subjects.py`,
   never a string literal. A new subject is added to `Subjects` and to `ALL`.
   Why: one list of subjects; a typo cannot create a subject nobody consumes.
-  Check: `grep -rPzl "\.publish\(\s*['\"]|publish_event\(\s*[\w.]+,\s*['\"]" apps/api/src --include=*.py` returns nothing;
+  Check: `grep -rPzl "\.publish\(\s*[bBfFrRuU]*['\"]|publish_event\(\s*[\w.]+,\s*[bBfFrRuU]*['\"]" apps/api/src --include=*.py` returns nothing;
   `grep -rnE "Subjects\.[A-Z_0-9]+ *\+" apps/api/src` prints only
   `apps/api/src/services/conversations.py` (CONV-EVT-02 in Known deviations).
 - **CONV-EVT-03** Every durable subject has exactly one workflow registered with
@@ -153,12 +156,21 @@ Source: ARCHITECTURE.md §4 and §9, `apps/api/src/api/deps.py`, `apps/api/src/c
   `grep -L "require_permission\|require_key_permission" apps/api/src/api/routes/*.py` prints
   `__init__.py`, `admin.py`, `auth.py`, `meta.py`, `oauth.py`, `profiles.py`, `ws.py`, and each
   of those has its own guard (CONV-AUTH-02, `require_target_profile_update`, token handshake,
-  public) - a new route file is not added to this list.
+  public) - a new route file is not added to this list. That grep only finds a file with no
+  guard at all, so it does not see an unguarded route added to a router that already has one;
+  read: every route the diff adds or changes that depends on `get_current_workspace_id`
+  declares `Depends(require_permission(<CONSTANT>))` or `Depends(require_key_permission(...))`.
+  The pytest check in CI check candidates tests this per route.
 - **CONV-AUTH-02** Deployment-wide routes (`/admin/*`, `/jobs/global/*`, workspace ownership
   transfer) depend on `require_superuser` or call `require_deployment_admin`. These do not
   replace the workspace check on workspace-scoped routes.
   Why: the bootstrap superuser does not bypass workspace permissions (ARCHITECTURE.md §4).
-  Check: `grep -c "require_superuser\|require_deployment_admin" apps/api/src/api/routes/admin.py` prints `9`.
+  Check: `grep -c "@router\." apps/api/src/api/routes/admin.py` and
+  `grep -c "Depends(require_superuser)" apps/api/src/api/routes/admin.py` print the same number;
+  read: each route in `admin.py` depends on `require_superuser`, and a `/jobs/global/*` route or
+  a workspace ownership transfer outside `admin.py` calls `require_deployment_admin` itself.
+  Counting `require_superuser` mentions does not test the rule: it also matches the import and
+  two docstring lines.
 - **CONV-AUTH-03** API-key requests are authorized against the key's own permission list, never
   the owner's role. That logic lives in `require_permission` and `require_key_permission`
   (`apps/api/src/api/deps.py`) only.
@@ -324,7 +336,7 @@ adding a new one needs a DECISIONS entry.
 | CONV-AUTH-03 | `apps/api/src/api/routes/jobs.py` (lines 237 and 280) checks `api_key.permissions` inside the route for the `/jobs/{id}` and run routes. |
 | CONV-DATA-05 | `apps/api/src/api/routes/admin.py` (two routes) and `notifications.py` call `db.commit()`. |
 | CONV-CFG-02 | `AUTH_IP_MAIL_MAX_ATTEMPTS` and `AUTH_IP_MAIL_WINDOW_SECONDS` are settings with no `.env.example` entry. |
-| CONV-FE-01, 02, 03 | `pages/settings/workspace/sections/RolesSection.tsx` (formerly `RolesPage`) creates roles in a dialog with `useCreate`. `MembersPage.tsx` uses `ListView` but invites from an inline form with `useCreate`. `WorkspaceCreatePage.tsx` uses `PageHeader` and `useCreate` instead of `CreateView` and `useForm`. `ReceivedInvitationsPage.tsx` complies. |
+| CONV-FE-01, 02, 03 | `pages/settings/workspace/sections/RolesSection.tsx` creates roles in a dialog with `useCreate`. `MembersPage.tsx` uses `ListView` but invites from an inline form with `useCreate`. `WorkspaceCreatePage.tsx` uses `PageHeader` and `useCreate` instead of `CreateView` and `useForm`. `ReceivedInvitationsPage.tsx` complies. |
 | CONV-FE-04 | `useNavigate` is used in `AuthConfig.tsx`, `AppLayout.tsx`, `NotificationCenter.tsx`, `NotFoundPage.tsx`, `LoginPage.tsx`, `InvitationAcceptPage.tsx`, `WorkspaceCreatePage.tsx` and `settings/workspace/sections/GeneralSection.tsx`. |
 | CONV-FE-05 | `ForgotPasswordPage.tsx`, `ResetPasswordPage.tsx` and `VerifyEmailPage.tsx` call `fetch` directly; they run before a session exists. |
 
