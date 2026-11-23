@@ -31,9 +31,7 @@ def upgrade() -> None:
         sa.Column("created_at", TS, nullable=False, server_default=NOW),
         sa.Column("updated_at", TS, nullable=False, server_default=NOW),
     )
-    op.create_index(
-        op.f("ix_demo_widgets_workspace_id"), "demo_widgets", ["workspace_id"]
-    )
+    op.create_index(op.f("ix_demo_widgets_workspace_id"), "demo_widgets", ["workspace_id"])
 
 
 def downgrade() -> None:
