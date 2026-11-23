@@ -16,6 +16,8 @@
 
 **Required env vars:** DATABASE_URL
 
+Fleet labels: `docs/FLEET_LABELS.md` is the single source for every `agent:*` label — read it before adding, removing, or renaming one.
+
 ## Product direction — read before proposing or building anything
 
 Before opening an issue or PR that adds or changes behaviour, read
@@ -63,25 +65,6 @@ Review the diff (watch for accidental drops, wrong nullability, missing server_d
 commit the file.
 `make db-check` (also in CI) fails on multiple heads or models≠migrations.
 Full workflow: `docs/MIGRATIONS.md`.
-
----
-
-## Agent Instructions
-
-This project uses codesight for structured AI context. Follow these steps before implementing:
-1. Read `.codesight/wiki/index.md` for project orientation (~200 tokens)
-2. Read `.codesight/wiki/overview.md` for architecture overview (~500 tokens)
-3. Read the relevant domain article, then open the source files listed in it
-4. Read `.codesight/CODESIGHT.md` for the full context map
-
-**Do not explore the file tree blindly.** The codesight context map already contains:
-routes, schema, components, libraries, config, middleware, and dependency graph.
-
-**Before modifying any file:** check `.codesight/graph.md` for blast radius.
-Files with high import counts affect many downstream modules — change carefully.
-
-Routes marked `[inferred]` were detected via regex and may have lower precision.
-If any source file shows ⚠ in a wiki article, re-run `npx codesight --wiki` before proceeding.
 
 ---
 

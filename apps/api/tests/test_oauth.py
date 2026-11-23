@@ -192,12 +192,13 @@ async def test_unknown_provider_404(app_client, oauth_on):
     assert resp.status_code == 404
 
 
-def _mock_oauth(monkeypatch, *, sub="sub-1", email=SSO_EMAIL):
+def _mock_oauth(monkeypatch, *, sub="sub-1", email=SSO_EMAIL, jwks_uri=None):
     async def fake_discovery(provider, cache):
         return {
             "authorization_endpoint": provider.authorize_url,
             "token_endpoint": provider.token_url,
             "userinfo_endpoint": provider.userinfo_url,
+            "jwks_uri": jwks_uri,
         }
 
     async def fake_exchange(provider, doc, *, code, redirect_uri, code_verifier):
@@ -297,6 +298,29 @@ async def test_oauth_new_user_allowed(app_client, oauth_on, monkeypatch):
     # Reuse is rejected (single-use code).
     again = await app_client.post("/api/v1/auth/oauth/token", json={"code": code})
     assert again.status_code == 400
+
+
+async def test_callback_refused_id_token_fails_login(app_client, oauth_on, monkeypatch):
+    """A provider that sends an `id_token` the pin refuses has failed the login. A
+    conformant OIDC response also carries an `access_token`, so without this the
+    userinfo path completed the login anyway and created the user."""
+    _mock_oauth(monkeypatch)
+
+    async def fake_exchange(provider, doc, *, code, redirect_uri, code_verifier):
+        return {"access_token": "at", "id_token": "refused"}
+
+    async def refuse_claims(provider, doc, id_token, cache):
+        return None
+
+    import src.api.routes.oauth as oauth_routes
+
+    monkeypatch.setattr(oauth_routes, "exchange_code", fake_exchange)
+    monkeypatch.setattr(oauth_routes, "claims_from_id_token", refuse_claims)
+    before = await _user_count()
+    _, resp = await _callback(app_client, monkeypatch)
+    assert resp.status_code == 302
+    assert resp.headers["location"].startswith("http://localhost:5173/login?error=")
+    assert await _user_count() == before
 
 
 async def test_oauth_existing_user_links_by_subject(app_client, oauth_on, monkeypatch):
@@ -1135,3 +1159,21 @@ async def test_oauth_error_redirect_allowlisted(app_client, oauth_on):
     )
     assert resp.status_code == 302
     assert resp.headers["location"].startswith("http://localhost:5173/login?error=")
+
+
+async def test_oauth_callback_signs_in_when_the_jwks_cannot_be_read(
+    app_client, oauth_on, monkeypatch
+):
+    """An unreadable key set is reported by `_jwks` as an OAuthError, which
+    `claims_from_id_token` answers with `None`, so the callback completes on the
+    userinfo path. The narrowed handler is the only thing standing between a JWKS
+    the IdP cannot serve and the 500 an unwrapped failure raises here, so the
+    boundary is driven from the route rather than only from the service."""
+    _mock_oauth(
+        monkeypatch, sub="jwks-down", email="jwks-down@example.com", jwks_uri="file:///etc/passwd"
+    )
+    before = await _user_count()
+    _, resp = await _callback(app_client, monkeypatch)
+    assert resp.status_code == 302, resp.text
+    assert resp.headers["location"].startswith("http://localhost:5173/oauth/callback?code=")
+    assert await _user_count() == before + 1

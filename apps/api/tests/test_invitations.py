@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 import src.core.permissions as perms
 from src.core.dates import now_utc
+from src.core.routes import INVITATIONS_ROUTE
 from src.db.session import SessionFactory
 from src.models.audit import AuditLogEntry
 from src.models.core import Invitation
@@ -65,7 +66,7 @@ async def test_invite_creates_notification_for_existing_user(app_client):
     assert items[0]["payload"]["workspace_name"] == "Acme Corp"
     # NotificationCenter renders the "Open" button off payload.url; without it
     # the invite is a dead end in the bell.
-    assert items[0]["payload"]["url"] == "/invitations"
+    assert items[0]["payload"]["url"] == INVITATIONS_ROUTE
 
     # invitee accepts → becomes member with editor role
     accepted = await client.post(

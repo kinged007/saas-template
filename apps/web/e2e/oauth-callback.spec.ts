@@ -113,6 +113,9 @@ test.describe("oauth callback escape", () => {
 
     await expect(page.getByText("Signing you in…")).toHaveCount(0);
     await expect(page.getByText("Sign-in failed. The code may have expired.")).toBeVisible();
-    expect(tokenPosts).toHaveLength(2);
+    // Polled, not asserted once: the remount's POST is in flight when the two
+    // status assertions above can already pass, so an immediate count read the
+    // race rather than the latch and went red on main intermittently.
+    await expect.poll(() => tokenPosts.length, { timeout: 10_000 }).toBe(2);
   });
 });

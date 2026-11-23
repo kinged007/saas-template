@@ -32,6 +32,8 @@ from src.services.workspaces import (
 
 logger = logging.getLogger(__name__)
 
+# Backend API path, mounted under /api/v1 by src/main.py — not the frontend
+# route (src.core.routes.INVITATIONS_ROUTE).
 router = APIRouter(prefix="/invitations", tags=["invitations"])
 
 _INVITATION_FILTERABLE = {"status", "email"}

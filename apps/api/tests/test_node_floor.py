@@ -29,8 +29,10 @@ def _check_node(tmp_path, version=None):
         shim.write_text(f'#!/bin/sh\necho "v{version}"\n')
         shim.chmod(0o755)
         path = f"{bindir}{os.pathsep}{os.environ['PATH']}"
-    env = {**os.environ, "PATH": path, "MAKELEVEL": "0"}
-    env.pop("MAKEFLAGS", None)
+    # Drop what an outer make exports: MAKELEVEL above 0 alone makes the child make
+    # print `Entering directory` lines, which is what this file asserts against.
+    env = {k: v for k, v in os.environ.items() if k not in {"MAKEFLAGS", "MFLAGS", "MAKELEVEL"}}
+    env["PATH"] = path
     return subprocess.run(
         [MAKE, "--no-print-directory", "check-node"],
         cwd=ROOT,
