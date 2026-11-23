@@ -140,6 +140,11 @@ async def oauth_callback(
         claims = None
         if tokens.get("id_token"):
             claims = await claims_from_id_token(provider, doc, tokens["id_token"], container.cache)
+            # A provider that sent an id_token and whose token was refused has
+            # failed the issuer pin; the userinfo response is not a fallback for
+            # it. Providers with no id_token (GitHub) never reach this.
+            if claims is None:
+                raise OAuthError("id_token could not be verified")
         userinfo = {}
         if tokens.get("access_token"):
             userinfo = await fetch_userinfo(provider, doc, tokens["access_token"])
