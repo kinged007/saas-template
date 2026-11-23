@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 import hashlib
+import operator
 import secrets
 from datetime import datetime
 
 from sqlalchemy import Select, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
-from src.core.dates import ensure_utc, now_utc
+from src.core.dates import ensure_utc, iso_or_none, now_utc
 from src.core.permissions import ALL_PERMISSIONS_INCLUDING_KEY_ONLY, KEY_ONLY_PERMISSIONS
 from src.events.bus import EventBus
 from src.events.publisher import publish_audit, publish_event
 from src.events.subjects import Subjects
-from src.models.api_key import ApiKey
+from src.models.api_key import (
+    MAX_QUOTA,
+    QUOTA_MAX_MESSAGE,
+    QUOTA_MIN_MESSAGE,
+    QUOTA_TYPE_MESSAGE,
+    ApiKey,
+)
 from src.models.workspace import User
 from src.services.workspaces import WorkspaceService
 
@@ -29,14 +37,25 @@ class ApiKeyNotFound(ApiKeyError):
     pass
 
 
-def _payload_iso(value: datetime | None) -> str | None:
-    """Serialize an ORM datetime for a publish payload.
+def _quota(usage_quota: int | None) -> int | None:
+    """Strict-type then range-check a service-side quota.
 
-    Normalized at the emission edge instead of read off the attribute: SQLite
-    hands `DateTime(timezone=True)` back without an offset, and a consumer's
-    `new Date(...)` reads a naive ISO string as local time.
+    `operator.index` accepts anything int-like (int, bool, numpy ints) and
+    refuses float/str values that only the schema would have coerced: a
+    direct caller that passes 5.5 must not reach the Integer column through
+    the range guards.
     """
-    return ensure_utc(value).isoformat() if value is not None else None
+    if usage_quota is None:
+        return None
+    try:
+        quota = operator.index(usage_quota)
+    except TypeError:
+        raise ApiKeyError(QUOTA_TYPE_MESSAGE) from None
+    if quota < 1:
+        raise ApiKeyError(QUOTA_MIN_MESSAGE)
+    if quota > MAX_QUOTA:
+        raise ApiKeyError(QUOTA_MAX_MESSAGE)
+    return quota
 
 
 class ApiKeyService:
@@ -98,9 +117,7 @@ class ApiKeyService:
         only ever returned once.
         """
         name = name.strip()
-        membership = await WorkspaceService(self._session).get_membership(
-            workspace_id, actor.id, active_only=True
-        )
+        membership = await WorkspaceService(self._session).get_membership(workspace_id, actor.id)
         if membership is None:
             raise ApiKeyForbidden("you are not a member of this workspace")
         _, role = membership
@@ -119,8 +136,7 @@ class ApiKeyService:
             denied = sorted(capped - allowed)
             raise ApiKeyForbidden(f"cannot grant permissions you do not have: {', '.join(denied)}")
 
-        if usage_quota is not None and usage_quota < 1:
-            raise ApiKeyError("usage quota must be at least 1 (leave it empty for unlimited)")
+        usage_quota = _quota(usage_quota)
         if expires_at is not None and ensure_utc(expires_at) <= now_utc():
             raise ApiKeyError("expiry must be in the future")
 
@@ -151,7 +167,7 @@ class ApiKeyService:
                 "permissions": key.permissions,
                 "created_by_user_id": actor.id,
                 "created_by_name": actor.display_name,
-                "expires_at": _payload_iso(key.expires_at),
+                "expires_at": iso_or_none(key.expires_at),
             },
         )
         await publish_audit(
@@ -276,6 +292,9 @@ class ApiKeyService:
     async def record_use(self, key: ApiKey, now: datetime | None = None) -> bool:
         """Count one successful use; False when the month's quota is spent.
 
+        Returns True when the unit was charged — never ignore the result:
+        False means the request was not metered, so the caller must refuse it.
+
         The rollover, the quota test and the increment are one UPDATE, so
         concurrent requests carrying one key cannot interleave a
         read-modify-write and consume more than `usage_quota` uses, and cannot
@@ -297,6 +316,16 @@ class ApiKeyService:
         next window. Those counters are the ones `authenticate` loaded, which
         is the committed value on a row-lock backend and at most one unit
         behind on SQLite, where a concurrent writer can slip in between.
+
+        The post-charge values come back on the UPDATE's own RETURNING
+        clause and are copied onto the caller's key without marking it
+        dirty, so the in-session row matches the database row:
+        `_quota_headers` reads the window counter after this returns, so
+        without them it would report the pre-charge balance; and a later
+        Python-side assignment is then based on the charged values instead
+        of the stale pre-charge ones, which would refund the unit. The clean
+        attributes the copy leaves behind — not the copy — are what keep the
+        next flush from writing anything back.
         """
         now = ensure_utc(now or now_utc())
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -315,17 +344,23 @@ class ApiKeyService:
                 last_used_at=now,
             )
             .execution_options(synchronize_session=False)
+            .returning(
+                ApiKey.usage_count,
+                ApiKey.usage_window_count,
+                ApiKey.usage_window_start,
+                ApiKey.last_used_at,
+            )
         )
-        if result.rowcount == 0:
+        # The verdict comes from the returned rows, never `rowcount`: with
+        # RETURNING on aiosqlite the attribute is -1 or absent entirely.
+        charged = result.first()
+        if charged is None:
             return False
-        # The rollover is a case() on the stored month, which the ORM cannot
-        # evaluate in place, so the row is re-read instead: the quota headers
-        # the caller reports must come from the values the database now holds.
-        # ponytail: that costs a PK SELECT inside the lock authenticate already
-        # holds. Ceiling: one extra read per key-authenticated request.
-        # Upgrade path: UPDATE ... RETURNING.
-        await self._session.refresh(key)
         await self._session.commit()
+        set_committed_value(key, "usage_count", charged[0])
+        set_committed_value(key, "usage_window_count", charged[1])
+        set_committed_value(key, "usage_window_start", charged[2])
+        set_committed_value(key, "last_used_at", charged[3])
         return True
 
     async def set_quota(
@@ -346,8 +381,7 @@ class ApiKeyService:
             raise ApiKeyNotFound("api key not found")
         if actor is not None and key.created_by_user_id != actor.id:
             raise ApiKeyNotFound("api key not found")
-        if usage_quota is not None and usage_quota < 1:
-            raise ApiKeyError("usage quota must be at least 1 (leave it empty for unlimited)")
+        usage_quota = _quota(usage_quota)
         key.usage_quota = usage_quota
         await self._session.commit()
         await publish_event(

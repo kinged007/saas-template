@@ -104,6 +104,36 @@ CSV_RESOURCES: dict[str, list[str]] = {
     ],
 }
 
+# resource -> keys each export_csv projection arm emits. Checked against
+# CSV_RESOURCES on every export, including empty ones.
+_PROJECTION_COLUMNS: dict[str, tuple[str, ...]] = {
+    "members": (
+        "id",
+        "email",
+        "display_name",
+        "avatar_url",
+        "email_verified",
+        "role",
+        "status",
+        "joined_at",
+        *(f"profile_{c}" for c in _MEMBER_PROFILE_COLUMNS),
+    ),
+    "invitations": ("email", "status", "expires_at", "created_at"),
+    "api_keys": ("name", "key_prefix", "permissions", "revoked_at", "created_at"),
+    "jobs": ("key", "name", "enabled", "cron_schedule", "next_run_at"),
+    "conversations": ("title", "last_message_preview", "last_message_at", "created_at"),
+    "notifications": ("type", "title", "acknowledged_at", "created_at"),
+    "audit": (
+        "id",
+        "created_at",
+        "actor_email",
+        "action",
+        "resource_type",
+        "resource_id",
+        "ip_address",
+    ),
+}
+
 
 def _snippet(text: str | None, q: str, width: int = 120) -> str | None:
     if not text:
@@ -138,7 +168,11 @@ async def _ensure_membership(session: AsyncSession, workspace_id: str, user_id: 
 # and LF start a formula too: the spreadsheet drops the control character and
 # reads the formula behind it. The "'" prefix is a convention, not a guarantee —
 # Excel can strip it on save-and-reopen, so an edited file can reactivate.
-_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+# The full-width forms of = + - @ are a deliberate widening past the OWASP list.
+# Only the first character is checked, so a legitimate value starting with one
+# of them gains one recoverable "'". The text is never normalised: NFKC would
+# turn CJK text into ASCII and could create formulas.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n", "＝", "＋", "－", "＠")
 
 
 def _csv_cell(value: object) -> object:
@@ -315,9 +349,7 @@ class SearchExportService:
     async def _can(self, workspace_id: str, user_id: str, permission: str) -> bool:
         from src.services.workspaces import WorkspaceService
 
-        membership = await WorkspaceService(self._session).get_membership(
-            workspace_id, user_id, active_only=True
-        )
+        membership = await WorkspaceService(self._session).get_membership(workspace_id, user_id)
         if membership is None:
             return False
         _, role = membership
@@ -569,6 +601,9 @@ class SearchExportService:
             raise ValueError(
                 f"unknown resource: {resource} (choose from {', '.join(sorted(CSV_RESOURCES))})"
             )
+        diff = set(columns) ^ set(_PROJECTION_COLUMNS[resource])
+        if diff:
+            raise ValueError(f"{resource} projection and columns differ: {sorted(diff)}")
         rows = bundle.get(resource, [])
         if resource == "members":
             flat = [

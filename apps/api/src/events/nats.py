@@ -140,6 +140,10 @@ class NatsEventBus(EventBus):
             logger.warning("dropping %d buffered publishes at stop", len(self._pending_publishes))
             self._pending_publishes.clear()
 
+    async def wait_idle(self) -> None:
+        """No-op: delivery happens server-side, so there is nothing local to
+        drain. Tests running against NATS must keep polling the database."""
+
     async def _apply_subscription(
         self, subject: str, handler: SubscriberHandler, fanout: bool, sub_id: str | None = None
     ) -> None:

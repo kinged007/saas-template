@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -34,9 +34,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useDeleteAccount, useExportProfile, useProfile, useUpdateProfile } from "@/hooks/useProfile";
+import { useDeleteAccount, useExportProfile, useProfile, useTargetUserId, useUpdateProfile } from "@/hooks/useProfile";
 import type { Identity, UserProfile } from "@/types";
 import { getProfileField } from "@/types";
+import { errorMessage } from "@/utils/errorMessage";
 
 const profileSchema = z.object({
   first_name: z.string().max(100, "Max 100 characters").optional().or(z.literal("")),
@@ -68,6 +69,20 @@ const profileSchema = z.object({
 });
 
 type ProfileFormData = z.infer<typeof profileSchema>;
+
+/** The PATCH body: the only profile fields this form is allowed to send. */
+const PROFILE_FIELDS: (keyof ProfileFormData)[] = [
+  "first_name",
+  "last_name",
+  "bio",
+  "phone_number",
+  "timezone",
+  "locale",
+  "date_of_birth",
+  "website_url",
+  "location",
+  "avatar_url",
+];
 
 // Developer-defined custom_data keys are not user-editable. The backend Merge Patch
 // remains available for forks that add first-class custom fields via code (types.ts
@@ -131,16 +146,20 @@ function getDetectedTimezone(): string {
 
 export function GeneralSection() {
   const { data: identity } = useGetIdentity<Identity>();
-  const profileHook = useProfile();
-  const profile = (profileHook.data as UserProfile | undefined) ?? identity?.profile;
-  const { mutate, mutation: updateMutation } = useUpdateProfile();
+  // Set when routed as `users/:id/settings/general` (a caller holding
+  // profile:update editing someone else); null on the self-service page.
+  const targetId = useTargetUserId();
+  const profileHook = useProfile(targetId);
+  // For a target, never fall back to identity.profile: that is the signed-in
+  // user, and showing their fields in the member editor is a data leak.
+  const profile = (profileHook.data as UserProfile | undefined) ?? (targetId ? undefined : identity?.profile);
+  const { mutate, mutation: updateMutation } = useUpdateProfile(targetId);
   const isSaving = updateMutation.isPending;
   const { exportMyData } = useExportProfile();
   const { mutate: deleteAccount, mutation: deleteMutation } = useDeleteAccount();
   const isDeleting = deleteMutation.isPending;
   const { list } = useNavigation();
 
-  const [initialized, setInitialized] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [deletePassword, setDeletePassword] = useState("");
@@ -150,58 +169,50 @@ export function GeneralSection() {
   // Ensure detected timezone is selectable even if fallback list is used.
   const allTimezones = detectedTimezone && !tzOptions.includes(detectedTimezone) ? [detectedTimezone, ...tzOptions] : tzOptions;
 
+  // react-hook-form reads `defaultValues` once, on mount; `values` resyncs the
+  // form whenever the profile query resolves, so no reset-on-first-render latch
+  // (which used to close on the not-yet-loaded profile and blank the form).
+  const values = useMemo<ProfileFormData>(
+    () => ({
+      first_name: (getProfileField(profile, "first_name", "") as string) || "",
+      last_name: (getProfileField(profile, "last_name", "") as string) || "",
+      bio: (getProfileField(profile, "bio", "") as string) || "",
+      phone_number: (getProfileField(profile, "phone_number", "") as string) || "",
+      timezone: (getProfileField(profile, "timezone", "") as string) || detectedTimezone || "",
+      locale: (getProfileField(profile, "locale", "") as string) || "en",
+      date_of_birth: (getProfileField(profile, "date_of_birth", "") as string) || "",
+      website_url: (getProfileField(profile, "website_url", "") as string) || "",
+      location: (getProfileField(profile, "location", "") as string) || "",
+      // The delegated GET returns the target's avatar_url; identity.avatar_url
+      // is the signed-in user's and is only a fallback for the self profile.
+      avatar_url:
+        (getProfileField(profile, "avatar_url", "") as string) ||
+        (targetId ? "" : identity?.avatar_url || ""),
+    }),
+    [profile, identity?.avatar_url, detectedTimezone, targetId],
+  );
+
+  // `values` still runs a full reset, so a profile that arrives after the user
+  // has started typing must not wipe what they typed: the fetch lands late
+  // precisely when the embedded profile was blank.
   const form = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
-    defaultValues: {
-      first_name: "",
-      last_name: "",
-      bio: "",
-      phone_number: "",
-      timezone: "",
-      locale: "",
-      date_of_birth: "",
-      website_url: "",
-      location: "",
-      avatar_url: "",
-    },
+    defaultValues: values,
+    values,
+    resetOptions: { keepDirtyValues: true },
   });
 
-  // Initialize form when profile loads — preselect detected timezone when empty.
+  // A new target means new values: drop dirty edits from the previous member
+  // so they cannot be saved into the next one. Runs after RHF's own
+  // values-reset (declared inside useForm), so it wins with a clean slate.
   useEffect(() => {
-    if (profile && !initialized) {
-      const tzFromProfile = (getProfileField(profile, "timezone", "") as string) || "";
-      const localeFromProfile = (getProfileField(profile, "locale", "") as string) || "";
-      form.reset({
-        first_name: (getProfileField(profile, "first_name", "") as string) || "",
-        last_name: (getProfileField(profile, "last_name", "") as string) || "",
-        bio: (getProfileField(profile, "bio", "") as string) || "",
-        phone_number: (getProfileField(profile, "phone_number", "") as string) || "",
-        timezone: tzFromProfile || detectedTimezone || "",
-        locale: localeFromProfile || "en",
-        date_of_birth: (getProfileField(profile, "date_of_birth", "") as string) || "",
-        website_url: (getProfileField(profile, "website_url", "") as string) || "",
-        location: (getProfileField(profile, "location", "") as string) || "",
-        avatar_url: (identity?.avatar_url as string) || "",
-      });
-      setInitialized(true);
-    }
-  }, [profile, identity, initialized, form, detectedTimezone]);
+    form.reset(values, { keepDirtyValues: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetId]);
 
   const onSubmit = (data: ProfileFormData) => {
     const payload: Record<string, unknown> = {};
-    const fields: (keyof ProfileFormData)[] = [
-      "first_name",
-      "last_name",
-      "bio",
-      "phone_number",
-      "timezone",
-      "locale",
-      "date_of_birth",
-      "website_url",
-      "location",
-      "avatar_url",
-    ];
-    for (const f of fields) {
+    for (const f of PROFILE_FIELDS) {
       const val = data[f];
       if (val !== undefined) {
         if (val === "") {
@@ -216,14 +227,11 @@ export function GeneralSection() {
     // rendered via dedicated inputs that map to getProfileField keys in forks.
     // For the base template we do not send custom_data at all.
 
+    // The mutation's own successNotification owns the "Profile updated" toast.
     mutate(payload, {
       isPut: false,
-      onSuccess: () => {
-        toast.success("Profile updated");
-      },
       onError: (err: unknown) => {
-        const msg = (err as { message?: string })?.message || String(err);
-        toast.error(msg);
+        toast.error(errorMessage(err));
       },
     });
   };
@@ -233,8 +241,7 @@ export function GeneralSection() {
       await exportMyData();
       toast.success("Export downloaded");
     } catch (e: unknown) {
-      const msg = (e as { message?: string })?.message || String(e);
-      toast.error(msg);
+      toast.error(errorMessage(e));
     }
   };
 
@@ -248,8 +255,7 @@ export function GeneralSection() {
         window.location.assign("/login");
       },
       onError: (err: unknown) => {
-        const msg = (err as { message?: string })?.message || String(err);
-        toast.error(msg);
+        toast.error(errorMessage(err));
       },
     });
   };
@@ -258,11 +264,17 @@ export function GeneralSection() {
     return <p className="text-muted-foreground p-4 text-sm">Loading profile…</p>;
   }
 
+  // A failed fetch with nothing embedded would paint an empty form whose submit
+  // nulls every stored field. Say so instead of offering it.
+  if (profileHook.isError && PROFILE_FIELDS.every((f) => !getProfileField(profile, f, ""))) {
+    return <p className="text-muted-foreground p-4 text-sm">Could not load your profile — reload to try again.</p>;
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <Card>
         <CardHeader>
-          <CardTitle>Personal Information</CardTitle>
+          <CardTitle>{targetId ? "Member Information" : "Personal Information"}</CardTitle>
           <CardDescription>Common profile fields and avatar URL.</CardDescription>
         </CardHeader>
         <CardContent>
@@ -335,7 +347,7 @@ export function GeneralSection() {
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue placeholder="Select timezone">
-                              {field.value || undefined}
+                              {field.value ?? ""}
                             </SelectValue>
                           </SelectTrigger>
                         </FormControl>
@@ -364,7 +376,7 @@ export function GeneralSection() {
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue placeholder="Select locale">
-                              {LOCALE_OPTIONS.find((o) => o.value === field.value)?.label}
+                              {LOCALE_OPTIONS.find((o) => o.value === field.value)?.label ?? field.value ?? ""}
                             </SelectValue>
                           </SelectTrigger>
                         </FormControl>
@@ -438,7 +450,7 @@ export function GeneralSection() {
               />
 
               <div className="flex justify-end gap-2 pt-4">
-                <Button type="button" variant="outline" onClick={() => list("workspaces")}>
+                <Button type="button" variant="outline" onClick={() => list(targetId ? "members" : "workspaces")}>
                   Cancel
                 </Button>
                 <Button type="submit" disabled={isSaving}>
@@ -450,6 +462,8 @@ export function GeneralSection() {
         </CardContent>
       </Card>
 
+      {/* Export and account deletion act on the signed-in user only. */}
+      {!targetId && (
       <Card>
         <CardHeader>
           <CardTitle>Data &amp; Account</CardTitle>
@@ -477,6 +491,7 @@ export function GeneralSection() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent>

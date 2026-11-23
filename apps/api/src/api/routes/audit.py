@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.crud import InvalidQuery, apply_query, parse_query
+from src.api.crud import CREATED_DESC, InvalidQuery, apply_query, parse_query
 from src.api.deps import get_current_workspace_id, require_permission
 from src.core.dates import iso_or_none
 from src.core.permissions import AUDIT_READ
@@ -69,7 +69,12 @@ async def list_audit_logs(
     try:
         spec = parse_query(request)
         stmt = apply_query(
-            stmt, AuditLogEntry, spec, sortable=_AUDIT_SORTABLE, filterable=_AUDIT_FILTERABLE
+            stmt,
+            AuditLogEntry,
+            spec,
+            sortable=_AUDIT_SORTABLE,
+            filterable=_AUDIT_FILTERABLE,
+            default_sort=CREATED_DESC,
         )
         q = (request.query_params.get("q") or "").strip()
         if q:
@@ -101,8 +106,6 @@ async def list_audit_logs(
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
 
-    if not spec.sort_by:
-        stmt = stmt.order_by(AuditLogEntry.created_at.desc(), AuditLogEntry.id.desc())
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)

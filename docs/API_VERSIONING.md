@@ -26,6 +26,8 @@ as `api_version`.
 
 ## Recorded corrections
 
+- `GET /api/v1/jobs/global/{id}/runs` returns `404 "job not found"` for an id
+  matching no definition — not `200 []` with `X-Total-Count: 0`.
 - `GET /api/v1/jobs/{id}`, `PATCH /api/v1/jobs/{id}`,
   `POST /api/v1/jobs/{id}/execute` and `GET /api/v1/jobs/{id}/runs` return
   `403 "you are not a member of this workspace"` — not `404 "job not found"` —
@@ -62,6 +64,11 @@ All three ride on the `403 api key quota exceeded` rejection as well, so a
 client that has run out can still read its budget and when it recovers.
 `Remaining` counts the request being answered, so it reaches `0` on the last
 accepted call and the next call is rejected.
+
+The charge happens in the access helper, before the handler body: an accepted
+request spends and commits its unit even when the handler later fails, and the
+quota-exceeded `403` is raised before the handler runs, so a refused request
+spends nothing.
 
 ### Changed meanings
 

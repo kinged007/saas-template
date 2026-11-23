@@ -17,22 +17,18 @@ export type SetupStep = {
  * undefined while it loads) — rendering an action that disappears a tick later
  * reads worse than the brief omission.
  *
- * `canCreateKey` is the caller's combined answer: the key step needs to read
- * the key list for its progress, so a role that may mint keys without listing
- * them is passed false.
- *
  * ponytail: a step is either present and actionable or absent. Add a
  * "not available to your role" row if a card ever has to explain an omission.
  */
 export function setupSteps({
   canInvite,
   invitationCount,
-  canCreateKey,
+  canTrackKeyStep,
   apiKeyCount,
 }: {
   canInvite?: boolean;
   invitationCount: number;
-  canCreateKey?: boolean;
+  canTrackKeyStep?: boolean;
   apiKeyCount: number;
 }): SetupStep[] {
   const steps: SetupStep[] = [];
@@ -45,7 +41,7 @@ export function setupSteps({
       cta: "Invite",
     });
   }
-  if (canCreateKey === true) {
+  if (canTrackKeyStep === true) {
     steps.push({
       done: apiKeyCount > 0,
       title: "Create an API key",

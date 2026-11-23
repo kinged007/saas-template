@@ -35,10 +35,11 @@ ISO_OFFSET = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d
 # A receiver is fine when it already carries an offset. `p.date_of_birth` is a
 # `Date` column with none to give.
 OK_CALL = re.compile(r"^(?:ensure_utc\(|now_utc\(|datetime\.now\(UTC\))")
-# Pinned to (path, line, receiver) so an exemption applies to the site that
-# justified it and to nothing else — and the guard fails when one moves.
+# Pinned to (path, receiver) so an exemption applies to the site that
+# justified it and to nothing else — a line insert above it stays green,
+# while a rename or deletion matches zero sites and still fails the guard.
 OK_SITE = {
-    ("services/serializers.py", 81, "p.date_of_birth"),
+    ("services/serializers.py", "p.date_of_birth"),
 }
 
 
@@ -83,6 +84,7 @@ def test_no_bare_isoformat_on_a_datetime_remains():
     """
     offenders = []
     exempted = set()
+    matches = 0
     for path in sorted(SRC.rglob("*.py")):
         rel = path.relative_to(SRC).as_posix()
         for node in ast.walk(ast.parse(path.read_text())):
@@ -95,13 +97,15 @@ def test_no_bare_isoformat_on_a_datetime_remains():
             receiver = ast.unparse(node.func.value)
             if OK_CALL.match(receiver):
                 continue
-            site = (rel, node.lineno, receiver)
+            site = (rel, receiver)
             if site in OK_SITE:
                 exempted.add(site)
+                matches += 1
                 continue
             offenders.append(f"{rel}:{node.lineno} {receiver}")
     assert offenders == []
     assert exempted == OK_SITE, f"exemptions that match no site: {OK_SITE - exempted}"
+    assert matches == 1, f"exemption must match exactly one site, matched {matches}"
 
 
 # --------------------------------------------------------------------- HTTP level

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from src.core.dates import iso_or_none
 from src.events.bus import SOURCE_EVENT_KEY
@@ -87,10 +88,44 @@ def profile_to_dict(p: UserProfile) -> dict:
     }
 
 
+def session_to_dict(row, *, current: bool) -> dict:
+    return {
+        "id": row.id,
+        "created_at": row.created_at,
+        "expires_at": row.expires_at,
+        "revoked_at": row.revoked_at,
+        "ip_address": row.ip_address,
+        "user_agent": row.user_agent,
+        "current": current,
+    }
+
+
+def strip_private_custom_data(custom: dict[str, Any] | None) -> dict[str, Any]:
+    """Drop the custom_data keys prefixed with `_private` — they belong to the
+    account holder, so no other profile surface may expose them."""
+    return {k: v for k, v in (custom or {}).items() if not k.startswith("_private")}
+
+
+def delegate_custom_data(
+    incoming: dict[str, Any] | None, existing: dict[str, Any] | None
+) -> dict[str, Any]:
+    """custom_data for a delegated `profile:update` write: keep the target's
+    stored `_private*` keys and drop whatever the caller sent under that prefix,
+    so a PUT (which replaces custom_data wholesale) cannot erase them."""
+    return {
+        **{k: v for k, v in (existing or {}).items() if k.startswith("_private")},
+        **strip_private_custom_data(incoming),
+    }
+
+
 def public_projection(p: UserProfile, user: User | None = None) -> dict:
     """
     Redacted projection for cross-user reads: strips phone_number, date_of_birth,
     and any custom_data keys prefixed with _private.
+
+    The delegated `profile:update` read in `routes/profiles.py` keeps
+    phone_number and date_of_birth but applies `strip_private_custom_data` to
+    custom_data, so the `_private` contract holds on both surfaces.
     """
     data = profile_to_dict(p)
     if user is not None:
@@ -100,7 +135,5 @@ def public_projection(p: UserProfile, user: User | None = None) -> dict:
     # Redact private fields
     data["phone_number"] = None
     data["date_of_birth"] = None
-    custom = data.get("custom_data") or {}
-    filtered = {k: v for k, v in custom.items() if not k.startswith("_private")}
-    data["custom_data"] = filtered
+    data["custom_data"] = strip_private_custom_data(data.get("custom_data"))
     return data

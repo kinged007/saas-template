@@ -9,7 +9,8 @@ import { Label } from "@/components/ui/label";
 import { SsoButtons, fetchAuthConfig, type AuthConfig } from "@/components/AuthConfig";
 import { afterAuthRedirect, authProvider, seedWorkspace } from "@/providers/authProvider";
 import { API_URL, httpClient } from "@/providers/dataProvider";
-import { identityStore, resetSessionState, tokenStore } from "@/utils/storage";
+import { identityStore, tokenStore } from "@/utils/storage";
+import { postCredentials } from "@/utils/credentialPost";
 import { clearAllCaches, queryClient } from "@/providers/queryClient";
 
 export function LoginPage() {
@@ -43,19 +44,19 @@ export function LoginPage() {
     if (challenge) codeRef.current?.focus();
   }, [challenge]);
 
-  // Same reset + workspace seed as authProvider.login, via resetSessionState():
-  // without this the identity query settles with no workspace selected and the
-  // app mounts behind a blank gate.
+  // Same reset + workspace seed as authProvider.login, except the reset runs in
+  // postCredentials() ahead of the POST, so the verify request is not scoped to
+  // the outgoing session. The app must still mount with a workspace selected or
+  // the identity query settles behind a blank gate.
   // Access token only — the refresh token lives in the HttpOnly cookie.
   const storeTokens = async (tokens: { access_token: string }) => {
-    resetSessionState();
     clearAllCaches(queryClient);
     tokenStore.setTokens(tokens.access_token);
     try {
       const { data: identity } = await httpClient.get(`${API_URL}/auth/me`);
       await seedWorkspace(identity);
     } catch {
-      identityStore.set(null);
+      identityStore.clear();
     }
   };
 
@@ -68,18 +69,22 @@ export function LoginPage() {
     if (challenge) {
       setPending(true);
       try {
-        const { data } = await httpClient.post(`${API_URL}/auth/2fa/login`, {
-          challenge_token: challenge,
-          code,
-          use_cookies: true,
-        });
+        const { data } = await postCredentials(() =>
+          httpClient.post(`${API_URL}/auth/2fa/login`, {
+            challenge_token: challenge,
+            code,
+            use_cookies: true,
+          }),
+        );
         await storeTokens(data);
         // replace: Back must not return to a spent sign-in form.
         navigate(afterAuthRedirect(), { replace: true });
       } catch {
-        setChallenge(null);
+        // The challenge survives a wrong code (the API consumes it only on
+        // success), so stay on the code form for a retry with the same token.
         setCode("");
-        setError("Verification failed. Sign in again.");
+        setError("Verification failed. Try again.");
+        codeRef.current?.focus();
       } finally {
         setPending(false);
       }
