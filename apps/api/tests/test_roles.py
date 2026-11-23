@@ -152,11 +152,21 @@ async def test_permission_registry_covers_route_guards():
 
 async def test_permission_catalog_requires_auth(app_client):
     resp = await app_client.get(
+        "/api/v1/roles/permission-catalog",
+        headers={"X-Workspace-ID": "00000000-0000-4000-8000-000000000000"},
+    )
+    # Well-formed (unknown) header passes the uuid_or_404 boundary, so the
+    # request reaches auth and is rejected as unauthenticated.
+    assert resp.status_code in (401, 403)
+
+
+async def test_permission_catalog_rejects_malformed_workspace_header(app_client):
+    resp = await app_client.get(
         "/api/v1/roles/permission-catalog", headers={"X-Workspace-ID": "ws-does-not-exist"}
     )
     # 404: the malformed workspace header is rejected at the route boundary
     # (uuid_or_404 in the header dependency), which runs before auth resolves.
-    assert resp.status_code in (401, 403, 404)
+    assert resp.status_code == 404
 
 
 async def test_permission_catalog_filtered_to_assignable(app_client):
