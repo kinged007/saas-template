@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { isAllowedLinkHref, normalizeLinkUrl } from "./link-url.ts";
+import { isAllowedDocumentHref, isAllowedLinkHref, normalizeLinkUrl } from "./link-url.ts";
 
 describe("normalizeLinkUrl", () => {
   it("keeps an absolute https URL and normalises it", () => {
@@ -62,5 +62,48 @@ describe("isAllowedLinkHref", () => {
     assert.equal(isAllowedLinkHref("javascript:alert(1)"), false);
     assert.equal(isAllowedLinkHref("mailto:a@example.com"), false);
     assert.equal(isAllowedLinkHref("data:text/html,<script>alert(1)</script>"), false);
+  });
+
+  it("refuses userinfo, so the host a bare host resolves to is never someone else's", () => {
+    // `http://evil.example.com@attacker.com` parses — the part before `@` is
+    // userinfo and the real host is `attacker.com` — so matching the prefix is
+    // approving a link to the attacker's site. No host contains `@`.
+    assert.equal(isAllowedLinkHref("evil.example.com@attacker.com"), false);
+    assert.equal(isAllowedLinkHref("https://example.com@attacker.com"), false);
+    assert.equal(isAllowedLinkHref("http://evil.example.com@attacker.com"), false);
+    assert.equal(isAllowedLinkHref("user@example.com"), false);
+    assert.equal(isAllowedLinkHref("example.com/a@b"), false);
+    assert.equal(isAllowedLinkHref(" example.com@attacker.com "), false);
+  });
+});
+
+describe("isAllowedDocumentHref", () => {
+  it("keeps everything the composer may create", () => {
+    assert.equal(isAllowedDocumentHref("https://example.com/x"), true);
+    assert.equal(isAllowedDocumentHref("www.example.com"), true);
+  });
+
+  it("keeps the relative paths and mailto addresses pasted rich HTML carries", () => {
+    // `parseHTML` drops an anchor whose href it refuses, so refusing these
+    // here silently unlinks whatever a user pasted from a web page.
+    assert.equal(isAllowedDocumentHref("/inbox"), true);
+    assert.equal(isAllowedDocumentHref("/inbox?a=1#b"), true);
+    assert.equal(isAllowedDocumentHref("mailto:a@example.com"), true);
+    assert.equal(isAllowedDocumentHref("mailto:a@example.com?subject=hi"), true);
+  });
+
+  it("still refuses every href that is not safe to put in the document", () => {
+    assert.equal(isAllowedDocumentHref(""), false);
+    assert.equal(isAllowedDocumentHref("//evil.example.com"), false);
+    assert.equal(isAllowedDocumentHref("javascript:alert(1)"), false);
+    assert.equal(isAllowedDocumentHref("data:text/html,<script>alert(1)</script>"), false);
+    assert.equal(isAllowedDocumentHref("file:///etc/passwd"), false);
+    assert.equal(isAllowedDocumentHref("mailto:"), false);
+    // A newline in an href is a header/attribute injection attempt, and a
+    // backslash reads as `/`, so `/\host` is the `//host` case again.
+    assert.equal(isAllowedDocumentHref("/inbox\njavascript:alert(1)"), false);
+    assert.equal(isAllowedDocumentHref("/\\evil.example.com"), false);
+    // The userinfo case from `isAllowedLinkHref` is refused here as well.
+    assert.equal(isAllowedDocumentHref("evil.example.com@attacker.com"), false);
   });
 });
