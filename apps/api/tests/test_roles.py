@@ -754,6 +754,7 @@ async def test_roles_default_order_breaks_a_name_tie_on_id(app_client):
     assert resp.status_code == 200, resp.text
     assert [r["id"] for r in resp.json() if r["name"] == "dup"] == ids
 
+
 async def test_roles_paging_tiles_the_set_without_gaps(app_client):
     """Rank + name + id is a total order, so pages tile the set in that one order.
 
