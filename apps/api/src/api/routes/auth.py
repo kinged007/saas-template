@@ -95,11 +95,11 @@ def _mail_limit_key(request: Request) -> str:
     """IP-only key for the coarse mail-volume backstop (#1346)."""
     return f"mailip:{_client_ip(request) or 'unknown'}"
 
+
 def _account_limit_key(email: str | None = None) -> str:
     """Account-scoped limiter key: one inbox attacked from many addresses
     shares one budget even when every request carries a different IP."""
     return f"account:{(email or '').lower()}"
-
 
 
 async def _maybe_join_single_workspace(db: AsyncSession, container, user) -> None:
