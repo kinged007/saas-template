@@ -30,6 +30,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: dev
+          fetch-depth: 0
           token: ${{ secrets.FLEET_TOKEN }}
       - name: Run the merge queue
         env:
