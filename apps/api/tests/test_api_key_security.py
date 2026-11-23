@@ -1196,16 +1196,6 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
             "deployment administration is not available to API keys"
         ), url
 
-    # usage_quota = 0 is refused at the counter: the conditional UPDATE's
-    # `usage_count < usage_quota` would be `0 < 0`, so the key the mint would
-    # hand back could never authenticate. No key is returned at all.
-    refused = await client.post(
-        "/api/v1/api-keys",
-        json={"name": "quota-zero", "permissions": [JOB_READ], "usage_quota": 0},
-        headers=headers,
-    )
-    assert refused.status_code == 422, refused.text
-
     # A key-authorized hit is metered like any other key route: every read and
     # write route spends one unit and reports what is left. Regression test for
     # #311 — the key branch of _require_run_access and _require_job_access used

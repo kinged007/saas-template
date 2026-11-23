@@ -68,6 +68,17 @@ def _quota_in_range(value: Any) -> Any:
 
 # BeforeValidator runs before the bounds on the fields below, so the 422
 # carries the service's words. ge/le stay on the fields so OpenAPI states the bounds.
+#
+# Rows stored with usage_quota = 0 before this guard are dead, not broken:
+# record_use's conditional UPDATE refuses every use (0 < 0), so the key
+# cannot authenticate, while the listing still reports it with
+# X-API-Key-Remaining: 0. Do not migrate them: NULL is the unlimited
+# sentinel, so 0 -> NULL would turn every dead credential into an unlimited
+# one, and any positive replacement is arbitrary. The repair is a PATCH to a
+# positive quota (or null for a deliberately unlimited key); revoking
+# (revoked_at) is how to disable a key. No CHECK constraint while a 0 row
+# can exist — both backends reject it when violating rows are present, so it
+# belongs in the same migration as whatever decision the row count motivates.
 QuotaAtLeastOne = Annotated[int | None, BeforeValidator(_quota_in_range)]
 
 

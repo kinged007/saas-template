@@ -154,6 +154,27 @@ instead of stamping it. Document the stamp target in the release notes.
 `make db-squash` itself never changes `project_versions/` content: it only
 moves the files aside for the baseline proof and restores them.
 
+## Legacy `usage_quota = 0` rows
+
+Keys stored with `usage_quota = 0` before the #948 guard are dead, not
+broken: every use is refused with 403, and `PATCH /api-keys/{id}` with a
+positive quota (or `null` for a deliberately unlimited key) revives them.
+Do not migrate them — `NULL` is the unlimited sentinel, so
+`UPDATE api_keys SET usage_quota = NULL WHERE usage_quota = 0` would turn
+every dead credential into an unlimited one, and any positive replacement
+is arbitrary.
+
+Runbook query to find them:
+
+```sql
+SELECT id, workspace_id, name, usage_quota FROM api_keys WHERE usage_quota = 0;
+```
+
+A `CHECK (usage_quota IS NULL OR usage_quota >= 1)` rejects violating rows
+rather than repairing them, so it cannot land until the count above is
+known and decided — it belongs in the same migration as that decision, not
+before it. The schema guard (`QuotaAtLeastOne`) carries the full policy.
+
 ## Fresh installs vs upgrades
 
 - Fresh: `create_all` + `alembic stamp heads` + seed (no replay).
