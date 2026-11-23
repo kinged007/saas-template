@@ -218,6 +218,11 @@ test.describe("composer toolbar", () => {
     await page.keyboard.type("evil.example.com@attacker.com ");
     await expect(editor.locator("a")).toHaveCount(0);
     await expect(editor).toHaveText(/evil\.example\.com@attacker\.com/);
+
+    // The same hole with a scheme: the real host is still `attacker.com`.
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.type("https://good.example.com@attacker.example ");
+    await expect(editor.locator("a")).toHaveCount(0);
   });
 
   test("a pasted anchor keeps its mark when its href is safe as written", async ({ page }) => {

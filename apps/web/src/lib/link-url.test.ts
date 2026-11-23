@@ -69,6 +69,8 @@ describe("isAllowedLinkHref", () => {
     // userinfo and the real host is `attacker.com` — so matching the prefix is
     // approving a link to the attacker's site. No host contains `@`.
     assert.equal(isAllowedLinkHref("evil.example.com@attacker.com"), false);
+    assert.equal(isAllowedLinkHref("https://example.com@attacker.com"), false);
+    assert.equal(isAllowedLinkHref("http://evil.example.com@attacker.com"), false);
     assert.equal(isAllowedLinkHref("user@example.com"), false);
     assert.equal(isAllowedLinkHref("example.com/a@b"), false);
     assert.equal(isAllowedLinkHref(" example.com@attacker.com "), false);
