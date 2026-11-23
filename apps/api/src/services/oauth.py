@@ -333,6 +333,16 @@ async def _jwks(
     return await _inflight.run(key, fetch)
 
 
+def _norm_issuer(issuer: str | None) -> str | None:
+    """Trailing slash normalized away, so a cosmetic slash decides nothing.
+
+    A non-string -- the token's `iss` is signed input, and a `ProviderConfig` can
+    be built by hand -- normalizes to None, which fails the pin closed rather
+    than raising.
+    """
+    return issuer.rstrip("/") if isinstance(issuer, str) and issuer else None
+
+
 def _signing_candidates(jwks_doc: dict[str, Any]) -> list[jwt.PyJWK]:
     """The published keys a token could be verified against.
 
@@ -359,33 +369,86 @@ async def claims_from_id_token(
     provider: ProviderConfig, doc: dict[str, Any], id_token: str, cache: TtlCache
 ) -> dict[str, Any] | None:
     """Verify the id_token signature via JWKS; None when unverifiable."""
-    # The document's issuer is what the IdP itself states, so it wins over the
-    # configured one; the config covers providers that skip discovery.
-    issuer = doc.get("issuer") or provider.issuer
+    # The operator's configured issuer is the pin; the discovery document only
+    # fills in a provider that names none, and one naming a different issuer is
+    # refused. That is a consistency check, not a standalone pin: the document
+    # still names the verifying keys via `jwks_uri`, so a document under
+    # hostile control still controls the keys. A disagreement is a hard login
+    # failure, not a fallback.
+    doc_issuer = doc.get("issuer")
+    if doc_issuer is not None and not isinstance(doc_issuer, str):
+        # Malformed input, not a disagreement: log it as such, so a triage of a
+        # suspected takeover is not sent after a compromise that did not happen.
+        logger.warning("unreadable issuer in discovery document for provider %s", provider.id)
+        return None
+    if provider.issuer and doc_issuer and _norm_issuer(provider.issuer) != _norm_issuer(doc_issuer):
+        logger.warning("discovery issuer mismatch for provider %s", provider.id)
+        return None
+    issuer = _norm_issuer(provider.issuer or doc_issuer)
     if not issuer:
         # Nothing to compare `iss` against, so only its presence is enforced.
         logger.warning("no issuer configured for provider %s; id_token iss not pinned", provider.id)
     try:
-        key = _signing_key(await _jwks(provider, doc, cache), id_token)
+        try:
+            jwks_doc = await _jwks(provider, doc, cache)
+        except Exception as exc:
+            # Only a fetch failure is an outage. An unknown kid and an unparseable
+            # token raise below and keep the generic line, so an outage that
+            # reads as an attack is the ambiguity this split exists to remove.
+            logger.warning(
+                "jwks fetch failed for provider %s: %s",
+                provider.id,
+                _single_line(exc),
+                exc_info=logger.isEnabledFor(logging.DEBUG),
+            )
+            return None
+        key = _signing_key(jwks_doc, id_token)
         if key is None:
             # A kid the cached set has never seen is the one case a refetch can fix.
-            key = _signing_key(await _jwks(provider, doc, cache, refresh=True), id_token)
+            try:
+                jwks_doc = await _jwks(provider, doc, cache, refresh=True)
+            except Exception as exc:
+                logger.warning(
+                    "jwks fetch failed for provider %s: %s",
+                    provider.id,
+                    _single_line(exc),
+                    exc_info=logger.isEnabledFor(logging.DEBUG),
+                )
+                return None
+            key = _signing_key(jwks_doc, id_token)
         if key is None:
             raise OAuthError("no matching signing key")
-        return jwt.decode(
+        claims = jwt.decode(
             id_token,
             key,
             algorithms=["RS256", "ES256"],
             audience=provider.client_id,
-            issuer=issuer,
-            options={"require": ["exp", "iss", "sub"]},
+            # `iss` is checked below instead of by PyJWT: it matches byte for
+            # byte, and a slash-terminated issuer is a legal OIDC shape
+            # (Discovery 1.0 §3), so the token's value needs the same
+            # normalization the expected one already gets.
+            options={"require": ["exp", "iss", "sub"], "verify_iss": False},
         )
-    except Exception as exc:
+        if issuer and _norm_issuer(claims["iss"]) != issuer:
+            raise jwt.InvalidIssuerError("Issuer does not match")
+        return claims
+
+    except (OAuthError, jwt.PyJWTError) as exc:
+        # Only these two are verification failures, so only these two mean "no
+        # claims". OAuthError is `_jwks` reporting the IdP side — unreachable, an
+        # HTTP error, a body that is not a usable key set, a non-JSON or non-UTF-8
+        # body, a response cut off mid-body — and the "no matching signing key"
+        # below. PyJWTError is `jwt.decode` refusing the token: expired, wrong
+        # audience or issuer, or signed by another key. Anything else is a defect
+        # in this module or in the provider config and has to reach the traceback
+        # instead of being reported as a rejected login.
+
         # The message can echo token-supplied header data (an unknown `crit`
         # extension echoes its name), so it is flattened like the body above.
         logger.warning(
-            "id_token verification failed for provider %s: %s",
+            "id_token verification failed for provider %s: %s: %s",
             provider.id,
+            type(exc).__name__,
             _single_line(exc),
             exc_info=logger.isEnabledFor(logging.DEBUG),
         )

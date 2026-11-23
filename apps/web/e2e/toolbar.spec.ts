@@ -207,6 +207,48 @@ test.describe("composer toolbar", () => {
     await expect(editor.locator("a")).toHaveCount(0);
   });
 
+  test("a host that hides its real target behind userinfo is not autolinked", async ({ page }) => {
+    await openToolbar(page);
+    const editor = page.getByRole("dialog").locator('[contenteditable="true"]');
+
+    // `http://evil.example.com@attacker.com` is a valid URL whose host is
+    // `attacker.com`, so matching `evil.example.com` on its own would turn a
+    // deceptive link into an anchor. It has to stay plain text.
+    await editor.click();
+    await page.keyboard.type("evil.example.com@attacker.com ");
+    await expect(editor.locator("a")).toHaveCount(0);
+    await expect(editor).toHaveText(/evil\.example\.com@attacker\.com/);
+
+    // The same hole with a scheme: the real host is still `attacker.com`.
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.type("https://good.example.com@attacker.example ");
+    await expect(editor.locator("a")).toHaveCount(0);
+  });
+
+  test("a pasted anchor keeps its mark when its href is safe as written", async ({ page }) => {
+    await openToolbar(page);
+    const editor = page.getByRole("dialog").locator('[contenteditable="true"]');
+
+    // `isAllowedUri` is what the extension runs on `parseHTML` as well, so a
+    // gate that only knows absolute http(s) hrefs unlinks a whole page pasted
+    // from a browser. The unsafe hrefs in the same paste are still dropped.
+    await editor.click();
+    await editor.evaluate((node) => {
+      const html =
+        '<p><a href="/inbox">inbox</a> <a href="mailto:a@example.com">mail</a> ' +
+        '<a href="javascript:alert(1)">script</a> <a href="//evil.example.com">evil</a></p>';
+      const data = new DataTransfer();
+      data.setData("text/html", html);
+      node.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+    });
+
+    await expect(editor.locator('a[href="/inbox"]')).toHaveText("inbox");
+    await expect(editor.locator('a[href="mailto:a@example.com"]')).toHaveText("mail");
+    // The two refused hrefs are plain text, so nothing points at another host.
+    await expect(editor.locator("a")).toHaveCount(2);
+    await expect(editor).toHaveText(/script evil/);
+  });
+
   test("the toolbar is a single tab stop with arrow-key navigation", async ({ page }) => {
     const toolbar = await openToolbar(page);
     const buttons = toolbar.getByRole("button");

@@ -20,7 +20,7 @@ from src.core.security.cookies import (
     require_csrf,
     set_refresh_cookie,
 )
-from src.core.security.ratelimit import get_auth_limiter, get_register_limiter
+from src.core.security.ratelimit import get_auth_limiter, get_mail_limiter, get_register_limiter
 from src.core.security.tokens import OpaqueToken
 from src.db.session import get_db
 from src.email import factory as email_factory
@@ -91,6 +91,11 @@ def _limit_key(request: Request, email: str | None = None) -> str:
     return f"{ip}:{(email or '').lower()}"
 
 
+def _mail_limit_key(request: Request) -> str:
+    """IP-only key for the coarse mail-volume backstop (#1346)."""
+    return f"mailip:{_client_ip(request) or 'unknown'}"
+
+
 async def _maybe_join_single_workspace(db: AsyncSession, container, user) -> None:
     if not settings.single_workspace:
         return
@@ -155,6 +160,10 @@ async def register(
     # If only one of first/last provided without the other, still allow but derive
     if not settings.auth_allow_registration:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "registration is disabled")
+    # IP-wide mail backstop (#1346): 429 before any DB write; only the
+    # verification send below spends it, so a 409 duplicate spends nothing.
+    mail_key = _mail_limit_key(request)
+    get_mail_limiter().check(mail_key)
     # The verification mail needs a cap no per-(IP, email) key can dodge
     # (#1343): the registrant owns every fresh address, so the key is the IP
     # alone, spent out of the register limiter's own window — not the auth
@@ -186,6 +195,9 @@ async def register(
         await _send_verification(service, user)
     except Exception:
         logger.exception("failed to send verification email for user %s", user.id)
+    # The send (or its attempt) is the metered event for the IP-wide mail
+    # backstop (#1346).
+    get_mail_limiter().fail(mail_key)
     # Every send spends one unit of the register limiter's budget, which the
     # window caps: like forgot-password there is no success reset, because the
     # send (or its attempt) is the metered event, not a failure.
@@ -213,6 +225,8 @@ async def forgot_password(
         return {"detail": "if an account exists for this email, a reset link was sent"}
     key = _limit_key(request, str(body.email))
     get_auth_limiter().check(key)
+    mail_key = _mail_limit_key(request)
+    get_mail_limiter().check(mail_key)
     raw = await AuthService(db, container.bus).request_password_reset(
         str(body.email), ip_address=_client_ip(request)
     )
@@ -230,6 +244,7 @@ async def forgot_password(
     # registered. Like resend-verification there is no success reset: the
     # send (or its attempt) is the metered event, not a failure.
     get_auth_limiter().fail(key)
+    get_mail_limiter().fail(mail_key)
     return {"detail": "if an account exists for this email, a reset link was sent"}
 
 
@@ -278,6 +293,8 @@ async def resend_verification(
 ) -> dict:
     key = _limit_key(request, user.email)
     get_auth_limiter().check(key)
+    mail_key = _mail_limit_key(request)
+    get_mail_limiter().check(mail_key)
     if getattr(user, "email_verified_at", None) is not None:
         return {"detail": "email already verified"}
     service = AuthService(db, container.bus)
@@ -288,8 +305,10 @@ async def resend_verification(
         logger.exception("failed to resend verification email for user %s", user.id)
     # Every send spends one unit of the auth-limiter budget, which the window
     # caps: unlike login there is no success reset, because the send itself
-    # is the metered event, not a failure.
+    # is the metered event, not a failure. The send also spends the IP-wide
+    # mail backstop (#1346).
     get_auth_limiter().fail(key)
+    get_mail_limiter().fail(mail_key)
     return {"detail": "if unverified, a verification link was sent"}
 
 
