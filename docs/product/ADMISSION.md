@@ -53,8 +53,11 @@ Hard rules. Any unchecked box that can be fixed becomes a named condition (**Acc
       why it cannot be split.
 - [ ] **Authorisation** for anything workspace-scoped is enforced on the server. UI gating is
       cosmetic and never the only check.
-- [ ] The change has **one release-note line** an adopter can read to decide whether to take
-      it: what changed, for whom, and anything they must do.
+- [ ] The squash commit into `dev` carries **one release-note line** an adopter can read to
+      decide whether to take it: what changed, for whom, and anything they must do. The author
+      writes it; when it is missing, the merger writes it. A missing line never blocks a merge.
+      A rename, move or deletion under `apps/` that is not listed as `old/path → new/path`
+      does block it.
 
 ### Gate 3 — Shape *(P3 Ownership not hooks, P5 Optional means removable)*
 
