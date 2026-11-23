@@ -1,6 +1,5 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 import { useCan, useCreate, useCustomMutation, useGetIdentity, useGo, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
-import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Link } from "react-router";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 
@@ -24,6 +23,7 @@ import {
 } from "@/components/ui/table";
 import { DeleteButton } from "../components/refine-ui/buttons/delete";
 import { ListView, ListViewHeader } from "../components/refine-ui/views/list-view";
+import { ListPager } from "../components/ListPager";
 import { EmptyRow, StatusBadge, formatDate } from "../components/ui";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { UserProfileDialog } from "@/components/UserProfileDialog";
@@ -128,22 +128,13 @@ export function MembersPage() {
 
   const rows = membersResult?.data ?? [];
   const membersTotal = membersResult?.total ?? 0;
-  const membersTotalPages = Math.max(1, Math.ceil(membersTotal / PAGE_SIZE));
   const roleOptions = rolesResult?.data ?? [];
   const invitations = invitationsResult?.data ?? [];
   const invitesTotal = invitationsResult?.total ?? 0;
-  const invitesTotalPages = Math.max(1, Math.ceil(invitesTotal / PAGE_SIZE));
   // The pickers and the notice count this one list, so the notice can never
   // claim a role the dropdown does not offer.
   const assignable = assignableRoles(roleOptions);
   const roleCapNotice = rolePickerCapNotice(rolesResult?.total ?? 0, roleOptions);
-
-  useEffect(() => {
-    if (membersPage > membersTotalPages) setMembersPage(membersTotalPages);
-  }, [membersPage, membersTotalPages]);
-  useEffect(() => {
-    if (invitesPage > invitesTotalPages) setInvitesPage(invitesTotalPages);
-  }, [invitesPage, invitesTotalPages]);
 
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
   const canManageRoles = !!canManage?.can && isManagerRoleName(myRole);
@@ -316,36 +307,12 @@ export function MembersPage() {
           </TableBody>
         </Table>
       </div>
-      {membersTotal > PAGE_SIZE && (
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-muted-foreground text-sm">
-          Showing {(membersPage - 1) * PAGE_SIZE + 1}–{Math.min(membersPage * PAGE_SIZE, membersTotal)} of {membersTotal}
-        </p>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={membersPage <= 1}
-            onClick={() => setMembersPage((c) => Math.max(1, c - 1))}
-          >
-            <ChevronLeft className="h-4 w-4" />
-            Previous
-          </Button>
-          <span className="text-muted-foreground px-2 text-sm">
-            Page {membersPage} of {membersTotalPages}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={membersPage >= membersTotalPages}
-            onClick={() => setMembersPage((c) => Math.min(membersTotalPages, c + 1))}
-          >
-            Next
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-      )}
+      <ListPager
+        page={membersPage}
+        pageSize={PAGE_SIZE}
+        total={membersTotal}
+        onPageChange={setMembersPage}
+      />
 
       {canInvite?.can && (
         <section className="flex flex-col gap-4">
@@ -370,7 +337,7 @@ export function MembersPage() {
             </div>
             <div className="flex flex-col gap-2">
               <Label>Role</Label>
-              <Select value={inviteRoleId} onValueChange={setInviteRoleId}>
+              <Select value={inviteRole?.id ?? ""} onValueChange={setInviteRoleId}>
                 <SelectTrigger className="w-40" aria-describedby={inviteRoleCapId}>
                   <SelectValue placeholder="Role">{inviteRole?.name ?? ""}</SelectValue>
                 </SelectTrigger>
@@ -457,36 +424,12 @@ export function MembersPage() {
               </TableBody>
             </Table>
           </div>
-          {invitesTotal > PAGE_SIZE && (
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-muted-foreground text-sm">
-              Showing {(invitesPage - 1) * PAGE_SIZE + 1}–{Math.min(invitesPage * PAGE_SIZE, invitesTotal)} of {invitesTotal}
-            </p>
-            <div className="flex items-center gap-1">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={invitesPage <= 1}
-                onClick={() => setInvitesPage((c) => Math.max(1, c - 1))}
-              >
-                <ChevronLeft className="h-4 w-4" />
-                Previous
-              </Button>
-              <span className="text-muted-foreground px-2 text-sm">
-                Page {invitesPage} of {invitesTotalPages}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={invitesPage >= invitesTotalPages}
-                onClick={() => setInvitesPage((c) => Math.min(invitesTotalPages, c + 1))}
-              >
-                Next
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-          )}
+          <ListPager
+            page={invitesPage}
+            pageSize={PAGE_SIZE}
+            total={invitesTotal}
+            onPageChange={setInvitesPage}
+          />
         </section>
       )}
       <UserProfileDialog

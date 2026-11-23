@@ -16,6 +16,8 @@
 
 **Required env vars:** DATABASE_URL
 
+Fleet labels: `docs/FLEET_LABELS.md` is the single source for every `agent:*` label — read it before adding, removing, or renaming one.
+
 ## Product direction — read before proposing or building anything
 
 Before opening an issue or PR that adds or changes behaviour, read
@@ -52,38 +54,17 @@ since vite serves both) — open either and the session holds.
 ## Migrations
 
 Models are the source of truth; migrations are generated, reviewed, committed.
-After changing any model, generate the migration with a 14-digit UTC timestamp
-revision id (`docs/product/DECISIONS.md` D-04):
+After changing any model, generate the migration (`make db-new` assigns a
+14-digit UTC timestamp revision id per `docs/product/DECISIONS.md` D-04):
 
 ```bash
-cd apps/api && uv run alembic revision --autogenerate \
-  --rev-id "$(date -u +%Y%m%d%H%M%S)" -m "acme orders"   # → 20261118104500_acme_orders.py
+make db-new m="acme orders"   # → 20261118104500_acme_orders.py
 ```
 
-`make db-new` does not set the id yet, so do not use it for new migrations until it does — it writes Alembic's default random hex id, which violates D-04. Use the `--rev-id` command above.
 Review the diff (watch for accidental drops, wrong nullability, missing server_default),
 commit the file.
 `make db-check` (also in CI) fails on multiple heads or models≠migrations.
-Full workflow: `docs/MIGRATIONS.md`, except its Daily workflow still shows `make db-new`: use the `--rev-id` command above for the id until that file is fixed.
-
----
-
-## Agent Instructions
-
-This project uses codesight for structured AI context. Follow these steps before implementing:
-1. Read `.codesight/wiki/index.md` for project orientation (~200 tokens)
-2. Read `.codesight/wiki/overview.md` for architecture overview (~500 tokens)
-3. Read the relevant domain article, then open the source files listed in it
-4. Read `.codesight/CODESIGHT.md` for the full context map
-
-**Do not explore the file tree blindly.** The codesight context map already contains:
-routes, schema, components, libraries, config, middleware, and dependency graph.
-
-**Before modifying any file:** check `.codesight/graph.md` for blast radius.
-Files with high import counts affect many downstream modules — change carefully.
-
-Routes marked `[inferred]` were detected via regex and may have lower precision.
-If any source file shows ⚠ in a wiki article, re-run `npx codesight --wiki` before proceeding.
+Full workflow: `docs/MIGRATIONS.md`.
 
 ---
 

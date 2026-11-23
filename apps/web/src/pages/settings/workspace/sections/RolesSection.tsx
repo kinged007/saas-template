@@ -27,14 +27,19 @@ import {
 } from "@/components/ui/table";
 import { Check, ChevronDown, Pencil, Plus } from "lucide-react";
 import type { Role } from "@/types";
-import { roleCapNotice } from "@/lib/role-cap";
+import { ListPager } from "@/components/ListPager";
 import { isOwnerRoleName } from "@/pages/role-name";
 
 type CatalogResponse = { catalog: string[]; permissions: string[] };
 
-// parse_query's max_limit: ask for one full page so the server order is
-// complete. A workspace past this is reported as truncated below the list.
+// parse_query's max_limit: the largest page the roles endpoint serves. A
+// workspace past this pages through the rest below the list.
 const ROLES_PAGE_SIZE = 100;
+
+const SYSTEM_RANK: Record<string, number> = { owner: 0, admin: 1, editor: 2, viewer: 3 };
+
+/** Custom roles keep their own order, always after the system block. */
+const rank = (r: Role) => (r.system ? (SYSTEM_RANK[r.name.toLowerCase()] ?? 4) : 5);
 
 function splitPermission(p: string): [string, string] {
   const i = p.indexOf(":");
@@ -156,9 +161,10 @@ function PermissionPicker({
 }
 
 export function RolesSection() {
+  const [page, setPage] = useState(1);
   const { result } = useWorkspaceList<Role>({
     resource: "roles",
-    pagination: { currentPage: 1, pageSize: ROLES_PAGE_SIZE },
+    pagination: { currentPage: page, pageSize: ROLES_PAGE_SIZE },
   });
   const { result: catalogResult } = useWorkspaceCustom<CatalogResponse>({
     url: "roles/permission-catalog",
@@ -172,10 +178,12 @@ export function RolesSection() {
   const { data: canManage } = useCan({ resource: "roles", action: "create" });
   const { data: canEdit } = useCan({ resource: "roles", action: "edit" });
 
-  // Ordered by the endpoint (system roles first), so no client sort.
-  const rows = result?.data ?? [];
+  // Server orders by a name-keyed rank; re-apply the system-keyed rank within
+  // the fetched page so a custom role named like a system role sorts last.
+  const rows = [...(result?.data ?? [])].sort(
+    (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name),
+  );
   const total = result?.total ?? rows.length;
-  const capNotice = roleCapNotice(rows.length, total);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
@@ -319,7 +327,6 @@ export function RolesSection() {
           </Dialog>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          {capNotice && <p className="text-muted-foreground text-sm">{capNotice}</p>}
           {rows.map((role) => {
             const isOpen = expanded.has(role.id);
             const granted = new Set(role.permissions.includes("*") ? catalog : role.permissions);
@@ -370,6 +377,7 @@ export function RolesSection() {
           {rows.length === 0 && (
             <p className="text-muted-foreground py-4 text-center text-sm">No roles yet.</p>
           )}
+          <ListPager page={page} pageSize={ROLES_PAGE_SIZE} total={total} onPageChange={setPage} />
         </CardContent>
       </Card>
 

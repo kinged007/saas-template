@@ -39,11 +39,12 @@ export function WorkspaceExportCard() {
     // report the same failure a second time.
     errorNotification: false,
   });
-  // refine's isLoading is `isFetching && !data`, which is true again while a
-  // retry runs: the refetch targets a query that never resolved. A non-zero
-  // errorUpdatedAt means an earlier attempt already failed, and that is what
-  // tells a first load from a retry. Holding the card and its alert up while
-  // the retry is in flight is the point: Retry shows as disabled, not gone.
+  // TanStack Query v5 (refine 5's useCan returns it unchanged): isLoading is
+  // `isPending && isFetching`, so it is true only for a first load. After a
+  // failure the query's status is `error`, so a retry sets isFetching again while
+  // isLoading stays false — a non-zero errorUpdatedAt, which records that failure,
+  // is what tells a first load from a retry in flight. Holding the card and its
+  // alert up while the retry runs is the point: Retry shows as disabled, not gone.
   const retrying =
     resourcesQuery.isFetching && !resourcesQuery.data && resourcesQuery.errorUpdatedAt > 0;
   const resourcesFailed = resourcesQuery.isError || retrying;
@@ -71,6 +72,7 @@ export function WorkspaceExportCard() {
     }
   };
 
+  // An already-failed query keeps the card mounted: only a first attempt in flight unmounts it.
   if (!workspace || isLoading || (resourcesQuery.isLoading && !resourcesQuery.errorUpdatedAt)) return null;
   if (canExport && !canExport.can) return null;
 
@@ -82,10 +84,12 @@ export function WorkspaceExportCard() {
           Download a read-only snapshot of this workspace: the workspace itself, members and their profiles,
           roles, invitations, conversations and their messages, jobs, API key metadata, webhook subscriptions,
           notifications, and the audit log. The JSON download is the full record. There is no import in this
-          app — the file is for your own backup, or for loading into another system. The CSV download is a
-          spreadsheet view of one selected resource, and cells a spreadsheet would read as a formula are prefixed
-          with an apostrophe, so use the JSON for anything you intend to parse. Secrets (API key values, webhook
-          signing secrets, secret job parameters) are never included — re-mint them yourself.
+          app — the file is for your own backup, or for loading into another system. Messages, notifications and
+          audit entries are capped at 5000 rows each, and the JSON carries a `truncated` flag that is true when a
+          cap was hit. The CSV download is a spreadsheet view of one selected resource, and cells a spreadsheet
+          would read as a formula are prefixed with an apostrophe, which is a convention a spreadsheet can drop
+          when it saves the file again, so use the JSON for anything you intend to parse. Secrets (API key values,
+          webhook signing secrets, secret job parameters) are never included — re-mint them yourself.
         </CardDescription>
       </CardHeader>
       <CardContent>

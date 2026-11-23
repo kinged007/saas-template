@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   api-lint:
     runs-on: ubuntu-latest
@@ -39,20 +42,46 @@ jobs:
       - run: cd apps/api && uv sync --extra dev
       - run: make db-check
 
-  web-build:
+  # Advisory in derived projects (a red report is review input, never a gate),
+  # skipped as a report in the template repo itself (where it runs the script's
+  # self-test instead). Derived projects reach this job through the template
+  # remote + tags set up below; the origin check tells the two cases apart.
+  template-paths:
     runs-on: ubuntu-latest
+    # Advisory only in derived projects; the template repo's self-test must fail the workflow.
+    continue-on-error: ${{ github.repository != 'kinged007/saas-template' }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: apps/web/package-lock.json
-      - run: cd apps/web && npm ci
-      - run: cd apps/web && npm run build
+          fetch-depth: 0
+          fetch-tags: true
+      - name: report template-owned changes (self-test in the template repo)
+        run: |
+          set -eo pipefail
+          origin="$(git remote get-url origin 2>/dev/null || true)"
+          case "$origin" in
+            *kinged007/saas-template*)
+              echo "template repo itself: running check-template-paths self-test"
+              bash scripts/check-template-paths.test.sh
+              ;;
+            *)
+              git remote add template https://github.com/kinged007/saas-template.git 2>/dev/null || true
+              git fetch template --tags --quiet || echo "warning: could not fetch template tags"
+              bash scripts/check-template-paths.sh
+              ;;
+          esac
 
-  web-test:
+  # One matrix over the three frontend checks, so the checkout, setup-node and
+  # npm ci block exists once instead of three times. The name keeps the
+  # previous check names (web-build, web-test, web-e2e) for branch protection.
+  # fail-fast off: a red leg must not cancel the others.
+  web:
+    name: web-${{ matrix.command }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        command: [build, test, e2e]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -61,14 +90,41 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - run: cd apps/web && npm ci
+      - if: matrix.command == 'build'
+        run: cd apps/web && npm run build
       # Default discovery matches the "test" script's glob; the pattern lives only in package.json.
       # node --test exits 0 when it discovers nothing, so assert a non-zero count.
-      - name: run web tests
+      - if: matrix.command == 'test'
+        name: run web tests
         run: |
           set -eo pipefail
           cd apps/web
           node --test --test-reporter=tap | tee web-test.tap
           grep -qE '^# tests [1-9]' web-test.tap
+      - if: matrix.command == 'e2e'
+        run: cd apps/web && npx playwright install --with-deps chromium
+      - if: matrix.command == 'e2e'
+        run: cd apps/web && npm run test:e2e
+      # A red run has to be diagnosable from here: the HTML report carries the
+      # per-spec error, the retained trace and the screenshot of each failure.
+      - if: failure() && matrix.command == 'e2e'
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-e2e-report
+          path: |
+            apps/web/playwright-report/
+            apps/web/test-results/
+          retention-days: 7
+          # A red e2e leg always writes both directories; finding neither means
+          # the run failed before Playwright did, which the default `warn` hides.
+          if-no-files-found: error
+
+  label-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check fleet label contract
+        run: ./scripts/check-label-contract.sh
 
   trailing-newline:
     runs-on: ubuntu-latest
@@ -79,9 +135,6 @@ jobs:
           set -eo pipefail
           failed=0
           while IFS= read -r -d '' f; do
-            case "$f" in
-              .codesight/*|review-artifacts/*) continue ;;
-            esac
             [ -s "$f" ] || continue
             if [ -n "$(tail -c1 "$f")" ]; then
               echo "no trailing newline: $f"

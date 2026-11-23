@@ -2,7 +2,7 @@
 
 Pick up the next open PR, review it, and either fix-and-stop or merge-and-close. Fix majors and minors, report, STOP — the next fresh session re-reviews. You can only merge and close a PR if all issues were fixed in a previous session. You cannot review, fix, and close in one session — if you fix issues in your session, hand off for a new review session to review and close. Run from the repo root. All `gh` commands assume the repo default (current directory) — never hardcode `repos/<owner>/<repo>`.
 
-There is no `backlog` label. `in-progress` is the mandatory claim lock for this workflow; `review-in-progress` is also treated as claimed for compatibility. `needs-human` means blocked, and `agent:done` means reviewed, ready to merge, and no longer to be picked up by step 1. `agent:done` is applied on the approval path in step 7 — if a PR is approved but not yet merged, it must already carry it, otherwise step 1 will hand it to the next agent forever.
+`backlog` means deferred by a person — never touch it. `in-progress` is the mandatory claim lock for this workflow; `review-in-progress` is also treated as claimed for compatibility. `needs-human` means blocked, and `agent:done` means reviewed, ready to merge, and no longer to be picked up by step 1. `agent:done` is applied on the approval path in step 7 — if a PR is approved but not yet merged, it must already carry it, otherwise step 1 will hand it to the next agent forever.
 
 ## Process lifecycle and cleanup (MANDATORY)
 
@@ -47,12 +47,12 @@ Browser: Playwright driving chromium, per `.agents/browser.md`. Read that file b
 
 ## 1. Find the oldest open PR
 
-Skip any PR labelled `wontfix`, `needs-human`, `in-progress`, `review-in-progress`, `invalid`, `duplicate`, or `agent:done` — never touch those, even if open. The rest are ordered oldest first, so the PR that has waited longest is reviewed first:
+Skip any PR labelled `wontfix`, `needs-human`, `backlog`, `in-progress`, `review-in-progress`, `invalid`, `duplicate`, or `agent:done` — never touch those, even if open. The rest are ordered oldest first, so the PR that has waited longest is reviewed first:
 
 ```bash
 gh pr list --state open --limit 50 --search "sort:created-asc" \
   --json number,title,createdAt,labels \
-  -q 'map(select(([.labels[].name] | any(. == "wontfix" or . == "needs-human" or . == "in-progress" or . == "review-in-progress" or . == "invalid" or . == "duplicate" or . == "agent:done")) | not))
+  -q 'map(select(([.labels[].name] | any(. == "wontfix" or . == "needs-human" or . == "backlog" or . == "in-progress" or . == "review-in-progress" or . == "invalid" or . == "duplicate" or . == "agent:done")) | not))
       | .[] | "\(.number) | \(.createdAt) | \(.title)"'
 ```
 

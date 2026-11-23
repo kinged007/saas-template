@@ -3,8 +3,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { toast } from "sonner";
-import { useCan, useCustomMutation, useDelete, useGetIdentity, useInvalidate } from "@refinedev/core";
-import { useNavigate } from "react-router";
+import { useCan, useCustomMutation, useDelete, useGetIdentity, useInvalidate, useNavigation } from "@refinedev/core";
+import { Link, useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -44,8 +44,17 @@ import type { Identity, Member } from "@/types";
 import { getDisplayNameFromRow, memberOptionLabel } from "@/types";
 import { WorkspaceExportCard } from "@/components/WorkspaceExportCard";
 import { workspaceStore } from "@/utils/storage";
-import { resolveTransferTarget, transferCandidateMessage, transferEligibleMembers } from "./transfer-ownership";
+import { resolveTransferTarget, transferCandidateMessage, transferCapNotice, transferEligibleMembers } from "./transfer-ownership";
 import { isOwnerRoleName } from "@/pages/role-name";
+
+// One picker on the page, so one id: aria-describedby resolves to the element
+// carrying it, and a second picker would need a second paragraph.
+const TRANSFER_CAP_ID = "transfer-cap";
+
+// parse_query in apps/api/src/api/crud.py clamps with max_limit=100, so this is
+// the largest page /members returns. A longer workspace is disclosed by the cap
+// notice, not paginated through.
+const MEMBERS_PAGE_SIZE = 100;
 
 const schema = z.object({
   name: z.string().min(1, "Name is required").max(150, "Max 150 characters"),
@@ -75,7 +84,7 @@ export function GeneralSection() {
   const { mutate: transfer, mutation: transferMutation } = useCustomMutation();
   const { result: membersResult, query: membersQuery } = useWorkspaceList<Member>({
     resource: "members",
-    pagination: { pageSize: 100 },
+    pagination: { pageSize: MEMBERS_PAGE_SIZE },
   });
   const invalidate = useInvalidate();
   const [transferId, setTransferId] = useState("");
@@ -83,6 +92,7 @@ export function GeneralSection() {
   const isOwner = isOwnerRoleName(workspace?.role);
   const members = membersResult?.data ?? [];
   const transferCandidates = transferEligibleMembers(members);
+  const transferCap = transferCapNotice(membersResult?.total ?? 0, members);
   // A transferId that stopped resolving on a refetch leaves transferTarget
   // undefined, which is what disarms the button below.
   // SelectValue without children renders the placeholder forever, so the trigger
@@ -91,9 +101,14 @@ export function GeneralSection() {
   const transferTarget = resolveTransferTarget(transferCandidates, transferId);
   const transferTargetName = transferTarget ? getDisplayNameFromRow(transferTarget) : "";
   const transferTargetLabel = transferTarget ? memberOptionLabel(transferTarget) : "";
-  // ponytail: the members endpoint clamps `limit` to 100, so the list can be
-  // truncated. The UI says so; page the select once a workspace can exceed 100 members.
+  // The members endpoint clamps `limit` to 100 and orders by created_at desc,
+  // so this page holds the newest rows and the rows it drops are the oldest
+  // ones. The notice says both and links the member table, which pages through
+  // every candidate `transfer_ownership` accepts.
+  // ponytail: the picker itself is still one page; page the select if a
+  // workspace above 100 members makes hunting an owner the common case.
   const membersTruncated = (membersResult?.total ?? 0) > members.length;
+  const { listUrl } = useNavigation();
   const candidatesMessage = transferCandidateMessage({
     isPending: membersQuery.isPending,
     isError: membersQuery.isError,
@@ -332,7 +347,11 @@ export function GeneralSection() {
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="transfer-member">New owner</Label>
                     <Select value={transferId} onValueChange={setTransferId}>
-                      <SelectTrigger id="transfer-member" className="w-full sm:w-72">
+                      <SelectTrigger
+                        id="transfer-member"
+                        className="w-full sm:w-72"
+                        aria-describedby={transferCap ? TRANSFER_CAP_ID : undefined}
+                      >
                         <SelectValue placeholder="Select member">{transferTargetLabel}</SelectValue>
                       </SelectTrigger>
                       <SelectContent>
@@ -343,6 +362,9 @@ export function GeneralSection() {
                         ))}
                       </SelectContent>
                     </Select>
+                    {transferCap && (
+                      <p id={TRANSFER_CAP_ID} className="text-muted-foreground text-sm">{transferCap}</p>
+                    )}
                     <Dialog open={transferOpen} onOpenChange={setTransferOpen}>
                       <DialogTrigger asChild>
                         <Button variant="destructive" disabled={!transferTarget || transferMutation.isPending}>
@@ -392,7 +414,11 @@ export function GeneralSection() {
                 {membersTruncated && (
                   <p className="text-muted-foreground text-xs sm:col-span-2">
                     Showing the first {members.length} of {membersResult?.total} members. Members beyond the first{" "}
-                    {members.length} are not listed here.
+                    {members.length} are not listed here — the list is newest first, so those are the oldest members.
+                    Any other active member can take the transfer.{" "}
+                    <Link className="underline" to={listUrl("members")}>
+                      See all members
+                    </Link>
                   </p>
                 )}
               </div>

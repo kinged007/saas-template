@@ -2,7 +2,7 @@
 must carry payload["url"], pair with their invitation and survive a re-seed.
 
 The real invite path (workflows.on_member_invited) sets ``url`` to
-``src.workflows.INVITATIONS_ROUTE`` in the notification payload, and
+``src.core.routes.INVITATIONS_ROUTE`` in the notification payload, and
 NotificationCenter renders its "Open" button only when that key is present.
 The dev seed built the same payload without it, so the bell entries in the
 seeded demo were dead ends. This asserts the seed's persisted payload matches
@@ -21,10 +21,10 @@ the test does not assert idempotency for the other tables the seed writes.
 import pytest
 from sqlalchemy import select
 
+from src.core.routes import INVITATIONS_ROUTE
 from src.db.session import SessionFactory
 from src.models.core import Invitation, Notification
 from src.settings import settings
-from src.workflows import INVITATIONS_ROUTE
 
 
 def _assert_carries_url(n: Notification) -> None:
