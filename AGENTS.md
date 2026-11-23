@@ -66,25 +66,6 @@ Full workflow: `docs/MIGRATIONS.md`.
 
 ---
 
-## Agent Instructions
-
-This project uses codesight for structured AI context. Follow these steps before implementing:
-1. Read `.codesight/wiki/index.md` for project orientation (~200 tokens)
-2. Read `.codesight/wiki/overview.md` for architecture overview (~500 tokens)
-3. Read the relevant domain article, then open the source files listed in it
-4. Read `.codesight/CODESIGHT.md` for the full context map
-
-**Do not explore the file tree blindly.** The codesight context map already contains:
-routes, schema, components, libraries, config, middleware, and dependency graph.
-
-**Before modifying any file:** check `.codesight/graph.md` for blast radius.
-Files with high import counts affect many downstream modules — change carefully.
-
-Routes marked `[inferred]` were detected via regex and may have lower precision.
-If any source file shows ⚠ in a wiki article, re-run `npx codesight --wiki` before proceeding.
-
----
-
 ## Frontend
 
 **Skill:** `refine-dev` (itechmeat-llm-code-refine-dev) is installed for opencode (`~/.agents/skills/itechmeat-llm-code-refine-dev/SKILL.md`) and Claude Code (`.claude/skills/itechmeat-llm-code-refine-dev/SKILL.md`). Load it for Refine.dev API details, but the canonical rules below and existing repo patterns take precedence over the skill's generic guidance (e.g. it assumes Mantine; this repo uses shadcn/ui).

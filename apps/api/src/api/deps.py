@@ -261,7 +261,7 @@ async def record_key_use(api_key: ApiKey, db: AsyncSession, response: Response) 
     Invariant: every branch that authorizes an API key must charge through
     this function, or the key is unmetered — a hand-rolled `api_key is not
     None` branch that skips it is the bug this guards against. The 403 comes
-    from the conditional UPDATE's rowcount, never from a pre-read, so two
+    from the rows the conditional UPDATE charged, never from a pre-read, so two
     concurrent requests cannot both spend the last unit.
 
     Shared by both permission dependencies and the jobs routes, so no branch
