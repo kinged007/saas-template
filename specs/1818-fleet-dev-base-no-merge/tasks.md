@@ -16,4 +16,4 @@
 
 - [x] T007 [AC-1, AC-4] repo root — re-ran the CICD-10/CICD-13 greps, `make label-contract`, and the `trailing-newline` CI loop over touched files; all green. (CICD-11/12 intentionally unsatisfied: merge kept per scope update 19:16; handoff moves to #1817.)
 - [x] T008 dry-walked the §7 approval path (file minors → `agent:done` → squash-merge → claim released) and the high-risk path (unchanged: `needs-human` + `agent:done`, owner merges); both traces recorded in the PR body.
-- [ ] T009 PR — open against base `dev` (default branch; scope update 19:16 — original `main` text fixed), no #1817 wait: merge as soon as green and approved; `risk:high` so the maintainer merges. (Original "do not merge before #1817" sequencing removed by scope update.)
+- [x] T009 PR — opened #1830 against base `dev` (default branch; scope update 19:16 — original `main` text fixed), no #1817 wait: merge as soon as green and approved; `risk:high` so the maintainer merges (PR carries `needs-human` + `agent:verify`). (Original "do not merge before #1817" sequencing removed by scope update.)
