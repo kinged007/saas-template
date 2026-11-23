@@ -31,7 +31,10 @@ const DELIVERY = {
   workspace_id: "ws-1",
   event_type: "apikey.created",
   subject: "apikey/ak-1",
-  status: "failed",
+  // The API only writes pending/success/exhausted — nothing ever assigns
+  // `WebhookDeliveryStatus.FAILED` — so the fixture states the terminal value
+  // a real row with `error` set would carry.
+  status: "exhausted",
   attempt_count: 3,
   response_status: 500,
   error: "Upstream returned 500",
@@ -110,6 +113,22 @@ test.describe("webhooks page", () => {
     await expect(page.getByText("No webhook subscriptions yet.")).toHaveCount(0);
   });
 
+  test("a failed subscriptions load reports the failure once, in the row", async ({
+    page,
+  }) => {
+    await webhooks(page);
+    await subscriptions(page, 500, { detail: "Permission denied" });
+
+    await page.goto("/webhooks");
+
+    const row = page.getByRole("row").filter({ hasText: "Could not load" });
+    await expect(row).toContainText("Permission denied");
+    await page.waitForTimeout(500);
+    expect(
+      await page.locator('[data-sonner-toast]:has-text("Permission denied")').count(),
+    ).toBe(0);
+  });
+
   test("an empty collection renders the empty state", async ({ page }) => {
     await webhooks(page);
     await subscriptions(page, 200, []);
@@ -139,6 +158,71 @@ test.describe("webhooks page", () => {
     await expect(row).toBeVisible();
     await expect(row).toContainText("Boom");
     await expect(page.getByText("No deliveries yet.")).toHaveCount(0);
+  });
+
+  // The shared client refuses a 5xx on the first attempt, so the dead-end
+  // failure rows are the only recovery: with refetchOnWindowFocus off, a
+  // refused load otherwise waits for a remount or a reload.
+  test("Try again re-runs the refused subscriptions query and recovers", async ({ page }) => {
+    await webhooks(page);
+    let calls = 0;
+    let succeed = false;
+    await page.route(
+      (url) => url.pathname.startsWith(COLLECTION),
+      (route) => {
+        calls += 1;
+        return route.fulfill({
+          status: succeed ? 200 : 500,
+          contentType: "application/json",
+          body: succeed ? "[]" : JSON.stringify({ detail: "Boom" }),
+        });
+      },
+    );
+
+    await page.goto("/webhooks");
+    const row = page.getByRole("row").filter({ hasText: "Could not load" });
+    await expect(row).toBeVisible();
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+
+    const before = calls;
+    succeed = true;
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByText("No webhook subscriptions yet.")).toBeVisible();
+    // The click drove new request(s): the recovery is the query refetching,
+    // not stale `list` data from anywhere else.
+    expect(calls).toBeGreaterThan(before);
+    await expect(row).toHaveCount(0);
+  });
+
+  test("Try again re-runs the refused delivery log and recovers", async ({ page }) => {
+    await webhooks(page);
+    await subscriptions(page, 200, [SUBSCRIPTION]);
+    let calls = 0;
+    let succeed = false;
+    await page.route(
+      (url) => url.pathname.startsWith(DELIVERIES),
+      (route) => {
+        calls += 1;
+        return route.fulfill({
+          status: succeed ? 200 : 500,
+          contentType: "application/json",
+          body: succeed ? "[]" : JSON.stringify({ detail: "Boom" }),
+        });
+      },
+    );
+
+    await page.goto("/webhooks");
+    await page.getByRole("button", { name: "Delivery log" }).click();
+    const row = page.getByRole("row").filter({ hasText: "Could not load deliveries" });
+    await expect(row).toBeVisible();
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+
+    const before = calls;
+    succeed = true;
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByText("No deliveries yet.")).toBeVisible();
+    expect(calls).toBeGreaterThan(before);
+    await expect(row).toHaveCount(0);
   });
 
   test("a deliveries payload that is not an array renders the empty state", async ({ page }) => {
@@ -173,7 +257,13 @@ test.describe("webhooks page", () => {
       (route) => {
         if (route.request().method() === "POST") {
           queued = true;
-          return route.fulfill({ status: 202, contentType: "application/json", body: "{}" });
+          // The redeliver route declares no status_code, so it answers 200 with
+          // the delivery record — `dispatch_due` has already reset its status.
+          return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ ...DELIVERY, status: "pending" }),
+          });
         }
         // The refetch fails while the rows it had are still good. A 403 is used
         // over a 500 because a client error skips react-query's retry budget
@@ -196,6 +286,8 @@ test.describe("webhooks page", () => {
     // row, so the filter also matches that outer row.
     const row = page.getByRole("row").filter({ hasText: DELIVERY.error }).last();
     await expect(row).toBeVisible();
+    // Rows without the staleness caption can only mean the log is current.
+    await expect(page.getByText("Showing the last deliveries loaded.")).toHaveCount(0);
 
     await page.getByRole("button", { name: "Redeliver" }).click();
 
@@ -203,6 +295,44 @@ test.describe("webhooks page", () => {
     await expect.poll(() => readsAfterQueue).toBeGreaterThan(0);
     // …and the failed refetch leaves the rows it already had on screen.
     await expect(row).toBeVisible();
+    // The failure is captioned next to the table, so stale rows are
+    // distinguishable from a current list.
+    await expect(page.getByText("Showing the last deliveries loaded.")).toBeVisible();
+    await expect(page.getByText("Could not load deliveries")).toHaveCount(0);
+  });
+
+  test("a failed log refetch captions an empty cached list", async ({ page }) => {
+    await webhooks(page);
+    await subscriptions(page, 200, [SUBSCRIPTION]);
+    let refused = false;
+    await page.route(
+      (url) => url.pathname.startsWith(DELIVERIES),
+      (route) =>
+        route.fulfill(
+          refused
+            ? {
+                status: 403,
+                contentType: "application/json",
+                body: JSON.stringify({ detail: "Not allowed to read deliveries" }),
+              }
+            : { status: 200, contentType: "application/json", body: JSON.stringify([]) },
+        ),
+    );
+
+    // The log loads an empty list, then the pane is closed and reopened: the
+    // mount refetch fails while the cached empty list is what renders. That
+    // is the empty-list twin of the redeliver spec above — the empty state
+    // must not read as current.
+    await page.goto("/webhooks");
+    await page.getByRole("button", { name: "Delivery log" }).click();
+    await expect(page.getByText("No deliveries yet.")).toBeVisible();
+
+    refused = true;
+    await page.getByRole("button", { name: "Hide log" }).click();
+    await page.getByRole("button", { name: "Delivery log" }).click();
+
+    await expect(page.getByText("Showing the last deliveries loaded.")).toBeVisible();
+    await expect(page.getByText("No deliveries yet.")).toBeVisible();
     await expect(page.getByText("Could not load deliveries")).toHaveCount(0);
   });
 

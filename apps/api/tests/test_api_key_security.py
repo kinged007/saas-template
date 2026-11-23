@@ -22,7 +22,7 @@ Covers, end to end over the HTTP API:
 """
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from src.core.permissions import ALL_PERMISSIONS, JOB_READ, JOB_UPDATE, permissions_for_role
 from src.db.session import SessionFactory
@@ -61,11 +61,10 @@ async def _add_member(client, owner_headers, ws_id, email, role_name):
 
 
 async def _create_key(client, headers, name, permissions, usage_quota=None):
-    resp = await client.post(
-        "/api/v1/api-keys",
-        json={"name": name, "permissions": permissions, "usage_quota": usage_quota},
-        headers=headers,
-    )
+    body = {"name": name, "permissions": permissions}
+    if usage_quota is not None:
+        body["usage_quota"] = usage_quota
+    resp = await client.post("/api/v1/api-keys", json=body, headers=headers)
     assert resp.status_code == 201, resp.text
     return resp.json()
 
@@ -266,6 +265,46 @@ async def test_key_reads_within_its_permission_scope(app_client):
     resp = await client.get("/api/v1/workspaces", headers=_key_headers(wkey["key"], ws["id"]))
     assert resp.status_code == 200
     assert [w["id"] for w in resp.json()] == [ws["id"]]
+
+
+async def test_non_canonical_workspace_header_still_authorises_a_key(app_client):
+    """The header is parsed as a UUID, so an uppercase spelling matches the stored
+    lowercase id. Before the UUID annotation the string comparison 403'd."""
+    client = app_client
+    owner = await register_user(client, "umi@example.com")
+    ws = await create_workspace(client, owner)
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "upper", ["workspace:read"])
+
+    resp = await client.get(
+        "/api/v1/workspaces", headers=_key_headers(key["key"], ws["id"].upper())
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert [w["id"] for w in resp.json()] == [ws["id"]]
+
+
+@pytest.mark.parametrize("grant", [["workspace:read"], ["workspace:read", "member:read"]])
+async def test_workspaces_list_reports_the_keys_grant_for_key_principals(app_client, grant):
+    """GET /workspaces for a key reports the key's own grant, like /auth/me.
+
+    The two endpoints must agree on the shape: `permissions` is what this
+    principal can do, not the creator's role. `[]` is a real grant, never a
+    fallback to the role.
+    """
+    client = app_client
+    owner = await register_user(client, "ws-grant@example.com")
+    ws = await create_workspace(client, owner, "Ws Grant Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "ws-granted", grant)
+
+    resp = await client.get("/api/v1/workspaces", headers=_key_headers(key["key"], ws["id"]))
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()) == 1
+    assert resp.json()[0]["permissions"] == sorted(grant)
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    assert me_key.json()["workspaces"][0]["permissions"] == resp.json()[0]["permissions"]
+    assert me_key.json()["permissions"] == resp.json()[0]["permissions"]
 
 
 async def test_key_cannot_read_outside_its_permission_scope(app_client):
@@ -1060,6 +1099,24 @@ async def test_auth_me_narrows_workspace_permissions_to_the_keys_grant(app_clien
     assert body["workspaces"][0]["permissions"] != me_owner.json()["workspaces"][0]["permissions"]
 
 
+async def test_auth_me_passes_a_wildcard_grant_through_verbatim(app_client):
+    """A wildcard key is the highest-stakes pass-through: `['*']` reaches both
+    the nested entry and the top-level field unfiltered. No inequality-vs-owner
+    assertion here — an owner's role is also `*`, which is why the equality
+    parametrization above skips this grant."""
+    client = app_client
+    owner = await register_user(client, "wild@example.com")
+    ws = await create_workspace(client, owner, "Wild Grant Inc")
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "wild", ["*"])
+
+    me_key = await client.get("/api/v1/auth/me", headers=_key_headers(key["key"], ws["id"]))
+    assert me_key.status_code == 200, me_key.text
+    body = me_key.json()
+    assert len(body["workspaces"]) == 1
+    assert body["workspaces"][0]["permissions"] == ["*"]
+    assert body["permissions"] == ["*"]
+
+
 async def test_auth_me_drops_a_keys_grant_when_its_membership_is_suspended(app_client):
     """`permissions` is what the gate authorizes on, and the gate also checks
     the membership: a key whose creator's membership is not active gets no
@@ -1152,31 +1209,58 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     # A key-authorized hit is metered like any other key route: every read and
     # write route spends one unit and reports what is left. Regression test for
     # #311 — the key branch of _require_run_access and _require_job_access used
-    # to return without record_key_use. Each key carries only what its own
-    # route needs — a GET is gated on jobs:read, a write on jobs:update — so
-    # the second request's refusal can only be the quota's doing.
-    for method, url, key_name, charged_status, body, refused_body in [
-        ("get", f"/api/v1/jobs/runs/{runs['workspace']}", "quota-run", 200, None, None),
-        ("get", f"/api/v1/jobs/runs/{runs['workspace']}/logs", "quota-logs", 200, None, None),
-        ("get", f"/api/v1/jobs/{runs['definition']}", "quota-definition", 200, None, None),
-        ("get", f"/api/v1/jobs/{runs['definition']}/runs", "quota-runs", 200, None, None),
+    # to return without record_key_use. Each row names the permission its route
+    # requires, so the key carries exactly that and no more — the second
+    # request's refusal can then only be the quota's doing.
+    for method, url, key_name, required, charged_status, body, refused_body in [
+        ("get", f"/api/v1/jobs/runs/{runs['workspace']}", "quota-run", JOB_READ, 200, None, None),
+        (
+            "get",
+            f"/api/v1/jobs/runs/{runs['workspace']}/logs",
+            "quota-logs",
+            JOB_READ,
+            200,
+            None,
+            None,
+        ),
+        (
+            "get",
+            f"/api/v1/jobs/{runs['definition']}",
+            "quota-definition",
+            JOB_READ,
+            200,
+            None,
+            None,
+        ),
+        (
+            "get",
+            f"/api/v1/jobs/{runs['definition']}/runs",
+            "quota-runs",
+            JOB_READ,
+            200,
+            None,
+            None,
+        ),
         (
             "patch",
             f"/api/v1/jobs/{runs['definition']}",
             "quota-patch",
+            JOB_UPDATE,
             200,
             {"cron_schedule": "30 4 * * *"},
             {"cron_schedule": "45 5 * * *"},
         ),
-        ("post", f"/api/v1/jobs/{runs['definition']}/execute", "quota-execute", 201, {}, {}),
+        (
+            "post",
+            f"/api/v1/jobs/{runs['definition']}/execute",
+            "quota-execute",
+            JOB_UPDATE,
+            201,
+            {},
+            {},
+        ),
     ]:
-        capped = await _create_key(
-            client,
-            headers,
-            key_name,
-            [JOB_READ if method == "get" else JOB_UPDATE],
-            usage_quota=1,
-        )
+        capped = await _create_key(client, headers, key_name, [required], usage_quota=1)
         capped_headers = _key_headers(capped["key"], ws["id"])
         first = await client.request(method, url, json=body, headers=capped_headers)
         assert first.status_code == charged_status, (url, first.text)
@@ -1186,22 +1270,59 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
             # the charge must not clobber the list route's own header
             assert first.headers["X-Total-Count"] == "1", url
 
-        # quota exhausted → 403, and the refusal does not spend again
+        # quota exhausted → 403, and the refusal does not spend again: the
+        # charge happens in the access helper before the handler body, and a
+        # refused call neither increments nor commits.
         second = await client.request(method, url, json=refused_body, headers=capped_headers)
         assert second.status_code == 403, (url, second.text)
         assert "quota" in second.json()["detail"].lower(), url
+        async with SessionFactory() as db:
+            row = await db.get(ApiKey, capped["id"])
+            assert row.usage_count == 1, (url, "a refused request must not spend a unit")
 
     # The refused PATCH never reached the write: the definition still holds
     # the schedule the charged request set.
     after = await client.get(f"/api/v1/jobs/{runs['definition']}", headers=auth_headers(owner))
     assert after.json()["cron_schedule"] == "30 4 * * *", after.text
 
-    # ... and the refused request never spent the unit it refused. This is the
-    # separate guard from the 403 above: the row must be left exactly as the
-    # charged request left it.
-    async with SessionFactory() as db:
-        row = await db.get(ApiKey, capped["id"])
-        assert row.usage_count == 1, "a refused request must not spend a unit"
+
+async def test_charge_does_not_read_the_key_back(app_client):
+    """The charge takes the post-charge values from its own RETURNING clause.
+
+    A follow-up SELECT would put the conditional UPDATE's verdict back in
+    reach of a stale in-memory row, which is what `record_use`'s docstring
+    explains the attribute update for."""
+    from src.db.session import engine
+    from src.models.api_key import ApiKey
+    from src.services.api_keys import ApiKeyService
+
+    client = app_client
+    owner = await register_user(client, "charge-roundtrip@example.com")
+    ws = await create_workspace(client, owner, "Charge Roundtrip Inc")
+    capped = await _create_key(
+        client, ws_headers(owner, ws["id"]), "roundtrip", ["member:read"], usage_quota=5
+    )
+
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    async with SessionFactory() as session:
+        key = await session.get(ApiKey, capped["id"])
+        event.listen(engine.sync_engine, "before_cursor_execute", record)
+        try:
+            assert await ApiKeyService(session).record_use(key) is True
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", record)
+
+    # Background event/webhook tasks share the engine, so scope the window to
+    # this table — and require the UPDATE to be in it, so an empty capture can
+    # never pass.
+    assert any(s.lstrip().upper().startswith("UPDATE API_KEYS") for s in statements), statements
+    assert not [
+        s for s in statements if s.lstrip().upper().startswith("SELECT") and "api_keys" in s
+    ], statements
 
 
 async def test_key_cannot_probe_global_run_existence(app_client):
@@ -1255,9 +1376,10 @@ async def test_key_cannot_probe_global_run_existence(app_client):
 
 
 async def test_one_quota_unit_cannot_be_spent_twice(app_client):
-    """Two callers that read the counter before either writes must not both
-    spend the last unit — the quota check and the increment are one
-    statement, not a read followed by a write."""
+    """A caller holding a pre-charge read of the key cannot spend the last
+    unit after another caller already spent it — the quota test and the
+    increment are one statement, so the refusal does not depend on when the
+    second caller read the counter."""
     from src.models.api_key import ApiKey
     from src.services.api_keys import ApiKeyService
 
@@ -1269,17 +1391,44 @@ async def test_one_quota_unit_cannot_be_spent_twice(app_client):
     )
 
     async with SessionFactory() as first, SessionFactory() as second:
-        # Both sessions read the key while usage_count is still 0 — the
-        # interleaving that used to let both commit usage_count = 1.
+        # Both sessions read the key while usage_count is still 0 — a
+        # read-then-write pair would let both commit usage_count = 1.
         one, two = await first.get(ApiKey, capped["id"]), await second.get(ApiKey, capped["id"])
         assert (one.usage_count, two.usage_count) == (0, 0)
 
         assert await ApiKeyService(first).record_use(one) is True
+        # The charged caller's key holds the post-charge row, so the quota
+        # headers it publishes read 0 remaining, not the stale 1.
+        assert one.usage_count == 1 and one.last_used_at is not None
         assert await ApiKeyService(second).record_use(two) is False
 
     async with SessionFactory() as verify:
         row = await verify.get(ApiKey, capped["id"])
         assert row.usage_count == 1, "a refused charge must not be spent"
+
+
+async def test_zero_quota_key_is_never_charged(app_client):
+    """`usage_quota = 0` is a closed key: the conditional UPDATE must refuse
+    it rather than charge the first unit for free."""
+    from src.models.api_key import ApiKey
+    from src.services.api_keys import ApiKeyService
+
+    client = app_client
+    owner = await register_user(client, "zero-quota@example.com")
+    ws = await create_workspace(client, owner, "Zero Quota Inc")
+    capped = await _create_key(
+        client, ws_headers(owner, ws["id"]), "zero", ["member:read"], usage_quota=1
+    )
+
+    async with SessionFactory() as session:
+        key = await session.get(ApiKey, capped["id"])
+        key.usage_quota = 0
+        await session.commit()
+        assert await ApiKeyService(session).record_use(key) is False
+
+    async with SessionFactory() as verify:
+        row = await verify.get(ApiKey, capped["id"])
+        assert (row.usage_count, row.last_used_at) == (0, None)
 
 
 async def _seed_definition(workspace_id: str | None, key: str = "test.echo") -> str:

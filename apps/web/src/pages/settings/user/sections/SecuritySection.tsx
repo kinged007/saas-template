@@ -26,6 +26,16 @@ import { sessionsEmptyMessage } from "./sessions-empty";
  * password and revoking sessions are delegated actions, while 2FA setup and
  * "change my password" require a credential only the account holder has.
  */
+const call = (
+  mutate: (mutation: never) => Promise<unknown>,
+  url: string,
+  method: "post" | "delete",
+  values?: unknown,
+) =>
+  mutate({ url, method, values, errorNotification: false } as never) as Promise<{
+    data: unknown;
+  }>;
+
 function SessionRevokeButton({
   base,
   sessionId,
@@ -38,11 +48,7 @@ function SessionRevokeButton({
   const { mutateAsync, mutation } = useCustomMutation();
   const revoke = async () => {
     try {
-      await (mutateAsync({
-        url: `${base}/sessions/${sessionId}`,
-        method: "delete",
-        errorNotification: false,
-      } as never) as Promise<{ data: unknown }>);
+      await call(mutateAsync, `${base}/sessions/${sessionId}`, "delete");
       toast.success("Session revoked");
       onRevoked();
     } catch (e) {
@@ -71,16 +77,6 @@ export function SecuritySection() {
 
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-
-  const call = (
-    mutate: typeof setPasswordMutate,
-    url: string,
-    method: "post" | "delete",
-    values?: unknown,
-  ) =>
-    mutate({ url, method, values, errorNotification: false } as never) as Promise<{
-      data: unknown;
-    }>;
 
   const list: AuthSession[] = Array.isArray(sessions.result?.data)
     ? (sessions.result.data as AuthSession[])

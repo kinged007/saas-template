@@ -93,7 +93,8 @@ function MemberSettingsFallback() {
  * misleading empty list. DashboardPage already carries the "No workspace yet"
  * card and the create CTA, so send them there. This lives in the router rather
  * than in WorkspaceProvider because the provider also wraps the workspace-free
- * routes (workspaces/create, settings/profile, admin, invitations).
+ * routes (settings/profile, users/:id/settings, workspaces/create, admin,
+ * invitations).
  *
  * WorkspaceProvider renders nothing until the identity settles, so `workspaces`
  * is empty only once the identity is known to hold none: the guard never fires
@@ -162,8 +163,20 @@ export function App() {
           { name: "admin-audit", list: "/admin/audit", meta: { hide: true } },
         ]}
       >
-        <WorkspaceProvider>
-          <Routes>
+        <Routes>
+          {/* Pathless layout: everything that needs the workspace context lives
+              here. The four public auth routes below are top-level siblings —
+              they read no workspace context, and wrapping /oauth/callback in the
+              provider would unmount and remount it mid-exchange on every
+              identity settle, because the gate renders nothing while the
+              identity loads. */}
+          <Route
+            element={
+              <WorkspaceProvider>
+                <Outlet />
+              </WorkspaceProvider>
+            }
+          >
             <Route
               path="/"
               element={
@@ -184,7 +197,11 @@ export function App() {
               <Route path="workspaces/create" element={<WorkspaceCreatePage />} />
               <Route path="invitations" element={<ReceivedInvitationsPage />} />
               {/* Every route below reads the active workspace; the guard keeps a
-                  user in zero workspaces out instead of stranding them here. */}
+                  user in zero workspaces out instead of stranding them here.
+                  Workspace-free routes (settings/profile, users/:id/settings,
+                  workspaces/create, admin, invitations) stay outside — the guard
+                  redirects on zero workspaces, and those pages are reachable
+                  without one. See RequireWorkspace's doc comment above. */}
               <Route element={<RequireWorkspace />}>
                 <Route path="members" element={<MembersPage />} />
                 <Route path="api-keys/create" element={<ApiKeyCreatePage />} />
@@ -207,8 +224,10 @@ export function App() {
                     element={<Navigate to="/settings/workspace/general" replace />}
                   />
                 </Route>
-                {/* Legacy redirects — keep old URLs working. Inside the guard, so
-                    a user in zero workspaces is sent straight to the dashboard. */}
+                {/* Legacy redirects — keep old URLs working. Inside the guard for
+                    the same reason as the routes above; their workspace-free
+                    siblings are listed just outside it. See the comment on the
+                    RequireWorkspace group above. */}
                 <Route path="roles" element={<Navigate to="/settings/workspace/roles" replace />} />
                 <Route path="jobs" element={<Navigate to="/settings/workspace/jobs" replace />} />
               </Route>
@@ -231,26 +250,8 @@ export function App() {
               </Route>
               <Route path="*" element={<NotFoundPage />} />
             </Route>
-            <Route
-              path="/login"
-              element={
-                <Authenticated key="login" fallback={<LoginPage />}>
-                  <Navigate to="/" replace />
-                </Authenticated>
-              }
-            />
-            <Route
-              path="/register"
-              element={
-                <Authenticated key="register" fallback={<RegisterPage />}>
-                  <Navigate to="/" replace />
-                </Authenticated>
-              }
-            />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
-            <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
-            <Route path="/verify-email" element={<VerifyEmailPage />} />
             {/* Emailed invite link — public: the recipient may not have an account yet. */}
             <Route
               path="/invitations/accept"
@@ -265,9 +266,27 @@ export function App() {
                 above "/" would flip that. Authenticated's fallback sends a signed-out
                 visitor to /login. */}
             <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-          <Toaster />
-        </WorkspaceProvider>
+          </Route>
+          <Route
+            path="/login"
+            element={
+              <Authenticated key="login" fallback={<LoginPage />}>
+                <Navigate to="/" replace />
+              </Authenticated>
+            }
+          />
+          <Route
+            path="/register"
+            element={
+              <Authenticated key="register" fallback={<RegisterPage />}>
+                <Navigate to="/" replace />
+              </Authenticated>
+            }
+          />
+          <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
+          <Route path="/verify-email" element={<VerifyEmailPage />} />
+        </Routes>
+        <Toaster />
       </Refine>
       </BrowserRouter>
     </ThemeProvider>

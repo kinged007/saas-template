@@ -77,10 +77,14 @@ async def list_roles(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
-    # A client sorter is a tiebreak within the rank groups, not an override:
-    # it is appended after _ROLE_RANK. Name last keeps the order total, so
-    # paging cannot repeat or drop a row.
-    stmt = stmt.order_by(Role.name).offset(spec.offset).limit(spec.limit)
+    # A client sorter is a tiebreak within the rank groups, not an override: it
+    # is appended after _ROLE_RANK, and `apply_query` already ends it on id. With
+    # no sorter, every custom role shares the last rank, so `name` orders that
+    # block and `id` makes the order total -- `roles.name` is unique only in the
+    # app layer, never in the schema.
+    if not spec.sort_by:
+        stmt = stmt.order_by(Role.name, Role.id)
+    stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
     return [_role_dict(r) for r in rows.scalars().all()]
@@ -99,7 +103,7 @@ async def permission_catalog(
     (`"*"` implies the full catalog) — same capping semantics as
     `GET /api-keys/effective-permissions`. The single source for the roles
     matrix and the New/Edit role dialogs."""
-    membership = await WorkspaceService(db).get_membership(workspace_id, user.id, active_only=True)
+    membership = await WorkspaceService(db).get_membership(workspace_id, user.id)
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership

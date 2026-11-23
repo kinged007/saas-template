@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio  # noqa: E402
+import inspect  # noqa: E402
 import os  # noqa: E402
 from datetime import timedelta  # noqa: E402
 from typing import TYPE_CHECKING  # noqa: E402
@@ -22,6 +23,7 @@ from httpx import ASGITransport, AsyncClient  # noqa: E402
 from sqlalchemy.engine import make_url  # noqa: E402
 
 from src import models as _models  # noqa: E402,F401  (register tables on Base.metadata)
+from src.core.security.ratelimit import get_register_limiter  # noqa: E402
 from src.db.base import Base  # noqa: E402
 from src.db.session import engine  # noqa: E402
 from src.settings import settings  # noqa: E402
@@ -87,6 +89,10 @@ async def _clean_db():
 async def app():
     from src.main import app as fastapi_app
 
+    # /auth/register meters mail per IP on the register limiter; spent keys are
+    # process-wide, so a test's registrations must not throttle the next test's
+    # register_user setup (#1343).
+    get_register_limiter().clear()
     async with LifespanManager(fastapi_app):
         yield fastapi_app
 
@@ -172,41 +178,67 @@ def ws_headers(tokens: dict, workspace_id: str) -> dict:
     return headers
 
 
+async def expire_invitation(invitation_id: str) -> None:
+    """Backdate an invitation's expiry for expired-invite test paths.
+
+    The assert pins the helper's preconditions: a stale id must fail the
+    calling test naming the row, and the row must still carry an expiry (the
+    column is NOT NULL, so a NULL here means the fixture wrote something else).
+    """
+    from datetime import timedelta
+
+    from src.core.dates import now_utc
+    from src.db.session import SessionFactory
+    from src.models.core import Invitation
+
+    async with SessionFactory() as session:
+        row = await session.get(Invitation, invitation_id)
+        assert row is not None and row.expires_at is not None, invitation_id
+        row.expires_at = now_utc() - timedelta(minutes=5)
+        await session.commit()
+
+
 async def run_job_via_scheduler(
     key: str,
     *,
+    workspace_id: str | None = None,
     missed_by: timedelta = timedelta(hours=3),
     timeout_s: float = 10.0,
 ) -> tuple[JobRun, list[str]]:
-    """Drive a global job through the real scheduler -> bus -> executor path.
+    """Drive a job through the real scheduler -> bus -> executor path.
 
     Backdates the provisioned definition's `next_run_at` so a tick claims it as
     a missed occurrence, then waits for the durable worker to finish the run.
-    Returns the run plus its captured log messages.
+    Ticks the production `app.state.job_scheduler` built in `main.py`, so the
+    container -> scheduler wiring is under test too. Returns the run plus its
+    captured log messages.
+
+    A tick also runs housekeeping when due: `_last_housekeeping` starts at 0.0
+    while being compared against `loop.time()`, so on a host up longer than
+    HOUSEKEEPING_INTERVAL_SECONDS (1h) the first tick additionally runs
+    `fail_stale_runs` + `prune_history` across other jobs' run rows.
     """
     from sqlalchemy import select
 
     from src.core.dates import now_utc
     from src.db.session import SessionFactory
-    from src.jobs.scheduler import JobScheduler
     from src.main import app as fastapi_app
     from src.models.jobs import JobDefinition, JobLogEntry, JobRun
 
     async with SessionFactory() as session:
+        scope = (
+            JobDefinition.workspace_id == workspace_id
+            if workspace_id is not None
+            else JobDefinition.workspace_id.is_(None)
+        )
         definition = (
-            await session.execute(
-                select(JobDefinition).where(
-                    JobDefinition.key == key,
-                    JobDefinition.workspace_id.is_(None),
-                )
-            )
+            await session.execute(select(JobDefinition).where(JobDefinition.key == key, scope))
         ).scalar_one()
-        assert definition.enabled is True, f"{key} is not enabled"
         definition.next_run_at = now_utc() - missed_by
         definition_id = definition.id
         await session.commit()
 
-    await JobScheduler(bus=fastapi_app.state.container.bus).tick()
+    scheduled = await fastapi_app.state.job_scheduler.tick()
 
     for _ in range(int(timeout_s * 10)):
         async with SessionFactory() as session:
@@ -235,4 +267,60 @@ async def run_job_via_scheduler(
                 )
                 return run, list(messages)
         await asyncio.sleep(0.1)
-    raise AssertionError(f"job {key} did not finish within {timeout_s}s")
+    raise AssertionError(f"job {key} did not finish within {timeout_s}s (scheduled={scheduled})")
+
+
+async def wait_for(predicate, timeout_secs: float = 3.0, interval: float = 0.02) -> bool:
+    """Poll `predicate` until it returns truthy; False once the deadline passes.
+
+    `predicate` may be sync or async. Timeout reports False instead of raising so
+    every call site keeps its own failure message.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_secs
+    while loop.time() < deadline:
+        result = predicate()
+        if inspect.isawaitable(result):
+            result = await result
+        if result:
+            return True
+        await asyncio.sleep(interval)
+    return False
+
+
+async def wait_for_audit_action(
+    workspace_id: str, action: str, timeout_secs: float = 5.0, *, interval: float = 0.02
+) -> list[str]:
+    """Poll the audit table until `action` lands for `workspace_id`.
+
+    Each iteration opens a fresh SessionFactory session: a cached session can
+    hold a stale read snapshot and never observe the consumer's commit.
+    """
+    from sqlalchemy import select
+
+    from src.db.session import SessionFactory
+    from src.models.audit import AuditLogEntry
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_secs
+    actions: list[str] = []
+    while True:
+        async with SessionFactory() as session:
+            actions = list(
+                (
+                    await session.execute(
+                        select(AuditLogEntry.action).where(
+                            AuditLogEntry.workspace_id == workspace_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        if action in actions or loop.time() >= deadline:
+            break
+        await asyncio.sleep(interval)
+    assert action in actions, (
+        f"audit bus did not commit {action} in {timeout_secs}s; saw {sorted(actions)}"
+    )
+    return actions

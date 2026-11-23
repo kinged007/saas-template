@@ -19,10 +19,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.crud import InvalidQuery, apply_query, parse_query
 from src.api.deps import (
     AuthPrincipal,
-    deployment_admin_denied,
     get_container,
     get_current_workspace_id,
     record_key_use,
+    require_deployment_admin,
     require_permission,
     require_superuser,
     resolve_auth_principal,
@@ -61,7 +61,7 @@ async def _admin_definition_or_404(
 ) -> JobDefinition:
     """Fetch a definition by id, or the 404 on a miss.
 
-    No workspace filter, and it applies none. All three callers are `/global*`
+    No workspace filter, and it applies none. All four callers are `/global*`
     routes behind `Depends(require_superuser)`. This helper authorizes nothing:
     a caller that is not superuser-gated has to authorize the definition it
     gets from here itself.
@@ -146,7 +146,6 @@ async def update_global_job(
 @router.post("/global/{definition_id}/execute", status_code=201)
 async def execute_global_job(
     definition_id: str,
-    request: Request,
     user=Depends(require_superuser),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
@@ -166,7 +165,8 @@ async def list_global_job_runs(
     _=Depends(require_superuser),
     db: AsyncSession = Depends(get_db),
 ):
-    return await _list_runs(request, response, definition_id, None, db)
+    definition = await _admin_definition_or_404(definition_id, db)
+    return await _list_runs(request, response, definition, None, db)
 
 
 # ------------------------------------------------------------------ run detail
@@ -228,20 +228,17 @@ async def _require_run_access(
     Response through, never drop it.
     """
     if run.workspace_id is None:
-        if not principal.is_deployment_admin:
-            raise deployment_admin_denied(principal)
+        require_deployment_admin(principal)
         return
     if principal.api_key is not None:
         api_key = principal.api_key
         if api_key.workspace_id != run.workspace_id:
-            raise deployment_admin_denied(principal)
+            require_deployment_admin(principal)
         if "*" in api_key.permissions or JOB_READ in api_key.permissions:
             await record_key_use(api_key, db, response)
             return
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"missing permission: {JOB_READ}") from None
-    membership = await WorkspaceService(db).get_membership(
-        run.workspace_id, principal.user.id, active_only=True
-    )
+    membership = await WorkspaceService(db).get_membership(run.workspace_id, principal.user.id)
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership
@@ -273,20 +270,19 @@ async def _require_job_access(
     """
     required = JOB_UPDATE if need_edit else JOB_READ
     if definition.workspace_id is None:
-        if not principal.is_deployment_admin:
-            raise deployment_admin_denied(principal)
+        require_deployment_admin(principal)
         return
     # workspace-scoped job — check the workspace of the definition, not the header
     if principal.api_key is not None:
         api_key = principal.api_key
         if api_key.workspace_id != definition.workspace_id:
-            raise deployment_admin_denied(principal)
+            require_deployment_admin(principal)
         if "*" in api_key.permissions or required in api_key.permissions:
             await record_key_use(api_key, db, response)
             return
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"missing permission: {required}") from None
     membership = await WorkspaceService(db).get_membership(
-        definition.workspace_id, principal.user.id, active_only=True
+        definition.workspace_id, principal.user.id
     )
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
@@ -393,7 +389,7 @@ async def list_job_runs(
         principal, JobService(db).get_definition(definition_id), "job not found"
     )
     await _require_job_access(db, principal, definition, response, need_edit=False)
-    return await _list_runs(request, response, definition_id, definition.workspace_id, db)
+    return await _list_runs(request, response, definition, definition.workspace_id, db)
 
 
 # -------------------------------------------------------------------- internal
@@ -430,15 +426,17 @@ async def _execute_now(
 async def _list_runs(
     request: Request,
     response: Response,
-    definition_id: str,
+    definition: JobDefinition,
     run_workspace_id: str | None,
     db: AsyncSession,
 ) -> list[dict]:
-    """List the runs of `definition_id`. `run_workspace_id` narrows the result
+    """List the runs of `definition`. `run_workspace_id` narrows the result
     to the runs of that workspace — it filters `JobRun` rows and authorizes
-    nothing; the caller has already authorized the definition."""
+    nothing; the caller has already authorized — and resolved — the
+    definition, whose params_schema serializes every row."""
     from sqlalchemy import func, select
 
+    definition_id = definition.id
     stmt = select(JobRun).where(JobRun.definition_id == definition_id)
     if run_workspace_id is not None:
         stmt = stmt.where(JobRun.workspace_id == run_workspace_id)
@@ -454,6 +452,4 @@ async def _list_runs(
     stmt = stmt.offset(spec.offset).limit(spec.limit)
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
-    definition = await JobService(db).get_definition(definition_id)
-    schema = (definition.params_schema if definition else None) or {}
-    return [job_run_to_dict(r, schema=schema) for r in rows.scalars().all()]
+    return [job_run_to_dict(r, schema=definition.params_schema or {}) for r in rows.scalars().all()]

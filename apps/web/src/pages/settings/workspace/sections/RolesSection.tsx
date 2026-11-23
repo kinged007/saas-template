@@ -36,6 +36,11 @@ type CatalogResponse = { catalog: string[]; permissions: string[] };
 // complete. A workspace past this is reported as truncated below the list.
 const ROLES_PAGE_SIZE = 100;
 
+const SYSTEM_RANK: Record<string, number> = { owner: 0, admin: 1, editor: 2, viewer: 3 };
+
+/** Custom roles keep their own order, always after the system block. */
+const rank = (r: Role) => (r.system ? (SYSTEM_RANK[r.name.toLowerCase()] ?? 4) : 5);
+
 function splitPermission(p: string): [string, string] {
   const i = p.indexOf(":");
   return i < 0 ? [p, ""] : [p.slice(0, i), p.slice(i + 1)];
@@ -172,8 +177,11 @@ export function RolesSection() {
   const { data: canManage } = useCan({ resource: "roles", action: "create" });
   const { data: canEdit } = useCan({ resource: "roles", action: "edit" });
 
-  // Ordered by the endpoint (system roles first), so no client sort.
-  const rows = result?.data ?? [];
+  // Server orders by a name-keyed rank; re-apply the system-keyed rank within
+  // the fetched page so a custom role named like a system role sorts last.
+  const rows = [...(result?.data ?? [])].sort(
+    (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name),
+  );
   const total = result?.total ?? rows.length;
   const capNotice = roleCapNotice(rows.length, total);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());

@@ -12,6 +12,9 @@ backoff until success or exhaustion, and the log is visible in the UI.
 3. Watch the delivery log in the webhooks page; retry failed rows with
    `POST /api/v1/webhooks/deliveries/{id}/redeliver`.
 
+`GET /api/v1/webhooks/subscriptions/{id}` reads one subscription
+(url, events, active — never the secret).
+
 `GET /api/v1/webhooks/events` lists subscribable event names
 (`workspace.created`, `invitation.created`, `member.invited`,
 `member.joined`, `member.role_changed` (an ownership transfer emits one

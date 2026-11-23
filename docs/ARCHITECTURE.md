@@ -82,6 +82,13 @@ User ──< WorkspaceMember >── Workspace (slug, name)
   - `admin` — manage members, roles, invitations, jobs
   - `editor` — read, manage API keys
   - `viewer` — read-only
+- Role names are stripped on write (`POST /roles`, `PATCH /roles/{id}`) and
+  compared exactly on read, so a row written before the strip existed can hold
+  a padded name that no lookup (auto-join, name-based role lookups) matches.
+  Remediation: rename the row with `PATCH /roles/{id}` — the payload name is
+  stripped and the row's own id is excluded from the duplicate check, so
+  resubmitting the row's padded name rewrites it stripped. A row named `Owner`
+  (any case) is the owner role and refuses every edit with 403.
 - Global (deployment-wide) administration — e.g. global jobs — is gated on
   the bootstrap superuser (`SUPERADMIN_EMAIL`), which does **not** bypass
   workspace-scoped checks.
@@ -90,7 +97,7 @@ User ──< WorkspaceMember >── Workspace (slug, name)
 
 | Flow | Mechanism |
 |---|---|
-| Password (browser) | `POST /auth/login` (`use_cookies: true`) → access JWT in JSON + refresh in `HttpOnly; SameSite=Lax` cookie, `Secure` per `cookie_secure_for()` (https request, explicit `REFRESH_COOKIE_SECURE`, or plain http outside `development`/`test`); `POST /auth/refresh` reads the cookie (rotating, hashed opaque token in DB); `POST /auth/logout` revokes + clears the cookie |
+| Password (browser) | `POST /auth/login` (`use_cookies: true`) → access JWT in JSON + refresh in `HttpOnly; SameSite=Lax` cookie, `Secure` per `cookie_secure_for()` (`REFRESH_COOKIE_SECURE` if set, else https request, else plain http outside `development`/`test`); `POST /auth/refresh` reads the cookie (rotating, hashed opaque token in DB); `POST /auth/logout` revokes + clears the cookie |
 | Password (non-browser) | `POST /auth/login` → access + refresh in JSON; `POST /auth/refresh` takes `{"refresh_token"}` as before |
 | 2FA / OAuth (browser) | `POST /auth/2fa/login` / `POST /auth/oauth/token` with `use_cookies: true` set the same cookie and omit the JSON refresh; the OAuth one-time code handoff carries only the access token for cookie callers |
 | API keys | `Authorization: Bearer <key>`; permissions resolved per workspace (untouched by the cookie flow) |
@@ -187,7 +194,7 @@ Every user/automatic action publishes an audit event (`audit.entry.created`):
 `member.role_changed/removed/left`, `invitation.created/resent/accepted/declined/revoked/email_failed`, `user.session_revoked/sessions_revoked/refresh_token_reuse`,
 `role.created`, `apikey.created/revoked`, `notification.acknowledged/
 unacknowledged`, `notification.email_failed`, `job.run_*`. The audit workflow persists them (committed) to
-`audit_log_entries`.
+`audit_log_entries`. `notification.email_failed` carries `details.reason` = `no_recipient | no_email | send_failed`.
 
 ## 7. Scheduled jobs
 
@@ -224,13 +231,14 @@ A shared `crud` helper turns Refine params into safe SQLAlchemy queries
 (whitelisted sort/filter fields per resource). Every sorted list ends on the
 row's primary key, in the direction of the last sort key, so the order is total
 and `offset`/`limit` paging cannot drop or repeat a row when the sorted columns
-tie. Ties resolve by `id`, not by insertion order — the ids are UUIDs.
+tie. Ties resolve by `id`, not by insertion order — the ids are UUIDs. Routes
+that pass neither `default_sort` nor a client sort still emit no `ORDER BY`.
 
 ## 9. Security
 
 - bcrypt password hashing, Fernet-encrypted secrets (versioned keys)
 - CORS allowlist from env (`allow_credentials` on); refresh-token rotation + revocation
-- Browser refresh tokens in `HttpOnly; SameSite=Lax` cookies (JS cannot exfiltrate them); `Secure` is resolved per request by `cookie_secure_for()` — on https requests, on plain http only when `ENVIRONMENT` is neither `development` nor `test`, or whatever `REFRESH_COOKIE_SECURE` is set to; CSRF covered by SameSite + `Origin`/`Referer` allowlist check + required `X-Requested-With` custom header on cookie-authenticated refresh/logout
+- Browser refresh tokens in `HttpOnly; SameSite=Lax` cookies (JS cannot exfiltrate them); `Secure` is resolved per request by `cookie_secure_for()` — `REFRESH_COOKIE_SECURE` if set, else https, else plain http only when `ENVIRONMENT` is neither `development` nor `test`; CSRF covered by SameSite + `Origin`/`Referer` allowlist check + required `X-Requested-With` custom header on cookie-authenticated refresh/logout
 - HttpOnly narrows theft to the live session — injected JS can still ride the session while the page is open, so CSP and output escaping remain the real XSS defense
 - Permission checks server-side on every workspace-scoped route
 - No secrets in responses; API-key raw values returned once at creation

@@ -33,6 +33,7 @@ from src.services.auth import AuthError, AuthService
 from src.services.oauth import (
     CODE_TTL_HINT,
     OAuthError,
+    _single_line,
     build_authorize_url,
     claims_from_id_token,
     consume_state,
@@ -109,9 +110,9 @@ async def oauth_callback(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    get_auth_limiter().check(f"oauth:{_client_ip(request) or 'unknown'}:{provider_id}")
     # Checks a bucket this module never charges; see the rule in
     # src/core/security/ratelimit.py.
+    get_auth_limiter().check(f"oauth:{_client_ip(request) or 'unknown'}:{provider_id}")
     container = get_container(request)
     code = request.query_params.get("code")
     state = request.query_params.get("state")
@@ -139,12 +140,23 @@ async def oauth_callback(
         claims = None
         if tokens.get("id_token"):
             claims = await claims_from_id_token(provider, doc, tokens["id_token"], container.cache)
+            # A provider that sent an id_token and whose token was refused has
+            # failed the issuer pin; the userinfo response is not a fallback for
+            # it. Providers with no id_token (GitHub) never reach this.
+            if claims is None:
+                raise OAuthError("id_token could not be verified")
         userinfo = {}
         if tokens.get("access_token"):
             userinfo = await fetch_userinfo(provider, doc, tokens["access_token"])
         identity = normalize_identity(provider_id=provider_id, claims=claims, userinfo=userinfo)
     except OAuthError as exc:
-        logger.warning("oauth callback failed provider=%s: %s", provider_id, exc)
+        # provider_id is the percent-decoded path param and exc can embed it,
+        # so both get the same control-char flattening as the service logs.
+        logger.warning(
+            "oauth callback failed provider=%s: %s",
+            _single_line(provider_id),
+            _single_line(exc),
+        )
         return _error_redirect("sign-in failed")
     service = AuthService(db, container.bus)
     try:
@@ -157,7 +169,11 @@ async def oauth_callback(
             last_name=identity["last_name"],
         )
     except AuthError as exc:
-        logger.info("oauth signup rejected provider=%s: %s", provider_id, exc)
+        logger.info(
+            "oauth signup rejected provider=%s: %s",
+            _single_line(provider_id),
+            _single_line(exc),
+        )
         return _error_redirect("registration is disabled")
     # Join before the 2FA branch and before issue_tokens, as POST /auth/login
     # does. A failed join stays log-only and the 302 happens either way; the

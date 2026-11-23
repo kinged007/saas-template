@@ -1,12 +1,16 @@
 import { expect, type Locator, type Page } from "playwright/test";
 
 import { test } from "./fixtures";
-import { mockApi } from "./mock-api";
+import { IDENTITY, mockApi } from "./mock-api";
 
 /**
- * The dashboard's card titles are `h3` sections of the page `h2`, so the whole
+ * The dashboard's card titles are `h2` sections of the page `h1`, so the whole
  * outline inside `<main>` is asserted as one list: naming the headings that do
  * exist passes just as well with a card left out, which is the regression.
+ *
+ * Both branches are pinned, because the no-workspace one returns before the
+ * page title and once had an empty outline: its only title was a `CardTitle`,
+ * which renders a div.
  */
 
 /** The AppLayout `<main>` — the sidebar's `SidebarInset` `<main>` comes first. */
@@ -31,18 +35,33 @@ test.describe("dashboard card headings", () => {
     await expect
       .poll(() => outline(pageBody(page)))
       .toEqual([
-        "H2: Acme Corp",
-        "H3: Get set up",
-        "H3: Members",
-        "H3: Inbox",
+        "H1: Acme Corp",
+        "H2: Get set up",
+        "H2: Members",
+        "H2: Inbox",
       ]);
 
     // By role, not by text: a text query matches the div CardTitle renders.
     await expect(
-      pageBody(page).getByRole("heading", { name: "Members", level: 3 }),
+      page.getByRole("heading", { name: "Acme Corp", level: 1 }),
     ).toBeVisible();
     await expect(
-      pageBody(page).getByRole("heading", { name: "Inbox", level: 3 }),
+      page.getByRole("heading", { name: "Members", level: 2 }),
     ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Inbox", level: 2 }),
+    ).toBeVisible();
+  });
+
+  test("the no-workspace branch has an outline too", async ({ page }) => {
+    await mockApi(page, {
+      signedIn: true,
+      identity: { ...IDENTITY, single_workspace: false, workspaces: [] },
+    });
+    await page.goto("/");
+
+    await expect
+      .poll(() => outline(pageBody(page)))
+      .toEqual(["H1: No workspace yet"]);
   });
 });

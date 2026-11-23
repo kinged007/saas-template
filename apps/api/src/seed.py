@@ -13,15 +13,15 @@ from typing import NamedTuple
 from sqlalchemy import select
 
 from src.core.dates import now_utc
+from src.core.routes import INVITATIONS_ROUTE
 from src.db.session import SessionFactory
 from src.models.api_key import ApiKey
 from src.models.core import Invitation, Notification
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
-from src.services.api_keys import ApiKeyService
+from src.services.api_keys import ApiKeyForbidden, ApiKeyService
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
 from src.settings import settings
-from src.workflows import INVITATIONS_ROUTE
 
 logger = logging.getLogger(__name__)
 
@@ -343,24 +343,39 @@ async def main() -> None:
                 continue
             workspace = workspaces[slug]
             user = users[email]
+            # A name may label several rows (key rotation mints a new row
+            # carrying the old name), so the idempotency check reads the newest
+            # one instead of assuming the name is unique.
             existing = await session.execute(
-                select(ApiKey).where(ApiKey.workspace_id == workspace.id, ApiKey.name == name)
+                select(ApiKey)
+                .where(ApiKey.workspace_id == workspace.id, ApiKey.name == name)
+                .order_by(ApiKey.created_at.desc())
+                .limit(1)
             )
             if existing.scalar_one_or_none() is not None:
                 continue
-            # `active_only=False`: the question is whether a member row exists
-            # for the demo admin at all, and a suspended row is still a row.
-            if await ws_service.get_membership(workspace.id, user.id, active_only=False) is None:
+            # Row existence, not an active membership: a suspended row still counts.
+            if not await ws_service.has_member_row(workspace.id, user.id):
                 # The canonical workspace pre-existed and its owner is not the
                 # demo admin, who never auto-joins (no login event yet).
                 logger.info("skipped api key %s in %s: %s is not a member", name, slug, email)
                 continue
-            key, raw = await api_service.create_api_key(
-                workspace_id=workspace.id,
-                name=name,
-                permissions=permissions,
-                actor=user,
-            )
+            try:
+                key, raw = await api_service.create_api_key(
+                    workspace_id=workspace.id,
+                    name=name,
+                    permissions=permissions,
+                    actor=user,
+                )
+            except ApiKeyForbidden as exc:
+                # The guard above is status blind, so a suspended row passes it
+                # while the mint — active members only — refuses. A refusal for
+                # any other reason (the role cannot grant what API_KEYS asks
+                # for) is a fixture bug and stays fatal.
+                if await ws_service.get_membership(workspace.id, user.id) is not None:
+                    raise
+                logger.info("skipped api key %s in %s: %s", name, slug, exc)
+                continue
             api_keys.append((name, slug, raw))
             logger.info("created api key %s in %s", name, slug)
 
@@ -369,12 +384,18 @@ async def main() -> None:
             if slug not in workspaces:
                 continue
             workspace = workspaces[slug]
+            # At most one pending invite is expected per address, but a
+            # re-invite can leave several rows behind; read the newest one so
+            # a repeat seed never trips on duplicates.
             existing = await session.execute(
-                select(Invitation).where(
+                select(Invitation)
+                .where(
                     Invitation.workspace_id == workspace.id,
                     Invitation.email == email,
                     Invitation.status == "pending",
                 )
+                .order_by(Invitation.created_at.desc())
+                .limit(1)
             )
             invite = existing.scalar_one_or_none()
             if invite is None:
@@ -395,11 +416,14 @@ async def main() -> None:
             user = users[email]
             workspace = workspaces[slug]
             existing = await session.execute(
-                select(Notification).where(
+                select(Notification)
+                .where(
                     Notification.user_id == user.id,
                     Notification.workspace_id == workspace.id,
                     Notification.title == title,
                 )
+                .order_by(Notification.created_at.desc())
+                .limit(1)
             )
             if existing.scalar_one_or_none() is not None:
                 continue
@@ -458,4 +482,5 @@ async def _role_by_name(session, workspace_id: str, name: str) -> Role:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)  # nothing else in this path configures it
     asyncio.run(main())

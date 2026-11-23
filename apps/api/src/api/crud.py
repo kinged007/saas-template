@@ -59,16 +59,25 @@ class QuerySpec:
     sort_order: list[str] = field(default_factory=list)
     ids: list[str] = field(default_factory=list)
     filters: list[tuple[str, str, str]] = field(default_factory=list)  # (field, op, value)
+    # Which sort dialect the client used, recorded by `parse_query` when it
+    # detects it. Error messages name the parameters the client actually
+    # sent (#1134).
+    repeated_sort: bool = False
+
+    def _sort_param_names(self) -> tuple[str, str]:
+        return ("sort[]", "order[]") if self.repeated_sort else ("_sort", "_order")
 
     def validate_sort(self) -> None:
         """Reject a direction list that does not line up with the sort list.
 
-        Called by `apply_query` and by the routes that sort in their service
-        layer, so a malformed sort query answers the same on every route
-        whether the client wrote `sort[]`/`order[]` or `_sort`/`_order`.
+        Called by `parse_query`, `apply_query`, and by the routes that sort
+        in their service layer, so a malformed sort query answers the same
+        on every route whether the client wrote `sort[]`/`order[]` or
+        `_sort`/`_order`.
         """
         if len(self.sort_by) != len(self.sort_order):
-            raise InvalidQuery("sort[] and order[] must have the same number of entries")
+            by, order = self._sort_param_names()
+            raise InvalidQuery(f"{by} and {order} must have the same number of entries")
 
 
 class InvalidQuery(Exception):
@@ -98,7 +107,15 @@ def parse_query(request: Request, *, max_limit: int = 100) -> QuerySpec:
     # parameters, so `_order` on its own is parsed (and rejected by the
     # length guard) rather than falling through to the repeated style and
     # being dropped.
+    #
+    # Dialect contract (#1059): the primary list path — refine's simple-rest
+    # data provider (apps/web) — sends the comma dialect (`_sort`/`_order`,
+    # e.g. `?_end=20&_order=desc&_sort=last_message_at&_start=0`). Only the
+    # admin provider (apps/web/src/providers/dataProvider.ts) appends
+    # repeated `sort[]`/`order[]`. The two spellings must be matched per
+    # request; the guards below name the dialect the client actually used.
     repeated = "sort[]" in q or "order[]" in q
+    spec.repeated_sort = repeated
     if repeated and ("_sort" in q or "_order" in q):
         # Name the mix here. Falling through reads it as an order with no
         # sort (or the reverse) and reports the length guard, whose message
@@ -120,6 +137,11 @@ def parse_query(request: Request, *, max_limit: int = 100) -> QuerySpec:
     # client may well send; unnormalized it took the `else` branch and sorted
     # ascending, silently.
     spec.sort_order = [o.strip().lower() for o in spec.sort_order]
+    # The length guard runs before the direction check so an order-only
+    # malformed query answers the length guard in both dialects regardless
+    # of the direction value (#1134). Service-layer routes re-run it after
+    # mutating the spec.
+    spec.validate_sort()
     # `apply_query` reads anything but "desc" as ascending, so a misspelled
     # direction would come back 200 and oldest-first with nothing to notice.
     for o in spec.sort_order:
@@ -171,6 +193,10 @@ def _coerce(column: ColumnElement, value: str) -> Any:
     return value
 
 
+# The common "newest first" list order, for routes that want one.
+CREATED_DESC = (("created_at", "desc"),)
+
+
 def apply_query(
     stmt: Select,
     model: type,
@@ -178,7 +204,13 @@ def apply_query(
     *,
     sortable: set[str],
     filterable: set[str],
+    default_sort: tuple[tuple[str, str], ...] = (),
 ) -> Select:
+    """Apply filters, ids and ordering to `stmt`.
+
+    `default_sort` is the order used when the caller sent no `sort[]`/`_sort`;
+    a caller's terms win over it.
+    """
     for fname, op, value in spec.filters:
         if fname not in filterable:
             raise InvalidQuery(f"filter on unknown field: {fname}")
@@ -188,15 +220,26 @@ def apply_query(
         stmt = stmt.where(_COMPARATORS[op](column, _coerce(column, value)))
     if spec.ids:
         stmt = stmt.where(model.id.in_(spec.ids))
-    spec.validate_sort()
-    for fname, order in zip(spec.sort_by, spec.sort_order, strict=True):
+    # A caller that sent no sort gets the route default whole: a stray
+    # `order[]` with no `sort[]` cannot desynchronise the `zip(strict=True)`
+    # below, so the length guard only runs on an explicit sort.
+    if spec.sort_by:
+        spec.validate_sort()
+    # Resolved together: `zip(..., strict=True)` below consumes the two lists as
+    # a pair, so independent fallbacks can desynchronise and 500.
+    if spec.sort_by:
+        sort_by, sort_order = list(spec.sort_by), list(spec.sort_order)
+    else:
+        sort_by, sort_order = [f for f, _ in default_sort], [o for _, o in default_sort]
+    for fname, order in zip(sort_by, sort_order, strict=True):
         if fname not in sortable:
             raise InvalidQuery(f"sort on unknown field: {fname}")
         column = getattr(model, fname)
         stmt = stmt.order_by(column.desc() if order == "desc" else column.asc())
     # A unique column last makes the order total, so offset/limit paging can
-    # neither repeat nor skip a row when the leading terms tie.
-    if spec.sort_by:
-        last = spec.sort_order[-1]
+    # neither repeat nor skip a row when the leading terms tie. Only where an
+    # order already exists: making one up is not this helper's call.
+    if sort_by and "id" not in sort_by:
+        last = sort_order[-1] if sort_order else "asc"
         stmt = stmt.order_by(model.id.desc() if last == "desc" else model.id.asc())
     return stmt

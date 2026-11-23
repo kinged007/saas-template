@@ -16,7 +16,9 @@ export type BadgeVariant = Exclude<
 
 /**
  * Total on purpose: a status with no variant here is a compile error, so a new
- * API status cannot reach the badge and fall through to `secondary` unnoticed.
+ * API status cannot be added to the union without an explicit mapping. A
+ * status the API ships before these types catch up is unknown at runtime
+ * instead — both lookups below fall back to `UNKNOWN_VARIANT` for it.
  */
 const VARIANTS: Record<StatusBadgeStatus, BadgeVariant> = {
   active: "secondary",
@@ -30,8 +32,15 @@ const VARIANTS: Record<StatusBadgeStatus, BadgeVariant> = {
   disabled: "secondary",
 };
 
+/**
+ * Fallback for a status the maps do not know at runtime. `undefined` would
+ * render cva's `default` variant (primary); `secondary` is the neutral chrome
+ * an unmapped status wears until the types catch up.
+ */
+const UNKNOWN_VARIANT: BadgeVariant = "secondary";
+
 export function statusBadgeVariant(status: StatusBadgeStatus): BadgeVariant {
-  return VARIANTS[status];
+  return VARIANTS[status] ?? UNKNOWN_VARIANT;
 }
 
 /** Total for the same reason as `VARIANTS`. */
@@ -44,5 +53,5 @@ const JOB_RUN_VARIANTS: Record<JobRunStatus, BadgeVariant> = {
 };
 
 export function jobRunBadgeVariant(status: JobRunStatus): BadgeVariant {
-  return JOB_RUN_VARIANTS[status];
+  return JOB_RUN_VARIANTS[status] ?? UNKNOWN_VARIANT;
 }

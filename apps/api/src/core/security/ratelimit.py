@@ -8,8 +8,7 @@ entry point is no proof that its key was charged. Branches leave the budget
 intact for two unrelated reasons:
 
 - On purpose, because the credentials were accepted and the caller is not
-  finished: the 2FA challenge on POST /auth/login, and the OAuth callback's
-  error redirect for an account that is gone.
+  finished: the 2FA challenge on POST /auth/login.
 - Because that branch never charges: /auth/2fa/login's 401s raised before
   `check` (challenge-token guessing is unthrottled by this limiter) and by
   `verify_login_code`, where only a rejected code charges, on `ip:<user_id>`
@@ -84,6 +83,7 @@ class SlidingWindowLimiter:
             self._failures.pop(key, None)
 
     def clear(self) -> None:
+        """Drop every key (tests reset the limiter between tests)."""
         with self._lock:
             self._failures.clear()
 
@@ -121,3 +121,30 @@ def get_mail_limiter() -> SlidingWindowLimiter:
     if wanted != current:
         mail_limiter = SlidingWindowLimiter(max_attempts=wanted[0], window_seconds=wanted[1])
     return mail_limiter
+
+
+register_limiter = SlidingWindowLimiter()
+
+
+def get_register_limiter() -> SlidingWindowLimiter:
+    """Per-IP cap on POST /auth/register (#1343): a separate instance and key
+    space, with its own settings pair so tightening the auth brute-force budget
+    in a test cannot strangle this window (register_user is universal setup).
+
+    The registrant owns every fresh address, so per-(IP, email) keying cannot
+    bound the verification mail it sends — the key is the IP alone. The separate
+    instance keeps that window out of login/forgot/resend's (IP, email) budget
+    and vice versa; conftest clears it per test so the universal `register_user`
+    setup path is never throttled by another test's spend.
+    """
+    from src.settings import settings
+
+    global register_limiter
+    wanted = (
+        settings.auth_register_rate_limit_max_attempts,
+        settings.auth_register_rate_limit_window_seconds,
+    )
+    current = (register_limiter.max_attempts, register_limiter.window_seconds)
+    if wanted != current:
+        register_limiter = SlidingWindowLimiter(max_attempts=wanted[0], window_seconds=wanted[1])
+    return register_limiter

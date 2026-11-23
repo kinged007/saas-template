@@ -1,3 +1,6 @@
+import pytest
+from sqlalchemy import select
+
 from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
 
 
@@ -223,21 +226,30 @@ async def test_list_query_rejects_mismatched_sort_and_order_lengths(app_client):
 
 
 async def test_list_query_rejects_order_without_sort(app_client):
-    """An order with no sort is malformed in either dialect (#968).
+    """An order with no sort is malformed in either dialect (#968, #1134).
 
     `order[]=desc` alone reached the length guard while `_order=desc` alone
     parsed to an empty spec, so the same request was 422 or 200 depending on
-    the parameter spelling. Both dialects are rejected.
+    the parameter spelling. Both dialects are rejected, each naming the
+    parameters its dialect uses, and the length guard fires before the
+    direction check so the message does not flip with the direction value.
     """
     client = app_client
     tokens = await register_user(client, "logan@example.com")
-    for query in ("order[]=desc", "_order=desc"):
+    for query, detail in (
+        ("order[]=desc", "sort[] and order[] must have the same number of entries"),
+        ("_order=desc", "_sort and _order must have the same number of entries"),
+        # Direction check runs after the length guard, so a bogus direction on
+        # an order-only query answers the length guard in both dialects.
+        ("order[]=sideways", "sort[] and order[] must have the same number of entries"),
+        ("_order=sideways", "_sort and _order must have the same number of entries"),
+    ):
         resp = await client.get(
             f"/api/v1/workspaces?{query}",
             headers=auth_headers(tokens),
         )
         assert resp.status_code == 422, (query, resp.text)
-        assert "same number of entries" in resp.json()["detail"]
+        assert resp.json()["detail"] == detail, (query, resp.json()["detail"])
 
 
 async def test_list_query_rejects_unknown_sort_direction(app_client):
@@ -373,6 +385,32 @@ async def test_simple_rest_range_pagination_query(app_client):
     assert len(resp.json()) == 2
 
 
+async def test_role_writers_require_an_actor(app_client):
+    """A direct writer call names its actor: omission is not the system path.
+
+    With an optional `actor`, leaving it off skipped the membership gate —
+    that path could still flip a seeded role's `system` flag. The argument is
+    required, so an omitted actor fails loudly instead of acting unbounded.
+    Audit attribution needs the same guarantee: without an actor the
+    workspace writers would publish `actor_user_id=None`.
+    """
+    import pytest
+
+    from src.db.session import SessionFactory
+    from src.services.workspaces import WorkspaceService
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session)
+        with pytest.raises(TypeError):
+            await service.create_custom_role("ws-x", name="ops", description=None, permissions=[])
+        with pytest.raises(TypeError):
+            await service.update_workspace("ws-x", name="ops")
+        with pytest.raises(TypeError):
+            await service.delete_workspace("ws-x")
+        with pytest.raises(TypeError):
+            await service.update_role("ws-x", "role-x", name="ops")
+
+
 async def test_service_stores_trimmed_names(app_client):
     """The service trims even when no schema validated the input.
 
@@ -401,8 +439,10 @@ async def test_service_stores_trimmed_names(app_client):
             permissions=["member:read"],
             actor=user,
         )
-        await service.update_workspace(workspace.id, name="  Acme Renamed  ")
-        await service.update_role(workspace.id, role.id, name="  operators  ")
+        await service.update_workspace(workspace.id, name="  Acme Renamed  ", actor=user)
+        # The owner is an explicit actor: the writers have no opt-out-by-omission
+        # system path, so a direct caller names who acts.
+        await service.update_role(workspace.id, role.id, name="  operators  ", actor=user)
 
     # Re-read so the assertion is on the stored row, not the in-memory object.
     async with SessionFactory() as session:
@@ -411,6 +451,78 @@ async def test_service_stores_trimmed_names(app_client):
         assert stored_ws.slug == "acme"
         stored_role = await session.get(Role, role.id)
         assert stored_role.name == "operators"
+
+
+async def test_service_rejects_blank_names(app_client):
+    """The service rejects a name that is blank after the strip.
+
+    `StrippedName` is the validation boundary over HTTP, but the service is
+    reachable without the schema (seed, bootstrap, tests), and a stored ""
+    would be unreachable as a role target and would fall through to the
+    random slug. #905.
+    """
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role, Workspace
+    from src.services.auth import AuthService
+    from src.services.workspaces import WorkspaceError, WorkspaceService
+
+    client = app_client
+    await register_user(client, "blank-owner@example.com")
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session)
+        user = await AuthService(session).get_by_email("blank-owner@example.com")
+        workspace = await service.create_workspace(
+            name="  Acme  ", slug=None, description=None, owner=user
+        )
+        role = await service.create_custom_role(
+            workspace.id, name="ops", description=None, permissions=[], actor=user
+        )
+        editor_id = (
+            await session.execute(select(Role.id).where(Role.name == "editor"))
+        ).scalar_one()
+
+        with pytest.raises(WorkspaceError) as excinfo:
+            await service.create_workspace(name="   ", slug=None, description=None, owner=user)
+        assert str(excinfo.value) == "workspace name cannot be blank"
+        with pytest.raises(WorkspaceError) as excinfo:
+            await service.update_workspace(workspace.id, name="   ", actor=user)
+        assert str(excinfo.value) == "workspace name cannot be blank"
+        with pytest.raises(WorkspaceError) as excinfo:
+            await service.create_custom_role(
+                workspace.id, name="   ", description=None, permissions=[], actor=user
+            )
+        assert str(excinfo.value) == "role name cannot be blank"
+        with pytest.raises(WorkspaceError) as excinfo:
+            await service.update_role(workspace.id, role.id, name="   ", actor=user)
+        assert str(excinfo.value) == "role name cannot be blank"
+        # The lookup wins over the blank check: an unknown workspace reports
+        # "not found" rather than leaking the name error.
+        with pytest.raises(WorkspaceError) as excinfo:
+            await service.update_workspace(
+                "00000000-0000-0000-0000-000000000000", name="   ", actor=user
+            )
+        assert str(excinfo.value) == "workspace not found"
+        # #907: a padded name that is not blank is still a no-op on a system role.
+        unchanged = await service.update_role(
+            workspace.id, editor_id, name="  editor  ", actor=user
+        )
+        assert unchanged.system is True
+
+    async with SessionFactory() as session:
+        blank_workspaces = (
+            (await session.execute(select(Workspace).where(Workspace.name == ""))).scalars().all()
+        )
+        blank_roles = (await session.execute(select(Role).where(Role.name == ""))).scalars().all()
+        assert blank_workspaces == []
+        assert blank_roles == []
+        stored_ws = await session.get(Workspace, workspace.id)
+        assert stored_ws.name == "Acme"
+        stored_role = await session.get(Role, role.id)
+        assert stored_role.name == "ops"
+        stored_editor = await session.get(Role, editor_id)
+        assert stored_editor.name == "editor"
+        assert stored_editor.system is True
 
 
 async def test_create_workspace_strips_padded_name(app_client):
@@ -427,6 +539,7 @@ async def test_create_workspace_strips_padded_name(app_client):
         "/api/v1/workspaces", json={"name": "   "}, headers=auth_headers(tokens)
     )
     assert blank.status_code == 422
+    assert blank.json()["detail"][0]["loc"] == ["body", "name"]
 
 
 async def test_update_workspace_strips_padded_name(app_client):
@@ -444,6 +557,7 @@ async def test_update_workspace_strips_padded_name(app_client):
         f"/api/v1/workspaces/{ws['id']}", json={"name": "   "}, headers=headers
     )
     assert blank.status_code == 422
+    assert blank.json()["detail"][0]["loc"] == ["body", "name"]
 
 
 async def _set_member_status(membership_id: str, status: str) -> None:
@@ -587,3 +701,68 @@ def test_suspend_and_reactivate_decide_every_member_status():
     # it unreachable through SQL, so the default is pinned here at table level.
     assert _SUSPEND_ALLOWED.get("archived", False) is False
     assert _REACTIVATE_ALLOWED.get("archived", False) is False
+
+
+async def test_suspend_refuses_a_status_the_table_blocks():
+    """The #977 refusal branch is pinned directly, not only at table level.
+
+    `test_suspend_and_reactivate_decide_every_member_status` pins the table
+    default (`_SUSPEND_ALLOWED.get("archived", False) is False`), and the
+    `WorkspaceConflict` -> 409 mapping is exercised through `reactivate_member`.
+    Neither reaches the `raise` itself. This test drives it: a member whose
+    `status` is outside the CHECK domain (unreachable through SQL, so a stub
+    session stands in for the row) makes `suspend_member` raise
+    `WorkspaceConflict`, and the row is left untouched — the refusal is not the
+    idempotent `return member` no-op a `SUSPENDED` status takes above it.
+    """
+    import pytest
+
+    from src.models.workspace import Role, User, WorkspaceMember
+    from src.services.workspaces import WorkspaceConflict, WorkspaceService
+
+    actor = User(id="actor-1")
+    target = WorkspaceMember(
+        id="member-2",
+        workspace_id="ws-1",
+        user_id="user-2",
+        role_id="role-editor",
+        status="archived",
+    )
+    editor = Role(id="role-editor", name="editor")
+    # The manager gate reads the actor as an active admin; `.execute` backs
+    # `get_membership`, `.get` backs the target member and its role, so the
+    # only thing that can refuse the call is the status table itself.
+    actor_row = WorkspaceMember(
+        id="member-1",
+        workspace_id="ws-1",
+        user_id="actor-1",
+        role_id="role-admin",
+        status="active",
+    )
+    admin = Role(id="role-admin", name="admin")
+
+    class _Result:
+        def __init__(self, row):
+            self._row = row
+
+        def first(self):
+            return self._row
+
+    class _StubSession:
+        async def execute(self, _stmt):
+            return _Result((actor_row, admin))
+
+        async def get(self, model, _pk):
+            if model is WorkspaceMember:
+                return target
+            if model is Role:
+                return editor
+            return None
+
+    service = WorkspaceService(_StubSession())
+    with pytest.raises(WorkspaceConflict, match="cannot suspend a member in this state"):
+        await service.suspend_member("ws-1", "member-2", actor=actor)
+
+    # The refusal is not a write: the row keeps the status that was refused,
+    # rather than being flipped to "suspended" or silently returned.
+    assert target.status == "archived"

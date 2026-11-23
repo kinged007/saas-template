@@ -1,0 +1,64 @@
+import { PlusCircle } from "lucide-react";
+import { Link } from "react-router";
+
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
+
+/** What a user who cannot create a workspace is told to do instead. */
+export const ASK_AN_ADMIN = "Ask an administrator to add you to it.";
+
+/** Why creation is unavailable in single-workspace deployments. */
+export const SINGLE_WORKSPACE_LIMIT = "This deployment allows one workspace.";
+
+/**
+ * The zero-workspace state, shared by the two surfaces the workspace guard
+ * cannot cover: the dashboard and the profile workspaces list.
+ *
+ * `single` is `single_workspace`, which makes /workspaces/create redirect home,
+ * so the button would navigate nowhere and the copy must not promise it. The
+ * locked-out copy says nothing about who owns the workspace: the flag also
+ * hides memberships outside the oldest workspace, so a member of a workspace
+ * they simply cannot see must be told the same thing.
+ */
+export function NoWorkspaceCard({
+  single,
+  headingLevel = 1,
+}: {
+  single: boolean;
+  /** Dashboard renders before its page title (h1); profile settings renders under one (h2). */
+  headingLevel?: 1 | 2;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        {/* CardTitle renders a div, so the title is spelled out as a heading
+            with the classes CardTitle applies; card-title-classes.test.ts
+            keeps the copy in step with the primitive. */}
+        {headingLevel === 2 ? (
+          <h2 className="font-semibold leading-none tracking-tight">No workspace yet</h2>
+        ) : (
+          <h1 className="font-semibold leading-none tracking-tight">No workspace yet</h1>
+        )}
+        <CardDescription>
+          {single
+            ? `${SINGLE_WORKSPACE_LIMIT} ${ASK_AN_ADMIN}`
+            : "Create a workspace to get started with managing your team."}
+        </CardDescription>
+      </CardHeader>
+      {!single && (
+        <CardContent>
+          {/* asChild renders a single <a>; <Link><Button> nests a button in a
+              link and costs a second tab stop. Not gated on useCan: the
+              workspaces.create permission is workspace-scoped and resolves false
+              here, while POST /workspaces checks no permission at all. */}
+          <Button asChild>
+            <Link to="/workspaces/create">
+              <PlusCircle className="mr-2 h-4 w-4" />
+              Create workspace
+            </Link>
+          </Button>
+        </CardContent>
+      )}
+    </Card>
+  );
+}

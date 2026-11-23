@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
-import { OAUTH_CALLBACK_TIMEOUT_MS, oauthCallbackLoginHref, oauthCodeConsumed } from "./oauthCallback";
+import { OAUTH_CALLBACK_TIMEOUT_MS, oauthCallbackLoginHref, oauthCodeConsumed } from "./oauth-callback";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { afterAuthRedirect, authProvider, seedWorkspace } from "@/providers/authProvider";
@@ -80,10 +80,15 @@ export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: str
   return {};
 }
 
-// Module scope, not the ref below: the workspace provider leaves its loading
-// gate as the identity settles, which unmounts and remounts this page with a
-// fresh ref while the URL still carries the code — the ref alone resets with
-// the instance and the code is exchanged twice.
+// Module scope, not the ref below: the ref resets with the component
+// instance, and a remount while the URL still carries the code (StrictMode's
+// dev double-mount, HMR) would exchange the single-use code twice.
+//
+// A successful exchange keeps its latch: the authorize hop in SsoButtons is a
+// hard document load, so a fresh authorization always resets this module, and
+// the first instance owns the navigate() — once this guard returns, the later
+// instance can no longer exchange or redirect, so its repeat has to be silent.
+// Only a failed exchange clears the latch; see the .catch below.
 let consumedCode: string | null = null;
 
 const PENDING_STATUS = "Signing you in…";
@@ -106,17 +111,8 @@ export function OAuthCallbackPage() {
       setStatus(error === "registration is disabled" ? "Registration is disabled." : "Sign-in failed.");
       return;
     }
-    // Ahead of the missing-code branch: the workspace provider leaves its
-    // loading gate as the identity settles, and that remount can land after
-    // navigate() has rewritten the URL — code is null but it was ours, so
-    // stopping here keeps a succeeding sign-in from painting an error.
-    // Gated on the session: consumedCode is module state that no sign-out
-    // clears, and the access token the exchange stored is in-memory only, so
-    // logout and the 401 handler both drop it while the latch survives. Honoring
-    // a latch with no session left it on "Signing you in…" forever.
-    // Every terminal branch below links back to /login. The retry runs a
-    // fresh authorize, so it carries a fresh single-use code and the latch
-    // above stays correct.
+    // Why null can be a repeat and why it is gated on the session: see the JSDoc on oauthCodeConsumed.
+    // The retry below runs a fresh authorize, so it carries a fresh single-use code and the latch stays correct.
     if (oauthCodeConsumed(code, consumedCode, tokenStore.getAccess() !== null)) return;
     if (!code) {
       setStatus("Missing sign-in code.");
@@ -135,7 +131,11 @@ export function OAuthCallbackPage() {
         // return to it and re-fire the exchange.
         navigate(afterAuthRedirect(), { replace: true });
       })
-      .catch(() => setStatus("Sign-in failed. The code may have expired."));
+      .catch(() => {
+        // Failed exchange: the latch is stale, so drop it and let a repeat visit retry.
+        consumedCode = null;
+        setStatus("Sign-in failed. The code may have expired.");
+      });
   }, [navigate]);
   // Bound the pending state: past this the page offers the escape instead of
   // hanging on "Signing you in…", which is otherwise indistinguishable from

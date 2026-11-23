@@ -34,6 +34,8 @@ from src.services.oauth import (
     OAuthError,
     ProviderConfig,
     _discovery,
+    _jwks,
+    _single_line,
     build_authorize_url,
     claims_from_id_token,
     consume_state,
@@ -56,10 +58,18 @@ UNSET = object()
 def _jwk(
     key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey, kid: str | None, alg: str
 ) -> dict[str, Any]:
+    # Mirrors the allow-list in src/services/oauth.py; not imported so drift fails loudly.
     algo = {"RS256": jwt.algorithms.RSAAlgorithm, "ES256": jwt.algorithms.ECAlgorithm}[alg]
     pub = json.loads(algo.to_jwk(key.public_key()))
     # A kid of None omits the member, as a provider that assigns no kid would.
     return {**pub, **({"kid": kid} if kid else {}), "use": "sig", "alg": alg}
+
+
+def test_jwk_rejects_unknown_algorithm(idp):
+    """An alg outside the map raises here, at the call site, rather than publishing a key
+    labelled with an algorithm it was not built for."""
+    with pytest.raises(KeyError, match="PS256"):
+        _jwk(idp.signing_key, "kid-x", "PS256")
 
 
 class _StubIdP:
@@ -97,6 +107,7 @@ class _StubIdP:
         # own, so it can carry bytes json.dumps would escape.
         self.token_error_body: str | None = None
         self.jwks_delay = 0.0
+        self.discovery_delay = 0.0
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
@@ -183,6 +194,8 @@ class _StubIdP:
                 elif self.path.startswith("/.well-known/openid-configuration-text"):
                     self._send(200, None, raw="this is not json")
                 elif self.path.startswith("/.well-known/openid-configuration"):
+                    if stub.discovery_delay:
+                        time.sleep(stub.discovery_delay)
                     self._send(200, stub.doc)
                 elif self.path == "/jwks":
                     if stub.jwks_delay:
@@ -314,6 +327,74 @@ async def test_claims_from_id_token_rejects_wrong_issuer_without_discovery_doc(
     )
 
 
+async def test_claims_from_id_token_rejects_disagreeing_discovery_issuer(
+    provider, idp, cache, caplog
+):
+    """The config is the pin: a discovery document naming another issuer is
+    refused outright, so a compromised or misconfigured IdP cannot repoint the
+    check even when it also signs the token it wants accepted."""
+    doc = {**idp.doc, "issuer": "http://evil.example"}
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        assert (
+            await claims_from_id_token(provider, doc, idp.mint(iss="http://evil.example"), cache)
+            is None
+        )
+    assert "discovery issuer mismatch" in caplog.text
+
+
+async def test_claims_from_id_token_ignores_trailing_slash_on_issuer(provider, idp, cache):
+    """PyJWT compares `iss` byte for byte, so a cosmetic slash must not decide the
+    outcome — on the config, the discovery-document or the token side. A
+    slash-terminated issuer is a legal OIDC shape (Discovery 1.0 §3)."""
+    slashed = replace(provider, issuer=f"{idp.base}/")
+    slashed_doc = {**idp.doc, "issuer": f"{idp.base}/"}
+    assert (
+        await claims_from_id_token(provider, idp.doc, idp.mint(iss=f"{idp.base}/"), cache)
+        is not None
+    )
+    assert await claims_from_id_token(slashed, idp.doc, idp.mint(), cache) is not None
+    assert (
+        await claims_from_id_token(slashed, slashed_doc, idp.mint(iss=f"{idp.base}/"), cache)
+        is not None
+    )
+    assert (
+        await claims_from_id_token(provider, slashed_doc, idp.mint(iss=f"{idp.base}/"), cache)
+        is not None
+    )
+
+
+async def test_claims_from_id_token_rejects_non_string_issuer(provider, idp, cache):
+    """The document is network-sourced JSON and the config is unvalidated env, so
+    `issuer` is untrusted in type as well as value: anything but a string is
+    refused, not raised. The callback only catches `OAuthError`, so an escaping
+    exception is a 500 with a stack trace. The config-side case is unreachable
+    in production -- `get_provider` coerces `issuer` to `str` -- so it asserts
+    the guard, not that a bad config is caught upstream."""
+    assert (
+        await claims_from_id_token(provider, {**idp.doc, "issuer": ["http://x"]}, idp.mint(), cache)
+        is None
+    )
+    assert (
+        await claims_from_id_token(replace(provider, issuer=12345), idp.doc, idp.mint(), cache)
+        is None
+    )
+
+
+async def test_claims_from_id_token_rejects_unreadable_discovery_issuer(
+    provider, idp, cache, caplog
+):
+    """A non-string document `issuer` is refused even when no `issuer` is configured,
+    where it would otherwise normalize to None and leave the pin presence-only. It
+    logs as unreadable, not as a mismatch, so a malformed document and a takeover
+    stay distinguishable during triage."""
+    for unconfigured in (provider, replace(provider, issuer=None)):
+        bad_doc = {**idp.doc, "issuer": 12345}
+        with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+            assert await claims_from_id_token(unconfigured, bad_doc, idp.mint(), cache) is None
+        assert "unreadable issuer in discovery document" in caplog.text
+        assert "discovery issuer mismatch" not in caplog.text
+
+
 async def test_claims_from_id_token_without_issuer_checks_presence_only(provider, idp, cache):
     """Deliberate ceiling: a provider that names no issuer anywhere (the explicit-URL
     shape, e.g. the GitHub config) has nothing to compare `iss` against, so only
@@ -378,14 +459,6 @@ async def test_claims_from_id_token_rejects_rs256_token_published_under_the_ec_k
     assert await claims_from_id_token(provider, idp.doc, from_attacker_rsa_key, cache) is None
 
 
-def test_jwk_rejects_unknown_algorithm(idp):
-    """An alg outside the map raises here, at the call site. The ternary this replaced
-    emitted an RSA key labelled with whatever alg it was handed, so the stub published
-    a key it could never verify and the failure surfaced as a signature error."""
-    with pytest.raises(KeyError):
-        _jwk(idp.signing_key, "kid-x", "PS256")
-
-
 async def test_claims_from_id_token_rejects_wrong_audience(provider, idp, cache):
     assert (
         await claims_from_id_token(provider, idp.doc, idp.mint(aud="another-client"), cache) is None
@@ -432,6 +505,42 @@ async def test_claims_from_id_token_rejects_token_signed_by_another_key(provider
 
 async def test_claims_from_id_token_rejects_unsigned_token(provider, idp, cache):
     assert await claims_from_id_token(provider, idp.doc, idp.mint(alg="none"), cache) is None
+
+
+async def test_claims_from_id_token_logs_jwks_fetch_failure(provider, idp, cache, caplog):
+    """An unreachable JWKS is an outage, not a bad token. It refuses either way,
+    but it must not log under the message a signature failure produces, or an
+    IdP key rotation is triaged as a takeover."""
+    doc = {**idp.doc, "jwks_uri": f"http://127.0.0.1:{_closed_port()}/jwks"}
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+    assert "jwks fetch failed" in caplog.text
+    assert "id_token verification failed" not in caplog.text
+
+
+async def test_claims_from_id_token_logs_unknown_kid_as_verification_failure(
+    provider, idp, cache, caplog
+):
+    """The JWKS was fetched and simply does not publish this kid: an attack-shaped
+    probe, not an outage, so it must not land on the jwks-fetch line."""
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        assert (
+            await claims_from_id_token(provider, idp.doc, idp.mint(kid="rotated-away"), cache)
+            is None
+        )
+    assert "jwks fetch failed" not in caplog.text
+    assert "id_token verification failed" in caplog.text
+
+
+async def test_claims_from_id_token_logs_unparseable_token_as_verification_failure(
+    provider, idp, cache, caplog
+):
+    """An unparseable token names no key a fetch could return, so naming a fetch
+    would name an operation that could not have helped."""
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        assert await claims_from_id_token(provider, idp.doc, "not-a-jwt", cache) is None
+    assert "jwks fetch failed" not in caplog.text
+    assert "id_token verification failed" in caplog.text
 
 
 async def test_claims_from_id_token_returns_none_without_jwks_uri(provider, idp, cache):
@@ -523,6 +632,61 @@ async def test_jwks_refuses_a_key_set_that_is_not_an_object(provider, idp, cache
         idp.broken_jwks = UNSET
     assert "is not an object" in caplog.text
     assert cache.get(f"oauth:jwks:{provider.id}") is None, "the bad key set was cached"
+
+
+async def test_concurrent_kid_misses_refetch_once(provider, idp, cache):
+    """#1025: a burst of logins meeting an unknown kid shares one in-flight refetch
+    instead of paying one outbound JWKS request per login."""
+    assert await claims_from_id_token(provider, idp.doc, idp.mint(), cache) is not None
+    before = idp.hits.count("/jwks")
+    idp.published = [(idp.other_key, ROTATED_KID, "RS256")]
+    idp.jwks_delay = 0.05
+    try:
+        tokens = [idp.mint(key=idp.other_key, kid=ROTATED_KID) for _ in range(5)]
+        claims = await asyncio.gather(
+            *[claims_from_id_token(provider, idp.doc, t, cache) for t in tokens]
+        )
+    finally:
+        idp.published = [(idp.signing_key, KID, "RS256"), (idp.ec_key, EC_KID, "ES256")]
+        idp.jwks_delay = 0.0
+    assert all(c is not None for c in claims)
+    assert idp.hits.count("/jwks") == before + 1
+
+
+async def test_concurrent_cold_jwks_fetches_once(provider, idp):
+    """#1025: a cold cache under a burst is filled once, not once per login."""
+    fresh = TtlCache(ttl_seconds=60)
+    before = idp.hits.count("/jwks")
+    idp.jwks_delay = 0.05
+    try:
+        claims = await asyncio.gather(
+            *[claims_from_id_token(provider, idp.doc, idp.mint(), fresh) for _ in range(5)]
+        )
+    finally:
+        idp.jwks_delay = 0.0
+    assert all(c is not None for c in claims)
+    assert idp.hits.count("/jwks") == before + 1
+
+
+async def test_concurrent_failed_jwks_fetches_fail_together(provider, idp, cache):
+    """One unusable set fails the whole burst with the same error, costs one fetch,
+    and leaves nothing behind: no cached set, no dead in-flight entry to join."""
+    doc = dict(idp.doc, jwks_uri=f"{idp.base}/jwks-broken")
+    idp.broken_jwks = {"keys": []}
+    before = idp.hits.count("/jwks-broken")
+    try:
+        outcomes = await asyncio.gather(
+            *[_jwks(provider, doc, cache) for _ in range(5)], return_exceptions=True
+        )
+    finally:
+        idp.broken_jwks = UNSET
+    assert idp.hits.count("/jwks-broken") == before + 1
+    assert all(isinstance(o, OAuthError) for o in outcomes)
+    assert cache.get(f"oauth:jwks:{provider.id}") is None, "the failed fetch was cached"
+    # The released entry means a later caller fetches again rather than joining
+    # a completed failure.
+    assert await _jwks(provider, doc, cache) is not None
+    assert idp.hits.count("/jwks-broken") == before + 2
 
 
 async def test_claims_from_id_token_survives_a_non_string_jwks_uri(provider, idp, cache):
@@ -634,6 +798,24 @@ async def test_discovery_refuses_a_document_that_is_not_an_object(provider, idp,
     finally:
         idp.broken_doc = UNSET
     assert cache.get(f"oauth:discovery:{provider.id}") is None, "the bad document was cached"
+
+
+async def test_concurrent_discovery_fetches_once(provider, idp):
+    """#1025: the discovery path has the same burst shape — five cold callers, one
+    well-known fetch."""
+    fresh = TtlCache(ttl_seconds=60)
+
+    def known() -> int:
+        return sum(1 for h in idp.hits if h.startswith("/.well-known"))
+
+    before = known()
+    idp.discovery_delay = 0.05
+    try:
+        docs = await asyncio.gather(*[_discovery(provider, fresh) for _ in range(5)])
+    finally:
+        idp.discovery_delay = 0.0
+    assert all(d["issuer"] == idp.base for d in docs)
+    assert known() == before + 1
 
 
 def test_authorize_url_carries_s256_challenge(provider, idp):
@@ -763,3 +945,13 @@ async def test_fetch_userinfo_raises_on_provider_error(provider, idp):
 async def test_fetch_userinfo_returns_empty_for_a_response_that_is_not_an_object(provider, idp):
     doc = dict(idp.doc, userinfo_endpoint=f"{idp.base}/userinfo?mode=array")
     assert await fetch_userinfo(provider, doc, "at-stub") == {}
+
+
+def test_single_line_replaces_every_cc_control_with_a_space():
+    # C0 (CR/LF/ESC), DEL, C1 (NEL): the ESC is defused so "[31m" that follows
+    # is inert text, and no control can forge a log line.
+    assert _single_line("a\rb\nc\x1b[31md\x7fe\x85") == "a b c [31md e "
+
+
+def test_single_line_truncates_to_the_cap():
+    assert _single_line("x" * 300) == "x" * 200

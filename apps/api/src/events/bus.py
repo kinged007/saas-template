@@ -101,6 +101,16 @@ class EventBus(ABC):
     async def stop(self) -> None:
         """Gracefully stop and disconnect."""
 
+    @abstractmethod
+    async def wait_idle(self) -> None:
+        """Wait until in-flight deliveries have completed.
+
+        Test-facility drain signal: a test publishes, awaits this, then
+        asserts handler side effects without polling the database. Backends
+        without local delivery tracking return immediately and guarantee
+        nothing — callers on those backends must keep polling.
+        """
+
     @property
     @abstractmethod
     def name(self) -> str: ...

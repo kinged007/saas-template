@@ -4,8 +4,13 @@ import re
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 
 import src.core.permissions as perms
+from src.db.session import SessionFactory
+from src.models.workspace import Role, WorkspaceMember
+from src.services.auth import AuthService
+from src.services.workspaces import WorkspaceForbidden, WorkspaceService
 from tests.conftest import (
     auth_headers,
     create_workspace,
@@ -147,7 +152,8 @@ async def test_permission_registry_covers_route_guards():
 
 async def test_permission_catalog_requires_auth(app_client):
     resp = await app_client.get(
-        "/api/v1/roles/permission-catalog", headers={"X-Workspace-ID": "ws-does-not-exist"}
+        "/api/v1/roles/permission-catalog",
+        headers={"X-Workspace-ID": "00000000-0000-0000-0000-000000000000"},
     )
     assert resp.status_code in (401, 403)
 
@@ -160,8 +166,8 @@ async def test_permission_catalog_filtered_to_assignable(app_client):
     # Seed the key-only scope before the member joins. accept_invitation stores
     # role_id and copies no permissions, so this way the viewer holds the scope
     # from the moment it joins and the test does not depend on get_membership
-    # joining Role live on WorkspaceMember.role_id. The intersection at
-    # roles.py:92 is only reachable for a non-owner caller.
+    # joining Role live on WorkspaceMember.role_id. The non-owner intersection
+    # in permission_catalog() is only reachable for a non-owner caller.
     await _add_key_only_to_role(
         await _role_id(client, owner_headers, "viewer"), perms.NOTIFICATION_READ
     )
@@ -279,7 +285,12 @@ async def test_create_role_rejects_blank_name(app_client):
         json={"name": "   ", "permissions": []},
         headers=ws_headers(owner, ws["id"]),
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 422, resp.text
+    # Pin the field: any other 422 (a bad permission, a missing field) would
+    # also satisfy a status-only assertion.
+    detail = resp.json()["detail"][0]
+    assert detail["loc"] == ["body", "name"]
+    assert detail["type"] == "string_too_short"
 
 
 async def test_update_role_strips_padded_name(app_client):
@@ -298,7 +309,28 @@ async def test_update_role_strips_padded_name(app_client):
     resp = await client.patch(
         f"/api/v1/roles/{created['id']}", json={"name": "   "}, headers=headers
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 422, resp.text
+    # Pin the field: any other 422 would also satisfy a status-only assertion.
+    detail = resp.json()["detail"][0]
+    assert detail["loc"] == ["body", "name"]
+    assert detail["type"] == "string_too_short"
+
+
+async def test_create_role_accepts_a_name_padded_to_the_50_char_bound(app_client):
+    # The 50-char bound applies to the stripped value, so a padded name whose
+    # stripped form is exactly the bound is accepted. If the length check ran
+    # on the raw string first (strip reordered after it), this would 422.
+    client = app_client
+    owner = await register_user(client, "cr-pad50@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    name = "x" * 50
+    resp = await client.post(
+        "/api/v1/roles", json={"name": f"  {name}  ", "permissions": []}, headers=headers
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == name
+    assert await _role_id(client, headers, name)
 
 
 async def test_permission_catalog_excludes_legacy_key_only_scope(app_client):
@@ -376,19 +408,12 @@ async def test_create_role_capped_by_creator_permissions(app_client):
 async def test_suspended_actor_is_capped_on_role_writes(app_client):
     """A suspended actor is capped as if unauthenticated, not by its own role.
 
-    The role-capping sites resolve the actor's membership with
-    `active_only=True`; a suspended row therefore reads as "no actor cap" and
-    every requested permission is denied. The same actor, active, must still be
-    able to write — otherwise a refusal for everyone would satisfy the deny
-    half.
+    The role-capping sites resolve the actor's membership with `get_membership`,
+    which reads active rows only; a suspended row therefore reads as "no actor
+    cap" and every requested permission is denied. The same actor, active, must
+    still be able to write — otherwise a refusal for everyone would satisfy the
+    deny half.
     """
-    from sqlalchemy import select  # noqa: E402
-
-    from src.db.session import SessionFactory
-    from src.models.workspace import Role, WorkspaceMember
-    from src.services.auth import AuthService
-    from src.services.workspaces import WorkspaceForbidden, WorkspaceService
-
     client = app_client
     owner = await register_user(client, "cap-owner@example.com")
     ws = await create_workspace(client, owner)
@@ -621,7 +646,7 @@ async def test_update_role_noop_body_keeps_system_flag(app_client):
     ws = await create_workspace(client, owner)
     headers = ws_headers(owner, ws["id"])
     editor_id = await _role_id(client, headers, "editor")
-    for body in ({}, {"name": "editor"}):
+    for body in ({}, {"name": "editor"}, {"name": "  editor  "}):
         resp = await client.patch(f"/api/v1/roles/{editor_id}", json=body, headers=headers)
         assert resp.status_code == 200, (body, resp.text)
         assert resp.json()["system"] is True, body
@@ -705,8 +730,34 @@ async def test_roles_client_sort_desc_reverses_only_within_the_rank_groups(app_c
     assert names[4:] == sorted(_CUSTOM_ROLE_NAMES, reverse=True)
 
 
+async def test_roles_default_order_breaks_a_name_tie_on_id(app_client):
+    """#848: the default order ends on id, so a shared name cannot tie it.
+
+    `roles.name` is unique only in the app layer, so two rows can carry one
+    name. They are inserted id-descending, which leaves storage order -- what a
+    rank + name read falls back on for a tie -- disagreeing with the id order.
+    """
+    client = app_client
+    owner = await register_user(client, "list-tie@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    ids = [f"00000000-0000-4000-8000-00000000000{i}" for i in (1, 2)]
+    async with SessionFactory() as session:
+        session.add_all(
+            Role(id=rid, workspace_id=ws["id"], name="dup", permissions=[], system=False)
+            for rid in reversed(ids)
+        )
+        await session.commit()
+    resp = await client.get("/api/v1/roles", params={"_start": 0, "_end": 100}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert [r["id"] for r in resp.json() if r["name"] == "dup"] == ids
+
+
 async def test_roles_paging_tiles_the_set_without_gaps(app_client):
-    """Rank + name is a total order, so pages tile the set in that one order.
+    """Rank + name + id is a total order, so pages tile the set in that one order.
 
     The expectation is built here rather than fetched from a full-set request:
     two runs of the same endpoint agree even when the order is not total.
