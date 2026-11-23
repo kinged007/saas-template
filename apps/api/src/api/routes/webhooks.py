@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.crud import InvalidQuery, apply_query, parse_query
+from src.api.crud import CREATED_DESC, InvalidQuery, apply_query, parse_query
 from src.api.deps import (
     get_container,
     get_current_user,
@@ -78,6 +78,20 @@ async def list_subscriptions(
     rows = await db.execute(stmt)
     response.headers["X-Total-Count"] = str(total)
     return [subscription_to_dict(s) for s in rows.scalars().all()]
+
+
+@router.get("/subscriptions/{subscription_id}")
+async def get_subscription(
+    subscription_id: str,
+    workspace_id: str = Depends(get_current_workspace_id),
+    _=Depends(require_permission(WEBHOOK_READ)),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        sub = await WebhookService(db).get_subscription(workspace_id, subscription_id)
+    except WebhookError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    return subscription_to_dict(sub)
 
 
 @router.post("/subscriptions", status_code=201)
@@ -227,12 +241,10 @@ async def list_deliveries(
             spec,
             sortable=_DELIVERY_SORTABLE,
             filterable=_DELIVERY_FILTERABLE,
+            default_sort=CREATED_DESC,
         )
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
-    # Default: newest first.
-    if not spec.sort_by:
-        stmt = stmt.order_by(WebhookDelivery.created_at.desc(), WebhookDelivery.id.desc())
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
     stmt = stmt.offset(spec.offset).limit(spec.limit)
@@ -265,11 +277,10 @@ async def list_subscription_deliveries(
             spec,
             sortable=_DELIVERY_SORTABLE,
             filterable=_DELIVERY_FILTERABLE,
+            default_sort=CREATED_DESC,
         )
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
-    if not spec.sort_by:
-        stmt = stmt.order_by(WebhookDelivery.created_at.desc(), WebhookDelivery.id.desc())
     count = await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
     total = count.scalar_one()
     stmt = stmt.offset(spec.offset).limit(spec.limit)

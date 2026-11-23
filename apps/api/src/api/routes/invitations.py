@@ -17,7 +17,7 @@ from src.api.deps import (
     require_session_user,
     resolve_auth_principal,
 )
-from src.core.dates import ensure_utc, now_utc
+from src.core.dates import ensure_utc, iso_or_none, now_utc
 from src.core.permissions import MEMBER_CREATE, MEMBER_DELETE
 from src.db.session import get_db
 from src.models.core import Invitation
@@ -32,6 +32,8 @@ from src.services.workspaces import (
 
 logger = logging.getLogger(__name__)
 
+# Backend API path, mounted under /api/v1 by src/main.py — not the frontend
+# route (src.core.routes.INVITATIONS_ROUTE).
 router = APIRouter(prefix="/invitations", tags=["invitations"])
 
 _INVITATION_FILTERABLE = {"status", "email"}
@@ -52,9 +54,9 @@ def _invite_dict(i: Invitation) -> dict:
         "invited_by_user_id": i.invited_by_user_id,
         "token": i.token,
         "status": i.status,
-        "expires_at": i.expires_at.isoformat() if i.expires_at else None,
-        "accepted_at": i.accepted_at.isoformat() if i.accepted_at else None,
-        "created_at": i.created_at.isoformat() if i.created_at else None,
+        "expires_at": iso_or_none(i.expires_at),
+        "accepted_at": iso_or_none(i.accepted_at),
+        "created_at": iso_or_none(i.created_at),
         "expired": expired,
     }
 

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 
+import { OAUTH_CALLBACK_TIMEOUT_MS, oauthCallbackLoginHref, oauthCodeConsumed } from "./oauth-callback";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { afterAuthRedirect, authProvider, seedWorkspace } from "@/providers/authProvider";
 import { API_URL, httpClient } from "@/providers/dataProvider";
-import { identityStore, tokenStore, workspaceStore } from "@/utils/storage";
+import { identityStore, tokenStore } from "@/utils/storage";
+import { postCredentials } from "@/utils/credentialPost";
 import { clearAllCaches, queryClient } from "@/providers/queryClient";
 
 export type AuthConfig = {
@@ -59,13 +61,13 @@ export function SsoButtons({ providers, disabled }: { providers: AuthConfig["pro
 
 /** Exchange the one-time OAuth code for tokens, then seed identity/workspace like login. */
 export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: string }> {
-  const { data } = await httpClient.post(`${API_URL}/auth/oauth/token`, {
-    code,
-    use_cookies: true,
-  });
+  const { data } = await postCredentials(() =>
+    httpClient.post(`${API_URL}/auth/oauth/token`, {
+      code,
+      use_cookies: true,
+    }),
+  );
   if (data.two_factor_required) return { twoFactor: data.challenge_token as string };
-  workspaceStore.clear();
-  identityStore.set(null);
   clearAllCaches(queryClient);
   // Refresh token is in the HttpOnly cookie; only the access token is stored.
   tokenStore.setTokens(data.access_token);
@@ -73,19 +75,28 @@ export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: str
     const { data: identity } = await httpClient.get(`${API_URL}/auth/me`);
     await seedWorkspace(identity);
   } catch {
-    identityStore.set(null);
+    identityStore.clear();
   }
   return {};
 }
 
-// Module scope, not the ref below: the workspace provider leaves its loading
-// gate as the identity settles, which unmounts and remounts this page with a
-// fresh ref while the URL still carries the code — the ref alone resets with
-// the instance and the code is exchanged twice.
+// Module scope, not the ref below: the ref resets with the component
+// instance, and a remount while the URL still carries the code (StrictMode's
+// dev double-mount, HMR) would exchange the single-use code twice.
+//
+// A successful exchange keeps its latch: the authorize hop in SsoButtons is a
+// hard document load, so a fresh authorization always resets this module, and
+// the first instance owns the navigate() — once this guard returns, the later
+// instance can no longer exchange or redirect, so its repeat has to be silent.
+// Only a failed exchange clears the latch; see the .catch below.
 let consumedCode: string | null = null;
 
+const PENDING_STATUS = "Signing you in…";
+
 export function OAuthCallbackPage() {
-  const [status, setStatus] = useState("Signing you in…");
+  const [status, setStatus] = useState(PENDING_STATUS);
+  const [timedOut, setTimedOut] = useState(false);
+  const pending = status === PENDING_STATUS;
   const navigate = useNavigate();
   // StrictMode runs this effect twice in dev and the code is single-use, so a
   // second exchange would race the first and report an expired code.
@@ -100,11 +111,13 @@ export function OAuthCallbackPage() {
       setStatus(error === "registration is disabled" ? "Registration is disabled." : "Sign-in failed.");
       return;
     }
+    // Why null can be a repeat and why it is gated on the session: see the JSDoc on oauthCodeConsumed.
+    // The retry below runs a fresh authorize, so it carries a fresh single-use code and the latch stays correct.
+    if (oauthCodeConsumed(code, consumedCode, tokenStore.getAccess() !== null)) return;
     if (!code) {
       setStatus("Missing sign-in code.");
       return;
     }
-    if (consumedCode === code) return;
     consumedCode = code;
     exchangeOAuthCode(code)
       .then((res) => {
@@ -118,13 +131,31 @@ export function OAuthCallbackPage() {
         // return to it and re-fire the exchange.
         navigate(afterAuthRedirect(), { replace: true });
       })
-      .catch(() => setStatus("Sign-in failed. The code may have expired."));
+      .catch(() => {
+        // Failed exchange: the latch is stale, so drop it and let a repeat visit retry.
+        consumedCode = null;
+        setStatus("Sign-in failed. The code may have expired.");
+      });
   }, [navigate]);
+  // Bound the pending state: past this the page offers the escape instead of
+  // hanging on "Signing you in…", which is otherwise indistinguishable from
+  // the sessionAlive repeat path. Terminal states render the escape at once.
+  useEffect(() => {
+    const timer = window.setTimeout(() => setTimedOut(true), OAUTH_CALLBACK_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
   void authProvider;
   return (
     <div className="bg-background flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
-        <CardContent className="pt-6 text-center text-sm">{status}</CardContent>
+        <CardContent className="flex flex-col items-center gap-4 pt-6 text-center text-sm">
+          <p>{timedOut && pending ? "Sign-in is taking longer than expected." : status}</p>
+          {(timedOut || !pending) && (
+            <Button asChild>
+              <Link to={oauthCallbackLoginHref(window.location.search)}>Back to sign-in</Link>
+            </Button>
+          )}
+        </CardContent>
       </Card>
     </div>
   );

@@ -34,6 +34,8 @@ from src.services.oauth import (
     OAuthError,
     ProviderConfig,
     _discovery,
+    _jwks,
+    _single_line,
     build_authorize_url,
     claims_from_id_token,
     consume_state,
@@ -49,15 +51,25 @@ KID = "stub-key-1"
 EC_KID = "stub-ec-1"
 ROTATED_KID = "stub-key-2"
 REDIRECT_URI = "http://localhost:8000/api/v1/auth/oauth/stub/callback"
+# Distinguishes "a test did not ask for a broken document" from a `null` one.
+UNSET = object()
 
 
 def _jwk(
     key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey, kid: str | None, alg: str
 ) -> dict[str, Any]:
+    # Mirrors the allow-list in src/services/oauth.py; not imported so drift fails loudly.
     algo = {"RS256": jwt.algorithms.RSAAlgorithm, "ES256": jwt.algorithms.ECAlgorithm}[alg]
     pub = json.loads(algo.to_jwk(key.public_key()))
     # A kid of None omits the member, as a provider that assigns no kid would.
     return {**pub, **({"kid": kid} if kid else {}), "use": "sig", "alg": alg}
+
+
+def test_jwk_rejects_unknown_algorithm(idp):
+    """An alg outside the map raises here, at the call site, rather than publishing a key
+    labelled with an algorithm it was not built for."""
+    with pytest.raises(KeyError, match="PS256"):
+        _jwk(idp.signing_key, "kid-x", "PS256")
 
 
 class _StubIdP:
@@ -82,9 +94,20 @@ class _StubIdP:
             (self.signing_key, KID, "RS256"),
             (self.ec_key, EC_KID, "ES256"),
         ]
-        # Set by a test to make /jwks-broken answer with an unusable set.
-        self.broken_jwks: dict[str, Any] | None = None
+        # Set by a test to make /jwks-broken answer with an unusable set, and
+        # UNSET once the set is usable again, so a JSON `null` set is expressible.
+        self.broken_jwks: Any = UNSET
+        # Set by a test to make the well-known document answer with `broken_doc`
+        # instead of an object, which a provider should never publish.
+        self.broken_doc: Any = UNSET
+        # Set by a test to answer the good-code token request with something other
+        # than a token object, which a provider should never publish.
+        self.broken_tokens: Any = UNSET
+        # Set by a test to answer the bad-code token request with raw text of its
+        # own, so it can carry bytes json.dumps would escape.
+        self.token_error_body: str | None = None
         self.jwks_delay = 0.0
+        self.discovery_delay = 0.0
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
@@ -115,11 +138,14 @@ class _StubIdP:
         kid: str | None = KID,
         key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey | None = None,
         alg: str = "RS256",
+        drop: tuple[str, ...] = (),
+        extra_headers: dict[str, Any] | None = None,
         **claims: Any,
     ) -> str:
         """A signed id_token; every claim is overridable so tests can break one at a time.
 
-        `kid=None` omits the JWT header.
+        `kid=None` omits the JWT header. `drop` pops claims outright: `**claims`
+        can only override, never remove, so `sub=None` would still satisfy presence.
         """
         now = int(time.time())
         payload = {
@@ -131,7 +157,10 @@ class _StubIdP:
             "exp": now + 300,
             **claims,
         }
+        for name in drop:
+            payload.pop(name, None)
         headers = {"kid": kid} if kid is not None else {}
+        headers.update(extra_headers or {})
         if alg == "none":
             return jwt.encode(payload, key="", algorithm="none", headers=headers)
         return jwt.encode(payload, key or self.signing_key, algorithm=alg, headers=headers)
@@ -146,8 +175,10 @@ class _StubIdP:
             def log_message(self, fmt: str, *args: Any) -> None:
                 pass  # keep the access log out of the test output
 
-            def _send(self, code: int, payload: dict[str, Any]) -> None:
-                body = json.dumps(payload).encode()
+            # `raw` sends bytes verbatim; without it the payload is JSON, so a bare
+            # str stays a JSON string rather than becoming an unparseable body.
+            def _send(self, code: int, payload: Any, raw: str | None = None) -> None:
+                body = (raw if raw is not None else json.dumps(payload)).encode()
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -156,7 +187,15 @@ class _StubIdP:
 
             def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
                 stub.hits.append(self.path)
-                if self.path.startswith("/.well-known/openid-configuration"):
+                if self.path.startswith("/.well-known/openid-configuration-broken"):
+                    self._send(200, stub.doc if stub.broken_doc is UNSET else stub.broken_doc)
+                elif self.path.startswith("/.well-known/openid-configuration-500"):
+                    self._send(500, {"error": "idp_down"})
+                elif self.path.startswith("/.well-known/openid-configuration-text"):
+                    self._send(200, None, raw="this is not json")
+                elif self.path.startswith("/.well-known/openid-configuration"):
+                    if stub.discovery_delay:
+                        time.sleep(stub.discovery_delay)
                     self._send(200, stub.doc)
                 elif self.path == "/jwks":
                     if stub.jwks_delay:
@@ -170,17 +209,24 @@ class _StubIdP:
                 elif self.path == "/jwks-broken":
                     # Answers with `broken_jwks` while a test holds one, so the IdP can
                     # be made to publish an unusable set and then repair itself.
-                    self._send(200, stub.broken_jwks or stub.published_jwks())
-                elif self.path == "/userinfo":
+                    body = stub.published_jwks() if stub.broken_jwks is UNSET else stub.broken_jwks
+                    self._send(200, body)
+                elif self.path == "/userinfo" or self.path.startswith("/userinfo?"):
                     stub.auth_headers.append(self.headers.get("Authorization", ""))
-                    self._send(
-                        200,
-                        {
-                            "sub": "sub-1",
-                            "email": "user@example.com",
-                            "name": "Stub User",
-                        },
-                    )
+                    mode = parse_qs(urlsplit(self.path).query).get("mode")
+                    if mode == ["500"]:
+                        self._send(500, {"error": "idp_down"})
+                    elif mode == ["array"]:
+                        self._send(200, ["not", "a", "dict"])
+                    else:
+                        self._send(
+                            200,
+                            {
+                                "sub": "sub-1",
+                                "email": "user@example.com",
+                                "name": "Stub User",
+                            },
+                        )
                 else:
                     self._send(404, {"error": "not_found"})
 
@@ -190,7 +236,7 @@ class _StubIdP:
                 form = parse_qs(self.rfile.read(length).decode())
                 stub.token_forms.append(form)
                 if form.get("code", [""])[0] == "bad-code":
-                    self._send(400, {"error": "invalid_grant"})
+                    self._send(400, {"error": "invalid_grant"}, stub.token_error_body)
                 else:
                     self._send(
                         200,
@@ -198,7 +244,9 @@ class _StubIdP:
                             "access_token": "at-stub",
                             "token_type": "Bearer",
                             "id_token": stub.mint(),
-                        },
+                        }
+                        if stub.broken_tokens is UNSET
+                        else stub.broken_tokens,
                     )
 
         return Handler
@@ -218,6 +266,10 @@ async def _clean_db():
     These tests never touch the database, and each default unlink/recreate cycle
     churns the SQLite file the whole suite shares (#319). Skipping it here keeps
     26 pointless teardowns out of every full run.
+
+    This is a workaround for #319, not a fix — skipping the churn is also what
+    keeps tests/test_jobs_atomicity_battle.py green. Delete this override when
+    the first DB-touching test lands in this file; the real fix is #319.
     """
     yield
 
@@ -339,14 +391,6 @@ async def test_claims_from_id_token_rejects_rs256_token_published_under_the_ec_k
     assert await claims_from_id_token(provider, idp.doc, from_attacker_rsa_key, cache) is None
 
 
-def test_jwk_rejects_unknown_algorithm(idp):
-    """An alg outside the map raises here, at the call site. The ternary this replaced
-    emitted an RSA key labelled with whatever alg it was handed, so the stub published
-    a key it could never verify and the failure surfaced as a signature error."""
-    with pytest.raises(KeyError):
-        _jwk(idp.signing_key, "kid-x", "PS256")
-
-
 async def test_claims_from_id_token_rejects_wrong_audience(provider, idp, cache):
     assert (
         await claims_from_id_token(provider, idp.doc, idp.mint(aud="another-client"), cache) is None
@@ -355,6 +399,16 @@ async def test_claims_from_id_token_rejects_wrong_audience(provider, idp, cache)
 
 async def test_claims_from_id_token_rejects_expired_token(provider, idp, cache):
     token = idp.mint(exp=int(time.time()) - 10)
+    assert await claims_from_id_token(provider, idp.doc, token, cache) is None
+
+
+@pytest.mark.parametrize("claim", ["exp", "iss", "sub"])
+async def test_claims_from_id_token_rejects_token_missing_a_required_claim(
+    provider, idp, cache, claim
+):
+    """`options["require"]` enforces presence, `iss`/`aud` enforce value: a token
+    missing a required claim must fail even though every present claim is valid."""
+    token = idp.mint(drop=(claim,))
     assert await claims_from_id_token(provider, idp.doc, token, cache) is None
 
 
@@ -428,13 +482,113 @@ async def test_unusable_jwks_is_not_served_from_the_cache(provider, idp, cache):
     try:
         assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
         before = idp.hits.count("/jwks-broken")
-        idp.broken_jwks = None
+        idp.broken_jwks = UNSET
         claims = await claims_from_id_token(provider, doc, idp.mint(), cache)
     finally:
-        idp.broken_jwks = None
+        idp.broken_jwks = UNSET
     assert claims is not None
     assert claims["sub"] == "sub-1"
     assert idp.hits.count("/jwks-broken") == before + 1, "the bad set was served from the cache"
+
+
+async def test_jwks_without_a_usable_signing_key_is_not_cached(provider, idp, cache, caplog):
+    """#1024: `from_dict` parses an encryption-only set, but `_signing_key` can never
+    select from it, so caching it costs every later login a kid-miss refetch."""
+    doc = dict(idp.doc, jwks_uri=f"{idp.base}/jwks-broken")
+    enc_key = _jwk(idp.other_key, "enc-1", "RS256")
+    enc_key["use"] = "enc"
+    idp.broken_jwks = {"keys": [enc_key]}
+    try:
+        with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+            assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+        # #1113: `_failure_detail` reduces anything without a status to its type
+        # name, so a gate raised inside the fetch try reached the log as "ValueError".
+        assert "no key published for signing" in caplog.text
+        assert cache.get(f"oauth:jwks:{provider.id}") is None, "an unusable set was cached"
+        before = idp.hits.count("/jwks-broken")
+        for _ in range(3):
+            assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+        assert idp.hits.count("/jwks-broken") == before + 3, (
+            "the cached set saved nothing, so each login paid a refetch on top of the cache hit"
+        )
+    finally:
+        idp.broken_jwks = UNSET
+
+
+@pytest.mark.parametrize("broken", [["not", "a", "dict"], "str", 42, None])
+async def test_jwks_refuses_a_key_set_that_is_not_an_object(provider, idp, cache, broken, caplog):
+    """#1112: `_jwks` is annotated `-> dict[str, Any]` while `resp.json()` is `Any`, so
+    the annotation has to be enforced here instead of left to `PyJWKSet.from_dict`."""
+    idp.broken_jwks = broken
+    doc = dict(idp.doc, jwks_uri=f"{idp.base}/jwks-broken")
+    try:
+        with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+            assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+    finally:
+        idp.broken_jwks = UNSET
+    assert "is not an object" in caplog.text
+    assert cache.get(f"oauth:jwks:{provider.id}") is None, "the bad key set was cached"
+
+
+async def test_concurrent_kid_misses_refetch_once(provider, idp, cache):
+    """#1025: a burst of logins meeting an unknown kid shares one in-flight refetch
+    instead of paying one outbound JWKS request per login."""
+    assert await claims_from_id_token(provider, idp.doc, idp.mint(), cache) is not None
+    before = idp.hits.count("/jwks")
+    idp.published = [(idp.other_key, ROTATED_KID, "RS256")]
+    idp.jwks_delay = 0.05
+    try:
+        tokens = [idp.mint(key=idp.other_key, kid=ROTATED_KID) for _ in range(5)]
+        claims = await asyncio.gather(
+            *[claims_from_id_token(provider, idp.doc, t, cache) for t in tokens]
+        )
+    finally:
+        idp.published = [(idp.signing_key, KID, "RS256"), (idp.ec_key, EC_KID, "ES256")]
+        idp.jwks_delay = 0.0
+    assert all(c is not None for c in claims)
+    assert idp.hits.count("/jwks") == before + 1
+
+
+async def test_concurrent_cold_jwks_fetches_once(provider, idp):
+    """#1025: a cold cache under a burst is filled once, not once per login."""
+    fresh = TtlCache(ttl_seconds=60)
+    before = idp.hits.count("/jwks")
+    idp.jwks_delay = 0.05
+    try:
+        claims = await asyncio.gather(
+            *[claims_from_id_token(provider, idp.doc, idp.mint(), fresh) for _ in range(5)]
+        )
+    finally:
+        idp.jwks_delay = 0.0
+    assert all(c is not None for c in claims)
+    assert idp.hits.count("/jwks") == before + 1
+
+
+async def test_concurrent_failed_jwks_fetches_fail_together(provider, idp, cache):
+    """One unusable set fails the whole burst with the same error, costs one fetch,
+    and leaves nothing behind: no cached set, no dead in-flight entry to join."""
+    doc = dict(idp.doc, jwks_uri=f"{idp.base}/jwks-broken")
+    idp.broken_jwks = {"keys": []}
+    before = idp.hits.count("/jwks-broken")
+    try:
+        outcomes = await asyncio.gather(
+            *[_jwks(provider, doc, cache) for _ in range(5)], return_exceptions=True
+        )
+    finally:
+        idp.broken_jwks = UNSET
+    assert idp.hits.count("/jwks-broken") == before + 1
+    assert all(isinstance(o, OAuthError) for o in outcomes)
+    assert cache.get(f"oauth:jwks:{provider.id}") is None, "the failed fetch was cached"
+    # The released entry means a later caller fetches again rather than joining
+    # a completed failure.
+    assert await _jwks(provider, doc, cache) is not None
+    assert idp.hits.count("/jwks-broken") == before + 2
+
+
+async def test_claims_from_id_token_survives_a_non_string_jwks_uri(provider, idp, cache):
+    """A `jwks_uri` that is not a string must fail the sign-in, not raise."""
+    doc = dict(idp.doc, jwks_uri=12345)
+    assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
 
 
 async def test_signing_key_is_matched_by_kid_not_position(provider, idp, cache):
@@ -512,6 +666,54 @@ async def test_discovery_raises_oauth_error_when_unreachable():
         await _discovery(dead, TtlCache(ttl_seconds=60))
 
 
+async def test_discovery_raises_oauth_error_on_a_500_response(provider, idp, cache):
+    bad = replace(provider, discovery_url=f"{idp.base}/.well-known/openid-configuration-500")
+    with pytest.raises(OAuthError, match="could not load discovery document"):
+        await _discovery(bad, cache)
+    assert cache.get(f"oauth:discovery:{provider.id}") is None, "the failed document was cached"
+
+
+async def test_discovery_raises_oauth_error_on_a_non_json_body(provider, idp, cache):
+    bad = replace(provider, discovery_url=f"{idp.base}/.well-known/openid-configuration-text")
+    with pytest.raises(OAuthError, match="could not load discovery document"):
+        await _discovery(bad, cache)
+    assert cache.get(f"oauth:discovery:{provider.id}") is None, "the failed document was cached"
+
+
+@pytest.mark.parametrize("broken", [["not", "a", "dict"], "str", 42, None])
+async def test_discovery_refuses_a_document_that_is_not_an_object(provider, idp, cache, broken):
+    """#1020: the callback catches only `OAuthError`, so a non-object document has to
+    fail here or its `AttributeError` escapes as a 500."""
+    idp.broken_doc = broken
+    doc_provider = replace(
+        provider, discovery_url=f"{idp.base}/.well-known/openid-configuration-broken"
+    )
+    try:
+        with pytest.raises(OAuthError, match="is not an object"):
+            await _discovery(doc_provider, cache)
+    finally:
+        idp.broken_doc = UNSET
+    assert cache.get(f"oauth:discovery:{provider.id}") is None, "the bad document was cached"
+
+
+async def test_concurrent_discovery_fetches_once(provider, idp):
+    """#1025: the discovery path has the same burst shape — five cold callers, one
+    well-known fetch."""
+    fresh = TtlCache(ttl_seconds=60)
+
+    def known() -> int:
+        return sum(1 for h in idp.hits if h.startswith("/.well-known"))
+
+    before = known()
+    idp.discovery_delay = 0.05
+    try:
+        docs = await asyncio.gather(*[_discovery(provider, fresh) for _ in range(5)])
+    finally:
+        idp.discovery_delay = 0.0
+    assert all(d["issuer"] == idp.base for d in docs)
+    assert known() == before + 1
+
+
 def test_authorize_url_carries_s256_challenge(provider, idp):
     """The challenge in the redirect must be the S256 digest of the verifier
     the server kept: the client only ever sees the public half."""
@@ -570,8 +772,82 @@ async def test_exchange_code_raises_on_provider_error(provider, idp, caplog):
     assert "invalid_grant" in caplog.text
 
 
+async def test_exchange_code_flattens_cr_in_the_logged_provider_body(provider, idp, caplog):
+    """A bare CR overwrites the line it lands on, so it is flattened like the LF."""
+    idp.token_error_body = '{"error": "invalid_grant\rforged: 500"}'
+    try:
+        with caplog.at_level("WARNING", logger="src.services.oauth"):
+            with pytest.raises(OAuthError, match="code exchange failed"):
+                await exchange_code(
+                    provider,
+                    idp.doc,
+                    code="bad-code",
+                    redirect_uri=REDIRECT_URI,
+                    code_verifier="verifier-abc",
+                )
+    finally:
+        idp.token_error_body = None
+
+    assert "invalid_grant forged: 500" in caplog.text
+    assert "\r" not in caplog.text
+
+
+async def test_claims_from_id_token_flattens_cr_in_the_logged_failure(provider, idp, cache, caplog):
+    """Mirror of the exchange_code test: the logged exception can embed token-supplied
+    header data, so CR and LF are flattened. `crit` is the vehicle because PyJWT echoes
+    only it into the message; an unknown `kid` raises fixed strings."""
+    evil = "x\rforged:\n500"
+    token = idp.mint(kid=evil, extra_headers={"crit": [evil], evil: True})
+    with caplog.at_level("WARNING", logger="src.services.oauth"):
+        assert await claims_from_id_token(provider, idp.doc, token, cache) is None
+    assert "x forged: 500" in caplog.text
+    assert "\r" not in caplog.text
+    record = next(r for r in caplog.records if "id_token verification failed" in r.getMessage())
+    assert "\r" not in record.getMessage()
+    assert "\n" not in record.getMessage()
+
+
+@pytest.mark.parametrize("broken", [["not", "a", "dict"], "str", 42, None])
+async def test_exchange_code_refuses_a_response_that_is_not_an_object(provider, idp, broken):
+    """#1112: the callback catches only `OAuthError` and then reads `tokens.get(...)`, so
+    a non-object body has to fail here or its `AttributeError` escapes as a 500."""
+    idp.broken_tokens = broken
+    try:
+        with pytest.raises(OAuthError, match="is not an object"):
+            await exchange_code(
+                provider,
+                idp.doc,
+                code="good-code",
+                redirect_uri=REDIRECT_URI,
+                code_verifier="verifier-abc",
+            )
+    finally:
+        idp.broken_tokens = UNSET
+
+
 async def test_fetch_userinfo_sends_bearer_token(provider, idp):
     info = await fetch_userinfo(provider, idp.doc, "at-stub")
 
     assert idp.auth_headers[-1] == "Bearer at-stub"
     assert info["email"] == "user@example.com"
+
+
+async def test_fetch_userinfo_raises_on_provider_error(provider, idp):
+    doc = dict(idp.doc, userinfo_endpoint=f"{idp.base}/userinfo?mode=500")
+    with pytest.raises(OAuthError, match="could not fetch user info"):
+        await fetch_userinfo(provider, doc, "at-stub")
+
+
+async def test_fetch_userinfo_returns_empty_for_a_response_that_is_not_an_object(provider, idp):
+    doc = dict(idp.doc, userinfo_endpoint=f"{idp.base}/userinfo?mode=array")
+    assert await fetch_userinfo(provider, doc, "at-stub") == {}
+
+
+def test_single_line_replaces_every_cc_control_with_a_space():
+    # C0 (CR/LF/ESC), DEL, C1 (NEL): the ESC is defused so "[31m" that follows
+    # is inert text, and no control can forge a log line.
+    assert _single_line("a\rb\nc\x1b[31md\x7fe\x85") == "a b c [31md e "
+
+
+def test_single_line_truncates_to_the_cap():
+    assert _single_line("x" * 300) == "x" * 200

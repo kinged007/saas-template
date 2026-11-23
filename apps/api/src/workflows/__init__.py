@@ -34,25 +34,53 @@ import logging
 
 from sqlalchemy import select
 
+from src.core.routes import INVITATIONS_ROUTE
 from src.core.security.crypto import SecretCipher
 from src.db.session import SessionFactory
 from src.events.bus import EventBus
 from src.events.factory import WorkflowRegistry
 from src.events.publisher import publish_audit
-from src.events.subjects import Subjects
+from src.events.subjects import OWNERSHIP_TRANSFER_REASON, Subjects
 from src.jobs.executor import execute_run
-from src.models.workspace import WorkspaceMember
+from src.models.workspace import ACTIVE_MEMBERSHIP_STATUSES, WorkspaceMember
 from src.realtime.manager import ConnectionManager
 from src.services.audit import AuditService
 from src.services.jobs import JobService
 from src.services.notifications import NotificationService
-from src.services.workspaces import is_owner_role_name
 
 logger = logging.getLogger(__name__)
 
-# Frontend route the invitation notification's "Open" button links to. The dev
-# seed (src/seed.py) imports it, so the two payload sides cannot drift.
-INVITATIONS_ROUTE = "/invitations"
+
+def _participant_user_ids(
+    payload: dict,
+    *,
+    subject: str | None = None,
+    correlation_id: str | None = None,
+) -> list[str] | None:
+    """Sanitized participant list for conversation event payloads.
+
+    None = field absent or malformed (non-list, bare string, any non-string,
+    empty, whitespace-only, or whitespace-padded item); [] = explicitly empty
+    list. Rejects instead of coercing so a bad publisher cannot make the
+    consumers fan out garbage ids. A present-but-malformed field logs a warning
+    (an absent field stays silent) so a publisher regression is diagnosable
+    instead of surfacing only as "users stopped getting notifications".
+    """
+    raw = payload.get("participant_user_ids")
+    if not isinstance(raw, list) or any(
+        not isinstance(x, str) or not x.strip() or x.strip() != x for x in raw
+    ):
+        if raw is not None:
+            logger.warning(
+                "malformed participant_user_ids on %s"
+                " (correlation_id=%s, conversation_id=%s, workspace_id=%s)",
+                subject,
+                correlation_id,
+                payload.get("conversation_id"),
+                payload.get("workspace_id"),
+            )
+        return None
+    return list(dict.fromkeys(raw))
 
 
 async def _audit_email_failure(
@@ -60,6 +88,7 @@ async def _audit_email_failure(
     notification,
     *,
     correlation_id: str | None,
+    source_event_id: str | None,
     user_id: str,
     n_type: str,
     email: str | None,
@@ -68,8 +97,9 @@ async def _audit_email_failure(
     """Log and audit one notification email that was not delivered.
 
     `reason` is `no_recipient`, `no_email` or `send_failed`. Published after
-    the attempt, so a failing publish nacks the message and the in-app
-    notification row is created again on redelivery.
+    the attempt, so a failing publish nacks the message and the handler runs
+    again — the notification row is then reused (see `_create_notification`),
+    so this still files one audit row for the source event.
     """
     logger.error(
         "notification email failed for %s (notification %s, reason=%s)",
@@ -80,16 +110,24 @@ async def _audit_email_failure(
     await publish_audit(
         bus,
         correlation_id=correlation_id,
+        source_event_id=source_event_id,
         workspace_id=notification.workspace_id,
         resource_type="notification",
         resource_id=notification.id,
         action="notification.email_failed",
+        # details.email is deliberate: this system-originated action has no actor
+        # (actor_user_id is None), so the address is the only field naming the recipient.
         details={"user_id": user_id, "type": n_type, "email": email, "reason": reason},
     )
 
 
 async def _create_notification(
-    session, bus: EventBus, *, correlation_id: str | None = None, **kwargs
+    session,
+    bus: EventBus,
+    *,
+    correlation_id: str | None = None,
+    source_event_id: str | None = None,
+    **kwargs,
 ) -> None:
     """Persist a notification and fan it out over the bus in one call.
 
@@ -98,6 +136,10 @@ async def _create_notification(
     row is kept and the failure logged and audited
     (`notification.email_failed`) when the recipient is missing, has no
     address, or sending fails).
+
+    `source_event_id` makes the insert idempotent, so a redelivered event
+    reuses the notification it created instead of a second row for the same
+    recipient.
     """
     service = NotificationService(session, bus)
     n_type = kwargs.get("type", "")
@@ -105,7 +147,9 @@ async def _create_notification(
     channel = await service.resolve_channel(n_user_id, n_type) if n_user_id else "in-app"
     if channel == "off":
         return
-    notification = await service.create(**kwargs, correlation_id=correlation_id)
+    notification = await service.create(
+        **kwargs, correlation_id=correlation_id, source_event_id=source_event_id
+    )
     if channel != "email":
         return
     from src.email.factory import send_email
@@ -120,6 +164,7 @@ async def _create_notification(
             bus,
             notification,
             correlation_id=correlation_id,
+            source_event_id=source_event_id,
             user_id=n_user_id,
             n_type=n_type,
             email=recipient.email if recipient else None,
@@ -142,6 +187,7 @@ async def _create_notification(
         bus,
         notification,
         correlation_id=correlation_id,
+        source_event_id=source_event_id,
         user_id=n_user_id,
         n_type=n_type,
         email=recipient.email,
@@ -179,6 +225,7 @@ def build_workflows(
                     "url": INVITATIONS_ROUTE,
                 },
                 correlation_id=metadata.correlation_id,
+                source_event_id=metadata.event_id,
             )
         logger.info("notification persisted for user %s (%s)", user_id, payload.get("workspace_id"))
 
@@ -209,11 +256,13 @@ def build_workflows(
                         "user_id": user_id,
                     },
                     correlation_id=metadata.correlation_id,
+                    source_event_id=metadata.event_id,
                 )
+            # A member who no longer has access is not told about new joins.
             result = await session.execute(
                 select(WorkspaceMember).where(
                     WorkspaceMember.workspace_id == workspace_id,
-                    WorkspaceMember.status == "active",
+                    WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
                 )
             )
             for member in result.scalars().all():
@@ -233,6 +282,7 @@ def build_workflows(
                         "user_id": user_id,
                     },
                     correlation_id=metadata.correlation_id,
+                    source_event_id=metadata.event_id,
                 )
 
     async def on_member_role_changed(payload: dict, metadata) -> None:
@@ -245,11 +295,11 @@ def build_workflows(
         to_role = payload.get("to_role")
         changed_by = payload.get("changed_by_name") or "A member"
         # The member is the actor (a self-demotion, or an ownership transfer):
-        # naming them in their own notification reads as "you changed your
-        # own role". set_member_role refuses to touch the owner's role, so a
-        # self-change from owner is always a transfer.
+        # naming them in their own notification reads as "you changed your own
+        # role". A transfer says so on the event; the role names carry no such
+        # claim, since a workspace may rename or omit its owner role.
         if user_id == payload.get("changed_by_user_id"):
-            if is_owner_role_name(from_role):
+            if payload.get("reason") == OWNERSHIP_TRANSFER_REASON:
                 # A null to_role names no new role, so the clause is dropped
                 # and the transfer itself is still reported.
                 body = (
@@ -261,13 +311,15 @@ def build_workflows(
                 body = "Your role was changed."
             else:
                 body = f"Your role is now {to_role}."
-        elif not to_role:
-            body = f"{changed_by} changed your role."
-        else:
+        elif to_role:
             # A null from_role has no name to print, so the sentence says there
             # was one instead of substituting a placeholder that reads like a role.
             previous = from_role or "a previous role"
             body = f"{changed_by} changed your role from {previous} to {to_role}."
+        elif from_role:
+            body = f"{changed_by} changed your role from {from_role}."
+        else:
+            body = f"{changed_by} changed your role."
         async with SessionFactory() as session:
             await _create_notification(
                 session,
@@ -285,6 +337,7 @@ def build_workflows(
                     "changed_by": changed_by,
                 },
                 correlation_id=metadata.correlation_id,
+                source_event_id=metadata.event_id,
             )
 
     async def on_member_removed(payload: dict, metadata) -> None:
@@ -309,6 +362,7 @@ def build_workflows(
                     "removed_by": removed_by,
                 },
                 correlation_id=metadata.correlation_id,
+                source_event_id=metadata.event_id,
             )
 
     async def on_invitation_created(payload: dict, metadata) -> None:
@@ -343,7 +397,7 @@ def build_workflows(
         invite_url = (
             f"{settings.frontend_url.rstrip('/')}/invitations/accept?token={token}"
             if token
-            else f"{settings.frontend_url.rstrip('/')}/invitations"
+            else f"{settings.frontend_url.rstrip('/')}{INVITATIONS_ROUTE}"
         )
         sent = await send_email(
             invitation_template(
@@ -363,6 +417,7 @@ def build_workflows(
         await publish_audit(
             bus,
             correlation_id=metadata.correlation_id,
+            source_event_id=metadata.event_id,
             workspace_id=payload.get("workspace_id"),
             resource_type="invitation",
             resource_id=invitation_id,
@@ -402,6 +457,14 @@ def build_workflows(
                 actor_user_id=payload.get("actor_user_id"),
                 details=payload.get("details"),
                 ip_address=payload.get("ip_address"),
+                # The payload's id when the entry was produced by a subscriber
+                # (the handler, not this publish, is what re-runs on a
+                # redelivery); otherwise this envelope's own id, which a direct
+                # producer's redelivery repeats unchanged.
+                # Server-set: every producer goes through `audit_payload` (pinned by
+                # test_every_workflow_audit_publish_carries_a_source_event_id), so the
+                # dedupe key is never client-chosen.
+                source_event_id=payload.get("source_event_id") or metadata.event_id,
             )
         logger.debug("audit entry persisted: %s", payload.get("action"))
 
@@ -466,7 +529,9 @@ def build_workflows(
         conversation_id = payload.get("conversation_id")
         sender_id = payload.get("sender_id")
         sender_type = payload.get("sender_type", "user")
-        participant_ids: list[str] = payload.get("participant_user_ids") or []
+        participant_ids = _participant_user_ids(
+            payload, subject=metadata.subject, correlation_id=metadata.correlation_id
+        )
 
         if not workspace_id or not conversation_id or not participant_ids:
             return
@@ -519,6 +584,7 @@ def build_workflows(
                     for uid in recipients
                 ],
                 correlation_id=metadata.correlation_id,
+                source_event_id=metadata.event_id,
             )
 
     async def on_conversation_message_live(payload: dict, metadata) -> None:
@@ -527,7 +593,9 @@ def build_workflows(
         Registered in every replica, so users receive `message.created`
         regardless of which replica holds their WebSocket.
         """
-        participant_ids: list[str] = payload.get("participant_user_ids") or []
+        participant_ids = _participant_user_ids(
+            payload, subject=metadata.subject, correlation_id=metadata.correlation_id
+        )
         if not participant_ids:
             return
         await connection_manager.push_many(
@@ -539,11 +607,13 @@ def build_workflows(
     async def on_conversation_renamed(payload: dict, metadata) -> None:
         """Fan-out conversation rename to participants."""
 
-        participant_ids: list[str] | None = payload.get("participant_user_ids")
-        # If payload does not contain participant list (legacy service path
-        # with just workspace_id), fall back to no fan-out
-        # New service publishes without participant list for rename; we need
-        # to resolve participants from DB.
+        participant_ids = _participant_user_ids(
+            payload, subject=metadata.subject, correlation_id=metadata.correlation_id
+        )
+        # Malformed (non-list, bare string, non-string, empty, whitespace-only,
+        # or whitespace-padded item) is treated like an absent list: resolve
+        # participants from the DB instead of fanning out garbage. An explicit
+        # empty list keeps the no-fallback semantics.
         if participant_ids is None:
             conversation_id = payload.get("conversation_id")
             if not conversation_id:
@@ -559,6 +629,7 @@ def build_workflows(
                 )
                 participant_ids = [r[0] for r in result.all()]
 
+        participant_ids = list(dict.fromkeys(participant_ids))
         if not participant_ids:
             return
         await connection_manager.push_many(

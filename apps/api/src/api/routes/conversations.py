@@ -72,9 +72,10 @@ async def list_conversations(
     # Parse pagination/sorting via generic parser
     try:
         spec = parse_query(request)
+        spec.validate_sort()
         # Validate sort fields
         for s in spec.sort_by:
-            if s not in _CONVERSATION_SORTABLE and s != "":
+            if s not in _CONVERSATION_SORTABLE:
                 raise InvalidQuery(f"sort on unknown field: {s}")
     except InvalidQuery as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
@@ -343,6 +344,7 @@ async def list_messages(
 ):
     try:
         spec = parse_query(request)
+        spec.validate_sort()
         for s in spec.sort_by:
             if s not in _MESSAGE_SORTABLE:
                 raise InvalidQuery(f"sort on unknown field: {s}")

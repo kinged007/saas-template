@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mentionRemarkPlugin, mentionUrlTransform, pickerIndex, rankMentionTargets, type MentionTarget } from "./mentions.ts";
+import { mentionRemarkPlugin, mentionUrlTransform, nextPickerIndex, pickerIndex, rankMentionTargets, type MentionTarget } from "./mentions.ts";
 
 /** The subset of an mdast node these tests build by hand. */
 type Node = { type: string; value?: string; url?: string; identifier?: string; children?: Node[] };
@@ -179,5 +179,52 @@ describe("pickerIndex", () => {
   it("selects nothing with no rows to select", () => {
     assert.equal(pickerIndex(null, [], "an"), -1);
     assert.equal(pickerIndex("Ann", [], ""), -1);
+  });
+});
+
+describe("nextPickerIndex", () => {
+  it("passes every key through on an empty list", () => {
+    // The review's untested branch: the empty-list early return. Even the
+    // arrows must reach the editor — there is no row to move to.
+    for (const key of ["ArrowUp", "ArrowDown", "Enter", "Tab", "Escape"]) {
+      assert.equal(nextPickerIndex(key, -1, []), -1, key);
+    }
+  });
+
+  it("passes Enter and Tab through when nothing is highlighted", () => {
+    // The review's untested branch: a bare Enter after `@` must reach the
+    // editor and insert a newline, not insert whoever happens to be first.
+    assert.equal(nextPickerIndex("Enter", -1, LABELS), -1);
+    assert.equal(nextPickerIndex("Tab", -1, LABELS), -1);
+  });
+
+  it("picks the highlighted row on Enter and Tab", () => {
+    for (const key of ["Enter", "Tab"]) {
+      assert.equal(nextPickerIndex(key, 0, LABELS), 0, key);
+      assert.equal(nextPickerIndex(key, 2, LABELS), 2, key);
+    }
+  });
+
+  it("wraps the arrows around the ends of the list", () => {
+    assert.equal(nextPickerIndex("ArrowUp", -1, LABELS), LABELS.length - 1);
+    assert.equal(nextPickerIndex("ArrowUp", 0, LABELS), LABELS.length - 1);
+    assert.equal(nextPickerIndex("ArrowUp", 1, LABELS), 0);
+    assert.equal(nextPickerIndex("ArrowDown", -1, LABELS), 0);
+    assert.equal(nextPickerIndex("ArrowDown", LABELS.length - 1, LABELS), 0);
+    assert.equal(nextPickerIndex("ArrowDown", 1, LABELS), 2);
+  });
+
+  it("passes every other key through", () => {
+    for (const key of ["Escape", "a", "Home", "ArrowLeft"]) {
+      assert.equal(nextPickerIndex(key, 0, LABELS), -1, key);
+      assert.equal(nextPickerIndex(key, -1, LABELS), -1, key);
+    }
+  });
+
+  it("composes with pickerIndex the way the editor wires it", () => {
+    // Blank query after `@`: nothing highlighted, so Enter inserts a newline;
+    // one typed character highlights row 0, so Enter picks it.
+    assert.equal(nextPickerIndex("Enter", pickerIndex(null, LABELS, ""), LABELS), -1);
+    assert.equal(nextPickerIndex("Enter", pickerIndex(null, LABELS, "an"), LABELS), 0);
   });
 });

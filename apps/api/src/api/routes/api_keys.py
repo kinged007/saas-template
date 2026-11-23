@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
@@ -15,7 +14,7 @@ from src.api.deps import (
     require_permission,
     resolve_auth_principal,
 )
-from src.core.dates import ensure_utc
+from src.core.dates import iso_or_none
 from src.core.permissions import (
     APIKEY_CREATE,
     APIKEY_DELETE,
@@ -40,12 +39,6 @@ _APIKEY_SORTABLE = {"name", "created_at", "last_used_at", "expires_at"}
 _APIKEY_DEFAULT_ORDER = (ApiKey.created_at.desc(), ApiKey.id.desc())
 
 
-def _iso(value: datetime | None) -> str | None:
-    # SQLite drops the offset from DateTime(timezone=True); a naive ISO string
-    # makes the browser's new Date() read it as local time.
-    return ensure_utc(value).isoformat() if value else None
-
-
 def _key_dict(k: ApiKey) -> dict:
     return {
         "id": k.id,
@@ -56,10 +49,12 @@ def _key_dict(k: ApiKey) -> dict:
         "created_by_user_id": k.created_by_user_id,
         "usage_count": k.usage_count,
         "usage_quota": k.usage_quota,
-        "last_used_at": _iso(k.last_used_at),
-        "expires_at": _iso(k.expires_at),
-        "revoked_at": _iso(k.revoked_at),
-        "created_at": _iso(k.created_at),
+        "usage_window_count": k.usage_window_count,
+        "usage_window_start": iso_or_none(k.usage_window_start),
+        "last_used_at": iso_or_none(k.last_used_at),
+        "expires_at": iso_or_none(k.expires_at),
+        "revoked_at": iso_or_none(k.revoked_at),
+        "created_at": iso_or_none(k.created_at),
     }
 
 
@@ -107,7 +102,7 @@ async def effective_permissions(
 
     Key-only scopes (notification:*) are always offerable: any member may hold
     them on a key (notifications are personal), mirroring ApiKeyService."""
-    membership = await WorkspaceService(db).get_membership(workspace_id, user.id, active_only=True)
+    membership = await WorkspaceService(db).get_membership(workspace_id, user.id)
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     _, role = membership

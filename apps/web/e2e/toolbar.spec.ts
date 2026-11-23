@@ -180,6 +180,14 @@ test.describe("composer toolbar", () => {
     await page.getByRole("dialog", { name: "New conversation" }).getByRole("heading").click();
     await expect(linkDialog).toHaveCount(0);
     await expect(editor).not.toBeFocused();
+
+    // Escape is Radix's own exit, the one path it owns end to end: the caret
+    // goes back to the document being edited, like Cancel.
+    await link.click();
+    await expect(linkDialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(linkDialog).toHaveCount(0);
+    await expect(editor).toBeFocused();
   });
 
   test("a bare host typed in the text still autolinks", async ({ page }) => {

@@ -9,6 +9,11 @@ from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
+# Reserved key under which a row stores the `EventMetadata.event_id` it was
+# derived from, so a redelivered event is recognized as the same one. Internal:
+# serializers strip it from the API shape.
+SOURCE_EVENT_KEY = "source_event_id"
+
 # A subscriber handler: (payload dict, metadata) -> None
 SubscriberHandler = Callable[[dict, "EventMetadata"], Awaitable[None]]
 
@@ -33,6 +38,20 @@ class EventMetadata:
 class EventEnvelope:
     metadata: EventMetadata
     payload: dict
+
+
+def subject_matches(subscription: str, subject: str) -> bool:
+    """NATS-style wildcard matching: '*' one token, '>' the rest."""
+    sub_tokens = subscription.split(".")
+    subj_tokens = subject.split(".")
+    for i, tok in enumerate(sub_tokens):
+        if tok == ">":
+            return True
+        if i >= len(subj_tokens):
+            return False
+        if tok != "*" and tok != subj_tokens[i]:
+            return False
+    return len(sub_tokens) == len(subj_tokens)
 
 
 class EventBus(ABC):
@@ -81,6 +100,16 @@ class EventBus(ABC):
     @abstractmethod
     async def stop(self) -> None:
         """Gracefully stop and disconnect."""
+
+    @abstractmethod
+    async def wait_idle(self) -> None:
+        """Wait until in-flight deliveries have completed.
+
+        Test-facility drain signal: a test publishes, awaits this, then
+        asserts handler side effects without polling the database. Backends
+        without local delivery tracking return immediately and guarantee
+        nothing — callers on those backends must keep polling.
+        """
 
     @property
     @abstractmethod

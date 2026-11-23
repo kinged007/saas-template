@@ -1,24 +1,74 @@
 from __future__ import annotations
 
+import math
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
 from pydantic import (
     AnyHttpUrl,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     EmailStr,
     Field,
     StrictBool,
     StringConstraints,
+    field_serializer,
     field_validator,
 )
+from pydantic_core import PydanticCustomError
+
+from src.core.dates import iso_or_none
+from src.models.api_key import MAX_QUOTA, QUOTA_MAX_MESSAGE, QUOTA_MIN_MESSAGE
 
 # strip_whitespace runs before the length check, so padding is normalized on
 # write (names are compared exactly on read, e.g. the auto-join lookup) and a
 # name that is blank after stripping fails min_length. Only what every name
 # field shares lives here; the bound is per-field in Field(max_length=...).
 StrippedName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+def _quota_in_range(value: Any) -> Any:
+    """Refuse a quota outside 1..MAX_QUOTA ahead of the bounds, in the service's words.
+
+    A BeforeValidator sees the raw value, before pydantic coerces it to int, so
+    int, float and str all have to be read here: a client that sends "0" from a
+    form or a YAML config must get the same refusal as one that sends 0.
+
+    ApiKeyService raises the same messages for callers that never reach this
+    schema (seed data, direct service calls). PydanticCustomError keeps the 422
+    free of the "Value error," prefix pydantic adds to a plain ValueError, and
+    reusing the ge=1 / le=MAX_QUOTA codes keeps the rest of the body identical
+    to main, so only the wording changes for a client.
+    """
+    if not isinstance(value, (int, float, str)):
+        return value  # null, a datetime, ...: leave the type to pydantic
+    try:
+        number = float(value)
+    except (ValueError, OverflowError):
+        # Not a number, or a JSON integer wider than a float64: the int() call
+        # below still reads it exactly, so an enormous integer is refused at
+        # the upper bound rather than overflowing into a silently unlimited key.
+        try:
+            number = int(value)
+        except (ValueError, OverflowError):
+            return value  # leave it to pydantic rather than raise a non-422
+        if number > MAX_QUOTA:
+            raise PydanticCustomError("less_than_equal", QUOTA_MAX_MESSAGE) from None
+        return value
+    if not math.isfinite(number) or not number.is_integer():
+        return value  # inf/nan is not a quota; 0.5 wants an int, not a bound
+    if number < 1:
+        raise PydanticCustomError("greater_than_equal", QUOTA_MIN_MESSAGE)
+    if number > MAX_QUOTA:
+        raise PydanticCustomError("less_than_equal", QUOTA_MAX_MESSAGE)
+    return value
+
+
+# BeforeValidator runs before the bounds on the fields below, so the 422
+# carries the service's words. ge/le stay on the fields so OpenAPI states the bounds.
+QuotaAtLeastOne = Annotated[int | None, BeforeValidator(_quota_in_range)]
 
 
 class LoginRequest(BaseModel):
@@ -33,7 +83,8 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     first_name: str | None = Field(default=None, min_length=1, max_length=100)
     last_name: str | None = Field(default=None, min_length=1, max_length=100)
-    password: str = Field(min_length=8)
+    # 72 is bcrypt's limit; longer input must be a 422, never a 500.
+    password: str = Field(min_length=8, max_length=72)
     # Deprecated — kept for backward compat, ignored if first_name/last_name provided.
     display_name: str | None = Field(default=None, min_length=1, max_length=150, deprecated=True)
     # Browser opt-in: set the HttpOnly refresh cookie and omit the refresh
@@ -64,7 +115,8 @@ class ForgotPasswordRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     token: str = Field(min_length=1)
-    new_password: str = Field(min_length=8)
+    # 72 is bcrypt's limit; longer input must be a 422, never a 500.
+    new_password: str = Field(min_length=8, max_length=72)
 
 
 class VerifyEmailRequest(BaseModel):
@@ -94,18 +146,33 @@ class TwoFactorDisable(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=8)
-    new_password: str = Field(min_length=8)
+    # 72 is bcrypt's limit; longer input must be a 422, never a 500.
+    new_password: str = Field(min_length=8, max_length=72)
     code: str | None = Field(default=None, min_length=6, max_length=10)
 
 
+class MemberPasswordUpdate(BaseModel):
+    """Admin-set password: no current_password. The caller already holds
+    `profile:update` on the target's workspace."""
+
+    new_password: str = Field(min_length=8, max_length=72)
+
+
+# Pydantic serializes a naive datetime with no offset, so the three instants go
+# through the shared helper instead of Pydantic's own dialect.
 class SessionRead(BaseModel):
     id: str
     created_at: datetime | None = None
     expires_at: datetime | None = None
+    # Always None here: `list_sessions` filters revoked rows out.
     revoked_at: datetime | None = None
     ip_address: str | None = None
     user_agent: str | None = None
     current: bool = False
+
+    @field_serializer("created_at", "expires_at", "revoked_at")
+    def _utc_iso(self, value: datetime | None) -> str | None:
+        return iso_or_none(value)
 
 
 class WorkspaceCreate(BaseModel):
@@ -124,11 +191,14 @@ class WorkspaceUpdate(BaseModel):
 
 class InvitationCreate(BaseModel):
     email: EmailStr
-    role_id: str
+    # UUID, not str: a malformed role_id is a request error (422), and the 400
+    # "unknown role for this workspace" stays reserved for a role that does not
+    # exist. One status per field, so the response reveals nothing about which.
+    role_id: UUID
 
 
 class MemberRoleUpdate(BaseModel):
-    role_id: str
+    role_id: UUID
 
 
 class OwnershipTransfer(BaseModel):
@@ -150,7 +220,7 @@ class RoleUpdate(BaseModel):
 class ApiKeyCreate(BaseModel):
     name: StrippedName = Field(max_length=150)
     permissions: list[str] = Field(default_factory=list)
-    usage_quota: int | None = Field(default=None, ge=1)
+    usage_quota: QuotaAtLeastOne = Field(default=None, ge=1, le=MAX_QUOTA)
     # Optional hard expiry. Naive input is rejected: without an offset the
     # instant is ambiguous, and the service compares against UTC.
     expires_at: datetime | None = Field(default=None, examples=["2027-01-01T00:00:00Z"])
@@ -164,7 +234,7 @@ class ApiKeyCreate(BaseModel):
 
 
 class ApiKeyQuotaUpdate(BaseModel):
-    usage_quota: int | None = Field(default=None, ge=1)
+    usage_quota: QuotaAtLeastOne = Field(default=None, ge=1, le=MAX_QUOTA)
 
 
 class NotificationAck(BaseModel):
