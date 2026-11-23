@@ -27,7 +27,11 @@ DEFAULT_EXTENSION_MODULE = "src.project"
 
 
 def _explicitly_configured() -> bool:
-    return "EXTENSION_MODULES" in os.environ
+    if "EXTENSION_MODULES" in os.environ:
+        return True
+    from src.settings import settings
+
+    return "extension_modules" in settings.model_fields_set
 
 
 def extension_module_names() -> list[str]:
@@ -91,7 +95,7 @@ def load_extension_cascade_models() -> list[type]:
     names = extension_module_names()
     if not names:
         return []
-    out: list[type] = []
+    by_table: dict[str, type] = {}
     for mapper in Base.registry.mappers:
         cls = mapper.class_
         if not hasattr(cls, "__tablename__"):
@@ -102,8 +106,9 @@ def load_extension_cascade_models() -> list[type]:
         module = cls.__module__ or ""
         if not any(module == name or module.startswith(name + ".") for name in names):
             continue
-        out.append(cls)
-    return out
+        by_table[table.key] = cls
+    # Dependents first so child rows go before parents on plain columns.
+    return [by_table[t.key] for t in reversed(Base.metadata.sorted_tables) if t.key in by_table]
 
 
 def register_extension_routes(app) -> None:
