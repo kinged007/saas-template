@@ -409,7 +409,7 @@ class MergeQueue:
         run = self.latest_ci_run()
         if not run or run.get("headSha") != head or run.get("conclusion") != "success":
             url = (run or {}).get("url", "none")
-            if run and run.get("conclusion") not in (None, "success") and run.get("status") == "completed":
+            if run and run.get("headSha") == head and run.get("conclusion") not in (None, "success") and run.get("status") == "completed":
                 print("gate 1 dev-CI: FAIL (%s) — entering red-dev path" % url)
                 return self.handle_red_dev(run)
             print("gate 1 dev-CI: FAIL (missing or stale for %s) — exit, no mark change" % head)

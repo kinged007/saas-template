@@ -224,6 +224,17 @@ class RedDevRecoveryTest(unittest.TestCase):
         self.assertEqual(seen["numbers"], [11])
         self.assertEqual(seen["url"], "https://run/9")
 
+    def test_stale_failed_run_exits_without_red_path(self):
+        q = mq.MergeQueue(repo="o/r", base="dev")
+        q.dev_head = lambda: "newsha"  # noqa: SLF001
+        q.latest_ci_run = lambda: {"headSha": "oldsha", "conclusion": "failure",  # noqa: SLF001
+                                   "status": "completed", "url": "u", "databaseId": 1}
+        called = []
+        q.handle_red_dev = lambda run: called.append(run) or "reverted"  # noqa: SLF001
+        self.assertEqual(q.run_once(), "gate1-exit")
+        self.assertEqual(called, [])
+
+
 class DryRunNoMutationTest(unittest.TestCase):
     def test_dry_run_performs_no_mutation(self):
         calls = []
