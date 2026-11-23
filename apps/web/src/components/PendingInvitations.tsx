@@ -16,10 +16,20 @@ import type { Invitation } from "../types";
  * needs to see pending invites. `invitations/mine` takes an optional workspace
  * id, so it resolves with none. Both call sites share one cache entry.
  */
-export function usePendingInvitations() {
+export function usePendingInvitations({ toastOnError = false }: { toastOnError?: boolean } = {}) {
   const { result, query } = useCustom<Invitation[]>({
     url: "invitations/mine",
     method: "get",
+    // The badge has no in-body surface, so it keeps the error toast. The card
+    // reports in-body instead — a hook-level toast would say it twice there.
+    ...(toastOnError
+      ? {
+          errorNotification: (error) => ({
+            type: "error",
+            message: errorMessage(error),
+          }),
+        }
+      : {}),
   });
   const rows = Array.isArray(result?.data) ? result.data : [];
   const pending = rows.filter((inv) => inv.status === "pending" && !inv.expired);
@@ -27,7 +37,7 @@ export function usePendingInvitations() {
 }
 
 export function PendingInvitationsBadge() {
-  const { pending } = usePendingInvitations();
+  const { pending } = usePendingInvitations({ toastOnError: true });
   if (pending.length === 0) return null;
   return (
     <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-xs font-medium text-destructive-foreground">
