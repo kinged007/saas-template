@@ -554,10 +554,12 @@ async def _gone_user_is_gone(app_client, monkeypatch, entry: str):
     assert resp.status_code == 401, resp.text
     assert resp.json()["detail"] == "account no longer exists"
     assert "access_token" not in resp.json()
-    if entry != "register":
-        # Both throttled entry points charge the limiter on this 401 instead of
-        # resetting the window. On login that is the whole point: the key is
-        # ip:email and stays reusable, so a reset would leave it unthrottled.
+    if entry == "login":
+        # Login charges both budgets (per-IP key plus account:<email> key),
+        # so one 401 records two checks and two fails.
+        assert [op for op, _ in calls] == ["check", "check", "fail", "fail"], calls
+    elif entry == "refresh":
+        # Refresh charges its single key on this 401 instead of resetting.
         # /register meters on its own per-IP limiter, not this one (#1343).
         assert [op for op, _ in calls] == ["check", "fail"], calls
 
