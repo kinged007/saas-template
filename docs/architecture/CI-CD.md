@@ -128,19 +128,18 @@ comment. Added rules:
 
   `Area` is one of `api`, `web`, `db`, `infra`. A PR that spans areas states why, uses the
   dominant area, and lists the others in the release-note line.
-- The review agent applies ADMISSION and code review. On approval it records the verdict line
-  and the head SHA it approved in its approval comment, then sets `agent:merge` and removes
-  `in-progress`. **It does not merge.**
+- The review agent applies ADMISSION and code review. On approval it submits a GitHub review event (`APPROVE`) for the head SHA it approved and records the verdict line and SHA in its approval comment, then sets `agent:merge` and removes
+  `in-progress`. **It does not merge.** In Stage 1 check 5 is advisory (all actors share one identity — see §7); in Stage 2 it requires the review event from an identity distinct from the PR author.
 - A conflict on a PR goes back to the agent that built it (`agent:rebase`). It knows the intent;
   `agent:ci-fix` does not.
 
 ### 4.3 Merge into `dev` — `merge-queue.yml`
 
-A workflow, not an agent. Triggered on `labeled` (`agent:merge`), on completion of `ci` for
+A workflow, not an agent, **living on `main`** so `schedule` and `workflow_run` fire (those triggers only evaluate on the default branch). Triggered on `labeled` (`agent:merge`), on completion of `ci` for
 `dev` (`workflow_run`), and every 30 minutes as a fallback. `concurrency: merge-queue`
 serializes it, so at most one merge is in flight.
 
-Each run takes the **oldest** PR labelled `agent:merge` (FIFO by label time) and checks, in order:
+Each run takes the oldest `P0`-labelled PR with `agent:merge` if any; otherwise the **oldest** PR labelled `agent:merge` (FIFO by label time) — so a `P0` security fix jumps the queue per §6 — and checks, in order:
 
 | # | Check | On failure |
 |---|---|---|
@@ -148,7 +147,7 @@ Each run takes the **oldest** PR labelled `agent:merge` (FIFO by label time) and
 | 2 | Base is `dev` | comment, retarget is the author's job → `agent:revise` |
 | 3 | `mergeable == MERGEABLE` | `agent:rebase` |
 | 4 | Every PR check at the head SHA is green | `agent:ci-fix` |
-| 5 | The approval comment names the current head SHA | `agent:review` (the approval is stale) |
+| 5 | A GitHub review event approves the current head SHA from an identity distinct from the PR author (Stage 1: advisory — see §7) | `agent:review` (the approval is stale or not a review event) |
 | 6 | The PR body has one `Area:` line with a valid value and one non-empty `Release-note:` line | `agent:revise` |
 
 When all pass, it squash-merges with an explicit message, so the trailers reach `git log`
@@ -182,7 +181,7 @@ bisect on failure; until then that is not built.
 `dev` run is caused by exactly one squash commit. The merge queue reruns the failed jobs once,
 so a flaky test does not revert a correct change. If the rerun is still red, it:
 
-1. `git revert` that commit on `dev`, subject `revert: <subject> — dev CI failed`, body keeping git's
+1. `git revert` that commit on `dev` (direct push via the machine-user bypass — if no bypass is available, open a revert PR instead), subject `revert: <subject> — dev CI failed`, body keeping git's
    `This reverts commit <sha>.` line and the failed run URL;
 2. reopens the issue it closed at merge, with `agent:ci-fix` and a link to the failed run;
 3. continues with the next PR once `dev` is green.
@@ -192,12 +191,11 @@ The PR is not reopened; its branch is deleted on merge. The fix is a new PR for 
 ### 4.5 Promotion — `promote.yml`
 
 Triggered on a cron (default **daily, 04:00 UTC = 06:00 SAST**) and on `workflow_dispatch`
-(the expedite path, §6).
+(the expedite path, §6) — **lives on `main`** so the cron fires (GitHub only evaluates `schedule` on the default branch).
 
 1. **Freeze.** Record the current `dev` head SHA. If `staging` already contains it, exit.
    Merges that land after this point go into the next promotion.
-2. **Verify.** Call `ci.yml` and `e2e.yml` as reusable workflows (`workflow_call`) on that SHA.
-   Nothing moves until both are green.
+2. **Verify.** Call `ci.yml` and `e2e.yml` as reusable workflows (`workflow_call`) with `sha:` set to the frozen SHA, and each workflow checks out that SHA (`actions/checkout` with `ref: ${{ inputs.sha }}`) in every job. Nothing moves until both are green — without the pinned checkout the workflows would run at `main` and CICD-27 could pass without ever exercising the frozen SHA.
 3. **On red:** do not touch `staging`. Open or update one issue `Promotion blocked at <sha>`
    with the failed run, labelled `agent:triage`, for the product loop.
 4. **On green:**
@@ -297,6 +295,8 @@ above and reports any guard failure.
 `GITHUB_TOKEN`: pushes and PRs created with `GITHUB_TOKEN` do not trigger other workflows, so
 `ci.yml` would not run on `dev` and the promotion would look verified when nothing ran.
 
+**Approval in Stage 1.** §4.3 check 5 is advisory in Stage 1: every actor authenticates as the same user, so a comment-based SHA check cannot distinguish the review agent from the build agent. Stage 2 introduces a separate reviewer identity and check 5 then requires the review event; until then it gates only on the comment.
+
 **Assignment.** Fleet work queries must name the dispatch assignee explicitly
 (`--assignee kinged007`), not `@me`. Then Stage 2's token change does not change which issues
 the fleet picks up, and no issue needs to be reassigned. The queries live in the Multica
@@ -318,14 +318,13 @@ Entered when the repository is made public (DECISIONS O-1). Each step works on i
    |---|---|
    | `main` | require a PR; 1 approving review (the promotion PR is opened by the machine user, so the maintainer's approval is the required one); merge commits only; block force push and deletion; require `ci` and `e2e` |
    | `staging` | block force push and deletion; restrict updates to the machine user |
-   | `dev` | require a PR; squash only; require `ci`; block force push and deletion |
+   | `dev` | require a PR; squash only; require `ci`; block force push and deletion; allow the machine user to bypass (Stage 2) so §4.4's auto-revert can push `git revert` directly — without a bypass the revert fails and check 1 stalls the queue permanently |
 
    Personal-account repositories have fewer ruleset options than organisation repositories
    (push restrictions and bypass lists are limited). Verify each row at setup; where a rule is
    unavailable, `branch-guard.yml` remains the check for it.
 3. **Repository settings.** `allow_rebase_merge=false` (rebase merges rewrite SHAs);
-   `delete_branch_on_merge=true`. Squash and merge commits both stay enabled; the rulesets choose
-   per branch.
+   `delete_branch_on_merge=true` — but exclude `staging` (or open promotions from a throwaway `promote/<sha7>` branch) before enabling it, otherwise the first promotion PR whose head is `staging` deletes `staging` on merge (Stage 1 has no deletion guard; only the Stage 2 `staging` ruleset blocks it).
 4. **Stale branches.** Delete remote branches with no open PR (645 branches on 2026-11-20).
 
 `branch-guard.yml` stays after Stage 2. It covers anything the rulesets on a personal account
@@ -341,18 +340,17 @@ Built in this order. Each row is one PR against the branch named.
 |---|---|---|---|---|
 | 1 | Branches + secret | create `dev` and `staging` at `main`; add `FLEET_TOKEN`; `delete_branch_on_merge=true`; `allow_rebase_merge=false` | — | settings, no PR |
 | 2 | Fleet briefs | `work-on-issues.md` §8: `--base dev`. `review_pr.md` §7: approval sets `agent:merge` and records the approved SHA; no merge. PR template: `Area:` / `Release-note:` lines | 1 | `main` |
-| 3 | CI triggers | `ci.yml`: `push` on `dev`, `staging`, `main`; `workflow_call`. `e2e.yml`: `workflow_call`; `pull_request` with base `main` | 1 | `main` |
+| 3 | CI triggers | `ci.yml`: `push` on `dev`, `staging`, `main`; `pull_request` on `dev` and `main`; `workflow_call` with `sha` input. `e2e.yml`: `workflow_call` with `sha` input; `pull_request` with base `main` | 1 | `main` |
 | 4 | `make release-notes BASE= HEAD=` | `scripts/release-notes.sh`: read `Area:` / `Release-note:` from `git log --no-merges BASE..HEAD`, drop pairs where one commit's `This reverts commit <sha>.` line names the other; a revert whose target is outside the range is listed under `Reverted`; group by area, print markdown | 2 | `dev` |
-| 5 | `merge-queue.yml` | §4.3 checks, squash with explicit message, auto-revert §4.4 | 2, 3 | `dev` |
-| 6 | `promote.yml` | §4.5; cron + `workflow_dispatch` | 3, 4 | `dev` |
+| 5 | `merge-queue.yml` | §4.3 checks, squash with explicit message, auto-revert §4.4 — **lives on `main`** (GitHub evaluates `schedule` and `workflow_run` only on the default branch; a copy on `dev` never fires its 30-minute fallback or its `workflow_run` retry) | 2, 3 | `main` |
+| 6 | `promote.yml` | §4.5; cron + `workflow_dispatch` — **lives on `main`** (same trigger reason; the cron promotion and `workflow_dispatch` expedite both fire from the default branch) | 3, 4 | `main` |
 | 7 | `branch-guard.yml` | §7 rules | 1 | `dev` |
 | 8 | `make release-candidate SHA=` | worktree at SHA, `make setup`, `make db-check`, seed, run the app, print the latest promotion checklist; documented in `docs/OPERATIONS.md` | 4 | `dev` |
 | 9 | Retarget open PRs | `gh pr edit <n> --base dev` for every open PR not in `backlog` | 1, 2 | — |
 | 10 | Autopilot prompts | explicit assignee (§7); loop brief: WIP limit, staleness, audit, reverts, no merging | 2 | Multica, not this repo |
 
 Pieces 2 and 3 target `main`, because the fleet and CI read their configuration from the
-branch that runs them; until 2 and 3 land, `dev` does not exist as a working base. From
-piece 4 onward, everything goes through the pipeline it builds.
+branch that runs them; until 2 and 3 land, `dev` does not exist as a working base. After 2 and 3 land, fast-forward `dev` (and `staging`) to that `main` head as an explicit step before piece 4, so `dev` carries the updated `ci.yml` (`push` on `dev`), the `--base dev` briefs and the template lines — otherwise `dev` never receives them and check 1 can never see a `ci` run for the current `dev` head. From piece 4 onward, everything goes through the pipeline it builds.
 
 Stage 2 (§8) is separate and has no code beyond ruleset settings.
 
