@@ -20,15 +20,25 @@ export const SINGLE_WORKSPACE_LIMIT = "This deployment allows one workspace.";
  * hides memberships outside the oldest workspace, so a member of a workspace
  * they simply cannot see must be told the same thing.
  */
-export function NoWorkspaceCard({ single }: { single: boolean }) {
+export function NoWorkspaceCard({
+  single,
+  headingLevel = 1,
+}: {
+  single: boolean;
+  /** Dashboard renders before its page title (h1); profile settings renders under one (h2). */
+  headingLevel?: 1 | 2;
+}) {
   return (
     <Card>
       <CardHeader>
         {/* CardTitle renders a div, so the title is spelled out as a heading
             with the classes CardTitle applies; card-title-classes.test.ts
-            keeps the copy in step with the primitive. This card returns
-            before the dashboard page title, so the card title is the page h1. */}
-        <h1 className="font-semibold leading-none tracking-tight">No workspace yet</h1>
+            keeps the copy in step with the primitive. */}
+        {headingLevel === 2 ? (
+          <h2 className="font-semibold leading-none tracking-tight">No workspace yet</h2>
+        ) : (
+          <h1 className="font-semibold leading-none tracking-tight">No workspace yet</h1>
+        )}
         <CardDescription>
           {single
             ? `${SINGLE_WORKSPACE_LIMIT} ${ASK_AN_ADMIN}`

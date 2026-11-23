@@ -43,7 +43,11 @@ const headingsIn = (source: string) =>
   );
 
 const cardTitleHeadings = () => [
-  ...(dashboard.includes("<NoWorkspaceCard") ? headingsIn(noWorkspaceCard) : []),
+  // The card renders h1 on the dashboard (default) and h2 under Profile
+  // Settings; only the dashboard branch belongs in this outline.
+  ...(dashboard.includes("<NoWorkspaceCard")
+    ? headingsIn(noWorkspaceCard).filter(([level]) => level === "1")
+    : []),
   ...headingsIn(dashboard),
 ];
 

@@ -56,3 +56,10 @@ test("the single-workspace limit sentence has one home", () => {
     `AppLayout.tsx and the pages must import SINGLE_WORKSPACE_LIMIT, not inline "${sentence}"`,
   );
 });
+
+test("the profile workspaces card renders under the page heading", () => {
+  assert.ok(
+    section.includes("headingLevel={2}"),
+    "WorkspacesSection must render <NoWorkspaceCard headingLevel={2}> under Profile Settings",
+  );
+});

@@ -44,7 +44,7 @@ export function WorkspacesSection() {
   // either answer early flashes one of them before the list is known.
   if (rows.length === 0) {
     if (list.query.isPending) return null;
-    return <NoWorkspaceCard single={identity?.single_workspace === true} />;
+    return <NoWorkspaceCard single={identity?.single_workspace === true} headingLevel={2} />;
   }
 
   const leave = async () => {
