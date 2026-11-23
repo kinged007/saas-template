@@ -194,7 +194,7 @@ Every user/automatic action publishes an audit event (`audit.entry.created`):
 `member.role_changed/removed/left`, `invitation.created/resent/accepted/declined/revoked/email_failed`, `user.session_revoked/sessions_revoked/refresh_token_reuse`,
 `role.created`, `apikey.created/revoked`, `notification.acknowledged/
 unacknowledged`, `notification.email_failed`, `job.run_*`. The audit workflow persists them (committed) to
-`audit_log_entries`.
+`audit_log_entries`. `notification.email_failed` carries `details.reason` = `no_recipient | no_email | send_failed`.
 
 ## 7. Scheduled jobs
 
@@ -231,7 +231,8 @@ A shared `crud` helper turns Refine params into safe SQLAlchemy queries
 (whitelisted sort/filter fields per resource). Every sorted list ends on the
 row's primary key, in the direction of the last sort key, so the order is total
 and `offset`/`limit` paging cannot drop or repeat a row when the sorted columns
-tie. Ties resolve by `id`, not by insertion order — the ids are UUIDs.
+tie. Ties resolve by `id`, not by insertion order — the ids are UUIDs. Routes
+that pass neither `default_sort` nor a client sort still emit no `ORDER BY`.
 
 ## 9. Security
 

@@ -249,7 +249,8 @@ async def test_permission_registry_covers_route_guards():
 
 async def test_permission_catalog_requires_auth(app_client):
     resp = await app_client.get(
-        "/api/v1/roles/permission-catalog", headers={"X-Workspace-ID": "ws-does-not-exist"}
+        "/api/v1/roles/permission-catalog",
+        headers={"X-Workspace-ID": "00000000-0000-0000-0000-000000000000"},
     )
     assert resp.status_code in (401, 403)
 
@@ -262,8 +263,8 @@ async def test_permission_catalog_filtered_to_assignable(app_client):
     # Seed the key-only scope before the member joins. accept_invitation stores
     # role_id and copies no permissions, so this way the viewer holds the scope
     # from the moment it joins and the test does not depend on get_membership
-    # joining Role live on WorkspaceMember.role_id. The intersection at
-    # roles.py:92 is only reachable for a non-owner caller.
+    # joining Role live on WorkspaceMember.role_id. The non-owner intersection
+    # in permission_catalog() is only reachable for a non-owner caller.
     await _add_key_only_to_role(
         await _role_id(client, owner_headers, "viewer"), perms.NOTIFICATION_READ
     )
@@ -742,7 +743,7 @@ async def test_update_role_noop_body_keeps_system_flag(app_client):
     ws = await create_workspace(client, owner)
     headers = ws_headers(owner, ws["id"])
     editor_id = await _role_id(client, headers, "editor")
-    for body in ({}, {"name": "editor"}):
+    for body in ({}, {"name": "editor"}, {"name": "  editor  "}):
         resp = await client.patch(f"/api/v1/roles/{editor_id}", json=body, headers=headers)
         assert resp.status_code == 200, (body, resp.text)
         assert resp.json()["system"] is True, body
@@ -826,8 +827,34 @@ async def test_roles_client_sort_desc_reverses_only_within_the_rank_groups(app_c
     assert names[4:] == sorted(_CUSTOM_ROLE_NAMES, reverse=True)
 
 
+async def test_roles_default_order_breaks_a_name_tie_on_id(app_client):
+    """#848: the default order ends on id, so a shared name cannot tie it.
+
+    `roles.name` is unique only in the app layer, so two rows can carry one
+    name. They are inserted id-descending, which leaves storage order -- what a
+    rank + name read falls back on for a tie -- disagreeing with the id order.
+    """
+    client = app_client
+    owner = await register_user(client, "list-tie@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    ids = [f"00000000-0000-4000-8000-00000000000{i}" for i in (1, 2)]
+    async with SessionFactory() as session:
+        session.add_all(
+            Role(id=rid, workspace_id=ws["id"], name="dup", permissions=[], system=False)
+            for rid in reversed(ids)
+        )
+        await session.commit()
+    resp = await client.get("/api/v1/roles", params={"_start": 0, "_end": 100}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert [r["id"] for r in resp.json() if r["name"] == "dup"] == ids
+
+
 async def test_roles_paging_tiles_the_set_without_gaps(app_client):
-    """Rank + name is a total order, so pages tile the set in that one order.
+    """Rank + name + id is a total order, so pages tile the set in that one order.
 
     The expectation is built here rather than fetched from a full-set request:
     two runs of the same endpoint agree even when the order is not total.

@@ -146,6 +146,7 @@ async def list_workspaces(
                 # identical for every key minted through the API, whose only
                 # writer stores `sorted(...)`. Change both together if a flow
                 # can ever store an unsorted grant.
+                # Mirrors GET /me (auth.py): require_key_permission 403s, so else [] is unreachable.
                 permissions=sorted(principal.api_key.permissions) if role else [],
             )
         ]

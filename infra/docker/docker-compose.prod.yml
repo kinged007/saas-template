@@ -10,7 +10,7 @@
 # SPA and reverse-proxies /api/* to the api service, so the whole app is
 # same-origin (no CORS) and postgres/nats stay off the host network.
 #
-# Migrations run automatically before each api start (`alembic upgrade head`).
+# Migrations run automatically before each api start (`alembic upgrade heads`).
 # Demo seed data is NOT applied — create the first user via /api/v1/register.
 #
 # FORWARDED_ALLOW_IPS (optional, see infra/docker/.env.example) lists the peers
@@ -72,7 +72,7 @@ services:
       nats:
         condition: service_healthy
     command: >
-      sh -c "alembic upgrade head &&
+      sh -c "alembic upgrade heads &&
              exec uvicorn src.main:app --host 0.0.0.0 --port 8000
                   --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-172.30.0.0/24}"
 

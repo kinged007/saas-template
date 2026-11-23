@@ -33,6 +33,7 @@ export function PageHeader({
     <div className={cn("flex items-start justify-between gap-4", className)}>
       <div>
         <h2 className="text-2xl font-bold tracking-tight">{title}</h2>
+        {/* Deliberate && (see #731): a JSX child drops "", unlike the inspected RoleCapNotice return fixed in #711. */}
         {subtitle && <p className="text-muted-foreground mt-1">{subtitle}</p>}
       </div>
       {actions}

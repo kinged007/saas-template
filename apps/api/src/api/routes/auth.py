@@ -575,11 +575,11 @@ async def totp_login(
     container=Depends(get_container),
 ) -> TokenResponse:
     svc = TwoFactorService(db, container.cipher, container.bus)
-    # ponytail: challenge-token guessing is unthrottled (401 raised before check);
-    # tokens are token_urlsafe(32) with a TTL, not attacker-chosen — charge on its own
-    # key, or move check above consume_challenge, if a caller shape makes them predictable.
+    # The challenge survives a wrong code so the user can retry with the same
+    # token: peek first, consume only once the code verifies. The rate limiter
+    # runs before verification, so guessing a code is throttled on ip:<user_id>.
     try:
-        user_id = svc.consume_challenge(body.challenge_token)
+        user_id = svc.peek_challenge(body.challenge_token)
     except TwoFactorError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
     key = _limit_key(request, user_id)
@@ -595,6 +595,11 @@ async def totp_login(
         get_auth_limiter().fail(key)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid code")
     get_auth_limiter().reset(key)
+    try:
+        svc.consume_challenge(body.challenge_token)
+    except TwoFactorError as exc:
+        # A concurrent request spent the single-use challenge first.
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
     pair = await AuthService(db, container.bus).issue_tokens(
         user, ip_address=_client_ip(request), user_agent=_user_agent(request)
     )

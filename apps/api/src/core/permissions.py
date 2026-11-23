@@ -45,6 +45,12 @@ WEBHOOK_DELETE = "webhook:delete"  # unsubscribe
 
 AUDIT_READ = "audit:read"
 
+# 403 detail for a caller that lacks deployment-wide superuser power. deps.py's
+# `require_deployment_admin` gate and `ProfileService.delete_account_superuser`
+# both reject a session without the flag and both answer with this one string, so
+# the reason never drifts into two different words for the same denial.
+SUPERUSER_ACCESS_REQUIRED = "superuser access required"
+
 # API-key-only scopes: never granted to roles, never required of sessions.
 # Declared before PERMISSION_DEFINITIONS so ALL_PERMISSIONS can exclude them.
 #

@@ -26,15 +26,21 @@ network to `172.30.0.0/24` and defaults `FORWARDED_ALLOW_IPS` to that subnet —
 the api service publishes no ports, so nginx is its only peer — and
 `infra/docker/.env` overrides it.
 
-Keep the list narrow. Under `'*'`, uvicorn takes the leftmost `X-Forwarded-For`
-entry verbatim, so any peer that can reach the API port picks the address
-recorded against it. Set the flag to your proxy's IP, CIDR, or a
-comma-separated list. Running the image outside compose already supplies both
+Keep the list narrow: `'*'` is a wildcard only as the whole value (`'*, 127.0.0.1'`
+trusts nothing beyond loopback), and under it uvicorn takes the leftmost
+`X-Forwarded-For` entry verbatim, so any peer that can reach the API port picks
+the address recorded against it. Set the flag to your proxy's IP, CIDR, or a
+comma-separated list — entries are parsed by uvicorn, which rejects nothing: one
+it cannot read as an address or a CIDR network is demoted to a literal that matches
+no peer, so the stack starts, nothing is logged, and when that entry was the proxy
+every recorded client IP becomes the proxy's and every IP-keyed limiter collapses
+into one bucket. Check the IP recorded on a row you just triggered after changing
+the list. Running the image outside compose already supplies both
 proxy flags: the CMD wires `--forwarded-allow-ips` to `FORWARDED_ALLOW_IPS`
 with a loopback-only default, quoted so a value with spaces stays one argv.
 Set `FORWARDED_ALLOW_IPS` to your proxy's address; until you do, no header is
 honoured and every address is the proxy's. The CMD does not run migrations
-(only the compose `command:` does), so apply `alembic upgrade head` yourself
+(only the compose `command:` does), so apply `alembic upgrade heads` yourself
 before starting the image outside compose.
 
 Behind an external load balancer or CDN, add its address to
@@ -50,6 +56,33 @@ shared address blocks every new user from registering until it drains.
 Only `X-Forwarded-For` is honoured. `X-Real-IP` and `CF-Connecting-IP` are read
 by neither uvicorn nor this code, so a proxy configured to send only
 `X-Real-IP` records the proxy's address.
+
+## Client scheme attribution
+
+`cookie_secure_for()` (`apps/api/src/core/security/cookies.py`) sets `Secure`
+on the refresh cookie only for HTTPS sessions, reading the scheme from
+`request.url.scheme` or the leftmost `X-Forwarded-Proto`. A TLS-terminating
+load balancer ends HTTPS and forwards plain HTTP to nginx, so nginx's `$scheme`
+is always `http`; without a fix the API never sees `https` and skips `Secure`.
+
+`infra/docker/nginx.conf` fixes this on the `/api/` and `/api/v1/ws` locations.
+It proves the requesting peer is a proxy this deployment trusts — a
+`geo $trusted_proxy` set covering all of RFC1918 plus loopback, the
+`172.30.0.0/24` compose subnet included, no trust-all default — and only for such
+a peer forwards that peer's `X-Forwarded-Proto` (leftmost entry of a chain,
+`http` or `https`, case-insensitive) to the API. Any other peer, including a
+client that forges the header straight at nginx, falls back to the local
+`$scheme`, so a spoofed `https` cannot upgrade a plain-HTTP request. Inside a
+cloud VPC the set is wider than the compose subnet — every RFC1918 peer can
+reach it — and an IPv6 peer matches no entry and is therefore untrusted.
+
+Edit the trust set before going public. nginx has no env-configurable `geo`, so
+edit the ranges in `infra/docker/nginx.conf`: for a load balancer inside a
+private network, trim them to its exact address; for one with a public address
+(ALB in a public subnet, CloudFront, Cloudflare), add its CIDR as a new entry —
+the shipped ranges do not contain it, so narrowing leaves the LB untrusted and
+the bug in place. The one conf is baked into the web image (Dockerfile.web), so
+every deployment running that image shares this edit.
 
 ## Metrics
 

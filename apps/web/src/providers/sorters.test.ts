@@ -28,6 +28,47 @@ test("null, undefined and empty directions all degrade to asc", () => {
   );
 });
 
+test("a whitespace-only direction degrades to asc like an empty one", () => {
+  assert.deepEqual(
+    normalizeSorters([
+      { field: "a", order: " " },
+      { field: "b", order: "\t" },
+    ]).map((s) => s.order),
+    ["asc", "asc"],
+  );
+});
+
+test("a non-string direction is stringified, not thrown", () => {
+  // An untyped JS caller can put anything in `order`. The pre-#1652 `||` never
+  // threw here, so this hardening must not reintroduce that assumption: junk is
+  // stringified and reaches the API as an invalid direction (a 422), it never
+  // crashes the list. Only null / undefined / empty still degrade to `asc`.
+  const junk = [
+    { field: "a", order: {} },
+    { field: "b", order: 0 },
+    { field: "c", order: 5 },
+    { field: "d", order: true },
+    { field: "e", order: false },
+    { field: "f", order: NaN },
+  ] as unknown as Parameters<typeof normalizeSorters>[0];
+  const orders = normalizeSorters(junk).map((s) => s.order);
+  assert.deepEqual(orders, [
+    "[object Object]",
+    "0",
+    "5",
+    "true",
+    "false",
+    "NaN",
+  ]);
+  assert.ok(orders.every((order) => typeof order === "string"));
+});
+
+test("a real direction keeps only itself, so serialization stays clean", () => {
+  const out = normalizeSorters([{ field: "a", order: " desc " }]);
+  assert.equal(out[0].order, "desc");
+  assert.ok(!JSON.stringify(out).includes(" \""));
+});
+
 test("defined directions pass through and stay on their own column", () => {
   const out = normalizeSorters([
     { field: "a", order: "desc" },

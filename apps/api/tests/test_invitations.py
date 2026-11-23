@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 import src.core.permissions as perms
 from src.core.dates import now_utc
+from src.core.routes import INVITATIONS_ROUTE
 from src.db.session import SessionFactory
 from src.models.audit import AuditLogEntry
 from src.models.core import Invitation
@@ -65,7 +66,7 @@ async def test_invite_creates_notification_for_existing_user(app_client):
     assert items[0]["payload"]["workspace_name"] == "Acme Corp"
     # NotificationCenter renders the "Open" button off payload.url; without it
     # the invite is a dead end in the bell.
-    assert items[0]["payload"]["url"] == "/invitations"
+    assert items[0]["payload"]["url"] == INVITATIONS_ROUTE
 
     # invitee accepts → becomes member with editor role
     accepted = await client.post(
@@ -452,6 +453,31 @@ async def _wait_for(predicate, deadline_seconds: float = 5.0) -> bool:
     return True
 
 
+async def _publish_invitation_created(
+    app, ws: dict, owner_me: dict, email: str, invitation_id: str | None = None
+) -> None:
+    """Publish `invitation.created`; a missing `invitation_id` is the payload
+    shape whose missing guard this module's email-failure tests exercise.
+
+    The keys mirror the real producer, `WorkspaceService.invite`
+    (`src/services/workspaces.py`); keep the two in step.
+    """
+    from src.events.subjects import Subjects
+
+    await app.state.container.bus.publish(
+        Subjects.WORKSPACE_INVITATION_CREATED,
+        {
+            "workspace_id": ws["id"],
+            "workspace_name": ws["name"],
+            "email": email,
+            "invited_by_user_id": owner_me["id"],
+            "invited_by_name": owner_me["display_name"],
+            "is_registered": False,
+            "invitation_id": invitation_id,
+        },
+    )
+
+
 async def test_failed_invitation_email_is_recorded_in_audit(app_client, monkeypatch):
     async def failing_send(message):
         return False
@@ -515,7 +541,9 @@ async def test_successful_invitation_email_records_no_audit_row(app_client, monk
 
     # The send has to have happened, otherwise "no audit row" proves nothing.
     # Registration also sends mail, so match the invitee rather than index 0.
-    assert await _wait_for(lambda: any(m.to == "reachable@example.com" for m in sent))
+    assert await _wait_for(lambda: any(m.to == "reachable@example.com" for m in sent)), (
+        "no invitation email for reachable@example.com"
+    )
     invites = [m for m in sent if m.to == "reachable@example.com"]
     assert len(invites) == 1
     assert "/invitations/accept?token=" in invites[0].html_body
@@ -527,8 +555,6 @@ async def test_invitation_email_failure_without_invitation_id_is_not_audited(
 ):
     """`resource_id` is NOT NULL, so a payload without an invitation id is
     logged and dropped instead of written as a null row."""
-    from src.events.subjects import Subjects
-
     sent: list = []
     audits: list = []
 
@@ -547,20 +573,22 @@ async def test_invitation_email_failure_without_invitation_id_is_not_audited(
     ws = await create_workspace(client, owner)
     owner_me = (await client.get("/api/v1/auth/me", headers=auth_headers(owner))).json()
 
-    await app.state.container.bus.publish(
-        Subjects.WORKSPACE_INVITATION_CREATED,
-        {
-            "workspace_id": ws["id"],
-            "workspace_name": ws["name"],
-            "email": "noid@example.com",
-            "invited_by_user_id": owner_me["id"],
-            "invited_by_name": owner_me["display_name"],
-            "is_registered": False,
-        },
+    await _publish_invitation_created(app, ws, owner_me, "noid@example.com")
+    assert await _wait_for(lambda: any(m.to == "noid@example.com" for m in sent)), (
+        "no failed-send email for noid@example.com"
     )
 
-    assert await _wait_for(lambda: any(m.to == "noid@example.com" for m in sent))
-    await asyncio.sleep(0.2)  # let the handler get past the guard
+    # Ordering barrier instead of a fixed delay: the bus runs one FIFO consumer
+    # task per subject, so the send for a second `invitation.created` proves the
+    # first handler already returned — past the missing-id guard that would
+    # have published an audit. Nothing can audit after it. Barrier valid only
+    # while `workspaces.invitation.created` has exactly one in-process consumer
+    # (`src/events/inprocess.py` `subscribe`/`_consume`); NATS, a wildcard
+    # subscriber, or a second subscription would break it.
+    await _publish_invitation_created(app, ws, owner_me, "barrier@example.com")
+    assert await _wait_for(lambda: any(m.to == "barrier@example.com" for m in sent)), (
+        "no barrier email for barrier@example.com"
+    )
     assert audits == []
     assert await _wait_for_audit("invitation.email_failed", ws["id"], deadline_seconds=0.5) == []
 
