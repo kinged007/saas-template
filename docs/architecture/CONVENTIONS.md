@@ -195,11 +195,16 @@ Source: ARCHITECTURE.md §4 and §9, `apps/api/src/api/deps.py`, `apps/api/src/c
   `admin-workspaces`, `admin-audit` (`AdminLayout` blocks every non-superuser). A new resource is
   not added to this list unless it is one of those two kinds; read: each new `resources` entry in
   `App.tsx` that maps to a permission has a `PERMISSION_MAP` key.
-- **CONV-AUTH-06** A page does not handle tokens or sessions. Token and session code lives in
-  `apps/web/src/providers/authProvider.ts` and `apps/web/src/utils/storage.ts`; only the sign-in
-  and OAuth callback screens call it.
+- **CONV-AUTH-06** A page does not read or write tokens or sessions. A page that needs session
+  state gets it from `useGetIdentity` or `useIsAuthenticated`, not from `tokenStore`.
+  The files that call `tokenStore` are the providers that own the session
+  (`providers/authProvider.ts`, `providers/dataProvider.ts`, `providers/liveProvider.ts`), the
+  workspace context (`contexts/WorkspaceContext.tsx`), `hooks/useProfile.ts`, the store itself
+  (`utils/storage.ts`), and the two screens that establish a session
+  (`pages/LoginPage.tsx`, `components/AuthConfig.tsx`).
   Why: one place changes when the session model changes (ARCHITECTURE.md §5).
-  Check: `grep -rln "tokenStore" apps/web/src/pages apps/web/src/components --include=*.tsx` prints only `apps/web/src/pages/LoginPage.tsx` and `apps/web/src/components/AuthConfig.tsx`.
+  Check: `grep -rln "tokenStore" apps/web/src --include=*.ts --include=*.tsx | grep -v "\.test\."`
+  prints those eight files and nothing else; read: a new page obtains identity through a hook.
 
 ## DATA — models, services, migrations
 
@@ -246,8 +251,9 @@ Source: `apps/api/src/models/`, `apps/api/src/services/`, `docs/MIGRATIONS.md`,
 ## FE — web (Refine)
 
 Source: `apps/web/src/App.tsx`, `apps/web/src/pages/`, `apps/web/src/components/refine-ui/`.
-These rules apply to all new pages; a touched page that is listed under FE in Known deviations
-is migrated.
+These rules apply to all new pages. A touched page that is listed under FE in Known deviations is
+not required to be migrated; touching it is a chance to fix it, on the same terms as every other
+Known deviation.
 
 - **CONV-FE-01** Register `create` on every resource that has a create flow, in
   `apps/web/src/App.tsx` (`{ name: "x", list: "/x", create: "/x/create" }`). Create is a page,
