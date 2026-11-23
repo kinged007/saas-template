@@ -3,6 +3,7 @@ import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
 import { KeyRound } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -115,8 +116,19 @@ export function ApiKeysPage() {
                 </TableCell>
               </TableRow>
             ))}
-            {rows.length === 0 && (
+            {rows.length === 0 && !query.isError ? (
               <EmptyRow colSpan={7}>No API keys yet.</EmptyRow>
+            ) : null}
+            {query.isError && (
+              <EmptyRow colSpan={7}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => query.refetch()}
+                >
+                  Try again
+                </Button>
+              </EmptyRow>
             )}
           </TableBody>
         </Table>
