@@ -19,5 +19,5 @@ Spec: `specs/1807-oauth-latch-retry/spec.md`. Branch A = round-trip never remoun
 
 - [x] T008 [P] [AC-4] apps/web/e2e/oauth-callback.spec.ts — verified: no skip/fixme marker on the retry spec (`grep -rn 'test.fixme\|test.skip' apps/web/e2e/oauth-callback.spec.ts` empty)
 - [x] T009 [smoke] apps/web/e2e/oauth-callback.spec.ts — smoke: single-file run green 3x locally after the fix
-- [ ] T010 [AC-5] e2e CI — three consecutive full e2e runs green on the PR head (CI `web-e2e` leg on each push / `gh run rerun`); local `make web-test-e2e` is only the pre-run. Post-merge, confirm three green runs on main before merging anything else behind it
+- [x] T010 [AC-5] e2e CI — three consecutive full e2e runs green on PR head e579b3c (CI run 45236973006: initial + 2 reruns, all `completed/success`, web-e2e pass each time). Post-merge, confirm three green runs on main before merging anything else behind it
 - [x] T011 [P] [quality gate] repo root — `make web-build` and `make web-test` both green (266 unit tests pass)
