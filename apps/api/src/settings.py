@@ -101,6 +101,8 @@ class Settings(BaseSettings):
     # discovery_url (or issuer + /.well-known/openid-configuration) covers
     # Google/Microsoft Entra/Okta/GitLab; explicit endpoint URLs cover
     # non-OIDC providers like GitHub. Secrets come from env, never committed.
+    # issuer is pinned when set: a discovery document that names a different
+    # one fails the login, so the value has to track the IdP's issuer.
     oauth_providers: str = ""
 
     # Auth brute-force protection: failures allowed per (IP, account) per window.

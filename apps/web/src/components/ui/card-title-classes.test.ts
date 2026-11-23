@@ -7,6 +7,10 @@ const dashboard = readFileSync(
   new URL("../../pages/DashboardPage.tsx", import.meta.url),
   "utf8",
 );
+const noWorkspaceCard = readFileSync(
+  new URL("../../components/NoWorkspaceCard.tsx", import.meta.url),
+  "utf8",
+);
 
 /** The classes `CardTitle` applies, read from the primitive. */
 const cardTitleClasses = () => {
@@ -22,10 +26,12 @@ const cardTitleClasses = () => {
 /**
  * Every dashboard card title written as a heading, as `[level, title, classes]`.
  * Scoped to the `CardHeader` blocks so the page title, which carries heading
- * classes of its own, is not read as a card title.
+ * classes of its own, is not read as a card title. The zero-workspace card
+ * lives in NoWorkspaceCard.tsx (DashboardPage renders <NoWorkspaceCard>), so
+ * its title is read from there.
  */
-const cardTitleHeadings = () =>
-  [...dashboard.matchAll(/<CardHeader>([\s\S]*?)<\/CardHeader>/g)].flatMap(
+const headingsIn = (source: string) =>
+  [...source.matchAll(/<CardHeader>([\s\S]*?)<\/CardHeader>/g)].flatMap(
     ([, block]) =>
       [...block.matchAll(/<h([1-6])\b([^>]*)>([^<]*)</g)].map(
         ([, level, attrs, title]) => [
@@ -35,6 +41,15 @@ const cardTitleHeadings = () =>
         ],
       ),
   );
+
+const cardTitleHeadings = () => [
+  // The card renders h1 on the dashboard (default) and h2 under Profile
+  // Settings; only the dashboard branch belongs in this outline.
+  ...(dashboard.includes("<NoWorkspaceCard")
+    ? headingsIn(noWorkspaceCard).filter(([level]) => level === "1")
+    : []),
+  ...headingsIn(dashboard),
+];
 
 /**
  * The dashboard writes its card titles as headings with the classes `CardTitle`
