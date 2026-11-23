@@ -58,6 +58,22 @@ test.describe("workspace export card", () => {
     await expect(description).toContainText("There is no import in this app");
   });
 
+  test("the description states the export caps, the truncated flag and the CSV prefix convention", async ({ page }) => {
+    await openSettings(page, { fail: false, attempts: [] });
+
+    const description = page.getByText(/Download a read-only snapshot of this workspace/);
+    await expect(description).toBeVisible();
+    const text = (await description.textContent()) ?? "";
+    // Three sections are capped, so the copy must name the cap and the flag
+    // that reports it instead of implying the JSON is always complete.
+    expect(text).toContain("5000");
+    expect(text).toContain("truncated");
+    // The apostrophe prefix is a convention a spreadsheet can drop, not a
+    // guarantee, so the copy must not present it as one.
+    expect(text).toMatch(/apostrophe/i);
+    expect(text).toMatch(/convention|not a guarantee/i);
+  });
+
   test("a failed resources fetch offers a user-pressed retry and recovers", async ({ page }) => {
     const resources: ResourcesMock = { fail: true, attempts: [] };
     await openSettings(page, resources);
