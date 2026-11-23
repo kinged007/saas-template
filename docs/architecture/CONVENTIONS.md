@@ -348,19 +348,19 @@ adding a new one needs a DECISIONS entry.
 
 ## CI check candidates
 
-Rules a script could enforce. None of these is implemented. Each becomes its own GitHub issue
-with its own Gate 0 verdict ([ADMISSION.md](../product/ADMISSION.md), Gate 0); this file does
-not create them.
+Rules a script could enforce. None of these is implemented. Each has its own GitHub issue with its
+own Gate 0 verdict ([ADMISSION.md](../product/ADMISSION.md), Gate 0); this file does not create
+them.
 
-| Rule | Proposed mechanism |
-|---|---|
-| CONV-EVT-02, 05, 06 | The `grep` commands above, including the `Subjects.X +` one, as one `make conventions-check` target, run in the `ci` workflow. |
-| CONV-EVT-03 | Pytest test: every durable subject in `Subjects.ALL` has a registered workflow; every transient subject is in `TRANSIENT_SUBJECTS` and registered with `fanout=True`. Fails today on `CONVERSATION_CREATED` until it is fixed or removed. |
-| CONV-AUTH-01 | Pytest test over each router's `routes`: every route that depends on `get_current_workspace_id` also depends on a `require_permission` or `require_key_permission` checker, with an allowlist for the routes under Known deviations and the guards named in CONV-AUTH-01. |
-| CONV-AUTH-03 | `grep` in the `make conventions-check` target, with the jobs routes allowlisted until they move into `deps.py`. |
-| CONV-AUTH-04 | `node --test` on `apps/web/src/App.tsx` routes: every route path outside the `/` layout is in the public set of CONV-AUTH-04. |
-| CONV-AUTH-05 | `node --test`: every `resources` name in `App.tsx` that is not hidden has a `PERMISSION_MAP` key or is on an allowlist. |
-| CONV-API-02, 03 | Pytest test over the app's routes: list routes set `X-Total-Count`; `DELETE` routes declare 204; create `POST` routes declare 201. |
-| CONV-API-05 | Already enforced by `apps/api/tests/test_uuid_ids.py`; add a test that every `uuid.UUID`-typed path param is in `FRAMEWORK_VALIDATED_UUID_ROUTES`. |
-| CONV-DATA-03, 04, 06 | `find` and `grep` commands above in the `make conventions-check` target. |
-| CONV-CFG-02 | Script from the Check above, failing on any name not in `.env.example`; fix the two known names first. |
+| Rule | Proposed mechanism | Issue |
+|---|---|---|
+| CONV-EVT-02, 05, 06 | The `grep` commands above, including the `Subjects.X +` one, as one `make conventions-check` target, run in the `ci` workflow. | #1822 |
+| CONV-EVT-03 | Pytest test: every durable subject in `Subjects.ALL` has a registered workflow; every transient subject is in `TRANSIENT_SUBJECTS` and registered with `fanout=True`. Fails today on `CONVERSATION_CREATED` until it is fixed or removed. | #1823 |
+| CONV-AUTH-01 | Pytest test over each router's `routes`: every route that depends on `get_current_workspace_id` also depends on a `require_permission` or `require_key_permission` checker, with an allowlist for the routes under Known deviations and the guards named in CONV-AUTH-01. | #1824 |
+| CONV-AUTH-03 | `grep` in the `make conventions-check` target, with the jobs routes allowlisted until they move into `deps.py`. | #1828 |
+| CONV-AUTH-04 | `node --test` on `apps/web/src/App.tsx` routes: every route path outside the `/` layout is in the public set of CONV-AUTH-04. | #1825 |
+| CONV-AUTH-05 | `node --test`: every `resources` name in `App.tsx` that is not hidden has a `PERMISSION_MAP` key or is on an allowlist. | #1825 |
+| CONV-API-02, 03 | Pytest test over the app's routes: list routes set `X-Total-Count`; `DELETE` routes declare 204; create `POST` routes declare 201. | #1826 |
+| CONV-API-05 | Already enforced by `apps/api/tests/test_uuid_ids.py`; add a test that every `uuid.UUID`-typed path param is in `FRAMEWORK_VALIDATED_UUID_ROUTES`. | #1828 |
+| CONV-DATA-03, 04, 06 | `find` and `grep` commands above in the `make conventions-check` target. | #1822, #1828 |
+| CONV-CFG-02 | Script from the Check above, failing on any name not in `.env.example`; fix the two known names first. | #1827 |
