@@ -224,6 +224,13 @@ class RedDevRecoveryTest(unittest.TestCase):
         self.assertEqual(seen["numbers"], [11])
         self.assertEqual(seen["url"], "https://run/9")
 
+    def test_unknown_label_time_sorts_last(self):
+        prs = [
+            {"number": 1, "is_p0": False},
+            {"number": 2, "is_p0": False, "merge_labeled_at": "2026-11-20T10:00:00Z"},
+        ]
+        self.assertEqual(mq.select_candidate(prs)["number"], 2)
+
     def test_stale_failed_run_exits_without_red_path(self):
         q = mq.MergeQueue(repo="o/r", base="dev")
         q.dev_head = lambda: "newsha"  # noqa: SLF001
