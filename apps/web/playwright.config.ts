@@ -29,12 +29,6 @@ export default defineConfig({
     : "list",
   use: {
     baseURL,
-    // Chromium's back/forward cache restores a document on goBack() without
-    // re-running its scripts, so a spec that navigates back to prove a remount
-    // observes a restored DOM and no network. That is what made
-    // oauth-callback's latch spec red on CI while passing locally. Off for
-    // every spec: a test must not depend on which browser cache served it.
-    launchOptions: { args: ["--disable-features=BackForwardCache"] },
     // A retained trace is the only record of the DOM, network and console of a
     // failure that is gone by the time anyone reads the log. It carries the
     // full network log, so it is safe only while every spec mocks /api/v1;
