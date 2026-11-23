@@ -27,7 +27,6 @@ class Subjects:
     NOTIFICATIONS_CREATED = "notifications.created"
 
     CONVERSATIONS = "conversations"
-    CONVERSATION_CREATED = "conversations.created"
     CONVERSATION_MESSAGE_CREATED = "conversations.message.created"
     CONVERSATION_MESSAGE_LIVE = "conversations.message.live"
     CONVERSATION_RENAMED = "conversations.renamed"
@@ -67,7 +66,6 @@ ALL = [
     Subjects.CONVERSATION_MESSAGE_CREATED,
     Subjects.CONVERSATION_MESSAGE_LIVE,
     Subjects.CONVERSATION_RENAMED,
-    Subjects.CONVERSATION_CREATED,
     Subjects.WORKSPACE_CREATED,
     Subjects.WORKSPACE_INVITATION_CREATED,
     Subjects.WORKSPACE_MEMBER_INVITED,

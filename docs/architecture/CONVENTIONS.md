@@ -56,8 +56,8 @@ Source: ARCHITECTURE.md §6, `apps/api/src/events/`, `apps/api/src/workflows/__i
   Why: a durable subject with no consumer accumulates in the JetStream stream.
   Check: `cd apps/api && uv run --extra dev pytest tests/test_events.py::test_workflow_registry_wiring -q` passes.
   The test asserts the registered set equals a fixed list; it does not compare against
-  `Subjects.ALL`, so a durable subject added to `ALL` with no registration still passes (third
-  row of CI check candidates).
+  `Subjects.ALL`, so a durable subject added to `ALL` with no registration still passes (#1823 in
+  CI check candidates).
 - **CONV-EVT-04** A transient subject (realtime fan-out, nothing persisted) is listed in
   `TRANSIENT_SUBJECTS`, is published with `transient=True`, and its workflow is registered with
   `fanout=True`. A durable subject is none of these.
@@ -336,7 +336,6 @@ adding a new one needs a DECISIONS entry.
 | Rule | Deviation |
 |---|---|
 | CONV-EVT-02 | `apps/api/src/services/conversations.py:746` builds the subject as `Subjects.CONVERSATIONS + ".renamed"` behind a `hasattr` fallback. The constant exists, so the fallback is dead code. |
-| CONV-EVT-03 | `Subjects.CONVERSATION_CREATED` (`conversations.created`) is in `ALL`, is not published anywhere, and has no workflow. |
 | CONV-API-02 | `apps/api/src/api/routes/conversations.py` builds its list queries without `apply_query`. |
 | CONV-API-04 | `apps/api/src/services/profile_helpers.py`, `profiles.py` and `search_export.py` import `HTTPException`. |
 | CONV-AUTH-03 | `apps/api/src/api/routes/jobs.py` (lines 237 and 280) checks `api_key.permissions` inside the route for the `/jobs/{id}` and run routes. |
@@ -355,7 +354,7 @@ them.
 | Rule | Proposed mechanism | Issue |
 |---|---|---|
 | CONV-EVT-02, 05, 06 | The `grep` commands above, including the `Subjects.X +` one, as one `make conventions-check` target, run in the `ci` workflow. | #1822 |
-| CONV-EVT-03 | Pytest test: every durable subject in `Subjects.ALL` has a registered workflow; every transient subject is in `TRANSIENT_SUBJECTS` and registered with `fanout=True`. Fails today on `CONVERSATION_CREATED` until it is fixed or removed. | #1823 |
+| CONV-EVT-03 | Pytest test: every durable subject in `Subjects.ALL` has a registered workflow; every transient subject is in `TRANSIENT_SUBJECTS` and registered with `fanout=True`. | #1823 |
 | CONV-AUTH-01 | Pytest test over each router's `routes`: every route that depends on `get_current_workspace_id` also depends on a `require_permission` or `require_key_permission` checker, with an allowlist for the routes under Known deviations and the guards named in CONV-AUTH-01. | #1824 |
 | CONV-AUTH-03 | `grep` in the `make conventions-check` target, with the jobs routes allowlisted until they move into `deps.py`. | #1828 |
 | CONV-AUTH-04 | `node --test` on `apps/web/src/App.tsx` routes: every route path outside the `/` layout is in the public set of CONV-AUTH-04. | #1825 |
