@@ -22,7 +22,7 @@ Covers, end to end over the HTTP API:
 """
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from src.core.permissions import ALL_PERMISSIONS, JOB_READ, JOB_UPDATE, permissions_for_role
 from src.db.session import SessionFactory
@@ -264,6 +264,22 @@ async def test_key_reads_within_its_permission_scope(app_client):
     wkey = await _create_key(client, headers, "w-read", ["workspace:read"])
     resp = await client.get("/api/v1/workspaces", headers=_key_headers(wkey["key"], ws["id"]))
     assert resp.status_code == 200
+    assert [w["id"] for w in resp.json()] == [ws["id"]]
+
+
+async def test_non_canonical_workspace_header_still_authorises_a_key(app_client):
+    """The header is parsed as a UUID, so an uppercase spelling matches the stored
+    lowercase id. Before the UUID annotation the string comparison 403'd."""
+    client = app_client
+    owner = await register_user(client, "umi@example.com")
+    ws = await create_workspace(client, owner)
+    key = await _create_key(client, ws_headers(owner, ws["id"]), "upper", ["workspace:read"])
+
+    resp = await client.get(
+        "/api/v1/workspaces", headers=_key_headers(key["key"], ws["id"].upper())
+    )
+
+    assert resp.status_code == 200, resp.text
     assert [w["id"] for w in resp.json()] == [ws["id"]]
 
 
@@ -1270,6 +1286,45 @@ async def test_job_run_access_uses_the_keys_own_permissions(app_client):
     assert after.json()["cron_schedule"] == "30 4 * * *", after.text
 
 
+async def test_charge_does_not_read_the_key_back(app_client):
+    """The charge takes the post-charge values from its own RETURNING clause.
+
+    A follow-up SELECT would put the conditional UPDATE's verdict back in
+    reach of a stale in-memory row, which is what `record_use`'s docstring
+    explains the attribute update for."""
+    from src.db.session import engine
+    from src.models.api_key import ApiKey
+    from src.services.api_keys import ApiKeyService
+
+    client = app_client
+    owner = await register_user(client, "charge-roundtrip@example.com")
+    ws = await create_workspace(client, owner, "Charge Roundtrip Inc")
+    capped = await _create_key(
+        client, ws_headers(owner, ws["id"]), "roundtrip", ["member:read"], usage_quota=5
+    )
+
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    async with SessionFactory() as session:
+        key = await session.get(ApiKey, capped["id"])
+        event.listen(engine.sync_engine, "before_cursor_execute", record)
+        try:
+            assert await ApiKeyService(session).record_use(key) is True
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", record)
+
+    # Background event/webhook tasks share the engine, so scope the window to
+    # this table — and require the UPDATE to be in it, so an empty capture can
+    # never pass.
+    assert any(s.lstrip().upper().startswith("UPDATE API_KEYS") for s in statements), statements
+    assert not [
+        s for s in statements if s.lstrip().upper().startswith("SELECT") and "api_keys" in s
+    ], statements
+
+
 async def test_key_cannot_probe_global_run_existence(app_client):
     """A run id that resolves to nothing must not answer differently for a key.
 
@@ -1321,9 +1376,10 @@ async def test_key_cannot_probe_global_run_existence(app_client):
 
 
 async def test_one_quota_unit_cannot_be_spent_twice(app_client):
-    """Two callers that read the counter before either writes must not both
-    spend the last unit — the quota check and the increment are one
-    statement, not a read followed by a write."""
+    """A caller holding a pre-charge read of the key cannot spend the last
+    unit after another caller already spent it — the quota test and the
+    increment are one statement, so the refusal does not depend on when the
+    second caller read the counter."""
     from src.models.api_key import ApiKey
     from src.services.api_keys import ApiKeyService
 
@@ -1335,17 +1391,44 @@ async def test_one_quota_unit_cannot_be_spent_twice(app_client):
     )
 
     async with SessionFactory() as first, SessionFactory() as second:
-        # Both sessions read the key while usage_count is still 0 — the
-        # interleaving that used to let both commit usage_count = 1.
+        # Both sessions read the key while usage_count is still 0 — a
+        # read-then-write pair would let both commit usage_count = 1.
         one, two = await first.get(ApiKey, capped["id"]), await second.get(ApiKey, capped["id"])
         assert (one.usage_count, two.usage_count) == (0, 0)
 
         assert await ApiKeyService(first).record_use(one) is True
+        # The charged caller's key holds the post-charge row, so the quota
+        # headers it publishes read 0 remaining, not the stale 1.
+        assert one.usage_count == 1 and one.last_used_at is not None
         assert await ApiKeyService(second).record_use(two) is False
 
     async with SessionFactory() as verify:
         row = await verify.get(ApiKey, capped["id"])
         assert row.usage_count == 1, "a refused charge must not be spent"
+
+
+async def test_zero_quota_key_is_never_charged(app_client):
+    """`usage_quota = 0` is a closed key: the conditional UPDATE must refuse
+    it rather than charge the first unit for free."""
+    from src.models.api_key import ApiKey
+    from src.services.api_keys import ApiKeyService
+
+    client = app_client
+    owner = await register_user(client, "zero-quota@example.com")
+    ws = await create_workspace(client, owner, "Zero Quota Inc")
+    capped = await _create_key(
+        client, ws_headers(owner, ws["id"]), "zero", ["member:read"], usage_quota=1
+    )
+
+    async with SessionFactory() as session:
+        key = await session.get(ApiKey, capped["id"])
+        key.usage_quota = 0
+        await session.commit()
+        assert await ApiKeyService(session).record_use(key) is False
+
+    async with SessionFactory() as verify:
+        row = await verify.get(ApiKey, capped["id"])
+        assert (row.usage_count, row.last_used_at) == (0, None)
 
 
 async def _seed_definition(workspace_id: str | None, key: str = "test.echo") -> str:

@@ -10,7 +10,6 @@ from src.models.core import Invitation, Notification
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
 from src.seed import DEMO_PASSWORD
 from src.seed import main as seed_main
-from src.services.api_keys import ApiKeyForbidden
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
 from src.settings import settings
@@ -242,7 +241,8 @@ async def test_seed_api_key_guard_looks_for_the_row_not_the_status(single_worksp
     which ignores status — admits the workspace, and ApiKeyService, which
     resolves the actor with `get_membership`, is what refuses the mint. An
     active-only membership check in the guard would skip the key silently
-    instead.
+    instead. That refusal no longer escapes the seed: the keys of a member
+    whose row exists but is suspended are skipped and the run carries on.
     """
     async with SessionFactory() as session:
         admin = await AuthService(session).register(
@@ -259,6 +259,16 @@ async def test_seed_api_key_guard_looks_for_the_row_not_the_status(single_worksp
         )
         member.scalar_one().status = "suspended"
         await session.commit()
+        workspace_id = workspace.id
+        admin_id = admin.id
 
-    with pytest.raises(ApiKeyForbidden):
-        await seed_main()
+    await seed_main()  # the refusal is skipped, not fatal
+
+    async with SessionFactory() as session:
+        result = await session.execute(
+            select(ApiKey.name).where(
+                ApiKey.workspace_id == workspace_id,
+                ApiKey.created_by_user_id == admin_id,
+            )
+        )
+        assert result.scalars().all() == []

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import format_datetime
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -209,15 +210,22 @@ async def resolve_or_deny(principal: AuthPrincipal, lookup, missing_detail: str)
 
 
 async def get_current_workspace_id(
-    x_workspace_id: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
+    x_workspace_id: Annotated[UUID | None, Header(alias="X-Workspace-ID")] = None,
 ) -> str:
+    """Required X-Workspace-ID header, canonicalised to str.
+
+    The UUID annotation makes FastAPI reject a malformed header as 422. The return
+    type stays str deliberately: StringUUID round-trips UUID columns back to str, so
+    widening it to UUID would silently break the api_key.workspace_id equality
+    checks in require_key_permission/require_permission.
+    """
     if not x_workspace_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "X-Workspace-ID header is required")
-    return uuid_or_404(x_workspace_id, "workspace")
+    return str(x_workspace_id)
 
 
 async def get_optional_workspace_id(
-    x_workspace_id: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
+    x_workspace_id: Annotated[UUID | None, Header(alias="X-Workspace-ID")] = None,
 ) -> str | None:
     """Like get_current_workspace_id, but optional.
 
@@ -225,9 +233,7 @@ async def get_optional_workspace_id(
     received invitations, workspace listing) but become workspace-scoped the
     moment an API key is presented.
     """
-    if not x_workspace_id:
-        return None
-    return uuid_or_404(x_workspace_id, "workspace")
+    return str(x_workspace_id) if x_workspace_id is not None else None
 
 
 def _quota_headers(api_key: ApiKey, now: datetime) -> dict[str, str]:
@@ -255,7 +261,7 @@ async def record_key_use(api_key: ApiKey, db: AsyncSession, response: Response) 
     Invariant: every branch that authorizes an API key must charge through
     this function, or the key is unmetered — a hand-rolled `api_key is not
     None` branch that skips it is the bug this guards against. The 403 comes
-    from the conditional UPDATE's rowcount, never from a pre-read, so two
+    from the rows the conditional UPDATE charged, never from a pre-read, so two
     concurrent requests cannot both spend the last unit.
 
     Shared by both permission dependencies and the jobs routes, so no branch
@@ -445,7 +451,7 @@ async def require_target_profile_update(
 
 
 async def require_existing_workspace(
-    workspace_id: str,
+    workspace_id: UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     """404 on missing workspaces before membership checks run.
@@ -458,7 +464,6 @@ async def require_existing_workspace(
     (missing) from 403 (exists, not a member); workspace ids are
     unguessable UUIDs, so this tradeoff is intentional.
     """
-    uuid_or_404(workspace_id, "workspace")
     if await db.get(Workspace, workspace_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
 

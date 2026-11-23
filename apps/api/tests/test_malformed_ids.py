@@ -117,7 +117,11 @@ async def test_workspace_route_malformed_path_id_not_500(app_client):
     headers = ws_headers(tokens, workspace_id)
     for method, url, body in WORKSPACE_PROBES:
         resp = await app_client.request(method, url, json=body, headers=headers)
-        assert resp.status_code == 404, (method, url, resp.status_code, resp.text)
+        # Workspace path ids are framework-validated UUID params (422);
+        # every other probed route looks its id up as a string (404).
+        # Either way the pinned property is the same: never a 500.
+        expected = 422 if f"/api/v1/workspaces/{BAD}" in url else 404
+        assert resp.status_code == expected, (method, url, resp.status_code, resp.text)
 
 
 async def test_superuser_route_malformed_path_id_not_500(app_client):
@@ -141,14 +145,11 @@ async def test_superuser_route_malformed_path_id_not_500(app_client):
 async def test_malformed_workspace_header_not_500(app_client):
     tokens, _workspace_id = await _owner_ws(app_client)
     headers = {**auth_headers(tokens), "X-Workspace-ID": BAD}
-    # A required-header route and a key-permission route answer like a
-    # valid-but-unknown workspace id (404). The optional-header route is
-    # different: with a session user, GET /api/v1/workspaces answers a
-    # valid-but-unknown header with the plain 200 list, so only the malformed
-    # header's own 404 is asserted here.
+    # The header dependency is UUID-annotated, so a malformed value is a 422
+    # (same contract as test_deps.py) on required and optional routes alike.
     for url in ("/api/v1/roles", "/api/v1/workspaces", "/api/v1/notifications"):
         resp = await app_client.get(url, headers=headers)
-        assert resp.status_code == 404, (url, resp.status_code, resp.text)
+        assert resp.status_code == 422, (url, resp.status_code, resp.text)
 
 
 async def test_malformed_query_ids_not_500(app_client):
@@ -218,9 +219,11 @@ async def test_malformed_body_ids_keep_the_valid_unknown_status(app_client):
     membership_id = await _member_membership_id(
         app_client, tokens, workspace_id, "body-probe@example.com"
     )
-    # Transfer and role lookups 404 on an unknown id; the participants
-    # membership check 400s (ConversationError), as does an unknown invitation
-    # role id. A malformed body id keeps the same status instead of 500.
+    # Transfer and participant lookups 404/400 on an unknown id, as does an
+    # unknown invitation role id. A malformed body id keeps the same status
+    # instead of 500 — except role_id fields, which are UUID in the schema:
+    # a malformed role_id is a 422 request error while a valid-but-unknown
+    # role_id keeps the lookup status (404 member role, 400 invitation).
     probes = [
         (
             "post",
@@ -228,7 +231,7 @@ async def test_malformed_body_ids_keep_the_valid_unknown_status(app_client):
             {"new_owner_membership_id": BAD},
             404,
         ),
-        ("patch", f"/api/v1/members/{membership_id}", {"role_id": BAD}, 404),
+        ("patch", f"/api/v1/members/{membership_id}", {"role_id": BAD}, 422),
         (
             "patch",
             f"/api/v1/conversations/{conversation_id}/participants",
@@ -245,7 +248,7 @@ async def test_malformed_body_ids_keep_the_valid_unknown_status(app_client):
             "post",
             "/api/v1/invitations",
             {"email": "malformed-role@example.com", "role_id": BAD},
-            400,
+            422,
         ),
     ]
     for method, url, body, expected in probes:

@@ -16,6 +16,23 @@
 
 **Required env vars:** DATABASE_URL
 
+## Product direction — read before proposing or building anything
+
+Before opening an issue or PR that adds or changes behaviour, read
+`docs/product/VISION.md` and apply `docs/product/ADMISSION.md`. Fill in the admission
+section of the PR template; a PR without a verdict line is not ready for review.
+
+Until the first release (`docs/product/VISION.md` §7), build only update-path work, security
+fixes, and fixes that restore documented behaviour. Assess anything else and leave it
+deferred — do not implement it.
+
+Never:
+- add hook, plugin or override layers over template files (`docs/product/DECISIONS.md` D-03);
+- rename, move or delete a file under `apps/` without listing it in the PR's release-note
+  line as `old/path → new/path` or `removed`;
+- create a migration without a 14-digit timestamp revision id (D-04; see Migrations below; the squashed 0001 baseline is the only exception);
+- add credits, branding or promotional text.
+
 ## Dev stack ports
 
 `make dev` runs api on :8000 and web on :5173 by default. If those ports are
@@ -35,29 +52,17 @@ since vite serves both) — open either and the session holds.
 ## Migrations
 
 Models are the source of truth; migrations are generated, reviewed, committed.
-After changing any model: `make db-new m="..."`, review the diff (watch for
-accidental drops, wrong nullability, missing server_default), commit the file.
+After changing any model, generate the migration (`make db-new` assigns a
+14-digit UTC timestamp revision id per `docs/product/DECISIONS.md` D-04):
+
+```bash
+make db-new m="acme orders"   # → 20261118104500_acme_orders.py
+```
+
+Review the diff (watch for accidental drops, wrong nullability, missing server_default),
+commit the file.
 `make db-check` (also in CI) fails on multiple heads or models≠migrations.
 Full workflow: `docs/MIGRATIONS.md`.
-
----
-
-## Agent Instructions
-
-This project uses codesight for structured AI context. Follow these steps before implementing:
-1. Read `.codesight/wiki/index.md` for project orientation (~200 tokens)
-2. Read `.codesight/wiki/overview.md` for architecture overview (~500 tokens)
-3. Read the relevant domain article, then open the source files listed in it
-4. Read `.codesight/CODESIGHT.md` for the full context map
-
-**Do not explore the file tree blindly.** The codesight context map already contains:
-routes, schema, components, libraries, config, middleware, and dependency graph.
-
-**Before modifying any file:** check `.codesight/graph.md` for blast radius.
-Files with high import counts affect many downstream modules — change carefully.
-
-Routes marked `[inferred]` were detected via regex and may have lower precision.
-If any source file shows ⚠ in a wiki article, re-run `npx codesight --wiki` before proceeding.
 
 ---
 

@@ -34,6 +34,7 @@ import logging
 
 from sqlalchemy import select
 
+from src.core.routes import INVITATIONS_ROUTE
 from src.core.security.crypto import SecretCipher
 from src.db.session import SessionFactory
 from src.events.bus import EventBus
@@ -48,10 +49,6 @@ from src.services.jobs import JobService
 from src.services.notifications import NotificationService
 
 logger = logging.getLogger(__name__)
-
-# Frontend route the invitation notification's "Open" button links to. The dev
-# seed (src/seed.py) imports it, so the two payload sides cannot drift.
-INVITATIONS_ROUTE = "/invitations"
 
 
 def _participant_user_ids(
@@ -118,6 +115,8 @@ async def _audit_email_failure(
         resource_type="notification",
         resource_id=notification.id,
         action="notification.email_failed",
+        # details.email is deliberate: this system-originated action has no actor
+        # (actor_user_id is None), so the address is the only field naming the recipient.
         details={"user_id": user_id, "type": n_type, "email": email, "reason": reason},
     )
 
@@ -398,7 +397,7 @@ def build_workflows(
         invite_url = (
             f"{settings.frontend_url.rstrip('/')}/invitations/accept?token={token}"
             if token
-            else f"{settings.frontend_url.rstrip('/')}/invitations"
+            else f"{settings.frontend_url.rstrip('/')}{INVITATIONS_ROUTE}"
         )
         sent = await send_email(
             invitation_template(

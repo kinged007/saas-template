@@ -1,4 +1,3 @@
-import asyncio
 import csv
 import io
 import json
@@ -9,7 +8,13 @@ from sqlalchemy import select
 
 from src.db.session import SessionFactory
 from src.models.audit import AuditLogEntry
-from tests.conftest import create_workspace, register_user, ws_headers
+from src.services.search_export import CSV_RESOURCES
+from tests.conftest import (
+    create_workspace,
+    register_user,
+    wait_for_audit_action,
+    ws_headers,
+)
 
 
 async def _wait_for_audit_export(
@@ -23,18 +28,9 @@ async def _wait_for_audit_export(
     `workspace.exported` audit event, so retrying the export would add work to
     the bus this waits on. One export is issued, after the gate.
     """
-    loop = asyncio.get_event_loop()
-    deadline = loop.time() + timeout_secs
-    while True:
-        async with SessionFactory() as session:
-            result = await session.execute(
-                select(AuditLogEntry.action).where(AuditLogEntry.workspace_id == workspace_id)
-            )
-            landed = "workspace.created" in set(result.scalars().all())
-        if landed or loop.time() >= deadline:
-            break
-        await asyncio.sleep(interval)
-    assert landed, f"event bus did not commit workspace.created within {timeout_secs}s"
+    await wait_for_audit_action(
+        workspace_id, "workspace.created", timeout_secs=timeout_secs, interval=interval
+    )
     resp = await client.get("/api/v1/workspaces/export", params=params, headers=headers)
     assert resp.status_code == 200, resp.text
     return resp
@@ -59,7 +55,7 @@ async def test_wait_for_audit_export_gives_up_without_issuing_export(app_client,
     # The gate watches a workspace id the bus has never seen, so the row can never land.
     missing_workspace_id = str(uuid4())
     timeout_secs, interval = 0.05, 0.01
-    with pytest.raises(AssertionError, match="event bus did not commit workspace.created"):
+    with pytest.raises(AssertionError, match="audit bus did not commit workspace.created"):
         await _wait_for_audit_export(
             app_client,
             ws_headers(tokens, ws["id"]),
@@ -480,13 +476,14 @@ def test_export_csv_leaves_safe_values_untouched():
     assert row["avatar_url"] == ""
 
 
-async def test_export_members_csv_neutralises_injected_display_name(app_client):
+@pytest.mark.parametrize("lead", ["=", "＝", "＋", "－", "＠"])
+async def test_export_members_csv_neutralises_injected_display_name(app_client, lead):
     """End to end: a formula-shaped display_name is prefixed in the response."""
     from src.db.session import SessionFactory
     from src.models.workspace import User
 
     client, h, ws, conv = await _setup(app_client)
-    payload = "=cmd|' /C calc'!A0"
+    payload = f"{lead}cmd|' /C calc'!A0"
     async with SessionFactory() as session:
         user_id = (
             (
@@ -603,3 +600,25 @@ async def test_export_requires_audit_read(app_client):
     # Owner keeps export access.
     owner_export = await client.get("/api/v1/workspaces/export", headers=h)
     assert owner_export.status_code == 200, owner_export.text
+
+
+def test_export_csv_prefixes_only_the_leading_full_width_character():
+    from src.services.search_export import SearchExportService
+
+    out = SearchExportService.export_csv(
+        {"invitations": [{"email": "＝a＝b@example.com"}, {"email": "Ada ＝ Lovelace"}]},
+        "invitations",
+    )
+    emails = [r["email"] for r in csv.DictReader(io.StringIO(out))]
+    assert emails == ["'＝a＝b@example.com", "Ada ＝ Lovelace"]
+
+
+@pytest.mark.parametrize("resource", sorted(CSV_RESOURCES))
+def test_column_drift_is_caught_when_the_resource_has_no_rows(monkeypatch, resource):
+    from src.services import search_export
+
+    monkeypatch.setitem(
+        search_export.CSV_RESOURCES, resource, [*search_export.CSV_RESOURCES[resource], "phantom"]
+    )
+    with pytest.raises(ValueError, match=f"{resource} projection and columns differ"):
+        search_export.SearchExportService.export_csv({resource: []}, resource)

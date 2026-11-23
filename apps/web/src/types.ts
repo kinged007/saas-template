@@ -119,7 +119,8 @@ export type AdminUser = {
   display_name: string;
   is_active: boolean;
   is_superuser: boolean;
-  created_at?: string;
+  /** `iso_or_none` in the API, so a stored null arrives as JSON `null`. */
+  created_at?: string | null;
   workspaces?: Array<{ id: string; name: string; slug: string; role: string }>;
 };
 

@@ -60,7 +60,7 @@ const members = (page: Page) =>
 
 const rowTrigger = (page: Page) =>
   page.getByRole("row").filter({ hasText: "member@example.com" }).getByRole("combobox");
-const inviteTrigger = (page: Page) => page.getByRole("combobox").last();
+const inviteTrigger = (page: Page) => page.locator("form").getByRole("combobox");
 
 // The sentence the triggers describe themselves with. The two notices label
 // their link differently, so a link is addressed by its accessible name rather
