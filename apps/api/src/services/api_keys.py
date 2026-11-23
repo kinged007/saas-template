@@ -117,6 +117,8 @@ class ApiKeyService:
         only ever returned once.
         """
         name = name.strip()
+        if not name:
+            raise ApiKeyError("api key name cannot be blank")
         membership = await WorkspaceService(self._session).get_membership(workspace_id, actor.id)
         if membership is None:
             raise ApiKeyForbidden("you are not a member of this workspace")

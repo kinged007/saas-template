@@ -1,6 +1,9 @@
 import hashlib
 from datetime import UTC, datetime
 
+import pytest
+from sqlalchemy import select
+
 from src.db.session import SessionFactory
 from src.models.api_key import ApiKey
 from tests.conftest import (
@@ -510,6 +513,7 @@ async def test_create_api_key_strips_padded_name(app_client):
         "/api/v1/api-keys", json={"name": "   ", "permissions": []}, headers=headers
     )
     assert blank.status_code == 422
+    assert blank.json()["detail"][0]["loc"] == ["body", "name"]
 
 
 async def test_api_key_service_stores_trimmed_name(app_client):
@@ -533,3 +537,25 @@ async def test_api_key_service_stores_trimmed_name(app_client):
     async with SessionFactory() as session:
         stored = await session.get(ApiKey, key.id)
         assert stored.name == "ci-deploy"
+
+
+async def test_create_api_key_rejects_blank_name(app_client):
+    """The service rejects a name that is blank after the strip. #905."""
+    from src.services.api_keys import ApiKeyError, ApiKeyService
+    from src.services.auth import AuthService
+
+    client = app_client
+    owner = await register_user(client, "blank-key@example.com")
+    ws = await create_workspace(client, owner)
+
+    async with SessionFactory() as session:
+        user = await AuthService(session).get_by_email("blank-key@example.com")
+        with pytest.raises(ApiKeyError) as excinfo:
+            await ApiKeyService(session).create_api_key(
+                workspace_id=ws["id"], name="   ", permissions=["member:read"], actor=user
+            )
+        assert str(excinfo.value) == "api key name cannot be blank"
+
+    async with SessionFactory() as session:
+        blank = (await session.execute(select(ApiKey).where(ApiKey.name == ""))).scalars().all()
+        assert blank == []

@@ -1,3 +1,6 @@
+import pytest
+from sqlalchemy import select
+
 from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
 
 
@@ -450,6 +453,78 @@ async def test_service_stores_trimmed_names(app_client):
         assert stored_role.name == "operators"
 
 
+async def test_service_rejects_blank_names(app_client):
+    """The service rejects a name that is blank after the strip.
+
+    `StrippedName` is the validation boundary over HTTP, but the service is
+    reachable without the schema (seed, bootstrap, tests), and a stored ""
+    would be unreachable as a role target and would fall through to the
+    random slug. #905.
+    """
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role, Workspace
+    from src.services.auth import AuthService
+    from src.services.workspaces import WorkspaceError, WorkspaceService
+
+    client = app_client
+    await register_user(client, "blank-owner@example.com")
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session)
+        user = await AuthService(session).get_by_email("blank-owner@example.com")
+        workspace = await service.create_workspace(
+            name="  Acme  ", slug=None, description=None, owner=user
+        )
+        role = await service.create_custom_role(
+            workspace.id, name="ops", description=None, permissions=[], actor=user
+        )
+        editor_id = (
+            await session.execute(select(Role.id).where(Role.name == "editor"))
+        ).scalar_one()
+
+        with pytest.raises(WorkspaceError) as excinfo:
+            await service.create_workspace(name="   ", slug=None, description=None, owner=user)
+        assert str(excinfo.value) == "workspace name cannot be blank"
+        with pytest.raises(WorkspaceError) as excinfo:
+            await service.update_workspace(workspace.id, name="   ", actor=user)
+        assert str(excinfo.value) == "workspace name cannot be blank"
+        with pytest.raises(WorkspaceError) as excinfo:
+            await service.create_custom_role(
+                workspace.id, name="   ", description=None, permissions=[], actor=user
+            )
+        assert str(excinfo.value) == "role name cannot be blank"
+        with pytest.raises(WorkspaceError) as excinfo:
+            await service.update_role(workspace.id, role.id, name="   ", actor=user)
+        assert str(excinfo.value) == "role name cannot be blank"
+        # The lookup wins over the blank check: an unknown workspace reports
+        # "not found" rather than leaking the name error.
+        with pytest.raises(WorkspaceError) as excinfo:
+            await service.update_workspace(
+                "00000000-0000-0000-0000-000000000000", name="   ", actor=user
+            )
+        assert str(excinfo.value) == "workspace not found"
+        # #907: a padded name that is not blank is still a no-op on a system role.
+        unchanged = await service.update_role(
+            workspace.id, editor_id, name="  editor  ", actor=user
+        )
+        assert unchanged.system is True
+
+    async with SessionFactory() as session:
+        blank_workspaces = (
+            (await session.execute(select(Workspace).where(Workspace.name == ""))).scalars().all()
+        )
+        blank_roles = (await session.execute(select(Role).where(Role.name == ""))).scalars().all()
+        assert blank_workspaces == []
+        assert blank_roles == []
+        stored_ws = await session.get(Workspace, workspace.id)
+        assert stored_ws.name == "Acme"
+        stored_role = await session.get(Role, role.id)
+        assert stored_role.name == "ops"
+        stored_editor = await session.get(Role, editor_id)
+        assert stored_editor.name == "editor"
+        assert stored_editor.system is True
+
+
 async def test_create_workspace_strips_padded_name(app_client):
     client = app_client
     tokens = await register_user(client, "pad-ws@example.com")
@@ -464,6 +539,7 @@ async def test_create_workspace_strips_padded_name(app_client):
         "/api/v1/workspaces", json={"name": "   "}, headers=auth_headers(tokens)
     )
     assert blank.status_code == 422
+    assert blank.json()["detail"][0]["loc"] == ["body", "name"]
 
 
 async def test_update_workspace_strips_padded_name(app_client):
@@ -481,6 +557,7 @@ async def test_update_workspace_strips_padded_name(app_client):
         f"/api/v1/workspaces/{ws['id']}", json={"name": "   "}, headers=headers
     )
     assert blank.status_code == 422
+    assert blank.json()["detail"][0]["loc"] == ["body", "name"]
 
 
 async def _set_member_status(membership_id: str, status: str) -> None:

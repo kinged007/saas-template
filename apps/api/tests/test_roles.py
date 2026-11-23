@@ -646,7 +646,7 @@ async def test_update_role_noop_body_keeps_system_flag(app_client):
     ws = await create_workspace(client, owner)
     headers = ws_headers(owner, ws["id"])
     editor_id = await _role_id(client, headers, "editor")
-    for body in ({}, {"name": "editor"}):
+    for body in ({}, {"name": "editor"}, {"name": "  editor  "}):
         resp = await client.patch(f"/api/v1/roles/{editor_id}", json=body, headers=headers)
         assert resp.status_code == 200, (body, resp.text)
         assert resp.json()["system"] is True, body
