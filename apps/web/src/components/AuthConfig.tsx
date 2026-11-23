@@ -83,6 +83,12 @@ export async function exchangeOAuthCode(code: string): Promise<{ twoFactor?: str
 // Module scope, not the ref below: the ref resets with the component
 // instance, and a remount while the URL still carries the code (StrictMode's
 // dev double-mount, HMR) would exchange the single-use code twice.
+//
+// A successful exchange keeps its latch: the authorize hop in SsoButtons is a
+// hard document load, so a fresh authorization always resets this module, and
+// the first instance owns the navigate() — once this guard returns, the later
+// instance can no longer exchange or redirect, so its repeat has to be silent.
+// Only a failed exchange clears the latch; see the .catch below.
 let consumedCode: string | null = null;
 
 const PENDING_STATUS = "Signing you in…";
@@ -125,7 +131,11 @@ export function OAuthCallbackPage() {
         // return to it and re-fire the exchange.
         navigate(afterAuthRedirect(), { replace: true });
       })
-      .catch(() => setStatus("Sign-in failed. The code may have expired."));
+      .catch(() => {
+        // Failed exchange: the latch is stale, so drop it and let a repeat visit retry.
+        consumedCode = null;
+        setStatus("Sign-in failed. The code may have expired.");
+      });
   }, [navigate]);
   // Bound the pending state: past this the page offers the escape instead of
   // hanging on "Signing you in…", which is otherwise indistinguishable from

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import secrets
 import uuid
 from datetime import timedelta
@@ -28,6 +29,8 @@ from src.models.workspace import (
 )
 from src.services.auth import AuthService
 from src.services.serializers import ONBOARDING_ENABLED_FLAG
+
+logger = logging.getLogger(__name__)
 
 
 class WorkspaceError(Exception):
@@ -113,8 +116,8 @@ def is_manager_role_name(name: str | None) -> bool:
     check (#328) can hold a pre-#328 `Admin` row beside its seeded `admin`, and
     that row's holder is now admitted at both manager gates, where the exact
     comparison refused them. `_check_name_free` refuses the name
-    case-insensitively, so such a row can only come from old data; #400's
-    backfill is what removes it.
+    case-insensitively, so such a row can only come from old data; see
+    `is_owner_role_name` for the removal path (#400, parked on `needs-human`).
 
     Name-only by design, as on the owner half: an `Admin` row an admin created
     carries no `"*"`, since `"*"` is reserved for the owner role, and the gate
@@ -142,9 +145,9 @@ _ROLE_PICK_ORDER = (Role.system.desc(), Role.created_at, Role.id)
 class WorkspaceService:
     DEFAULT_ROLES = ["owner", "admin", "editor", "viewer"]
 
-    # Fallback auto-join role for single-workspace mode (SINGLE_WORKSPACE).
-    # Viewer: edit access requires explicit designation.
-    SINGLE_WORKSPACE_ROLE = "viewer"
+    # Fallback auto-join role for single-workspace mode (SINGLE_WORKSPACE), used
+    # when SINGLE_WORKSPACE_DEFAULT_ROLE names no role of the workspace.
+    SINGLE_WORKSPACE_FALLBACK_ROLE = "viewer"
 
     def __init__(self, session: AsyncSession, bus: EventBus | None = None) -> None:
         self._session = session
@@ -222,6 +225,8 @@ class WorkspaceService:
         allow_single_workspace_bootstrap: bool = False,
     ) -> Workspace:
         name = name.strip()
+        if not name:
+            raise WorkspaceError("workspace name cannot be blank")
         if self.single_workspace_enabled() and not allow_single_workspace_bootstrap:
             existing = await self.get_single_workspace()
             if existing is not None:
@@ -296,6 +301,8 @@ class WorkspaceService:
         changes: dict = {}
         if name is not None:
             name = name.strip()
+            if not name:
+                raise WorkspaceError("workspace name cannot be blank")
         if name is not None and name != workspace.name:
             changes["name"] = {"from": workspace.name, "to": name}
             workspace.name = name
@@ -511,7 +518,7 @@ class WorkspaceService:
         self,
         workspace_id: str,
         member_id: str,
-        role_id: str,
+        role_id: str | uuid.UUID,
         *,
         actor: User,
         ip_address: str | None = None,
@@ -1095,7 +1102,11 @@ class WorkspaceService:
         return changed
 
     async def list_roles(self, workspace_id: str) -> list[Role]:
-        stmt = select(Role).where(Role.workspace_id == workspace_id).order_by(Role.created_at.asc())
+        stmt = (
+            select(Role)
+            .where(Role.workspace_id == workspace_id)
+            .order_by(Role.created_at.asc(), Role.name.asc())
+        )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
@@ -1107,13 +1118,15 @@ class WorkspaceService:
 
     async def _single_workspace_role(self, workspace_id: str) -> Role:
         """Auto-join role: SINGLE_WORKSPACE_DEFAULT_ROLE, else
-        viewer/editor/admin/an arbitrary remaining non-owner role.
+        viewer/editor/admin/oldest remaining non-owner role.
 
         Each rung is matched by folded name over the workspace's non-owner roles,
         so a custom role works too and an unknown, blank or "owner" value falls
         through the chain. The wider chain keeps a later login working when the
         viewer role was renamed or removed, instead of bricking every later
-        login.
+        login. The last resort is the oldest remaining role, ties broken by
+        name — the order `list_roles` returns — so the grant does not depend on
+        the query plan.
 
         Raises when the workspace has no non-owner role at all: there is
         nothing to join with, and the caller skips the join rather than
@@ -1134,13 +1147,32 @@ class WorkspaceService:
         for role in result.scalars():
             if not is_owner_role_name(role.name):
                 roles.setdefault(role.name.lower(), role)
-        names = (settings.single_workspace_default_role.strip(), self.SINGLE_WORKSPACE_ROLE)
-        for name in (*names, "editor", "admin"):
-            if role := roles.get(name.lower()):
-                return role
-        if roles:
-            return next(iter(roles.values()))
-        raise WorkspaceError(f"workspace {workspace_id} has no non-owner role to join")
+        configured = settings.single_workspace_default_role.strip()
+        folded = configured.lower()
+        for name in (folded, self.SINGLE_WORKSPACE_FALLBACK_ROLE, "editor", "admin"):
+            if role := roles.get(name):
+                break
+        else:
+            oldest = min(roles.values(), key=lambda r: (r.created_at, r.name), default=None)
+            if oldest is None:
+                raise WorkspaceError(f"workspace {workspace_id} has no non-owner role to join")
+            logger.warning(
+                "SINGLE_WORKSPACE_DEFAULT_ROLE=%r, %r, 'editor' and 'admin' all absent in "
+                "workspace %s; granting oldest remaining role %r",
+                configured,
+                self.SINGLE_WORKSPACE_FALLBACK_ROLE,
+                workspace_id,
+                oldest.name,
+            )
+            role = oldest
+        if folded not in ("", "owner") and folded not in roles:
+            logger.warning(
+                "SINGLE_WORKSPACE_DEFAULT_ROLE=%r not found in workspace %s; granted %r",
+                configured,
+                workspace_id,
+                role.name,
+            )
+        return role
 
     async def _role_by_name(self, workspace_id: str, name: str) -> Role:
         # Folded like the predicates its callers guard on, so a workspace whose
@@ -1224,6 +1256,8 @@ class WorkspaceService:
         ip_address: str | None = None,
     ) -> Role:
         name = name.strip()
+        if not name:
+            raise WorkspaceError("role name cannot be blank")
         _, actor_role = await self._require_active_member(workspace_id, actor)
         is_owner = "*" in actor_role.permissions
         assignable = set(actor_role.permissions)
@@ -1266,6 +1300,8 @@ class WorkspaceService:
         role = await self.get_role(workspace_id, role_id)
         if is_owner_role_name(role.name):
             raise WorkspaceForbidden("the owner role cannot be edited")
+        if name is not None and not name:
+            raise WorkspaceError("role name cannot be blank")
         # Resolve the actor once, before any mutation: a name-only or
         # description-only edit carries no permission set to cap, so without
         # this it wrote — and flipped `system` below — for a suspended caller.

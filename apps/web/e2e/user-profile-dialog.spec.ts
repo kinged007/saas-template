@@ -1,4 +1,4 @@
-import { expect, type Page } from "playwright/test";
+import { expect, type Page, type Route } from "playwright/test";
 
 import { test } from "./fixtures";
 import { mockApi } from "./mock-api";
@@ -39,7 +39,7 @@ const PROFILE = {
 const PROFILE_ROUTE = "**/api/v1/users/user-7/profile";
 
 /** Open the dialog with the profile route already answered — the dialog fires the request on open. */
-async function openMembersProfile(page: Page, profile: (route: import("playwright/test").Route) => void) {
+async function openMembersProfile(page: Page, profile: (route: Route) => void) {
   await mockApi(page, { signedIn: true });
   await page.route(
     (url) => url.pathname.endsWith("/api/v1/members"),

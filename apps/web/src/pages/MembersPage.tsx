@@ -370,7 +370,7 @@ export function MembersPage() {
             </div>
             <div className="flex flex-col gap-2">
               <Label>Role</Label>
-              <Select value={inviteRoleId} onValueChange={setInviteRoleId}>
+              <Select value={inviteRole?.id ?? ""} onValueChange={setInviteRoleId}>
                 <SelectTrigger className="w-40" aria-describedby={inviteRoleCapId}>
                   <SelectValue placeholder="Role">{inviteRole?.name ?? ""}</SelectValue>
                 </SelectTrigger>

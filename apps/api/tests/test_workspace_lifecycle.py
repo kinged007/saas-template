@@ -1,5 +1,3 @@
-import asyncio
-
 import pytest
 from sqlalchemy.exc import IntegrityError
 
@@ -8,6 +6,7 @@ from tests.conftest import (
     create_workspace,
     expire_invitation,
     register_user,
+    wait_for_audit_action,
     ws_headers,
 )
 
@@ -304,25 +303,4 @@ async def test_safe_delete_cascades_but_keeps_audit(app_client):
     # audit endpoint is no longer reachable for them — assert the retained rows
     # directly instead. The row is written by the background audit consumer, so
     # poll for it instead of reading once.
-    from sqlalchemy import select
-
-    from src.db.session import SessionFactory
-    from src.models.audit import AuditLogEntry
-
-    loop = asyncio.get_event_loop()
-    deadline = loop.time() + 5.0
-    while True:
-        async with SessionFactory() as session:
-            actions = (
-                (
-                    await session.execute(
-                        select(AuditLogEntry.action).where(AuditLogEntry.workspace_id == ws["id"])
-                    )
-                )
-                .scalars()
-                .all()
-            )
-        if "workspace.deleted" in actions or loop.time() >= deadline:
-            break
-        await asyncio.sleep(0.02)
-    assert "workspace.deleted" in actions, "audit bus did not commit workspace.deleted in 5s"
+    await wait_for_audit_action(ws["id"], "workspace.deleted")
