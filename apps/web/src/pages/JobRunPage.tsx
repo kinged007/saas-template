@@ -98,6 +98,9 @@ export function JobRunPage() {
             Run of {job?.name ?? "job"}
             <JobRunStatusBadge status={run.status} />
           </h2>
+          {/* The heading's job name falls back to "job", so a failed
+              jobs/:jobId read is reported here, once, with its reason. */}
+          <ReadError error={jobQuery.error} />
         </div>
         <Button variant="outline" onClick={() => refetchLogs()}>
           <RefreshCw className={logsFetching ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
@@ -163,14 +166,18 @@ export function JobRunPage() {
         )}
       </div>
       <div className="overflow-hidden rounded-lg border">
-        {logsQuery.error ? (
+        {/* A transient poll failure must not blank retained entries: the
+            error only replaces the log when nothing loaded yet. */}
+        {logsQuery.error && logs.length === 0 ? (
           <ReadError error={logsQuery.error} className="p-0" />
         ) : logs.length === 0 ? (
           <p className="text-muted-foreground p-4 text-sm">
             {isActive ? "Waiting for output…" : "No output was captured."}
           </p>
         ) : (
-          <pre className="bg-muted/30 max-h-[480px] overflow-auto p-4 font-mono text-xs leading-relaxed">
+          <>
+            {logsQuery.error && <ReadError error={logsQuery.error} />}
+            <pre className="bg-muted/30 max-h-[480px] overflow-auto p-4 font-mono text-xs leading-relaxed">
             {logs.map((entry) => (
               <div key={entry.seq} className="flex gap-3">
                 <span className="text-muted-foreground w-20 shrink-0 select-none">
@@ -193,6 +200,7 @@ export function JobRunPage() {
               </div>
             ))}
           </pre>
+          </>
         )}
       </div>
     </div>
