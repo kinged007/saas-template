@@ -7,6 +7,7 @@ from datetime import datetime
 
 from sqlalchemy import Select, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from src.core.dates import ensure_utc, iso_or_none, now_utc
 from src.core.permissions import ALL_PERMISSIONS_INCLUDING_KEY_ONLY, KEY_ONLY_PERMISSIONS
@@ -291,6 +292,9 @@ class ApiKeyService:
     async def record_use(self, key: ApiKey, now: datetime | None = None) -> bool:
         """Count one successful use; False when the month's quota is spent.
 
+        Returns True when the unit was charged — never ignore the result:
+        False means the request was not metered, so the caller must refuse it.
+
         The rollover, the quota test and the increment are one UPDATE, so
         concurrent requests carrying one key cannot interleave a
         read-modify-write and consume more than `usage_quota` uses, and cannot
@@ -312,6 +316,16 @@ class ApiKeyService:
         next window. Those counters are the ones `authenticate` loaded, which
         is the committed value on a row-lock backend and at most one unit
         behind on SQLite, where a concurrent writer can slip in between.
+
+        The post-charge values come back on the UPDATE's own RETURNING
+        clause and are copied onto the caller's key without marking it
+        dirty, so the in-session row matches the database row:
+        `_quota_headers` reads the window counter after this returns, so
+        without them it would report the pre-charge balance; and a later
+        Python-side assignment is then based on the charged values instead
+        of the stale pre-charge ones, which would refund the unit. The clean
+        attributes the copy leaves behind — not the copy — are what keep the
+        next flush from writing anything back.
         """
         now = ensure_utc(now or now_utc())
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -330,17 +344,23 @@ class ApiKeyService:
                 last_used_at=now,
             )
             .execution_options(synchronize_session=False)
+            .returning(
+                ApiKey.usage_count,
+                ApiKey.usage_window_count,
+                ApiKey.usage_window_start,
+                ApiKey.last_used_at,
+            )
         )
-        if result.rowcount == 0:
+        # The verdict comes from the returned rows, never `rowcount`: with
+        # RETURNING on aiosqlite the attribute is -1 or absent entirely.
+        charged = result.first()
+        if charged is None:
             return False
-        # The rollover is a case() on the stored month, which the ORM cannot
-        # evaluate in place, so the row is re-read instead: the quota headers
-        # the caller reports must come from the values the database now holds.
-        # ponytail: that costs a PK SELECT inside the lock authenticate already
-        # holds. Ceiling: one extra read per key-authenticated request.
-        # Upgrade path: UPDATE ... RETURNING.
-        await self._session.refresh(key)
         await self._session.commit()
+        set_committed_value(key, "usage_count", charged[0])
+        set_committed_value(key, "usage_window_count", charged[1])
+        set_committed_value(key, "usage_window_start", charged[2])
+        set_committed_value(key, "last_used_at", charged[3])
         return True
 
     async def set_quota(
