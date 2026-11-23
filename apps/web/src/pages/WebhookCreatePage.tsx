@@ -160,11 +160,20 @@ export function WebhookCreatePage() {
                       </Label>
                     </div>
                   ))}
-                  {available.length === 0 && (
-                    <p className="text-muted-foreground text-sm">
-                      Loading events…
-                    </p>
-                  )}
+                  {available.length === 0 &&
+                    (eventsQuery.isPending ? (
+                      <p className="text-muted-foreground text-sm">
+                        Loading events…
+                      </p>
+                    ) : eventsQuery.error ? (
+                      <p className="text-muted-foreground text-sm">
+                        Could not load events.
+                      </p>
+                    ) : (
+                      <p className="text-muted-foreground text-sm">
+                        No events available.
+                      </p>
+                    ))}
                 </div>
                 <FormMessage />
               </FormItem>
