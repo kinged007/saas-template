@@ -223,21 +223,30 @@ async def test_list_query_rejects_mismatched_sort_and_order_lengths(app_client):
 
 
 async def test_list_query_rejects_order_without_sort(app_client):
-    """An order with no sort is malformed in either dialect (#968).
+    """An order with no sort is malformed in either dialect (#968, #1134).
 
     `order[]=desc` alone reached the length guard while `_order=desc` alone
     parsed to an empty spec, so the same request was 422 or 200 depending on
-    the parameter spelling. Both dialects are rejected.
+    the parameter spelling. Both dialects are rejected, each naming the
+    parameters its dialect uses, and the length guard fires before the
+    direction check so the message does not flip with the direction value.
     """
     client = app_client
     tokens = await register_user(client, "logan@example.com")
-    for query in ("order[]=desc", "_order=desc"):
+    for query, detail in (
+        ("order[]=desc", "sort[] and order[] must have the same number of entries"),
+        ("_order=desc", "_sort and _order must have the same number of entries"),
+        # Direction check runs after the length guard, so a bogus direction on
+        # an order-only query answers the length guard in both dialects.
+        ("order[]=sideways", "sort[] and order[] must have the same number of entries"),
+        ("_order=sideways", "_sort and _order must have the same number of entries"),
+    ):
         resp = await client.get(
             f"/api/v1/workspaces?{query}",
             headers=auth_headers(tokens),
         )
         assert resp.status_code == 422, (query, resp.text)
-        assert "same number of entries" in resp.json()["detail"]
+        assert resp.json()["detail"] == detail, (query, resp.json()["detail"])
 
 
 async def test_list_query_rejects_unknown_sort_direction(app_client):
@@ -373,6 +382,32 @@ async def test_simple_rest_range_pagination_query(app_client):
     assert len(resp.json()) == 2
 
 
+async def test_role_writers_require_an_actor(app_client):
+    """A direct writer call names its actor: omission is not the system path.
+
+    With an optional `actor`, leaving it off skipped the membership gate —
+    that path could still flip a seeded role's `system` flag. The argument is
+    required, so an omitted actor fails loudly instead of acting unbounded.
+    Audit attribution needs the same guarantee: without an actor the
+    workspace writers would publish `actor_user_id=None`.
+    """
+    import pytest
+
+    from src.db.session import SessionFactory
+    from src.services.workspaces import WorkspaceService
+
+    async with SessionFactory() as session:
+        service = WorkspaceService(session)
+        with pytest.raises(TypeError):
+            await service.create_custom_role("ws-x", name="ops", description=None, permissions=[])
+        with pytest.raises(TypeError):
+            await service.update_workspace("ws-x", name="ops")
+        with pytest.raises(TypeError):
+            await service.delete_workspace("ws-x")
+        with pytest.raises(TypeError):
+            await service.update_role("ws-x", "role-x", name="ops")
+
+
 async def test_service_stores_trimmed_names(app_client):
     """The service trims even when no schema validated the input.
 
@@ -401,8 +436,10 @@ async def test_service_stores_trimmed_names(app_client):
             permissions=["member:read"],
             actor=user,
         )
-        await service.update_workspace(workspace.id, name="  Acme Renamed  ")
-        await service.update_role(workspace.id, role.id, name="  operators  ")
+        await service.update_workspace(workspace.id, name="  Acme Renamed  ", actor=user)
+        # The owner is an explicit actor: the writers have no opt-out-by-omission
+        # system path, so a direct caller names who acts.
+        await service.update_role(workspace.id, role.id, name="  operators  ", actor=user)
 
     # Re-read so the assertion is on the stored row, not the in-memory object.
     async with SessionFactory() as session:
@@ -587,3 +624,68 @@ def test_suspend_and_reactivate_decide_every_member_status():
     # it unreachable through SQL, so the default is pinned here at table level.
     assert _SUSPEND_ALLOWED.get("archived", False) is False
     assert _REACTIVATE_ALLOWED.get("archived", False) is False
+
+
+async def test_suspend_refuses_a_status_the_table_blocks():
+    """The #977 refusal branch is pinned directly, not only at table level.
+
+    `test_suspend_and_reactivate_decide_every_member_status` pins the table
+    default (`_SUSPEND_ALLOWED.get("archived", False) is False`), and the
+    `WorkspaceConflict` -> 409 mapping is exercised through `reactivate_member`.
+    Neither reaches the `raise` itself. This test drives it: a member whose
+    `status` is outside the CHECK domain (unreachable through SQL, so a stub
+    session stands in for the row) makes `suspend_member` raise
+    `WorkspaceConflict`, and the row is left untouched — the refusal is not the
+    idempotent `return member` no-op a `SUSPENDED` status takes above it.
+    """
+    import pytest
+
+    from src.models.workspace import Role, User, WorkspaceMember
+    from src.services.workspaces import WorkspaceConflict, WorkspaceService
+
+    actor = User(id="actor-1")
+    target = WorkspaceMember(
+        id="member-2",
+        workspace_id="ws-1",
+        user_id="user-2",
+        role_id="role-editor",
+        status="archived",
+    )
+    editor = Role(id="role-editor", name="editor")
+    # The manager gate reads the actor as an active admin; `.execute` backs
+    # `get_membership`, `.get` backs the target member and its role, so the
+    # only thing that can refuse the call is the status table itself.
+    actor_row = WorkspaceMember(
+        id="member-1",
+        workspace_id="ws-1",
+        user_id="actor-1",
+        role_id="role-admin",
+        status="active",
+    )
+    admin = Role(id="role-admin", name="admin")
+
+    class _Result:
+        def __init__(self, row):
+            self._row = row
+
+        def first(self):
+            return self._row
+
+    class _StubSession:
+        async def execute(self, _stmt):
+            return _Result((actor_row, admin))
+
+        async def get(self, model, _pk):
+            if model is WorkspaceMember:
+                return target
+            if model is Role:
+                return editor
+            return None
+
+    service = WorkspaceService(_StubSession())
+    with pytest.raises(WorkspaceConflict, match="cannot suspend a member in this state"):
+        await service.suspend_member("ws-1", "member-2", actor=actor)
+
+    # The refusal is not a write: the row keeps the status that was refused,
+    # rather than being flipped to "suspended" or silently returned.
+    assert target.status == "archived"

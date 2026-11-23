@@ -6,13 +6,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import format_datetime
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dates import now_utc
-from src.core.permissions import PROFILE_UPDATE
+from src.core.permissions import PROFILE_UPDATE, SUPERUSER_ACCESS_REQUIRED
 from src.core.security.tokens import decode_access_token
 from src.db.session import get_db
 from src.models.api_key import ApiKey
@@ -130,6 +131,15 @@ async def require_session_user(
     and the password. No permission list covers any of them, so the key would be
     the only thing deciding access. (`GET /me/profile` and `GET /auth/me` stay
     readable by a key: they report the caller's own identity.)
+
+    This list is not exhaustive. `POST /auth/resend-verification` is
+    deliberately left key-reachable: it depends on `get_current_user`, holds no
+    permission list, changes no authority, and mails the address it already
+    knows. Each send spends one unit of the auth-limiter budget keyed on
+    (IP, email) (#1289), but it is not quota-charged — it never reaches
+    `record_key_use` — so sends do not spend key quota.
+    ponytail: key quota is uncharged by design today; call `record_key_use`
+    on the route when that ceiling has to be closed.
     """
     if principal.api_key is not None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "api keys cannot perform this action")
@@ -139,35 +149,41 @@ async def require_session_user(
 async def require_superuser(
     principal: AuthPrincipal = Depends(resolve_auth_principal),
 ) -> User:
-    """Gate deployment-wide administration (e.g. global scheduled jobs).
+    """Gate deployment-wide administration (e.g. global scheduled jobs) with a
+    resolved principal, returning the authenticated user.
 
-    Session-only: API keys never carry deployment-wide power, even when
-    minted by a superuser, so key-authenticated requests always 403 here.
-    Use this dependency for every deployment-wide route — `/admin/*` and
-    the `/jobs/global*` family are session superuser only.
+    Session-only: API keys never carry deployment-wide power, even when minted
+    by a superuser, so key-authenticated requests always 403 here. `/admin/*`
+    and the `/jobs/global*` family are session superuser only.
 
-    The 403 detail names the supported path rather than the caller's
-    authority: a key is told deployment administration needs a session, a
-    session user without the flag is told the privilege is missing. Neither
-    answer reveals anything the status code does not.
-
-    Routes that mix superuser and co-member access pass
-    `principal.is_deployment_admin` to their service instead, so an API key
-    can never reach a service superuser branch."""
-    if not principal.is_deployment_admin:
-        raise deployment_admin_denied(principal)
+    Delegates to `require_deployment_admin`; routes that mix superuser and
+    co-member access pass `principal.is_deployment_admin` to their service
+    instead, guarding their own check there (`resolve_or_deny`)."""
+    require_deployment_admin(principal)
     return principal.user
 
 
-def deployment_admin_denied(principal: AuthPrincipal) -> HTTPException:
-    """Build the 403 for a deployment-wide gate. Shared with the routes that
-    resolve their own check, so one denial of the same kind never reaches the
-    caller as two different messages."""
-    return HTTPException(
+def require_deployment_admin(principal: AuthPrincipal) -> None:
+    """Gate deployment-wide administration for a resolved principal.
+
+    Returns None for a deployment admin (only session auth ever is —
+    `AuthPrincipal.is_deployment_admin`) and raises the 403 for everyone else,
+    so a call site proceeds only by falling through a returned None and can
+    never read the gate as a predicate.
+
+    Shared with the routes that resolve their own check, so one denial of the
+    same kind never reaches the caller as two different messages. The 403
+    detail names the supported path rather than the caller's authority — a key
+    is told deployment administration needs a session, a session user without
+    the flag is told the privilege is missing — neither reveals anything the
+    status code does not."""
+    if principal.is_deployment_admin:
+        return
+    raise HTTPException(
         status.HTTP_403_FORBIDDEN,
         "deployment administration is not available to API keys"
         if principal.api_key is not None
-        else "superuser access required",
+        else SUPERUSER_ACCESS_REQUIRED,
     )
 
 
@@ -188,21 +204,28 @@ async def resolve_or_deny(principal: AuthPrincipal, lookup, missing_detail: str)
     record = await lookup
     if record is None:
         if principal.api_key is not None:
-            raise deployment_admin_denied(principal)
+            require_deployment_admin(principal)
         raise HTTPException(status.HTTP_404_NOT_FOUND, missing_detail)
     return record
 
 
 async def get_current_workspace_id(
-    x_workspace_id: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
+    x_workspace_id: Annotated[UUID | None, Header(alias="X-Workspace-ID")] = None,
 ) -> str:
+    """Required X-Workspace-ID header, canonicalised to str.
+
+    The UUID annotation makes FastAPI reject a malformed header as 422. The return
+    type stays str deliberately: StringUUID round-trips UUID columns back to str, so
+    widening it to UUID would silently break the api_key.workspace_id equality
+    checks in require_key_permission/require_permission.
+    """
     if not x_workspace_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "X-Workspace-ID header is required")
-    return x_workspace_id
+    return str(x_workspace_id)
 
 
 async def get_optional_workspace_id(
-    x_workspace_id: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
+    x_workspace_id: Annotated[UUID | None, Header(alias="X-Workspace-ID")] = None,
 ) -> str | None:
     """Like get_current_workspace_id, but optional.
 
@@ -210,7 +233,7 @@ async def get_optional_workspace_id(
     received invitations, workspace listing) but become workspace-scoped the
     moment an API key is presented.
     """
-    return x_workspace_id
+    return str(x_workspace_id) if x_workspace_id is not None else None
 
 
 def _quota_headers(api_key: ApiKey, now: datetime) -> dict[str, str]:
@@ -238,7 +261,7 @@ async def record_key_use(api_key: ApiKey, db: AsyncSession, response: Response) 
     Invariant: every branch that authorizes an API key must charge through
     this function, or the key is unmetered — a hand-rolled `api_key is not
     None` branch that skips it is the bug this guards against. The 403 comes
-    from the conditional UPDATE's rowcount, never from a pre-read, so two
+    from the rows the conditional UPDATE charged, never from a pre-read, so two
     concurrent requests cannot both spend the last unit.
 
     Shared by both permission dependencies and the jobs routes, so no branch
@@ -285,9 +308,7 @@ def require_key_permission(permission: str):
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, "api key is not scoped to this workspace"
             )
-        membership = await WorkspaceService(db).get_membership(
-            workspace_id, principal.user.id, active_only=True
-        )
+        membership = await WorkspaceService(db).get_membership(workspace_id, principal.user.id)
         if membership is None:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
         if "*" in api_key.permissions or permission in api_key.permissions:
@@ -305,7 +326,7 @@ async def resolve_membership(
     user=Depends(get_current_user),
     workspace_id: str = Depends(get_current_workspace_id),
 ):
-    membership = await WorkspaceService(db).get_membership(workspace_id, user.id, active_only=True)
+    membership = await WorkspaceService(db).get_membership(workspace_id, user.id)
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
     return membership
@@ -327,9 +348,7 @@ def require_permission(permission: str):
                 raise HTTPException(
                     status.HTTP_403_FORBIDDEN, "api key is not scoped to this workspace"
                 )
-            membership = await WorkspaceService(db).get_membership(
-                workspace_id, principal.user.id, active_only=True
-            )
+            membership = await WorkspaceService(db).get_membership(workspace_id, principal.user.id)
             if membership is None:
                 raise HTTPException(
                     status.HTTP_403_FORBIDDEN, "you are not a member of this workspace"
@@ -341,7 +360,7 @@ def require_permission(permission: str):
                 status.HTTP_403_FORBIDDEN, f"missing permission: {permission}"
             ) from None
         service = WorkspaceService(db)
-        membership = await service.get_membership(workspace_id, principal.user.id, active_only=True)
+        membership = await service.get_membership(workspace_id, principal.user.id)
         if membership is None:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "you are not a member of this workspace")
         _, role = membership
@@ -432,7 +451,7 @@ async def require_target_profile_update(
 
 
 async def require_existing_workspace(
-    workspace_id: str,
+    workspace_id: UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     """404 on missing workspaces before membership checks run.

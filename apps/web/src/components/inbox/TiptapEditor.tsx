@@ -14,7 +14,7 @@ import { UserAvatar } from "@/components/ui/user-avatar";
 import { Bold, Italic, Code2, SquareCode, List, ListOrdered, Link2, Quote } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isAllowedLinkHref, normalizeLinkUrl } from "@/lib/link-url";
-import { pickerIndex, rankMentionTargets, type MentionTarget } from "@/lib/mentions";
+import { nextPickerIndex, pickerIndex, rankMentionTargets, type MentionTarget } from "@/lib/mentions";
 
 const turndownService = new TurndownService({
   headingStyle: "atx",
@@ -49,23 +49,11 @@ const MentionList = forwardRef<MentionListRef, SuggestionProps<MentionTarget>>(f
 
   useImperativeHandle(ref, () => ({
     onKeyDown: ({ event }) => {
-      if (items.length === 0) return false;
-      if (event.key === "ArrowUp") {
-        setSelectedId(items[index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length].id);
-        return true;
-      }
-      if (event.key === "ArrowDown") {
-        setSelectedId(items[index < 0 ? 0 : (index + 1) % items.length].id);
-        return true;
-      }
-      if (event.key === "Enter" || event.key === "Tab") {
-        // Nothing to highlight: pass the key on to the editor rather than
-        // swallowing it, so Enter still inserts a newline.
-        if (index < 0) return false;
-        select(index);
-        return true;
-      }
-      return false;
+      const next = nextPickerIndex(event.key, index, items);
+      if (next < 0) return false;
+      if (event.key === "Enter" || event.key === "Tab") select(next);
+      else setSelectedId(items[next].id);
+      return true;
     },
   }));
 
@@ -125,9 +113,16 @@ type Props = {
   mentions?: MentionTarget[];
   /** Ids of the users currently mentioned in the draft, in document order. */
   onMention?: (userIds: string[]) => void;
+  /**
+   * Controlled link-popover open state. ComposeDialog controls it so its own
+   * Escape handling can close the popover instead of the whole dialog.
+   * Omit it (like the thread composer does) for internal state.
+   */
+  linkOpen?: boolean;
+  onLinkOpenChange?: (open: boolean) => void;
 };
 
-export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€¦", className, minHeight = "80px", mentions, onMention }: Props) {
+export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€¦", className, minHeight = "80px", mentions, onMention, linkOpen: linkOpenProp, onLinkOpenChange: onLinkOpenChangeProp }: Props) {
   const mentionKey = useMemo(() => (mentions ?? []).map((m) => m.id).join(","), [mentions]);
   // The picker reads the latest list without the extension being rebuilt for it.
   const mentionsRef = useRef(mentions);
@@ -137,7 +132,11 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [toolbarIndex, setToolbarIndex] = useState(0);
 
-  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkOpenInternal, setLinkOpenInternal] = useState(false);
+  // ComposeDialog controls the popover so its dialog-level Escape handling
+  // can close it; everywhere else the state stays internal.
+  const linkOpen = linkOpenProp ?? linkOpenInternal;
+  const setLinkOpen = onLinkOpenChangeProp ?? setLinkOpenInternal;
   const [linkUrl, setLinkUrl] = useState("");
   const [linkError, setLinkError] = useState<string | null>(null);
   const linkInputRef = useRef<HTMLInputElement>(null);
@@ -296,7 +295,7 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
     if (index >= 0) setToolbarIndex(index);
   };
 
-  const onLinkOpenChange = (open: boolean) => {
+  const handleLinkOpenChange = (open: boolean) => {
     setLinkOpen(open);
     if (open) {
       setLinkUrl((editor.getAttributes("link").href as string | undefined) ?? "");
@@ -445,7 +444,7 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
         >
           <Quote className="h-3.5 w-3.5" />
         </Button>
-        <Popover open={linkOpen} onOpenChange={onLinkOpenChange}>
+        <Popover open={linkOpen} onOpenChange={handleLinkOpenChange}>
           <PopoverTrigger asChild>
             <Button
               ref={linkTriggerRef}
@@ -472,7 +471,12 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
               // Clicking the trigger is one of the popover's own exits, but
               // Radix reports it here before it checks where the click landed,
               // so it has to be excluded or the caret is dropped on close.
-              if (linkTriggerRef.current?.contains(e.target as Node)) return;
+              // It is still a dismissal path: clear the marker so a later close
+              // cannot inherit a stale outside-click from an earlier dismissal.
+              if (linkTriggerRef.current?.contains(e.target as Node)) {
+                linkDismissedOutside.current = false;
+                return;
+              }
               linkDismissedOutside.current = true;
             }}
             // The trigger eats mousedown so the caret survives, which leaves
@@ -482,9 +486,20 @@ export function TiptapEditor({ value, onChange, placeholder = "Write a messageâ€
               linkInputRef.current?.focus();
               linkInputRef.current?.select();
             }}
+            onEscapeKeyDown={() => {
+              // Escape is its own dismissal path: the caret goes back to the
+              // document being edited. Focus before Radix unmounts the popover
+              // (like Apply does): a focus issued during the unmount loses the
+              // race with the focus restore, exactly as in onCloseAutoFocus.
+              linkDismissedOutside.current = false;
+              editor.commands.focus();
+            }}
             onCloseAutoFocus={(e) => {
               // Radix would otherwise park focus on the trigger.
               e.preventDefault();
+              // Each dismissal path above leaves linkDismissedOutside in its own
+              // state before close, so this read never sees a value left over
+              // from an earlier dismissal.
               const dismissedOutside = linkDismissedOutside.current;
               linkDismissedOutside.current = false;
               // Apply, Cancel and Escape close the popover from its own controls,

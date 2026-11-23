@@ -19,11 +19,12 @@ import logging
 import secrets
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 import jwt
 
-from src.core.cache import TtlCache
+from src.core.cache import SingleFlight, TtlCache
 from src.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,34 @@ STATE_TTL_HINT = "oauth:state:"
 CODE_TTL_HINT = "oauth:code:"
 
 DEFAULT_SCOPES = "openid email profile"
+
+# A plain-http IdP on loopback cannot offer https, and loopback is not routable
+# off the machine, so it is the one scheme exception the origin guards allow.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+# Providers serialise the boolean flags on an email entry as a real JSON
+# boolean, as a string, or as a number, so they are read against an allowlist:
+# anything else is refused rather than read by truthiness, where "false" and
+# "no" would both read as verified.
+_AFFIRMATIVE_FLAGS = frozenset({"true", "1", "yes"})
+
+
+def _affirmative(value: Any) -> bool:
+    return str(value).strip().lower() in _AFFIRMATIVE_FLAGS
+
+
+def _clean_email(value: Any) -> str:
+    """A provider-supplied address, stripped; empty unless it is a string.
+
+    A non-string is refused rather than coerced, so a list address cannot
+    become the account email as "['a@b.c']".
+    """
+    return value.strip() if isinstance(value, str) else ""
+
+
+# One shared in-flight fetch per cache key, so a burst of callers that miss the
+# cache (or bypass it for a refresh) costs the IdP one request, not one per caller.
+_inflight = SingleFlight()
 
 
 class OAuthError(Exception):
@@ -58,28 +87,54 @@ class ProviderConfig:
         return self.display_name or self.id
 
 
+def _provider_from(raw: dict[str, Any], provider_id: str) -> ProviderConfig:
+    """One OAUTH_PROVIDERS entry as a config object, every URL field a str."""
+    return ProviderConfig(
+        id=provider_id,
+        display_name=str(raw.get("display_name") or provider_id),
+        client_id=str(raw.get("client_id") or ""),
+        client_secret=str(raw.get("client_secret") or ""),
+        scopes=str(raw.get("scopes") or DEFAULT_SCOPES),
+        discovery_url=str(raw.get("discovery_url") or "") or None,
+        issuer=str(raw.get("issuer") or "") or None,
+        authorize_url=str(raw.get("authorize_url") or "") or None,
+        token_url=str(raw.get("token_url") or "") or None,
+        userinfo_url=str(raw.get("userinfo_url") or "") or None,
+        emails_url=str(raw.get("emails_url") or "").strip() or None,
+        jwks_uri=str(raw.get("jwks_uri") or "") or None,
+    )
+
+
 def get_provider(provider_id: str) -> ProviderConfig:
     for raw in settings.oauth_provider_list:
+        if not isinstance(raw, dict):
+            continue
         if raw.get("id") == provider_id:
-            client_id = str(raw.get("client_id") or "")
-            client_secret = str(raw.get("client_secret") or "")
-            if not client_id or not client_secret:
+            provider = _provider_from(raw, provider_id)
+            if not provider.client_id or not provider.client_secret:
                 raise OAuthError(f"oauth provider '{provider_id}' is missing client credentials")
-            return ProviderConfig(
-                id=provider_id,
-                display_name=str(raw.get("display_name") or provider_id),
-                client_id=client_id,
-                client_secret=client_secret,
-                scopes=str(raw.get("scopes") or DEFAULT_SCOPES),
-                discovery_url=raw.get("discovery_url"),
-                issuer=raw.get("issuer"),
-                authorize_url=raw.get("authorize_url"),
-                token_url=raw.get("token_url"),
-                userinfo_url=raw.get("userinfo_url"),
-                emails_url=raw.get("emails_url"),
-                jwks_uri=raw.get("jwks_uri"),
-            )
+            return provider
     raise OAuthError(f"unknown oauth provider '{provider_id}'")
+
+
+def untrusted_emails_urls() -> list[str]:
+    """Provider ids whose emails_url the origin guard would refuse.
+
+    Called at boot so a config that cannot sign in is reported at deploy time
+    rather than at the first callback. The check is config-only - no discovery
+    document is fetched here - so a provider whose emails_url is anchored only
+    by the document is reported even though the callback accepts it.
+    """
+    untrusted: list[str] = []
+    for raw in settings.oauth_provider_list:
+        # An entry that is not a dict, or whose id is not a string, can never be
+        # selected by get_provider(), so it is not a provider to report on either.
+        if not isinstance(raw, dict) or not isinstance(raw.get("id"), str):
+            continue
+        provider = _provider_from(raw, raw["id"])
+        if provider.emails_url and not _endpoint_trusted(provider, {}, provider.emails_url):
+            untrusted.append(provider.id)
+    return untrusted
 
 
 async def _discovery(provider: ProviderConfig, cache: TtlCache) -> dict[str, Any]:
@@ -94,23 +149,31 @@ async def _discovery(provider: ProviderConfig, cache: TtlCache) -> dict[str, Any
     url = (
         provider.discovery_url or f"{provider.issuer.rstrip('/')}/.well-known/openid-configuration"
     )
+    # The document names every endpoint a secret is later sent to, so it is
+    # fetched over https only: a plaintext one is an on-path attacker's to write.
+    if not _origin_ok(url):
+        raise OAuthError(f"discovery_url for '{provider.id}' must be https")
     key = f"oauth:discovery:{provider.id}"
     cached = cache.get(key)
     if cached is not None:
         return cached
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            doc = resp.json()
-    except Exception as exc:
-        raise OAuthError(
-            f"could not load discovery document for '{provider.id}': {_failure_detail(exc)}"
-        ) from exc
-    if not isinstance(doc, dict):
-        raise OAuthError(f"discovery document for '{provider.id}' is not an object")
-    cache.set(key, doc)
-    return doc
+
+    async def fetch() -> dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                doc = resp.json()
+        except Exception as exc:
+            raise OAuthError(
+                f"could not load discovery document for '{provider.id}': {_failure_detail(exc)}"
+            ) from exc
+        if not isinstance(doc, dict):
+            raise OAuthError(f"discovery document for '{provider.id}' is not an object")
+        cache.set(key, doc)
+        return doc
+
+    return await _inflight.run(key, fetch)
 
 
 def _pkce_pair() -> tuple[str, str]:
@@ -171,6 +234,13 @@ async def exchange_code(
     endpoint = doc.get("token_endpoint") or provider.token_url
     if not endpoint:
         raise OAuthError(f"oauth provider '{provider.id}' has no token endpoint")
+    # client_secret is posted here, so the token endpoint gets the same origin
+    # check as the bearer-bearing ones, before the client is built.
+    if not _endpoint_trusted(provider, doc, endpoint):
+        raise OAuthError(
+            f"token endpoint for '{provider.id}' is not https on a host the provider names"
+        )
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
@@ -196,7 +266,7 @@ async def exchange_code(
             logger.warning(
                 "oauth token endpoint error body provider=%s: %s",
                 provider.id,
-                body[:200].replace("\r", " ").replace("\n", " "),
+                _single_line(body),
             )
         raise OAuthError(f"code exchange failed: {_failure_detail(exc)}") from exc
     # The callback reads id_token and access_token off the result and catches
@@ -216,11 +286,13 @@ async def _jwks(
     (PyJWKClient fetches with blocking urllib) and covered by the same 10s timeout
     as the module's other IdP calls.
 
-    `refresh=True` bypasses the cache and writes the result back, so a kid the
-    provider does not publish costs one extra IdP round trip per failed login for
-    as long as the entry lives. Bounding that needs a fetch timestamp on the
-    cached document; the cost is kept because the path requires a completed code
-    exchange.
+    `refresh=True` skips only the cache read, so a kid the provider does not
+    publish still costs one extra IdP round trip per login that meets it.
+    Concurrent misses share a single in-flight fetch; a sequential miss after a
+    completed fetch pays its own request, because a failed or unusable set is
+    never cached (#1024). Bounding the sequential case needs a fetch timestamp
+    on the cached document; the cost is kept because the path requires a
+    completed code exchange.
     """
     uri = doc.get("jwks_uri") or provider.jwks_uri
     # The non-string case is refused here rather than left to httpx, whose TypeError
@@ -231,28 +303,34 @@ async def _jwks(
     cached = None if refresh else cache.get(key)
     if cached is not None:
         return cached
-    try:
-        # `PyJWKClient` fetched through urllib, which follows redirects; httpx does not
-        # follow them by default.
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            resp = await client.get(uri)
-            resp.raise_for_status()
-            keys = resp.json()
-        # Parsed and checked before it is cached: a body with no `keys` member, or a
-        # set with no key a token could verify against, would otherwise sit in the cache
-        # for its whole TTL and cost a refetch on every login that meets it. Raised as
-        # OAuthError rather than a ValueError from inside the try, which
-        # `_failure_detail` would reduce to the literal string "ValueError".
-        if not isinstance(keys, dict):
-            raise OAuthError(f"key set for '{provider.id}' is not an object")
-        if not _signing_candidates(keys):
-            raise OAuthError(f"no key published for signing by '{provider.id}'")
-    except OAuthError:
-        raise
-    except Exception as exc:
-        raise OAuthError(f"could not load signing keys: {_failure_detail(exc)}") from exc
-    cache.set(key, keys)
-    return keys
+
+    async def fetch() -> dict[str, Any]:
+        try:
+            # `PyJWKClient` fetched through urllib, which follows redirects; httpx does not
+            # follow them by default.
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                resp = await client.get(uri)
+                resp.raise_for_status()
+                keys = resp.json()
+            # Parsed and checked before it is cached: a body that is not an object, or a
+            # set with no key a token could verify against, would otherwise sit in the
+            # cache for its whole TTL and cost a refetch on every login that meets it.
+            # Both gates raise OAuthError, which the re-raise below passes through with
+            # its reason intact; anything else raised here is flattened by
+            # `_failure_detail` to "HTTP <status>" or a bare type name, which is why
+            # `_signing_candidates` has to stay inside the try.
+            if not isinstance(keys, dict):
+                raise OAuthError(f"key set for '{provider.id}' is not an object")
+            if not _signing_candidates(keys):
+                raise OAuthError(f"no key published for signing by '{provider.id}'")
+        except OAuthError:
+            raise
+        except Exception as exc:
+            raise OAuthError(f"could not load signing keys: {_failure_detail(exc)}") from exc
+        cache.set(key, keys)
+        return keys
+
+    return await _inflight.run(key, fetch)
 
 
 def _signing_candidates(jwks_doc: dict[str, Any]) -> list[jwt.PyJWK]:
@@ -303,10 +381,12 @@ async def claims_from_id_token(
             options={"require": ["exp", "iss", "sub"]},
         )
     except Exception as exc:
+        # The message can echo token-supplied header data (an unknown `crit`
+        # extension echoes its name), so it is flattened like the body above.
         logger.warning(
             "id_token verification failed for provider %s: %s",
             provider.id,
-            exc,
+            _single_line(exc),
             exc_info=logger.isEnabledFor(logging.DEBUG),
         )
         return None
@@ -317,20 +397,91 @@ async def _verified_email(client: httpx.AsyncClient, url: str, headers: dict[str
 
     GitHub returns a null email from /user whenever the account keeps its
     address private, and only this endpoint states whether an address is
-    verified. The claim is the provider's, not proof of mailbox control.
+    verified. The claim is the provider's, not proof of mailbox control, so an
+    entry is taken only when its `verified` flag reads as affirmative and its
+    address is present once stripped. Both flags go through the same allowlist,
+    so "false" is not a claim of verification on either.
     """
     resp = await client.get(url, headers=headers)
     resp.raise_for_status()
     data = resp.json()
     entries = (
-        [e for e in data if isinstance(e, dict) and e.get("verified") and e.get("email")]
+        [
+            e
+            for e in data
+            if isinstance(e, dict)
+            and _affirmative(e.get("verified"))
+            and _clean_email(e.get("email"))
+        ]
         if isinstance(data, list)
         else []
     )
     # No primary flag: fall back to the provider's list order, so the winner
     # is deterministic only while that ordering is stable.
-    chosen = next((e for e in entries if e.get("primary")), None) or next(iter(entries), None)
-    return str(chosen["email"]) if chosen else ""
+    chosen = next((e for e in entries if _affirmative(e.get("primary"))), None) or next(
+        iter(entries), None
+    )
+    return _clean_email(chosen.get("email")) if chosen else ""
+
+
+def _url_host_scheme(url: Any) -> tuple[str, str]:
+    """Lower-cased (hostname, scheme) of a URL, or ("", "") when unusable."""
+    if not isinstance(url, str) or not url:
+        return "", ""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "", ""
+    return (parts.hostname or "").lower(), parts.scheme.lower()
+
+
+def _origin_ok(url: Any) -> bool:
+    """https, except plain http on loopback: a local IdP cannot offer https and
+    loopback is not routable off the machine."""
+    host, scheme = _url_host_scheme(url)
+    return bool(host) and (scheme == "https" or (scheme == "http" and host in _LOOPBACK_HOSTS))
+
+
+def _anchor_hosts(provider: ProviderConfig, doc: dict[str, Any]) -> set[str]:
+    """Hosts named by the provider config, plus the ones in `doc`.
+
+    authorize_url and the document's authorization_endpoint are excluded on
+    purpose: they carry no secret, and an attacker-chosen authorize host would
+    make itself the anchor.
+    """
+    anchors = (
+        provider.issuer,
+        provider.discovery_url,
+        provider.token_url,
+        provider.userinfo_url,
+        provider.jwks_uri,
+        doc.get("token_endpoint"),
+        doc.get("userinfo_endpoint"),
+        doc.get("jwks_uri"),
+    )
+    return {_url_host_scheme(a)[0] for a in anchors} - {""}
+
+
+def _endpoint_trusted(provider: ProviderConfig, doc: dict[str, Any], url: Any) -> bool:
+    """Whether a secret-bearing request may go to `url`.
+
+    One rule for every destination (userinfo, token, emails): https on a host
+    the operator's config or its discovery document names. The document counts
+    because `_discovery` accepts it over https only, so it is as trustworthy as
+    the config it came from - which is what lets a cross-host IdP pass (Google
+    serves userinfo from openidconnect.googleapis.com, Entra from
+    graph.microsoft.com) and what a forged document would have to defeat.
+    """
+    return _origin_ok(url) and _url_host_scheme(url)[0] in _anchor_hosts(provider, doc)
+
+
+_CC_CONTROLS = "".join(map(chr, [*range(0x20), *range(0x7F, 0xA0)]))
+_CC_TO_SPACE = str.maketrans(_CC_CONTROLS, " " * len(_CC_CONTROLS))
+
+
+def _single_line(text: object, limit: int = 200) -> str:
+    """Flatten every Cc control char to a space, then truncate: no log forging, no ANSI escapes."""
+    return str(text).translate(_CC_TO_SPACE)[:limit]
 
 
 def _failure_detail(exc: Exception) -> str:
@@ -345,6 +496,17 @@ async def fetch_userinfo(
     endpoint = doc.get("userinfo_endpoint") or provider.userinfo_url
     if not endpoint:
         return {}
+    # Both bearer destinations are checked before the client is built: a refusal
+    # raises its own OAuthError instead of being re-wrapped by the narrowed try
+    # below, and the access token never leaves the process.
+    if not _endpoint_trusted(provider, doc, endpoint):
+        raise OAuthError(
+            f"userinfo endpoint for '{provider.id}' is not https on a host the provider names"
+        )
+    if provider.emails_url and not _endpoint_trusted(provider, doc, provider.emails_url):
+        raise OAuthError(
+            f"emails_url for '{provider.id}' is not https on a host the provider names"
+        )
     async with httpx.AsyncClient(timeout=10.0) as client:
         headers = {"Authorization": f"Bearer {access_token}"}
         try:
@@ -358,7 +520,7 @@ async def fetch_userinfo(
             ) from exc
         if not isinstance(data, dict):
             return {}
-        if not data.get("email") and provider.emails_url:
+        if not _clean_email(data.get("email")) and provider.emails_url:
             try:
                 data["email"] = await _verified_email(client, provider.emails_url, headers)
             except Exception as exc:
@@ -390,7 +552,7 @@ def normalize_identity(
     """
     merged = {**(userinfo or {}), **(claims or {})}
     subject = str(merged.get("sub") or merged.get("id") or merged.get("login") or "")
-    email = merged.get("email") or ""
+    email = _clean_email(merged.get("email"))
     if not subject or not email:
         raise OAuthError("provider did not return an email address")
     name = merged.get("name") or ""
@@ -402,7 +564,7 @@ def normalize_identity(
     return {
         "provider": provider_id,
         "subject": subject,
-        "email": str(email).lower(),
+        "email": email.lower(),
         "display_name": str(name) if name else None,
         "first_name": str(given) if given else None,
         "last_name": str(family) if family else None,

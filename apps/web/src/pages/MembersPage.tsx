@@ -32,11 +32,11 @@ import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceConte
 import { canResendInvitation, canRevokeInvitation, invitationStatus } from "./invitation-actions";
 import { resolveInviteRole } from "./invite-role";
 import { canReactivateMember, canSuspendMember } from "./member-actions";
-import { assignableRoles, roleCapNoticeText, rolePickerCapNotice } from "./role-picker-cap";
+import { assignableRoles, rolePickerCapNotice } from "./role-picker-cap";
 import { isWorkspaceAdmin } from "./settings/workspace/WorkspaceSettingsLayout";
 import { isManagerRoleName, isOwnerRoleName } from "./role-name";
 import type { Identity, Invitation, Member, Role } from "../types";
-import { getMemberDisplayName } from "../types";
+import { getDisplayNameFromRow } from "../types";
 
 const PAGE_SIZE = 10;
 // The role pickers need every role, ordered by the endpoint. Capped at the
@@ -134,7 +134,7 @@ export function MembersPage() {
   // The pickers and the notice count this one list, so the notice can never
   // claim a role the dropdown does not offer.
   const assignable = assignableRoles(roleOptions);
-  const roleCapNotice = roleCapNoticeText(rolePickerCapNotice(rolesResult?.total ?? 0, roleOptions));
+  const roleCapNotice = rolePickerCapNotice(rolesResult?.total ?? 0, roleOptions);
 
   const myRole = identity?.workspaces.find((w) => w.id === workspace?.id)?.role;
   const canManageRoles = !!canManage?.can && isManagerRoleName(myRole);
@@ -210,7 +210,7 @@ export function MembersPage() {
           </TableHeader>
           <TableBody>
             {rows.map((m) => {
-              const name = getMemberDisplayName(m);
+              const name = getDisplayNameFromRow(m);
               return (
                 <TableRow key={m.membership_id}>
                   <TableCell>
@@ -337,7 +337,7 @@ export function MembersPage() {
             </div>
             <div className="flex flex-col gap-2">
               <Label>Role</Label>
-              <Select value={inviteRoleId} onValueChange={setInviteRoleId}>
+              <Select value={inviteRole?.id ?? ""} onValueChange={setInviteRoleId}>
                 <SelectTrigger className="w-40" aria-describedby={inviteRoleCapId}>
                   <SelectValue placeholder="Role">{inviteRole?.name ?? ""}</SelectValue>
                 </SelectTrigger>
@@ -441,7 +441,7 @@ export function MembersPage() {
         fallback={
           selectedMember
             ? {
-                display_name: getMemberDisplayName(selectedMember),
+                display_name: getDisplayNameFromRow(selectedMember),
                 email: selectedMember.email,
                 avatar_url: selectedMember.avatar_url,
                 first_name: selectedMember.first_name,

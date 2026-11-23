@@ -63,6 +63,20 @@ export function pickerIndex(selectedId: string | null, items: MentionTarget[], q
 }
 
 /**
+ * The row the picker's key handler acts on, or -1 when the key must pass
+ * through to the editor: an empty list has no row to act on, `Enter`/`Tab`
+ * with nothing highlighted must not be swallowed (a bare Enter after `@`
+ * still has to insert a newline), and every other key belongs to the editor.
+ */
+export function nextPickerIndex(key: string, index: number, items: MentionTarget[]): number {
+  if (items.length === 0) return -1;
+  if (key === "ArrowUp") return index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length;
+  if (key === "ArrowDown") return index < 0 ? 0 : (index + 1) % items.length;
+  if (key === "Enter" || key === "Tab") return index;
+  return -1;
+}
+
+/**
  * react-markdown's default `urlTransform` drops any href without a known
  * scheme, which turns the mention marker into an empty `href` before the `a`
  * override sees it. Keep the marker and defer every other decision to the

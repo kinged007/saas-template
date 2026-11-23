@@ -9,6 +9,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import CHAR, TypeDecorator
 
 
+class MalformedUUIDError(ValueError):
+    """A StringUUID column was bound with a value `uuid.UUID` cannot parse."""
+
+
 class StringUUID(TypeDecorator):
     """Store UUIDs as strings (SQLite-friendly); native UUID on Postgres."""
 
@@ -24,7 +28,12 @@ class StringUUID(TypeDecorator):
         if value is None:
             return None
         if isinstance(value, str):
-            value = uuid.UUID(value)
+            # `uuid.UUID` fails with two different messages (bad length, bad hex
+            # digit); the type is what callers classify on, not the wording.
+            try:
+                value = uuid.UUID(value)
+            except ValueError as exc:
+                raise MalformedUUIDError(str(exc)) from exc
         if dialect.name == "postgresql":
             return value
         return str(value)

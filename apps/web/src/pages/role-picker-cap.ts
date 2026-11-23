@@ -1,3 +1,4 @@
+import { roleCapNotice } from "../lib/role-cap.ts";
 import type { Role } from "../types";
 import { isOwnerRoleName } from "./role-name.ts";
 
@@ -8,11 +9,6 @@ import { isOwnerRoleName } from "./role-name.ts";
 // backend on a row spelled `Owner` as well as on the seeded `owner`.
 export const assignableRoles = (roles: Role[]): Role[] =>
   roles.filter((r) => !isOwnerRoleName(r.name));
-
-// The gate and sentence behind the MembersPage role pickers; null while the
-// page is complete.
-export const roleCapNotice = (fetched: number, total: number): string | null =>
-  total > fetched ? `Showing ${fetched} of ${total} roles.` : null;
 
 // The roles endpoint answers with one capped page, so a workspace past that cap
 // leaves both MembersPage pickers short of the full role list. `pickable` is the
@@ -25,14 +21,4 @@ export const rolePickerCapNotice = (total: number, roles: Role[]): string | null
   const assignable = assignableRoles(roles);
   const pickable = Math.max(0, total - (roles.length - assignable.length));
   return roleCapNotice(assignable.length, pickable);
-};
-
-// The notice is the accessible description of the trigger it annotates, so a
-// whitespace-only string has to be no notice at all: `aria-describedby` would
-// still resolve to the paragraph and announce an empty description. Call it
-// once, where the notice is produced (MembersPage), so the notice and the two
-// `aria-describedby` gates read the same value.
-export const roleCapNoticeText = (text: string | null): string | null => {
-  const trimmed = text?.trim();
-  return trimmed ? trimmed : null;
 };

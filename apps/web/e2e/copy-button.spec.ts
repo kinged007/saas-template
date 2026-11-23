@@ -12,10 +12,11 @@ import { IDENTITY, mockApi } from "./mock-api";
  * Both pages share one `CopyButton`, so the pair is asserted equal on each:
  * the accessible name is the invariant and `title` duplicates it, and a control
  * whose two disagree announces one action and hovers another (WCAG 2.5.3,
- * Label in Name). The icon flips to a check for 1.5 s after the write, so the
- * name flips with it — a button that still reads "Copy …" in the copied state
- * announces the action just performed instead of a confirmation. The same shape
- * `security-2fa-copy.spec.ts` pins for the 2FA control.
+ * Label in Name). The name stays across the copy — the button keeps DOM focus,
+ * and a name change on a focused element is announced only opportunistically —
+ * while the confirmation enters a `role="status"` live region instead (#1075).
+ * The icon flip to a check for 1.5 s stays as the purely visual confirmation.
+ * The same shape `security-2fa-copy.spec.ts` pins for the 2FA control.
  */
 
 const API_KEY = {
@@ -68,10 +69,45 @@ const created = (page: Page, path: string, record: unknown) =>
   );
 
 /**
- * The button is named, `title` matches the name, and the name flips to the
- * confirmation after the write. The role+name locator carries the 1.5 s flip, so
- * the confirmation is one retrying assertion rather than a chain coupled to how
- * long the transient state lasts.
+ * Reject every clipboard write, as a denied permission or a dismissed prompt
+ * would. `addInitScript` runs before the app, so the stub wins over the real
+ * clipboard regardless of the granted `clipboard-write` permission above.
+ */
+const denyClipboard = (page: Page) =>
+  page.addInitScript(() => {
+    Object.defineProperty(window.navigator, "clipboard", {
+      value: { writeText: () => Promise.reject(new Error("Denied")) },
+      configurable: true,
+    });
+  });
+
+/** First write succeeds, every later one rejects — a failure inside the 1.5 s window. */
+const failSecondWrite = (page: Page) =>
+  page.addInitScript(() => {
+    let calls = 0;
+    Object.defineProperty(window.navigator, "clipboard", {
+      value: {
+        writeText: () => {
+          calls += 1;
+          return calls === 1 ? Promise.resolve() : Promise.reject(new Error("Denied"));
+        },
+      },
+      configurable: true,
+    });
+  });
+
+/** sonner's <Toaster>: the only aria-live region on the page, one <li> per toast. */
+const liveRegion = (page: Page) => page.locator('section[aria-live="polite"]');
+
+/** The live region inside the created-key dialog: one per dialog. */
+const status = (page: Page) => page.getByRole("dialog").getByRole("status");
+
+/**
+ * The button is named, `title` matches the name, and the confirmation is
+ * announced by the dialog's `role="status"` region — the button stays focused
+ * with its name across the copy, so no rename is relied on (#1075). The
+ * role+text locator carries the 1.5 s flip, so the confirmation is one retrying
+ * assertion rather than a chain coupled to how long the transient state lasts.
  */
 async function expectCopyButtonAnnounces(copy: Locator, label: string) {
   await expect(copy).toBeVisible();
@@ -80,11 +116,15 @@ async function expectCopyButtonAnnounces(copy: Locator, label: string) {
 
   await copy.click();
 
-  const confirmed = copy
-    .page()
-    .getByRole("dialog")
-    .getByRole("button", { name: "Copied", exact: true });
-  await expect(confirmed).toHaveAttribute("title", "Copied");
+  await expect(copy).toBeFocused();
+  await expect(copy).toHaveAccessibleName(label);
+  await expect(copy).toHaveAttribute("title", label);
+  await expect(copy.locator("svg.lucide-check")).toBeVisible();
+
+  const subject = label.replace(/^Copy\s+/i, "");
+  await expect(status(copy.page())).toHaveText(
+    subject.charAt(0).toUpperCase() + subject.slice(1) + " copied",
+  );
 }
 
 test.beforeEach(async ({ page }) => {
@@ -106,6 +146,82 @@ test("the API-key copy button announces the copy, then the confirmation", async 
     page.getByRole("button", { name: "Copy API key", exact: true }),
     "Copy API key",
   );
+});
+
+/** Open the created-key dialog with every clipboard write rejecting. */
+const deniedApiKeyDialog = async (page: Page) => {
+  await denyClipboard(page);
+  await signedIn(page);
+  await created(page, "/api/v1/api-keys", API_KEY);
+  await page.goto("/api-keys/create");
+  await page.getByLabel("Name").fill(API_KEY.name);
+  await page.getByRole("button", { name: "Create API key" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+};
+
+/** Open the signing-secret dialog with every clipboard write rejecting. */
+const deniedWebhookDialog = async (page: Page) => {
+  await denyClipboard(page);
+  await signedIn(page);
+  await page.route(
+    (url) => url.pathname === "/api/v1/webhooks/events",
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ events: ["invoice.paid"] }),
+      }),
+  );
+  await created(page, "/api/v1/webhooks/subscriptions", SUBSCRIPTION);
+  await page.goto("/webhooks/create");
+  await page.getByLabel("Target URL").fill(SUBSCRIPTION.url);
+  await page.getByLabel("invoice.paid").check();
+  await page.getByRole("button", { name: "Create webhook" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+};
+
+/**
+ * A denied write must not claim success. The unchanged name is the assertion:
+ * `copied` stays false, and the fixture fails the test on the unhandled
+ * rejection itself.
+ */
+const expectDeniedWriteToasts = async (page: Page, label: string) => {
+  const copy = page.getByRole("button", { name: label, exact: true });
+  await copy.click();
+  await expect(copy).toHaveAccessibleName(label);
+  await expect
+    .poll(async () => (await liveRegion(page).textContent()) ?? "")
+    .toMatch(/could not copy/i);
+};
+
+test("a denied API-key write toasts instead of claiming success", async ({ page }) => {
+  await deniedApiKeyDialog(page);
+  await expectDeniedWriteToasts(page, "Copy API key");
+});
+
+test("a denied webhook-secret write toasts instead of claiming success", async ({ page }) => {
+  await deniedWebhookDialog(page);
+  await expectDeniedWriteToasts(page, "Copy signing secret");
+});
+
+test("a denied second write clears the pending confirmation", async ({ page }) => {
+  await failSecondWrite(page);
+  await signedIn(page);
+  await created(page, "/api/v1/api-keys", API_KEY);
+  await page.goto("/api-keys/create");
+  await page.getByLabel("Name").fill(API_KEY.name);
+  await page.getByRole("button", { name: "Create API key" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  const copy = page.getByRole("button", { name: "Copy API key", exact: true });
+  await copy.click();
+  await expect(status(page)).toHaveText("API key copied");
+  await copy.click();
+  // Without a `setCopied(false)` in the catch the region keeps "API key copied"
+  // forever: the second-click handler cleared the pending timer first.
+  await expect(status(page)).toHaveText("");
+  await expect
+    .poll(async () => (await liveRegion(page).textContent()) ?? "")
+    .toMatch(/could not copy/i);
 });
 
 test("the webhook-secret copy button announces the copy, then the confirmation", async ({ page }) => {

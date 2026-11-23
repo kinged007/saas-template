@@ -12,6 +12,15 @@ from src.db.base import Base, StringUUID, TimestampMixin
 # neither copy can drift.
 QUOTA_MIN_MESSAGE = "usage quota must be at least 1 (omit it or send null for unlimited)"
 
+# The largest quota the usage_quota column holds on both backends: sa.Integer
+# is int32 on the default PostgreSQL and int64 on SQLite, so anything larger
+# is refused with these words instead of overflowing into a silently
+# unlimited key. ponytail: ceiling is the int32 column; upgrade path is a
+# BigInteger column with le=2**63 - 1 (plus `make db-new m="..."`).
+MAX_QUOTA = 2**31 - 1
+QUOTA_MAX_MESSAGE = f"usage quota must be at most {MAX_QUOTA} (omit it or send null for unlimited)"
+QUOTA_TYPE_MESSAGE = "usage quota must be an integer"
+
 
 class ApiKey(Base, TimestampMixin):
     """Workspace-scoped API key. Only a hash of the secret is stored."""

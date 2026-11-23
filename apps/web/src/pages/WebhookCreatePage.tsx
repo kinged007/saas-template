@@ -13,6 +13,7 @@ import { Navigate } from "react-router";
 import { toast } from "sonner";
 
 import { CopyButton } from "@/components/CopyButton";
+import { errorMessage } from "@/utils/errorMessage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -95,7 +96,7 @@ export function WebhookCreatePage() {
       }
     } catch (err) {
       toast.error("Could not create webhook", {
-        description: String((err as { message?: string })?.message ?? err),
+        description: errorMessage(err),
       });
     }
   };
@@ -198,9 +199,18 @@ export function WebhookCreatePage() {
                 // Clear before the write so the previous window dies even if this
                 // one never reaches the clipboard.
                 window.clearTimeout(copyTimer.current);
-                await navigator.clipboard.writeText(created.secret);
-                setCopied(true);
-                copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
+                try {
+                  await navigator.clipboard.writeText(created.secret);
+                  setCopied(true);
+                  copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
+                } catch (err) {
+                  // A denied write must not leave a stale confirmation: the timer
+                  // above was already cleared, so nothing would reset `copied`.
+                  setCopied(false);
+                  toast.error("Could not copy signing secret", {
+                    description: errorMessage(err),
+                  });
+                }
               }}
             />
           </div>

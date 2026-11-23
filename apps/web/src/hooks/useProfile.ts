@@ -38,23 +38,23 @@ export function useTargetUserId(): string | null {
 export function useProfile(userId?: string | null) {
   const { data: identity } = useGetIdentity<Identity>();
   const isSelf = !userId;
-  const enabled = isSelf ? !identity?.profile : true;
   const custom = useCustom<UserProfile>({
     url: isSelf ? "me/profile" : `users/${userId}/profile`,
     method: "get",
-    queryOptions: { enabled },
   });
-  const data =
-    (isSelf ? (identity?.profile as UserProfile | undefined) : undefined) ??
-    (custom.result?.data as UserProfile | undefined);
-  const isLoading = enabled ? (custom.query.isPending as boolean) : false;
-  const isError = enabled ? (custom.query.isError as boolean) : false;
+  // `simple-rest` wraps a `custom` response as `{ data }`, so read the query
+  // payload: `result.data` is a frozen, always-truthy `{}` until the request
+  // settles, which is what left the form blank. The fetched record wins;
+  // `/auth/me`'s embed is only the first-paint fallback for the self profile
+  // (it can arrive with all-null fields), and never applies to a target.
+  const data = custom.query.data?.data ?? (isSelf ? identity?.profile : undefined);
+  const isLoading = custom.query.isPending;
+  const isError = custom.query.isError;
   return {
     data,
     isLoading,
     isError,
     query: custom.query,
-    result: custom.result,
     refetch: custom.query.refetch,
   };
 }
@@ -62,7 +62,7 @@ export function useProfile(userId?: string | null) {
 export function useUpdateProfile(userId?: string | null) {
   const queryClient = useQueryClient();
   const invalidate = useInvalidate();
-  const { mutate, mutateAsync, mutation } = useCustomMutation<UserProfile>();
+  const { mutate, mutation } = useCustomMutation<UserProfile>();
   const url = userId ? `users/${userId}/profile` : "me/profile";
 
   const update = useCallback(
@@ -101,28 +101,7 @@ export function useUpdateProfile(userId?: string | null) {
     [mutate, queryClient, invalidate, url, userId]
   );
 
-  const updateAsync = useCallback(
-    async (values: Record<string, unknown>, isPut = false) => {
-      const res = await mutateAsync({
-        url,
-        method: isPut ? "put" : "patch",
-        values,
-        successNotification: {
-          message: "Profile updated",
-          type: "success",
-        },
-        errorNotification: false,
-      } as never);
-      if (!userId) {
-        queryClient.invalidateQueries({ queryKey: ["auth"] });
-        queryClient.invalidateQueries({ queryKey: ["data"] });
-      }
-      return res;
-    },
-    [mutateAsync, queryClient, url, userId]
-  );
-
-  return { mutate: update, mutateAsync: updateAsync, mutation };
+  return { mutate: update, mutation };
 }
 
 export function useExportProfile() {
@@ -184,7 +163,7 @@ export function useDeleteAccount() {
         {
           onSuccess: () => {
             tokenStore.clear();
-            identityStore.set(null);
+            identityStore.clear();
             clearAllCaches(queryClient);
             opts?.onSuccess?.();
           },
@@ -205,7 +184,7 @@ export function useDeleteAccount() {
         errorNotification: false,
       } as never);
       tokenStore.clear();
-      identityStore.set(null);
+      identityStore.clear();
       clearAllCaches(queryClient);
       return res;
     },

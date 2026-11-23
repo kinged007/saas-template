@@ -1,9 +1,11 @@
 import { Fragment, useState } from "react";
 import { useCan } from "@refinedev/core";
 import { useWorkspaceList } from "../hooks/useWorkspaceQuery";
+import { cn } from "@/lib/utils";
 import { Webhook } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -24,28 +26,73 @@ import { useWebhookDeliveries, useWebhookRedeliver } from "./webhooks-hooks";
 
 function DeliveryLog({ subscriptionId }: { subscriptionId: string }) {
   const { result, query } = useWebhookDeliveries(subscriptionId);
-  const { mutate: redeliver, mutation } = useWebhookRedeliver();
-  const rows = result?.data ?? [];
+  // The delivery log is a `useCustom` query, so the redeliver has to refetch
+  // it directly — invalidating the `webhooks` list key leaves it untouched.
+  const { mutate: redeliver, mutation } = useWebhookRedeliver(() => {
+    void query.refetch();
+  });
+  /* refine hands back a frozen empty object as `result.data` whenever the
+     query has no data — a disabled query reports neither loading nor error —
+     so the shape is checked once, before anything reaches `rows.map`. */
+  const isList = Array.isArray(result?.data);
+  const rows = isList ? result.data : [];
 
   if (query.isLoading) {
     return <p className="text-muted-foreground text-sm">Loading deliveries…</p>;
   }
-  /* refine hands back an empty object as `result.data` when the request
-     failed, so this branch also keeps the table from rendering. */
-  if (query.isError) {
+  /* A failed refetch keeps the rows react-query already had, and stale rows
+     beat an error message; only a load that produced no data at all is one.
+     Uncaptioned rows would read as current — the `staleNote` `<p>` below
+     marks them instead. */
+  if (query.isError && !isList) {
     return (
-      <p className="text-destructive text-sm">
+      <p className="text-destructive flex flex-wrap items-center gap-2 text-sm">
         Could not load deliveries: {query.error?.message ?? "Unknown error"}
+        <Button variant="outline" size="sm" onClick={() => query.refetch()}>
+          Try again
+        </Button>
       </p>
     );
   }
+  // A failed refetch leaves a cached empty list in place too — the pane must
+  // caption it, not let "No deliveries yet." read as current.
+  const staleNote = query.isError && isList;
   if (rows.length === 0) {
     return (
-      <p className="text-muted-foreground text-sm">No deliveries yet.</p>
+      <div>
+        {/* Caption for a failed background refetch. Always mounted: a live
+            region has to be in the accessibility tree before its text changes
+            to be announced — `sr-only` keeps the idle (textless) state out of
+            the layout. */}
+        <p
+          role="status"
+          className={cn(
+            "text-muted-foreground mb-2 text-sm",
+            !staleNote && "sr-only",
+          )}
+        >
+          {staleNote ? "Showing the last deliveries loaded." : ""}
+        </p>
+        <p className="text-muted-foreground text-sm">No deliveries yet.</p>
+      </div>
     );
   }
   return (
-    <Table>
+    <div>
+      {/* Caption for a failed background refetch, per InboxPage's staleness
+          note. Always mounted: a live region has to be in the accessibility
+          tree before its text changes to be announced — `sr-only` keeps the
+          idle (textless) state out of the layout. */}
+      <p
+        role="status"
+        className={cn(
+          "text-muted-foreground mb-2 text-sm",
+          !staleNote && "sr-only",
+        )}
+      >
+        {staleNote ? "Showing the last deliveries loaded." : ""}
+      </p>
+      <Table>
       <TableHeader>
         <TableRow>
           <TableHead>Event</TableHead>
@@ -96,12 +143,18 @@ function DeliveryLog({ subscriptionId }: { subscriptionId: string }) {
           </TableRow>
         ))}
       </TableBody>
-    </Table>
+      </Table>
+    </div>
   );
 }
 
 export function WebhooksPage() {
-  const { result, query } = useWorkspaceList<WebhookSubscription>({ resource: "webhooks" });
+  const { result, query } = useWorkspaceList<WebhookSubscription>({
+    resource: "webhooks",
+    // The failure row below reports the reason itself, so refine's error
+    // notification would only repeat it in a toast.
+    errorNotification: false,
+  });
   const { data: canManage } = useCan({ resource: "webhooks", action: "delete" });
   const [openId, setOpenId] = useState<string | null>(null);
 
@@ -195,7 +248,10 @@ export function WebhooksPage() {
                 <span className="text-destructive">
                   Could not load webhook subscriptions:{" "}
                   {query.error?.message ?? "Unknown error"}
-                </span>
+                </span>{" "}
+                <Button variant="outline" size="sm" onClick={() => query.refetch()}>
+                  Try again
+                </Button>
               </EmptyRow>
             )}
             {!query.isPending && !query.isError && rows.length === 0 && (

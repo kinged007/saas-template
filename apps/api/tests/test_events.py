@@ -141,6 +141,30 @@ async def test_inprocess_transient_and_durable_are_equivalent():
     assert len(received) == 1
 
 
+async def test_inprocess_wait_idle_drains_deliveries():
+    bus = InProcessEventBus()
+    received = []
+
+    async def handler(payload, metadata):
+        received.append(payload)
+
+    await bus.subscribe("workspaces.created", handler)
+    await bus.start()
+    await bus.publish("workspaces.created", {"workspace_id": "w1"})
+    await bus.publish("workspaces.created", {"workspace_id": "w2"})
+    await bus.wait_idle()
+    await bus.stop()
+
+    assert received == [{"workspace_id": "w1"}, {"workspace_id": "w2"}]
+
+
+async def test_inprocess_wait_idle_returns_when_idle():
+    bus = InProcessEventBus()
+    await bus.start()
+    await bus.wait_idle()
+    await bus.stop()
+
+
 async def test_workflow_registry_wiring(app_client):
     from src.container import Container
     from src.events.factory import WorkflowRegistry

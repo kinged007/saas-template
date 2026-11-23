@@ -55,12 +55,6 @@ async def test_session_routes_reject_api_key_callers(app_client):
 
 
 async def test_reused_refresh_token_revokes_all_sessions(app_client):
-    from sqlalchemy import select
-
-    from src.core.security.tokens import OpaqueToken
-    from src.db.session import SessionFactory
-    from src.models.workspace import RefreshToken
-
     client = app_client
     t1 = await register_user(client, "reuse@example.com")
     t2 = await login(client, "reuse@example.com")
@@ -84,13 +78,32 @@ async def test_reused_refresh_token_revokes_all_sessions(app_client):
     resp = await client.get("/api/v1/auth/me", headers=auth_headers(rotated))
     assert resp.status_code == 401, resp.text
 
-    # the killed sessions carry the reason, so a reuse revocation is told apart
-    # from a password change or a logout in the audit trail
+
+async def test_reuse_marks_revoked_rows_with_the_reason(app_client):
+    """The reuse revocation stamps the rows it kills, so the audit trail can
+    tell a compromise apart from a password change or a logout."""
+    from sqlalchemy import select
+
+    from src.core.security.tokens import OpaqueToken
+    from src.db.session import SessionFactory
+    from src.models.workspace import RefreshToken
+
+    client = app_client
+    t1 = await register_user(client, "reuse-reason@example.com")
+    t2 = await login(client, "reuse-reason@example.com")
+
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]})
+    assert resp.status_code == 200, resp.text
+    rotated = resp.json()
+    resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]})
+    assert resp.status_code == 401, resp.text
+
     hashes = [OpaqueToken.hash(t1["refresh_token"]), OpaqueToken.hash(rotated["refresh_token"])]
     async with SessionFactory() as session:
         stmt = select(RefreshToken.revoke_reason).where(RefreshToken.token_hash.in_(hashes))
         reasons = (await session.execute(stmt)).scalars().all()
-    assert reasons == ["reuse", "reuse"], reasons
+    assert len(reasons) == 2, reasons
+    assert set(reasons) == {"reuse"}, reasons
 
 
 async def test_unknown_refresh_token_revokes_nothing(app_client):
@@ -163,16 +176,13 @@ async def test_revoke_all_sessions(app_client):
 
 
 async def test_concurrent_refresh_of_one_token_is_deterministic(app_client):
-    """Two racing rotations of one token never lock the user out.
+    """Two racing rotations of one token elect exactly one winner.
 
     The SPA serialises this with the Web Locks API (see providers/refreshLock.ts),
-    so the server only sees it from a client that does not. The two outcomes split
-    on the storage engine, because ``with_for_update()`` is a real row lock on
-    Postgres and a no-op on the sqlite the suite runs on: Postgres serialises the
-    two and answers the loser from the reuse branch, sqlite lets both read a live
-    row and answers 200 twice. Asserting either outcome would be an assertion that
-    cannot fail, so this pins the three properties that hold either way and that a
-    regression in the reuse gate would break.
+    so the server only sees it from a client that does not. The claim UPDATE in
+    rotate_refresh is statement-atomic on both engines, so exactly one racer
+    claims the row and the loser takes the reuse branch — no row lock needed,
+    which matters because ``with_for_update()`` is a no-op on sqlite.
     """
     import asyncio
 
@@ -184,19 +194,19 @@ async def test_concurrent_refresh_of_one_token_is_deterministic(app_client):
         client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]}),
         client.post("/api/v1/auth/refresh", json={"refresh_token": t2["refresh_token"]}),
     )
-    # The race must not lose the token outright. If the reuse signal ever fires on
-    # a row that was not rotated, both racers take the 401 path and the user has no
-    # live session and no token to retry with.
-    assert 200 in (first.status_code, second.status_code), (first.text, second.text)
-    for resp in (first, second):
-        if resp.status_code == 200:
-            continue
-        # Whoever loses loses to the same no-oracle 401 an unknown token gets, so a
-        # loser cannot tell itself apart from a stranger probing for valid hashes.
-        # Any other status (500, 429, 403) fails here; `status_code in (200, 401)`
-        # would have passed on it.
-        assert resp.status_code == 401, resp.text
-        assert resp.json()["detail"] == "invalid refresh token", resp.text
+    # Exactly one winner. Two 200s would mean both racers read a live row and
+    # claimed it; two 401s would mean the reuse signal fired on a row nobody
+    # rotated and the user has no live session and no token to retry with.
+    assert sorted([first.status_code, second.status_code]) == [200, 401], (
+        first.text,
+        second.text,
+    )
+    loser = first if first.status_code == 401 else second
+    # Whoever loses loses to the same no-oracle 401 an unknown token gets, so a
+    # loser cannot tell itself apart from a stranger probing for valid hashes.
+    # Any other status (500, 429, 403) fails here; `status_code in (200, 401)`
+    # would have passed on it.
+    assert loser.json()["detail"] == "invalid refresh token", loser.text
 
     # signed out at worst, never disabled: the user can always get back in
     t3 = await login(client, "race@example.com")

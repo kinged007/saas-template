@@ -20,7 +20,7 @@ from src.core.security.cookies import (
     require_csrf,
     set_refresh_cookie,
 )
-from src.core.security.ratelimit import get_auth_limiter
+from src.core.security.ratelimit import get_auth_limiter, get_register_limiter
 from src.core.security.tokens import OpaqueToken
 from src.db.session import get_db
 from src.email import factory as email_factory
@@ -155,6 +155,12 @@ async def register(
     # If only one of first/last provided without the other, still allow but derive
     if not settings.auth_allow_registration:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "registration is disabled")
+    # The verification mail needs a cap no per-(IP, email) key can dodge
+    # (#1343): the registrant owns every fresh address, so the key is the IP
+    # alone, spent out of the register limiter's own window — not the auth
+    # limiter's (IP, email) budget.
+    register_key = _limit_key(request)
+    get_register_limiter().check(register_key)
     try:
         user = await service.register(
             email=body.email,
@@ -180,6 +186,10 @@ async def register(
         await _send_verification(service, user)
     except Exception:
         logger.exception("failed to send verification email for user %s", user.id)
+    # Every send spends one unit of the register limiter's budget, which the
+    # window caps: like forgot-password there is no success reset, because the
+    # send (or its attempt) is the metered event, not a failure.
+    get_register_limiter().fail(register_key)
     if browser_flow(request, body):
         set_refresh_cookie(response, pair.refresh_token, request=request)
         return TokenResponse(
@@ -201,6 +211,8 @@ async def forgot_password(
     # Always 202 — never reveal whether the email is registered.
     if not settings.auth_password_enabled:
         return {"detail": "if an account exists for this email, a reset link was sent"}
+    key = _limit_key(request, str(body.email))
+    get_auth_limiter().check(key)
     raw = await AuthService(db, container.bus).request_password_reset(
         str(body.email), ip_address=_client_ip(request)
     )
@@ -213,6 +225,11 @@ async def forgot_password(
             )
         except Exception:
             logger.exception("failed to send password-reset email for %s", body.email)
+    # Every call spends one unit of the auth-limiter budget — known and
+    # unknown addresses alike, so a 429 never reveals whether the email is
+    # registered. Like resend-verification there is no success reset: the
+    # send (or its attempt) is the metered event, not a failure.
+    get_auth_limiter().fail(key)
     return {"detail": "if an account exists for this email, a reset link was sent"}
 
 
@@ -252,10 +269,15 @@ async def verify_email(
 
 @router.post("/resend-verification", status_code=202)
 async def resend_verification(
+    request: Request,
+    # Key-reachable by design; rate-limited per (IP, email) — see #1289 and
+    # `require_session_user`'s docstring.
     user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ) -> dict:
+    key = _limit_key(request, user.email)
+    get_auth_limiter().check(key)
     if getattr(user, "email_verified_at", None) is not None:
         return {"detail": "email already verified"}
     service = AuthService(db, container.bus)
@@ -264,6 +286,10 @@ async def resend_verification(
         await _send_verification(service, fresh or user)
     except Exception:
         logger.exception("failed to resend verification email for user %s", user.id)
+    # Every send spends one unit of the auth-limiter budget, which the window
+    # caps: unlike login there is no success reset, because the send itself
+    # is the metered event, not a failure.
+    get_auth_limiter().fail(key)
     return {"detail": "if unverified, a verification link was sent"}
 
 
@@ -290,6 +316,9 @@ async def login(
         if msg in ("password login is disabled",):
             raise HTTPException(status.HTTP_403_FORBIDDEN, msg) from None
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, msg) from None
+    # Captured before the try: the helper's rollback expires the instance,
+    # so reading attributes in the handler would lazy-load.
+    user_id = user.id
     try:
         # The only HTTPException in here is the helper's account-gone guard, so
         # charging the limiter for it is always a 401 charge, nothing else.
@@ -297,10 +326,18 @@ async def login(
         # charge on it can actually throttle the caller.
         user = await _join_single_workspace_best_effort(db, container, user)
     except HTTPException:
+        # Error, not exception: the helper logged the fault with a traceback
+        # already; this is the login-level correlation (parity with the
+        # refresh flow's #714 fix).
+        logger.error("account gone on login (user %s)", user_id)
         get_auth_limiter().fail(key)
         raise
     get_auth_limiter().reset(key)
     if user.totp_enabled:
+        # Deliberately uncharged, unlike the 401s above: the password was
+        # right and the caller still owes the second factor. The guesses that
+        # do matter are a rejected code, charged on ip:<user_id> rather than
+        # this key. See the rule in src/core/security/ratelimit.py.
         challenge = TwoFactorService(db, container.cipher, container.bus).issue_challenge(user.id)
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
@@ -357,11 +394,17 @@ async def refresh(
         get_auth_limiter().fail(key)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, ACCOUNT_GONE_DETAIL)
     if settings.single_workspace:
+        # Captured before the try: the helper's rollback expires the instance,
+        # so reading attributes in the handler would lazy-load.
+        user_id = user.id
         try:
             # The only HTTPException in here is the helper's account-gone
             # guard, so this charge is always a 401 charge, nothing else.
             await _join_single_workspace_best_effort(db, container, user)
         except HTTPException:
+            # Error, not exception: the helper logged the fault with a
+            # traceback already; this is the refresh-level correlation (#714).
+            logger.error("account gone on refresh (user %s)", user_id)
             get_auth_limiter().fail(key)
             raise
         except Exception:
@@ -532,8 +575,11 @@ async def totp_login(
     container=Depends(get_container),
 ) -> TokenResponse:
     svc = TwoFactorService(db, container.cipher, container.bus)
+    # The challenge survives a wrong code so the user can retry with the same
+    # token: peek first, consume only once the code verifies. The rate limiter
+    # runs before verification, so guessing a code is throttled on ip:<user_id>.
     try:
-        user_id = svc.consume_challenge(body.challenge_token)
+        user_id = svc.peek_challenge(body.challenge_token)
     except TwoFactorError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
     key = _limit_key(request, user_id)
@@ -549,6 +595,11 @@ async def totp_login(
         get_auth_limiter().fail(key)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid code")
     get_auth_limiter().reset(key)
+    try:
+        svc.consume_challenge(body.challenge_token)
+    except TwoFactorError as exc:
+        # A concurrent request spent the single-use challenge first.
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
     pair = await AuthService(db, container.bus).issue_tokens(
         user, ip_address=_client_ip(request), user_agent=_user_agent(request)
     )
@@ -658,21 +709,45 @@ async def me(
     memberships = await service.list_workspaces(user.id)
     if principal.api_key is not None:
         # A key learns only its own workspace, never the creator's inventory:
-        # every workspace listed here is one the key can actually reach.
+        # every workspace listed here is one the key can actually reach. A key
+        # is pinned to that one workspace and its gate never reads the flag, so
+        # the single-workspace filter does not apply to it.
         memberships = [m for m in memberships if m[0].id == principal.api_key.workspace_id]
-    if settings.single_workspace:
+    elif settings.single_workspace:
         # Toggling onto an existing deployment: oldest wins, rest stay hidden.
         # (GET /workspaces still lists all memberships; /me is the UI surface.)
         single = await service.get_single_workspace()
         if single is not None:
             memberships = [m for m in memberships if m[0].id == single.id]
-    data["workspaces"] = [
-        workspace_to_dict(
-            w, role=role.name, permissions=role.permissions, joined_at=member.created_at
+    # `permissions` always means what this principal can do here: a session
+    # user gets the union of the roles it holds in the listed workspaces, an
+    # API key only its own grant — in the top-level field and in each nested
+    # entry alike. Each entry still names the creator's membership role (the
+    # fact `require_session_user` relies on); only the permission lists are
+    # the key's own. Branch on `is not None`, never on truthiness — an empty
+    # grant is a real grant, not a missing one. Empty too when the creator's
+    # membership in the key's workspace is not active: `list_workspaces`
+    # drops those rows and the gate refuses them, so the two must not disagree.
+    if principal.api_key is not None:
+        key_grant = sorted(principal.api_key.permissions) if memberships else []
+        data["workspaces"] = [
+            workspace_to_dict(w, role=role.name, permissions=key_grant, joined_at=m.created_at)
+            for w, role, m in memberships
+        ]
+        data["permissions"] = key_grant
+    else:
+        data["workspaces"] = [
+            workspace_to_dict(
+                w, role=role.name, permissions=role.permissions, joined_at=member.created_at
+            )
+            for w, role, member in memberships
+        ]
+        # Ordered dedup, not a sort: the union keeps each role's registry
+        # order (first occurrence wins across memberships), matching the
+        # nested entries which carry role.permissions verbatim.
+        data["permissions"] = list(
+            dict.fromkeys(p for _, role, _ in memberships for p in role.permissions)
         )
-        for w, role, member in memberships
-    ]
-    data["permissions"] = sorted({p for _, role, _ in memberships for p in role.permissions})
     data["single_workspace"] = settings.single_workspace
     # Embed profile (lazy create)
     try:

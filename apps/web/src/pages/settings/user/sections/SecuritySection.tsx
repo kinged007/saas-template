@@ -26,6 +26,42 @@ import { sessionsEmptyMessage } from "./sessions-empty";
  * password and revoking sessions are delegated actions, while 2FA setup and
  * "change my password" require a credential only the account holder has.
  */
+const call = (
+  mutate: (mutation: never) => Promise<unknown>,
+  url: string,
+  method: "post" | "delete",
+  values?: unknown,
+) =>
+  mutate({ url, method, values, errorNotification: false } as never) as Promise<{
+    data: unknown;
+  }>;
+
+function SessionRevokeButton({
+  base,
+  sessionId,
+  onRevoked,
+}: {
+  base: string;
+  sessionId: string;
+  onRevoked: () => void;
+}) {
+  const { mutateAsync, mutation } = useCustomMutation();
+  const revoke = async () => {
+    try {
+      await call(mutateAsync, `${base}/sessions/${sessionId}`, "delete");
+      toast.success("Session revoked");
+      onRevoked();
+    } catch (e) {
+      toast.error((e as Error)?.message ?? "Revoke failed");
+    }
+  };
+  return (
+    <Button variant="outline" size="sm" onClick={revoke} disabled={mutation.isPending}>
+      Revoke
+    </Button>
+  );
+}
+
 export function SecuritySection() {
   const userId = useTargetUserId();
   const base = `users/${userId}`;
@@ -36,15 +72,11 @@ export function SecuritySection() {
     method: "get",
     queryOptions: { enabled: Boolean(userId) },
   });
-  const { mutateAsync, mutation } = useCustomMutation();
+  const { mutateAsync: setPasswordMutate, mutation: setPasswordMutation } = useCustomMutation();
+  const { mutateAsync: revokeAllMutate, mutation: revokeAllMutation } = useCustomMutation();
 
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-
-  const call = (url: string, method: "post" | "delete", values?: unknown) =>
-    mutateAsync({ url, method, values, errorNotification: false } as never) as Promise<{
-      data: unknown;
-    }>;
 
   const list: AuthSession[] = Array.isArray(sessions.result?.data)
     ? (sessions.result.data as AuthSession[])
@@ -58,7 +90,7 @@ export function SecuritySection() {
 
   const setPasswordForMember = async () => {
     try {
-      await call(`${base}/password`, "post", { new_password: password });
+      await call(setPasswordMutate, `${base}/password`, "post", { new_password: password });
       setPassword("");
       setConfirmPassword("");
       // Setting a password revokes every session of the target.
@@ -69,19 +101,9 @@ export function SecuritySection() {
     }
   };
 
-  const revokeOne = async (id: string) => {
-    try {
-      await call(`${base}/sessions/${id}`, "delete");
-      toast.success("Session revoked");
-      sessions.query.refetch();
-    } catch (e) {
-      toast.error((e as Error)?.message ?? "Revoke failed");
-    }
-  };
-
   const revokeAll = async () => {
     try {
-      await call(`${base}/sessions`, "delete");
+      await call(revokeAllMutate, `${base}/sessions`, "delete");
       toast.success("All sessions revoked");
       sessions.query.refetch();
     } catch (e) {
@@ -124,7 +146,10 @@ export function SecuritySection() {
             )}
           </div>
           <div>
-            <Button onClick={setPasswordForMember} disabled={!passwordValid || mutation.isPending}>
+            <Button
+              onClick={setPasswordForMember}
+              disabled={!passwordValid || setPasswordMutation.isPending}
+            >
               Set password
             </Button>
           </div>
@@ -164,9 +189,11 @@ export function SecuritySection() {
                       {s.user_agent ?? "—"}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button variant="outline" size="sm" onClick={() => revokeOne(s.id)}>
-                        Revoke
-                      </Button>
+                      <SessionRevokeButton
+                        base={base}
+                        sessionId={s.id}
+                        onRevoked={() => sessions.query.refetch()}
+                      />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -176,7 +203,12 @@ export function SecuritySection() {
           </div>
           {list.length > 0 && (
             <div className="flex justify-end pt-4">
-              <Button variant="destructive" size="sm" onClick={revokeAll} disabled={mutation.isPending}>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={revokeAll}
+                disabled={revokeAllMutation.isPending}
+              >
                 Revoke all sessions
               </Button>
             </div>
