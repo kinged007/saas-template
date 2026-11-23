@@ -7,7 +7,10 @@
 <!-- The one line an adopter reads to decide whether to take this change.
      Include any renames as old/path → new/path, and anything they must do. -->
 
-**Area:** api / web / db / infra  <!-- one; if more, say why it can't be split -->
+Area: api
+Release-note: <one line an adopter reads to decide whether to take this change>
+
+<!-- Area is one of api / web / db / infra. If more, say why it can't be split. -->
 
 ## Admission ([docs/product/ADMISSION.md](https://github.com/kinged007/saas-template/blob/main/docs/product/ADMISSION.md))
 

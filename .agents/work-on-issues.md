@@ -170,14 +170,17 @@ If implementation and testing succeed, submit a PR for the issue (push the branc
 
 ## 8. Open the pull request
 
-Do not push directly to the PR's base branch. Resolve the base first (never assume) and open the PR from a per-issue branch against it:
+Do not push directly to the PR's base branch. Branch from `dev` and open the PR against `dev` — always explicit, no lookup:
 
 ```bash
-BASE=$(gh repo view --json defaultBranchRef -q '.defaultBranchRef.name')
 git checkout -b auto/<n>
 git push -u origin auto/<n>
-gh pr create --base "$BASE" --head auto/<n> --title "<summary>" --body "<body>"
+gh pr create --base dev --head auto/<n> --title "<summary>" --body "<body>"
 ```
+
+The PR body must carry both machine-read lines, one line each, in the
+Release-note section of the template: `Area: <api|web|db|infra>` and
+`Release-note: <one line>`.
 
 The PR body must follow this structure — two-line bodies are not acceptable:
 

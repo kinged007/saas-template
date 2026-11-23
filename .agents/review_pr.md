@@ -252,7 +252,7 @@ Only when a review (yours or adopted) approves with all majors complete, and onl
 
 ```bash
 gh pr edit <n> --add-label agent:done
-gh pr merge <n> --merge
+gh pr merge <n> --squash
 gh pr edit <n> --remove-label in-progress
 ```
 
