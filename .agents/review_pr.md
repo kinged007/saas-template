@@ -242,21 +242,22 @@ gh pr edit <n> --remove-label in-progress
 
 Then STOP and report why.
 
-## 7. Approval path: file minors, then merge and close
+## 7. Approval path: file minors, then mark ready-to-merge
 
-Only when a review (yours or adopted) approves with all majors complete, and only for non-high-risk PRs (step 3):
+Only when a review (yours or adopted) approves with all majors complete, and only for non-high-risk PRs (step 3). Never merge here — `merge-queue.yml` owns merging; approval only marks the PR ready and records the approved head SHA for its check 5:
 
 1. Create one issue per deferred finding (title, repro/context, `enhancement` label). Reference the PR number in each body.
-2. Apply `agent:done` before merging, so a concurrent step-1 run cannot claim the PR mid-merge. This label also survives the merge and keeps the PR out of every later run.
-3. Merge and close:
+2. Apply `agent:done` before marking, so a concurrent step-1 run cannot claim the PR mid-step.
+3. Mark ready-to-merge and record the approved head SHA:
 
 ```bash
 gh pr edit <n> --add-label agent:done
-gh pr merge <n> --merge
+gh pr comment <n> --body "Approved head SHA: $(gh pr view <n> --json headRefOid -q .headRefOid)"
+gh pr edit <n> --add-label agent:merge
 gh pr edit <n> --remove-label in-progress
 ```
 
-Report the merge plus the created issue numbers.
+Report the created issue numbers and the recorded SHA (no merge; the merge queue merges when its gates pass).
 
 ## 8. Commit and push before finishing (MANDATORY)
 
