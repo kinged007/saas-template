@@ -217,4 +217,5 @@ export async function mockApiTwoFactor(
     },
     { hasSession: signedIn },
   );
+  return { signIn: () => void (session.signedIn = true) };
 }
