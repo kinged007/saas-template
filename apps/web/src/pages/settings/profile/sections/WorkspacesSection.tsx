@@ -44,6 +44,12 @@ export function WorkspacesSection() {
   // either answer early flashes one of them before the list is known.
   if (rows.length === 0) {
     if (list.query.isPending) return null;
+    if (list.query.isError)
+      return (
+        <p role="alert" className="text-destructive text-sm">
+          Could not load your workspaces.
+        </p>
+      );
     return <NoWorkspaceCard single={identity?.single_workspace === true} headingLevel={2} />;
   }
 
