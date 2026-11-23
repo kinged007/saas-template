@@ -219,8 +219,8 @@ async def test_malformed_body_ids_keep_the_valid_unknown_status(app_client):
         app_client, tokens, workspace_id, "body-probe@example.com"
     )
     # Transfer and role lookups 404 on an unknown id; the participants
-    # membership check 400s (ConversationError). A malformed body id keeps the
-    # same status instead of 500.
+    # membership check 400s (ConversationError), as does an unknown invitation
+    # role id. A malformed body id keeps the same status instead of 500.
     probes = [
         (
             "post",
@@ -241,6 +241,12 @@ async def test_malformed_body_ids_keep_the_valid_unknown_status(app_client):
             {"title": "probe", "participant_user_ids": [BAD], "initial_message": "hi"},
             400,
         ),
+        (
+            "post",
+            "/api/v1/invitations",
+            {"email": "malformed-role@example.com", "role_id": BAD},
+            400,
+        ),
     ]
     for method, url, body, expected in probes:
         resp = await app_client.request(method, url, json=body, headers=headers)
@@ -258,6 +264,12 @@ async def test_malformed_body_ids_keep_the_valid_unknown_status(app_client):
             "patch",
             f"/api/v1/conversations/{conversation_id}/participants",
             {"participant_user_ids": [me.json()["id"], VALID_ID]},
+            400,
+        ),
+        (
+            "post",
+            "/api/v1/invitations",
+            {"email": "unknown-role@example.com", "role_id": VALID_ID},
             400,
         ),
     ]

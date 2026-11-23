@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import func, select
@@ -100,6 +101,12 @@ async def create_invitation(
     workspace = await service.get_workspace(workspace_id)
     if workspace is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
+    try:
+        uuid.UUID(body.role_id)
+    except ValueError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "unknown role for this workspace"
+        ) from None
     role = await db.get(Role, body.role_id)
     if role is None or role.workspace_id != workspace_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "unknown role for this workspace")
