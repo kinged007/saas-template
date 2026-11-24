@@ -30,9 +30,30 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Resolve the last head the guard already checked
+        id: last
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # A burst of 3+ pushes supersedes the middle queued run (the
+          # concurrency group keeps one pending run), so its before..after
+          # range is never validated. Widen this run back to the newest
+          # already-checked head so the gap is still covered (#1878). Only
+          # completed success/failure runs count: cancelled (superseded) runs
+          # never validated anything. Any lookup failure falls back to empty,
+          # which keeps the pushed range.
+          LAST=""
+          LIST="$(gh run list --workflow branch-guard.yml --branch "$BRANCH" --status completed --limit 20 --json databaseId,headSha,conclusion 2>/dev/null || true)"
+          if [ -n "$LIST" ] && [ "$LIST" != "[]" ]; then
+            LAST="$(echo "$LIST" | jq -r --argjson run "$RUN_ID" '[.[] | select(.databaseId != $run and (.conclusion == "success" or .conclusion == "failure"))][0].headSha // empty' 2>/dev/null || true)"
+          fi
+          echo "sha=$LAST" >> "$GITHUB_OUTPUT"
       - name: Check the pushed range against the branch model
         id: guard
-        run: bash scripts/branch-guard.sh "${{ github.ref_name }}" "${{ github.event.before }}" "${{ github.event.after }}" "${{ github.event.forced }}"
+        run: bash scripts/branch-guard.sh "${{ github.ref_name }}" "${{ github.event.before }}" "${{ github.event.after }}" "${{ github.event.forced }}" "${{ steps.last.outputs.sha }}"
       - name: Open or update the needs-human issue
         if: failure()
         env:
@@ -41,11 +62,12 @@ jobs:
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.event.after }}
           FORCED: ${{ github.event.forced }}
+          LAST: ${{ steps.last.outputs.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           if [ -f scripts/branch-guard.sh ]; then
-            DIAG="$(bash scripts/branch-guard.sh "$BRANCH" "$BEFORE" "$AFTER" "$FORCED" 2>&1 || true)"
+            DIAG="$(bash scripts/branch-guard.sh "$BRANCH" "$BEFORE" "$AFTER" "$FORCED" "$LAST" 2>&1 || true)"
           else
             DIAG="branch-guard.sh not found (the checkout step did not run); see the run log for the guard diagnosis."
           fi

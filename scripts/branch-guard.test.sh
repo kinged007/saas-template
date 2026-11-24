@@ -14,17 +14,17 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/branch-guard-test-XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 fail() { echo "TEST FAIL: $1" >&2; exit 1; }
-expect_pass() { # <desc> <branch> <before> <after>
+expect_pass() { # <desc> <branch> <before> <after> [last-checked]
   local out
-  if ! out="$(bash "$GUARD" "$2" "$3" "$4" 2>&1)"; then
+  if ! out="$(bash "$GUARD" "$2" "$3" "$4" "false" "${5:-}" 2>&1)"; then
     echo "$out" >&2
     fail "expected PASS: $1 (got FAIL)"
   fi
   echo "ok: $1"
 }
-expect_fail() { # <desc> <branch> <before> <after> [pattern]
+expect_fail() { # <desc> <branch> <before> <after> [pattern] [last-checked]
   local out
-  if out="$(bash "$GUARD" "$2" "$3" "$4" 2>&1)"; then
+  if out="$(bash "$GUARD" "$2" "$3" "$4" "false" "${6:-}" 2>&1)"; then
     echo "$out" >&2
     fail "expected FAIL: $1 (got PASS)"
   fi
@@ -198,4 +198,58 @@ grep -q 'BODY="Branch' "$WF_YML" \
   && fail "failure step must not use literal \\n in a double-quoted body"
 echo "ok: failure step passes forced through, uses real newlines, falls back without checkout"
 
-echo "TEST PASS: dev/staging/main good+bad, force-push, deletion, range scoping, issue update"
+# --- #1878: the surviving run covers a superseded middle queued range ---
+# Three-push burst A0 -> A1 (good), A1 -> A2 (bad), A2 -> A3 (good) where the
+# middle queued run is superseded: the survivor only knows its own pushed
+# range (A2..A3) plus the last checked head (A0).
+R1878_BASE="$(git rev-parse HEAD)"
+git commit -q --allow-empty -m "burst one" -m "Area: api" -m "Release-note: burst"
+R1878_A1="$(git rev-parse HEAD)"
+git commit -q --allow-empty -m "burst two has no trailers"
+R1878_A2="$(git rev-parse HEAD)"
+git commit -q --allow-empty -m "burst three" -m "Area: web" -m "Release-note: burst"
+R1878_A3="$(git rev-parse HEAD)"
+# Without the last-checked head the surviving run sees only its own pushed
+# range and the middle violation slips through (the reported bug).
+expect_pass "pushed-only range misses the superseded middle commit" dev "$R1878_A2" "$R1878_A3"
+# With the last checked head the same run reports the middle commit.
+expect_fail "widened range reports the superseded middle commit" dev "$R1878_A2" "$R1878_A3" "$R1878_A2" "$R1878_BASE"
+# The override only widens: equal, already-at-head, unknown and diverged
+# heads keep the pushed range, and a non-fast-forward push still fails.
+expect_pass "last-checked equal to before keeps the pushed range" dev "$R1878_A2" "$R1878_A3" "$R1878_A2"
+expect_pass "last-checked at after keeps the pushed range" dev "$R1878_A2" "$R1878_A3" "$R1878_A3"
+expect_pass "unknown last-checked head keeps the pushed range" dev "$R1878_A2" "$R1878_A3" "0000000000000000000000000000000000000001"
+git checkout -q -b drift main
+git commit -q --allow-empty -m "drift" -m "Area: db" -m "Release-note: drift"
+DRIFT_SHA="$(git rev-parse HEAD)"
+git checkout -q dev
+expect_pass "diverged last-checked head keeps the pushed range" dev "$R1878_A2" "$R1878_A3" "$DRIFT_SHA"
+expect_fail "widened range still rejects a non-fast-forward push" dev "$R1878_A3" "$R1878_A1" "non-fast-forward" "$R1878_BASE"
+
+# --- #1878 / AC-2: branch creation (zero before) and no-op cases ---
+git checkout -q --orphan newborn
+git commit -q --allow-empty -m "genesis" -m "Area: api" -m "Release-note: genesis"
+R1878_GENESIS="$(git rev-parse HEAD)"
+git checkout -q dev
+ZERO40="0000000000000000000000000000000000000000"
+# Zero-BEFORE checks the whole history; the last-checked head changes nothing
+# on this path (a root commit never satisfies the single-parent dev rule, so
+# creation reports it with or without the override).
+expect_fail "branch creation checks full history" dev "$ZERO40" "$R1878_GENESIS" "$R1878_GENESIS"
+expect_fail "branch creation ignores the last-checked head" dev "$ZERO40" "$R1878_GENESIS" "$R1878_GENESIS" "$R1878_BASE"
+# No-op ranges still pass, with or without the override.
+expect_pass "no-op range passes with last-checked set" dev "$R1878_A3" "$R1878_A3" "$R1878_BASE"
+
+# --- #1878: the workflow resolves the last checked head and widens both
+# guard invocations with it ---
+grep -q 'gh run list --workflow branch-guard.yml' "$WF_YML" \
+  || fail "workflow must resolve the last checked head with gh run list"
+grep -q 'steps.last.outputs.sha' "$WF_YML" \
+  || fail "workflow must pass the last checked head to the guard"
+grep -q 'branch-guard.sh "$BRANCH" "$BEFORE" "$AFTER" "$FORCED" "$LAST"' "$WF_YML" \
+  || fail "failure step must pass \$LAST to branch-guard.sh"
+grep -q 'github.event.forced }}" "${{ steps.last.outputs.sha }}"' "$WF_YML" \
+  || fail "guard step must pass the last checked head as the 5th arg"
+echo "ok: surviving run resolves and passes the last checked head"
+
+echo "TEST PASS: dev/staging/main good+bad, force-push, deletion, range scoping, issue update, superseded-range widening"

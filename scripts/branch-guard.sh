@@ -2,10 +2,16 @@
 # Branch guard for dev, staging and main (CI-CD piece 7, §7).
 #
 # Usage:
-#   bash scripts/branch-guard.sh <branch> <before> <after> [forced]
+#   bash scripts/branch-guard.sh <branch> <before> <after> [forced] [last-checked]
 #
-# Checks only the pushed range (<before>..<after>, first-parent) against the
-# branch model: dev takes single-parent commits with Area:/Release-note:
+# Checks the pushed range (<before>..<after>, first-parent) against the branch
+# model, widened back to <last-checked> when given: GitHub keeps at most one
+# pending run per concurrency group, so in a burst of 3+ pushes a middle queued
+# run is superseded and its range is never validated. The surviving run passes
+# the newest already-checked head as <last-checked> (#1878) so the gap is
+# still covered. The override only widens a fast-forward pushed range
+# backwards; it never masks a non-fast-forward push and never narrows.
+# dev takes single-parent commits with Area:/Release-note:
 # trailer lines (or revert commits); staging takes merges whose second parent
 # is a commit on dev; main takes merges whose second parent is reachable from
 # the staging head. Any non-fast-forward push fails. Exit 0 when the range
@@ -57,6 +63,16 @@ else
   if ! git merge-base --is-ancestor "$BEFORE" "$AFTER"; then
     fail "non-fast-forward (force) push to '$BRANCH' ($BEFORE is not an ancestor of $AFTER)"
     exit 1
+  fi
+  # Superseded queued runs (#1878): widen back to the last checked head when
+  # it is a strictly older ancestor of the pushed base. Unknown, diverged,
+  # equal, or newer heads keep the pushed range.
+  LAST_CHECKED="${5:-}"
+  if [ -n "$LAST_CHECKED" ] && [ "$LAST_CHECKED" != "$ZERO" ] \
+    && [ "$LAST_CHECKED" != "$BEFORE" ] \
+    && git rev-parse --verify --quiet "$LAST_CHECKED^{commit}" >/dev/null \
+    && git merge-base --is-ancestor "$LAST_CHECKED" "$BEFORE"; then
+    BEFORE="$LAST_CHECKED"
   fi
   RANGE="$(git rev-list --first-parent --reverse "$BEFORE..$AFTER")"
 fi
