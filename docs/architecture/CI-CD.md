@@ -2,8 +2,7 @@
 
 > **Status:** Proposed. Becomes binding when merged by the maintainer, together with
 > [DECISIONS.md D-07](../product/DECISIONS.md).
-> **Revision:** 2026-11-23 · `dev` is the default branch until the first release (§2 rule 2) ·
-> first written 2026-11-20 against `main` @ `372755d3`
+> **Revision:** 2026-11-23 · `dev` is the default branch (§2 rule 2)
 > **Read with:** [VISION.md](../product/VISION.md) §4 (the update guarantees this serves) ·
 > [ADMISSION.md](../product/ADMISSION.md) (the per-change gate) ·
 > [COMPLIANCE-CHECKLIST.md](COMPLIANCE-CHECKLIST.md) (how to check an implementation of this
@@ -37,7 +36,7 @@ Constraints measured on 2026-11-20:
 - `e2e.yml` runs only on pushes to `main` and on manual dispatch. No change is e2e-tested before
   it reaches `main`.
 - `.agents/review_pr.md` §7 merges approved PRs with `gh pr merge --merge`, and
-  `.agents/work-on-issues.md` §8 opens PRs against the default branch (`main` when this was measured; `dev` since 2026-11-23).
+  `.agents/work-on-issues.md` §8 opens PRs against the default branch.
 
 ---
 
@@ -62,18 +61,14 @@ Rules:
 
 1. **One writer per branch.** No agent pushes to `dev`, `staging` or `main`. No person pushes to
    `dev` or `staging`.
-2. **`dev` is the default branch until the first release; `main` is the default from then on.**
-   While `dev` is the default, new work branches from it, `gh pr create` targets it, `Closes #N`
+2. **`dev` is the default branch.** New work branches from it, `gh pr create` targets it, `Closes #N`
    closes issues when a PR merges into it, and `schedule` / `workflow_run` triggers fire from it.
-   The cost: "Use this template", a plain `git clone` and the seed path (VISION §4.4) copy the
-   default branch, so they hand out unpromoted work. Before the first release there are no
-   adopters, so that cost is zero. Switching the default to `main` is a precondition of the first
-   release tag. The pipeline does not depend on which branch is the default, so the switch needs
-   no code change:
+   "Use this template", a plain `git clone` and the seed path (VISION §4.4) copy `dev`, which can hold
+   work that is not promoted yet. The documented seed path is a clone of a release tag
+   (VISION §4.4, `docs/UPGRADING.md`), which is promoted work:
    - agents set `--base dev` explicitly (§4.2);
    - the merge queue closes linked issues itself (§4.3);
-   - workflows land on `dev` like every other change and reach `main` by promotion, so the
-     scheduled workflows exist on both branches and fire from whichever one is the default.
+   - workflows land on `dev` like every other change and reach `main` by promotion.
 3. **No fix is committed to `staging` or `main`.** A fix lands on `dev` as a normal PR and is
    promoted. A commit made only on `staging` makes it diverge from `dev`, and the next promotion
    conflicts.
@@ -146,7 +141,7 @@ comment. Added rules:
 
 ### 4.3 Merge into `dev` — `merge-queue.yml`
 
-A workflow, not an agent. It lands on `dev` and reaches `main` by promotion; `schedule` and `workflow_run` fire from the default branch (§2 rule 2). Triggered on `labeled` (`agent:merge`), on completion of `ci` for
+A workflow, not an agent. It lands on `dev` and reaches `main` by promotion; `schedule` and `workflow_run` fire from `dev`, the default branch. Triggered on `labeled` (`agent:merge`), on completion of `ci` for
 `dev` (`workflow_run`), and every 30 minutes as a fallback. `concurrency: merge-queue`
 serializes it, so at most one merge is in flight.
 
@@ -175,8 +170,7 @@ the failed check, and moves to the next PR.
 
 After the merge it closes the PR's linked issues itself (`gh issue close` with a comment
 naming the squash SHA), skipping any issue that is already closed. GitHub closes issues from
-`Closes #N` only when a PR merges into the default branch. That covers `dev` until the first
-release and stops covering it when the default moves to `main` (§2 rule 2).
+`Closes #N` only when a PR merges into the default branch (`dev`).
 
 **No rebase before merge.** GitHub's squash merge applies the PR onto the current `dev` tip;
 check 3 stops textual conflicts. Semantic conflicts (both sides merge cleanly, the result is
@@ -203,7 +197,7 @@ The PR is not reopened; its branch is deleted on merge. The fix is a new PR for 
 ### 4.5 Promotion — `promote.yml`
 
 Triggered on a cron (default **daily, 04:00 UTC = 06:00 SAST**) and on `workflow_dispatch`
-(the expedite path, §6). The cron fires from the default branch (§2 rule 2).
+(the expedite path, §6). The cron fires from `dev`, the default branch.
 
 1. **Freeze.** Record the current `dev` head SHA. If `staging` already contains it, exit.
    Merges that land after this point go into the next promotion.
