@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
 from pydantic import (
     AnyHttpUrl,
@@ -43,6 +44,11 @@ def _quota_in_range(value: Any) -> Any:
     """
     if not isinstance(value, (int, float, str)):
         return value  # null, a datetime, ...: leave the type to pydantic
+    if isinstance(value, int) and not isinstance(value, bool) and value < 1:
+        # A JSON integer wider than a float64 loses exactness in float(), so
+        # the floor is judged on the raw value first; bools keep their old
+        # path (true -> 1, false -> refused as 0).
+        raise PydanticCustomError("greater_than_equal", QUOTA_MIN_MESSAGE)
     try:
         number = float(value)
     except (ValueError, OverflowError):
@@ -67,7 +73,7 @@ def _quota_in_range(value: Any) -> Any:
 
 # BeforeValidator runs before the bounds on the fields below, so the 422
 # carries the service's words. ge/le stay on the fields so OpenAPI states the bounds.
-QuotaAtLeastOne = Annotated[int | None, BeforeValidator(_quota_in_range)]
+QuotaInRange = Annotated[int | None, BeforeValidator(_quota_in_range)]
 
 
 class LoginRequest(BaseModel):
@@ -190,11 +196,14 @@ class WorkspaceUpdate(BaseModel):
 
 class InvitationCreate(BaseModel):
     email: EmailStr
-    role_id: str
+    # UUID, not str: a malformed role_id is a request error (422), and the 400
+    # "unknown role for this workspace" stays reserved for a role that does not
+    # exist. One status per field, so the response reveals nothing about which.
+    role_id: UUID
 
 
 class MemberRoleUpdate(BaseModel):
-    role_id: str
+    role_id: UUID
 
 
 class OwnershipTransfer(BaseModel):
@@ -216,7 +225,7 @@ class RoleUpdate(BaseModel):
 class ApiKeyCreate(BaseModel):
     name: StrippedName = Field(max_length=150)
     permissions: list[str] = Field(default_factory=list)
-    usage_quota: QuotaAtLeastOne = Field(default=None, ge=1, le=MAX_QUOTA)
+    usage_quota: QuotaInRange = Field(default=None, ge=1, le=MAX_QUOTA)
     # Optional hard expiry. Naive input is rejected: without an offset the
     # instant is ambiguous, and the service compares against UTC.
     expires_at: datetime | None = Field(default=None, examples=["2027-01-01T00:00:00Z"])
@@ -230,7 +239,7 @@ class ApiKeyCreate(BaseModel):
 
 
 class ApiKeyQuotaUpdate(BaseModel):
-    usage_quota: QuotaAtLeastOne = Field(default=None, ge=1, le=MAX_QUOTA)
+    usage_quota: QuotaInRange = Field(default=None, ge=1, le=MAX_QUOTA)
 
 
 class NotificationAck(BaseModel):

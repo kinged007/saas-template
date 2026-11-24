@@ -55,7 +55,8 @@ export function NotificationsSection() {
                 >
                   <SelectTrigger className="h-8 w-32 text-sm">
                     <SelectValue>
-                      {CHANNEL_OPTIONS.find((o) => o.value === (channels[t] ?? "in-app"))?.label}
+                      {CHANNEL_OPTIONS.find((o) => o.value === (channels[t] ?? "in-app"))?.label ??
+                        (channels[t] ?? "in-app")}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>

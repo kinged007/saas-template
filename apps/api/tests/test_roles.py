@@ -139,6 +139,103 @@ async def _add_member_holding_role(
     return user, membership_id
 
 
+# ------------------------------------------- registry order of seeded defaults
+
+
+async def test_owner_and_admin_defaults_keep_registry_order():
+    """Issue #1569: owner/admin defaults are the registry in its declared order.
+
+    The set-iteration order this replaced was hash-randomized per process, so
+    the same seed code stored a different list on each boot. `editor`/`viewer`
+    are literal lists and already ordered this way.
+    """
+    owner = perms.permissions_for_role("owner")
+    admin = perms.permissions_for_role("admin")
+    # Hard-coded, not re-derived from the registry: a reorder of
+    # PERMISSION_DEFINITIONS must fail here rather than change what a system
+    # role holds without a test noticing.
+    assert owner == [
+        "workspace:read",
+        "workspace:update",
+        "workspace:delete",
+        "member:read",
+        "member:create",
+        "member:update",
+        "member:delete",
+        "profile:update",
+        "role:read",
+        "role:create",
+        "apikey:read",
+        "apikey:create",
+        "apikey:delete",
+        "message:read",
+        "message:create",
+        "message:update",
+        "jobs:read",
+        "jobs:update",
+        "webhook:read",
+        "webhook:create",
+        "webhook:update",
+        "webhook:delete",
+        "audit:read",
+        "*",
+    ]
+    assert admin == [p for p in owner if p not in {"workspace:delete", "*"}]
+    assert admin[-1] == "audit:read"
+
+
+async def test_seeded_system_rows_store_registry_ordered_permissions(app_client):
+    """Issue #1569: a freshly created workspace stores the registry order, and
+    that is the order `GET /roles` (and so `/auth/me`) reports. Comparing
+    `sorted(...)` here would hide a permutation."""
+    owner = await register_user(app_client, "seeded-order@example.com")
+    ws = await create_workspace(app_client, owner)
+    rows = {
+        r["name"]: r["permissions"] for r in await _roles(app_client, ws_headers(owner, ws["id"]))
+    }
+    assert rows["owner"] == [*perms.ALL_PERMISSIONS, "*"]
+    assert rows["admin"] == [p for p in perms.ALL_PERMISSIONS if p != perms.WORKSPACE_DELETE]
+
+
+async def test_sync_system_role_permissions_rewrites_shuffled_system_rows(app_client):
+    """Issue #1569: a system role seeded by an older build keeps its hash-random
+    order until it is rewritten, so the sync is order-sensitive. Idempotent: the
+    second call reports nothing to do."""
+    owner = await register_user(app_client, "shuffled-admin@example.com")
+    ws = await create_workspace(app_client, owner)
+    expected = [p for p in perms.ALL_PERMISSIONS if p != perms.WORKSPACE_DELETE]
+    shuffled = list(reversed(expected))
+    assert shuffled != expected
+
+    async with SessionFactory() as session:
+        admin = await session.scalar(
+            select(Role).where(
+                Role.workspace_id == ws["id"],
+                Role.name == "admin",
+                Role.system.is_(True),
+            )
+        )
+        assert admin is not None
+        admin.permissions = shuffled
+        await session.commit()
+
+    async with SessionFactory() as session:
+        assert await WorkspaceService(session).sync_system_role_permissions() == 1
+
+    async with SessionFactory() as session:
+        admin = await session.scalar(
+            select(Role).where(
+                Role.workspace_id == ws["id"],
+                Role.name == "admin",
+                Role.system.is_(True),
+            )
+        )
+        assert admin.permissions == expected
+
+    async with SessionFactory() as session:
+        assert await WorkspaceService(session).sync_system_role_permissions() == 0
+
+
 # ------------------------------------------------------- registry + catalog
 
 
@@ -152,7 +249,8 @@ async def test_permission_registry_covers_route_guards():
 
 async def test_permission_catalog_requires_auth(app_client):
     resp = await app_client.get(
-        "/api/v1/roles/permission-catalog", headers={"X-Workspace-ID": "ws-does-not-exist"}
+        "/api/v1/roles/permission-catalog",
+        headers={"X-Workspace-ID": "00000000-0000-0000-0000-000000000000"},
     )
     assert resp.status_code in (401, 403)
 
@@ -645,7 +743,7 @@ async def test_update_role_noop_body_keeps_system_flag(app_client):
     ws = await create_workspace(client, owner)
     headers = ws_headers(owner, ws["id"])
     editor_id = await _role_id(client, headers, "editor")
-    for body in ({}, {"name": "editor"}):
+    for body in ({}, {"name": "editor"}, {"name": "  editor  "}):
         resp = await client.patch(f"/api/v1/roles/{editor_id}", json=body, headers=headers)
         assert resp.status_code == 200, (body, resp.text)
         assert resp.json()["system"] is True, body
@@ -729,8 +827,34 @@ async def test_roles_client_sort_desc_reverses_only_within_the_rank_groups(app_c
     assert names[4:] == sorted(_CUSTOM_ROLE_NAMES, reverse=True)
 
 
+async def test_roles_default_order_breaks_a_name_tie_on_id(app_client):
+    """#848: the default order ends on id, so a shared name cannot tie it.
+
+    `roles.name` is unique only in the app layer, so two rows can carry one
+    name. They are inserted id-descending, which leaves storage order -- what a
+    rank + name read falls back on for a tie -- disagreeing with the id order.
+    """
+    client = app_client
+    owner = await register_user(client, "list-tie@example.com")
+    ws = await create_workspace(client, owner)
+    headers = ws_headers(owner, ws["id"])
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    ids = [f"00000000-0000-4000-8000-00000000000{i}" for i in (1, 2)]
+    async with SessionFactory() as session:
+        session.add_all(
+            Role(id=rid, workspace_id=ws["id"], name="dup", permissions=[], system=False)
+            for rid in reversed(ids)
+        )
+        await session.commit()
+    resp = await client.get("/api/v1/roles", params={"_start": 0, "_end": 100}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert [r["id"] for r in resp.json() if r["name"] == "dup"] == ids
+
+
 async def test_roles_paging_tiles_the_set_without_gaps(app_client):
-    """Rank + name is a total order, so pages tile the set in that one order.
+    """Rank + name + id is a total order, so pages tile the set in that one order.
 
     The expectation is built here rather than fetched from a full-set request:
     two runs of the same endpoint agree even when the order is not total.

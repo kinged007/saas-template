@@ -1,5 +1,9 @@
 """My workspaces list + leave (issue #173)."""
 
+from sqlalchemy import select
+
+from src.db.session import SessionFactory
+from src.models.workspace import Workspace
 from tests.conftest import auth_headers, create_workspace, register_user, ws_headers
 
 
@@ -65,6 +69,76 @@ async def test_me_permissions_follow_role_registry_order(app_client):
     me = await client.get("/api/v1/auth/me", headers=auth_headers(member))
     assert me.status_code == 200, me.text
     assert me.json()["permissions"] == ordered
+
+
+async def test_me_permissions_union_keeps_first_occurrence_across_memberships(app_client):
+    """Issue #1568: across memberships the union resolves a permission held by
+    two roles to its first occurrence in `list_workspaces` order — newest
+    workspace first (`Workspace.created_at.desc()`), duplicates collapsing once.
+    Pins that order; a re-sort would fail here."""
+    client = app_client
+    owner = await register_user(client, "first-occ-owner@example.com")
+    ws_a = await create_workspace(client, owner, name="Workspace A")
+    role_a = await client.post(
+        "/api/v1/roles",
+        json={
+            "name": "a-scanner",
+            "permissions": ["audit:read", "member:read", "workspace:update"],
+        },
+        headers=ws_headers(owner, ws_a["id"]),
+    )
+    assert role_a.status_code == 201, role_a.text
+    ws_b = await create_workspace(client, owner, name="Workspace B")
+    role_b = await client.post(
+        "/api/v1/roles",
+        json={"name": "b-scanner", "permissions": ["member:read", "audit:read"]},
+        headers=ws_headers(owner, ws_b["id"]),
+    )
+    assert role_b.status_code == 201, role_b.text
+
+    member = await register_user(client, "first-occ-member@example.com")
+    for ws_id, role_id in (
+        (ws_a["id"], role_a.json()["id"]),
+        (ws_b["id"], role_b.json()["id"]),
+    ):
+        inv = await client.post(
+            "/api/v1/invitations",
+            json={"email": "first-occ-member@example.com", "role_id": role_id},
+            headers=ws_headers(owner, ws_id),
+        )
+        assert inv.status_code == 201, inv.text
+        acc = await client.post(
+            "/api/v1/invitations/accept",
+            params={"token": inv.json()["token"]},
+            headers=auth_headers(member),
+        )
+        assert acc.status_code == 200, acc.text
+
+    # created_at is a one-second server_default here, so two workspaces
+    # created in the same test tie and the id breaks the tie
+    # (`Workspace.created_at.desc(), Workspace.id.desc()`). Derive the
+    # expectation from the documented order rather than hand-pinning a
+    # timestamp: a re-sort or a scan-order tiebreak fails here.
+    async with SessionFactory() as session:
+        stamped = (
+            await session.execute(
+                select(Workspace.id, Workspace.created_at).where(
+                    Workspace.id.in_([ws_a["id"], ws_b["id"]])
+                )
+            )
+        ).all()
+    order = [row[0] for row in sorted(stamped, key=lambda row: (row[1], row[0]), reverse=True)]
+    grants = {
+        ws_a["id"]: role_a.json()["permissions"],
+        ws_b["id"]: role_b.json()["permissions"],
+    }
+
+    me = await client.get("/api/v1/auth/me", headers=auth_headers(member))
+    assert me.status_code == 200, me.text
+    assert [w["id"] for w in me.json()["workspaces"]] == order
+    assert me.json()["permissions"] == list(
+        dict.fromkeys(p for ws_id in order for p in grants[ws_id])
+    )
 
 
 async def test_leave_removes_membership(app_client):

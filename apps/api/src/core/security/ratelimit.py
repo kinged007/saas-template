@@ -16,6 +16,15 @@ intact for two unrelated reasons:
   after `check`. Every OAuth route likewise calls `check`
   and no `fail`.
 
+`check` consults two keys on POST /auth/login: the (IP, email) key and the
+account key (`account:<email>`), so distributed guessing against one inbox
+from many addresses shares one budget. Exhausting the window budget locks the
+key for `lockout_seconds` (0 disables, pure sliding window); a success
+`reset`s both keys.
+
+Locking the account key can lock the real owner out; intentional
+brute-force vs. availability tradeoff.
+
 Read the route, not this list, before adding a `fail`.
 # ponytail: ceiling is one replica; move to Redis when the API scales out.
 """
@@ -35,12 +44,15 @@ class SlidingWindowLimiter:
         *,
         max_attempts: int = 10,
         window_seconds: int = 300,
+        lockout_seconds: int = 900,
         max_keys: int = 10_000,
     ) -> None:
         self.max_attempts = max_attempts
         self.window_seconds = window_seconds
+        self.lockout_seconds = lockout_seconds
         self.max_keys = max_keys
         self._failures: dict[str, deque[float]] = {}
+        self._locked_until: dict[str, float] = {}
         self._lock = threading.Lock()
 
     def _prune(self, key: str, now: float) -> deque[float] | None:
@@ -56,12 +68,32 @@ class SlidingWindowLimiter:
         return hits
 
     def check(self, key: str) -> None:
-        """Raise 429 when the key has exhausted its failure budget."""
+        """Raise 429 when the key has exhausted its failure budget.
+
+        A key that just exhausted the window is locked for `lockout_seconds`
+        (0 disables the lock, the Retry-After falls back to the window); a
+        locked key stays 429 until the lockout lapses, which also clears the
+        window history accumulated beneath it.
+        """
         now = time.monotonic()
         with self._lock:
+            locked_until = self._locked_until.get(key)
+            if locked_until is not None:
+                if locked_until > now:
+                    raise HTTPException(
+                        status.HTTP_429_TOO_MANY_REQUESTS,
+                        "too many attempts, try again later",
+                        headers={"Retry-After": str(int(locked_until - now) + 1)},
+                    )
+                del self._locked_until[key]
+                self._failures.pop(key, None)
             hits = self._prune(key, now)
             if hits is not None and len(hits) >= self.max_attempts:
-                retry_after = int(hits[0] + self.window_seconds - now) + 1
+                if self.lockout_seconds > 0:
+                    self._locked_until[key] = now + self.lockout_seconds
+                    retry_after = self.lockout_seconds
+                else:
+                    retry_after = int(hits[0] + self.window_seconds - now) + 1
                 raise HTTPException(
                     status.HTTP_429_TOO_MANY_REQUESTS,
                     "too many attempts, try again later",
@@ -74,18 +106,22 @@ class SlidingWindowLimiter:
             hits = self._prune(key, now)
             if hits is None:
                 if len(self._failures) >= self.max_keys:
-                    self._failures.pop(next(iter(self._failures)))
+                    evicted = next(iter(self._failures))
+                    self._failures.pop(evicted)
+                    self._locked_until.pop(evicted, None)
                 hits = self._failures[key] = deque()
             hits.append(now)
 
     def reset(self, key: str) -> None:
         with self._lock:
             self._failures.pop(key, None)
+            self._locked_until.pop(key, None)
 
     def clear(self) -> None:
         """Drop every key (tests reset the limiter between tests)."""
         with self._lock:
             self._failures.clear()
+            self._locked_until.clear()
 
 
 auth_limiter = SlidingWindowLimiter()
@@ -101,11 +137,46 @@ def get_auth_limiter() -> SlidingWindowLimiter:
     from src.settings import settings
 
     global auth_limiter
-    wanted = (settings.auth_rate_limit_max_attempts, settings.auth_rate_limit_window_seconds)
-    current = (auth_limiter.max_attempts, auth_limiter.window_seconds)
+    wanted = (
+        settings.auth_rate_limit_max_attempts,
+        settings.auth_rate_limit_window_seconds,
+        settings.auth_rate_limit_lockout_seconds,
+    )
+    current = (
+        auth_limiter.max_attempts,
+        auth_limiter.window_seconds,
+        auth_limiter.lockout_seconds,
+    )
     if wanted != current:
-        auth_limiter = SlidingWindowLimiter(max_attempts=wanted[0], window_seconds=wanted[1])
+        auth_limiter = SlidingWindowLimiter(
+            max_attempts=wanted[0], window_seconds=wanted[1], lockout_seconds=wanted[2]
+        )
     return auth_limiter
+
+
+mail_limiter = SlidingWindowLimiter()
+
+
+def get_mail_limiter() -> SlidingWindowLimiter:
+    """IP-wide mail-volume backstop (#1346), same settings-diff rebuild."""
+    from src.settings import settings
+
+    global mail_limiter
+    wanted = (
+        settings.auth_ip_mail_max_attempts,
+        settings.auth_ip_mail_window_seconds,
+        settings.auth_rate_limit_lockout_seconds,
+    )
+    current = (
+        mail_limiter.max_attempts,
+        mail_limiter.window_seconds,
+        mail_limiter.lockout_seconds,
+    )
+    if wanted != current:
+        mail_limiter = SlidingWindowLimiter(
+            max_attempts=wanted[0], window_seconds=wanted[1], lockout_seconds=wanted[2]
+        )
+    return mail_limiter
 
 
 register_limiter = SlidingWindowLimiter()
@@ -113,7 +184,8 @@ register_limiter = SlidingWindowLimiter()
 
 def get_register_limiter() -> SlidingWindowLimiter:
     """Per-IP cap on POST /auth/register (#1343): a separate instance and key
-    space, with its own settings pair so tightening the auth brute-force budget
+    space (IP alone, never the login account:<email> key), with its own
+    settings pair so tightening the auth brute-force budget
     in a test cannot strangle this window (register_user is universal setup).
 
     The registrant owns every fresh address, so per-(IP, email) keying cannot
@@ -121,6 +193,7 @@ def get_register_limiter() -> SlidingWindowLimiter:
     instance keeps that window out of login/forgot/resend's (IP, email) budget
     and vice versa; conftest clears it per test so the universal `register_user`
     setup path is never throttled by another test's spend.
+    Shares only the auth lockout-duration setting.
     """
     from src.settings import settings
 
@@ -128,8 +201,15 @@ def get_register_limiter() -> SlidingWindowLimiter:
     wanted = (
         settings.auth_register_rate_limit_max_attempts,
         settings.auth_register_rate_limit_window_seconds,
+        settings.auth_rate_limit_lockout_seconds,
     )
-    current = (register_limiter.max_attempts, register_limiter.window_seconds)
+    current = (
+        register_limiter.max_attempts,
+        register_limiter.window_seconds,
+        register_limiter.lockout_seconds,
+    )
     if wanted != current:
-        register_limiter = SlidingWindowLimiter(max_attempts=wanted[0], window_seconds=wanted[1])
+        register_limiter = SlidingWindowLimiter(
+            max_attempts=wanted[0], window_seconds=wanted[1], lockout_seconds=wanted[2]
+        )
     return register_limiter

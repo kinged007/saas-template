@@ -280,7 +280,7 @@ async def test_auto_join_resolves_the_configured_role_through_the_fold(
 
 async def test_relogin_keeps_existing_member_role(app_client, single_workspace_on, monkeypatch):
     await _first_workspace(app_client)
-    second = await register_user(app_client, "second@example.com")
+    await register_user(app_client, "second@example.com")
     monkeypatch.setattr(settings, "single_workspace_default_role", "editor")
     resp = await app_client.post(
         "/api/v1/auth/login",
@@ -289,7 +289,6 @@ async def test_relogin_keeps_existing_member_role(app_client, single_workspace_o
     assert resp.status_code == 200, resp.text
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(resp.json()))
     assert me.json()["workspaces"][0]["role"] == "viewer"
-    assert second["access_token"]
 
 
 async def test_flag_off_keeps_current_behavior(app_client):
@@ -345,6 +344,103 @@ async def test_join_survives_missing_viewer_role(app_client, single_workspace_on
     tokens = await register_user(app_client, "second@example.com")
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
     assert [w["id"] for w in me.json()["workspaces"]] == [ws_id]
+
+
+async def _retire_system_roles(app_client, created_at: list) -> str:
+    """Leave the workspace owner plus two custom roles, newest inserted first.
+
+    Dropping admin/editor/viewer is what forces the last-resort branch.
+    Returns the workspace id; `created_at` is per custom role, in insert order.
+    """
+    from sqlalchemy import delete
+
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    _, ws_id = await _first_workspace(app_client)
+    async with SessionFactory() as session:
+        await session.execute(
+            delete(Role).where(
+                Role.workspace_id == ws_id, Role.name.in_(["admin", "editor", "viewer"])
+            )
+        )
+        session.add_all(
+            Role(workspace_id=ws_id, name=name, permissions=[], created_at=stamp)
+            for name, stamp in zip(["zulu", "alpha"], created_at, strict=True)
+        )
+        await session.commit()
+    return ws_id
+
+
+async def test_last_resort_role_is_the_oldest_remaining_role(
+    app_client, single_workspace_on, caplog
+):
+    import logging
+    from datetime import timedelta
+
+    from src.core.dates import now_utc
+
+    base = now_utc()
+    ws_id = await _retire_system_roles(app_client, [base + timedelta(days=1), base])
+    with caplog.at_level(logging.WARNING, logger="src.services.workspaces"):
+        tokens = await register_user(app_client, "second@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert [(w["id"], w["role"]) for w in me.json()["workspaces"]] == [(ws_id, "alpha")]
+    # The last resort is the branch an operator most needs to know about.
+    assert "granting oldest remaining role 'alpha'" in caplog.text
+
+
+async def test_last_resort_role_breaks_timestamp_ties_by_name(app_client, single_workspace_on):
+    from src.core.dates import now_utc
+
+    # Roles created in one transaction share a created_at; the pick must still be stable.
+    base = now_utc()
+    ws_id = await _retire_system_roles(app_client, [base, base])
+    tokens = await register_user(app_client, "second@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert [(w["id"], w["role"]) for w in me.json()["workspaces"]] == [(ws_id, "alpha")]
+
+
+async def test_unresolvable_default_role_is_logged(
+    app_client, single_workspace_on, monkeypatch, caplog
+):
+    import logging
+
+    from sqlalchemy import delete
+
+    from src.db.session import SessionFactory
+    from src.models.workspace import Role
+
+    _, ws_id = await _first_workspace(app_client)
+    # Only viewer is gone, so the chain lands on editor: the log must name the
+    # role actually granted, not the constant it no longer reaches.
+    async with SessionFactory() as session:
+        await session.execute(delete(Role).where(Role.workspace_id == ws_id, Role.name == "viewer"))
+        await session.commit()
+    monkeypatch.setattr(settings, "single_workspace_default_role", "edtior")
+    with caplog.at_level(logging.WARNING, logger="src.services.workspaces"):
+        tokens = await register_user(app_client, "second@example.com")
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+    assert me.json()["workspaces"][0]["role"] == "editor"
+    assert "SINGLE_WORKSPACE_DEFAULT_ROLE='edtior'" in caplog.text
+    assert "granted 'editor'" in caplog.text
+
+
+async def test_resolvable_default_role_logs_nothing(
+    app_client, single_workspace_on, monkeypatch, caplog
+):
+    import logging
+
+    await _first_workspace(app_client)
+    for value in ("viewer", "owner"):
+        monkeypatch.setattr(settings, "single_workspace_default_role", value)
+        with caplog.at_level(logging.WARNING, logger="src.services.workspaces"):
+            tokens = await register_user(app_client, f"{value}-cfg@example.com")
+        me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens))
+        # "owner" is a documented input that resolves viewer: not a misconfiguration.
+        assert me.json()["workspaces"][0]["role"] == "viewer"
+        assert "SINGLE_WORKSPACE_DEFAULT_ROLE" not in caplog.text
+        assert "granting oldest remaining role" not in caplog.text
 
 
 async def test_refresh_refuses_pair_when_account_deleted_mid_rotation(app_client, monkeypatch):
@@ -554,10 +650,12 @@ async def _gone_user_is_gone(app_client, monkeypatch, entry: str):
     assert resp.status_code == 401, resp.text
     assert resp.json()["detail"] == "account no longer exists"
     assert "access_token" not in resp.json()
-    if entry != "register":
-        # Both throttled entry points charge the limiter on this 401 instead of
-        # resetting the window. On login that is the whole point: the key is
-        # ip:email and stays reusable, so a reset would leave it unthrottled.
+    if entry == "login":
+        # Login charges both budgets (per-IP key plus account:<email> key),
+        # so one 401 records two checks and two fails.
+        assert [op for op, _ in calls] == ["check", "check", "fail", "fail"], calls
+    elif entry == "refresh":
+        # Refresh charges its single key on this 401 instead of resetting.
         # /register meters on its own per-IP limiter, not this one (#1343).
         assert [op for op, _ in calls] == ["check", "fail"], calls
 

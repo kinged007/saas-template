@@ -2,7 +2,7 @@
 
 Pick up the next actionable piece of work and implement it. Run from the repo root. All `gh` commands assume the repo default (current directory) — never hardcode `repos/<owner>/<repo>`.
 
-This repo currently has zero milestones. There is no milestone ordering. Work directly from the open-issue list. If milestones are added later, process the lowest-numbered open milestone first, skipping staging/empty tracks unless told otherwise.
+Work directly from the open-issue list. This workflow does not order by milestone.
 
 ## Process lifecycle and cleanup (MANDATORY)
 
@@ -20,26 +20,26 @@ Use a task-appropriate cap for the application stack as well. At cleanup, send `
 
 ## 1. List open issues, sorted by priority then age
 
-Priority comes from three labels: `p0` (highest), `p1`, `p2` (lowest). Highest priority wins; within one priority, the oldest issue wins. An issue with no priority label sorts after every `p0`/`p1`/`p2` issue, ordered among the unlabelled group by age. If an issue carries more than one priority label, the highest one counts. The agent only reads these labels and never adds or removes them.
+Priority comes from three labels: `P0` (highest), `P1`, `P2` (lowest). Highest priority wins; within one priority, the oldest issue wins. An issue with no priority label sorts after every `P0`/`P1`/`P2` issue, ordered among the unlabelled group by age. If an issue carries more than one priority label, the highest one counts. The agent only reads these labels and never adds or removes them.
 
 This single command returns the actionable issues already in that order:
 
 ```bash
 gh issue list --state open --limit 100 \
   --json number,title,createdAt,labels \
-  -q 'map(select(([.labels[].name] | any(. == "wontfix" or . == "needs-human" or . == "in-progress" or . == "review-in-progress" or . == "invalid" or . == "duplicate" or . == "agent:done")) | not))
-      | map(. + {p: ([.labels[].name | select(. == "p0" or . == "p1" or . == "p2")] | sort | first // "UNSET")})
-      | sort_by((if .p=="p0" then 0 elif .p=="p1" then 1 elif .p=="p2" then 2 else 3 end), .createdAt)
+  -q 'map(select(([.labels[].name] | any(. == "wontfix" or . == "needs-human" or . == "backlog" or . == "in-progress" or . == "review-in-progress" or . == "invalid" or . == "duplicate" or . == "agent:done")) | not))
+      | map(. + {p: ([.labels[].name | select(. == "P0" or . == "P1" or . == "P2")] | sort | first // "UNSET")})
+      | sort_by((if .p=="P0" then 0 elif .p=="P1" then 1 elif .p=="P2" then 2 else 3 end), .createdAt)
       | .[] | "#\(.number) | \(.p) | \(.createdAt) | \(.title)"'
 ```
 
-Two details matter. The skip filter uses `any(... or ...)`, not `inside(...)`: `inside` is fed the label array as input and does not do what it looks like here, so an issue carrying `needs-human` alongside another label slips through the filter. The priority lookup takes `sort | first` over the matched labels so that an issue tagged both `p2` and `p0` ranks as `p0`.
+Two details matter. The skip filter uses `any(... or ...)`, not `inside(...)`: `inside` is fed the label array as input and does not do what it looks like here, so an issue carrying `needs-human` alongside another label slips through the filter. The priority lookup takes `sort | first` over the matched labels so that an issue tagged both `P2` and `P0` ranks as `P0`.
 
 If the three priority labels do not exist yet, every issue sorts as `UNSET` and the effective order is oldest first. That is correct but inert — ask the maintainer to label the backlog before relying on priority ordering.
 
 ## 2. Drop finished, invalid, or claimed issues
 
-The step 1 query already excludes every issue labelled `wontfix`, `needs-human`, `in-progress`, `review-in-progress`, `invalid`, `duplicate`, or `agent:done`. There is no `backlog` label. Never touch a skipped issue, even if open.
+The step 1 query already excludes every issue labelled `wontfix`, `needs-human`, `backlog`, `in-progress`, `review-in-progress`, `invalid`, `duplicate`, or `agent:done`. `backlog` means deferred by a person — do not dispatch it. Never touch a skipped issue, even if open.
 
 ## 3. Find the next unblocked and related open issues
 
@@ -54,7 +54,7 @@ gh issue view <n> --json blockedBy \
   -q '.blockedBy.nodes[] | "\(.number) \(.state) \(.title)"'
 ```
 
-Take issues with no blocker in `OPEN` state, that are related or similar to each other. Take on no more than 5 minor issues at a time. The more complex the issue, the fewer to claim at the same time. Only claim issues that are related or similar, otherwise just claim ONE issue.
+Take issues with no blocker in `OPEN` state. Claim ONE issue; only claim more when they are related or similar to each other, and the more complex the issue, the fewer to claim at the same time. One admitted issue that serves the phase beats five that do not.
 If every open issue is blocked by another open issue, stop and report that the backlog is drained or deadlocked.
 
 ## 3a. Claim every selected issue before work (MANDATORY)
@@ -78,6 +78,20 @@ Never remove a label claimed by another agent. If no issue is claimed, there is 
 
 Do not add `agent:done` when releasing early. It marks finished work and is applied once, on the success path in step 10. An issue that stops at `needs-human` is not done, and one abandoned mid-implementation is not done; both stay without it so they can be picked up again.
 
+## 3b. Apply admission Gate 0 before work (MANDATORY)
+
+Read `docs/product/ADMISSION.md`, then assess every claimed issue against Gate 0: until the first release, only three kinds of change are built — work that delivers the update-path guarantee (VISION §4), a security fix, or a fix restoring already-documented behaviour.
+
+An issue that fails Gate 0 but passes Gates 1–4 is deferred, not built. Defer it and move on to the next candidate — never stop the run on the first deferred issue:
+
+```bash
+gh issue comment <n> --body "Deferred: Gate 0 / <P0|P1|P2|unlabelled> — <one line: which of the three admitted kinds it is not, and the earliest release it waits for>"
+gh issue edit <n> --add-label backlog
+gh issue edit <n> --remove-label in-progress
+```
+
+An issue that fails Gate 0 and also fails a later gate gets that gate's verdict instead (Reject, or Maintainer via `needs-human`), then release `in-progress` and continue to the next candidate. Only an issue that passes Gate 0 proceeds to step 4.
+
 ## 4. Read the issue threads first, then plan, then post the plan
 
 Read ALL existing comments on the issues BEFORE planning — some issues already carry a plan or steering notes that override the body:
@@ -100,6 +114,7 @@ Context to read:
 - the repo's architecture docs; check `docs/` for related docs on the area being touched.
 - the project's context map / wiki if present, then the source files it lists. Never plan from the wiki alone.
 - check blast radius before touching widely-imported files.
+- `docs/architecture/CONVENTIONS.md`: the plan's "Conventions touched" section lists the `CONV-<AREA>-NN` rule IDs the change touches, or `none`. A change that has to break a rule needs a `docs/product/DECISIONS.md` entry; that is an architectural change, so apply `needs-human` as below.
 - Follow the repo's own instructions (tooling, make targets, no new dependencies without asking).
 - Post the plan as an issue comment before writing code:
 
@@ -110,6 +125,8 @@ gh issue comment <n> --body "## Plan
 ...
 ### Files to touch
 ...
+### Conventions touched
+CONV-... IDs from docs/architecture/CONVENTIONS.md, or none
 ### Acceptance (from issue)
 ..."
 ```
@@ -156,14 +173,17 @@ If implementation and testing succeed, submit a PR for the issue (push the branc
 
 ## 8. Open the pull request
 
-Do not push directly to the PR's base branch. Resolve the base first (never assume) and open the PR from a per-issue branch against it:
+Do not push directly to the PR's base branch. Branch from `dev` and open the PR against `dev` — always explicit, no lookup:
 
 ```bash
-BASE=$(gh repo view --json defaultBranchRef -q '.defaultBranchRef.name')
 git checkout -b auto/<n>
 git push -u origin auto/<n>
-gh pr create --base "$BASE" --head auto/<n> --title "<summary>" --body "<body>"
+gh pr create --base dev --head auto/<n> --title "<summary>" --body "<body>"
 ```
+
+The PR body must carry both machine-read lines, one line each, in the
+Release-note section of the template: `Area: <api|web|db|infra>` and
+`Release-note: <one line>`.
 
 The PR body must follow this structure — two-line bodies are not acceptable:
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import secrets
 import uuid
 from datetime import timedelta
@@ -28,6 +29,8 @@ from src.models.workspace import (
 )
 from src.services.auth import AuthService
 from src.services.serializers import ONBOARDING_ENABLED_FLAG
+
+logger = logging.getLogger(__name__)
 
 
 class WorkspaceError(Exception):
@@ -142,9 +145,9 @@ _ROLE_PICK_ORDER = (Role.system.desc(), Role.created_at, Role.id)
 class WorkspaceService:
     DEFAULT_ROLES = ["owner", "admin", "editor", "viewer"]
 
-    # Fallback auto-join role for single-workspace mode (SINGLE_WORKSPACE).
-    # Viewer: edit access requires explicit designation.
-    SINGLE_WORKSPACE_ROLE = "viewer"
+    # Fallback auto-join role for single-workspace mode (SINGLE_WORKSPACE), used
+    # when SINGLE_WORKSPACE_DEFAULT_ROLE names no role of the workspace.
+    SINGLE_WORKSPACE_FALLBACK_ROLE = "viewer"
 
     def __init__(self, session: AsyncSession, bus: EventBus | None = None) -> None:
         self._session = session
@@ -222,6 +225,8 @@ class WorkspaceService:
         allow_single_workspace_bootstrap: bool = False,
     ) -> Workspace:
         name = name.strip()
+        if not name:
+            raise WorkspaceError("workspace name cannot be blank")
         if self.single_workspace_enabled() and not allow_single_workspace_bootstrap:
             existing = await self.get_single_workspace()
             if existing is not None:
@@ -296,6 +301,8 @@ class WorkspaceService:
         changes: dict = {}
         if name is not None:
             name = name.strip()
+            if not name:
+                raise WorkspaceError("workspace name cannot be blank")
         if name is not None and name != workspace.name:
             changes["name"] = {"from": workspace.name, "to": name}
             workspace.name = name
@@ -444,7 +451,7 @@ class WorkspaceService:
                 WorkspaceMember.user_id == user_id,
                 WorkspaceMember.status.in_(ACTIVE_MEMBERSHIP_STATUSES),
             )
-            .order_by(Workspace.created_at.desc())
+            .order_by(Workspace.created_at.desc(), Workspace.id.desc())
         )
         result = await self._session.execute(stmt)
         return list(result.all())
@@ -511,7 +518,7 @@ class WorkspaceService:
         self,
         workspace_id: str,
         member_id: str,
-        role_id: str,
+        role_id: str | uuid.UUID,
         *,
         actor: User,
         ip_address: str | None = None,
@@ -1079,6 +1086,10 @@ class WorkspaceService:
         list changed. Used when a default role's permission set evolves
         (e.g. granting apikey management to viewers) so existing workspaces
         pick up the change on re-seed instead of only new ones.
+
+        The comparison is order-sensitive: a system role left in the order an
+        older build seeded is rewritten once, because that order is part of
+        what a consumer sees on `/roles` and `/auth/me`.
         """
         result = await self._session.execute(select(Role).where(Role.system.is_(True)))
         changed = 0
@@ -1087,7 +1098,7 @@ class WorkspaceService:
                 defaults = permissions_for_role(role.name)
             except ValueError:
                 continue  # system flag on a renamed/custom role — leave it alone
-            if sorted(role.permissions) != sorted(defaults):
+            if role.permissions != defaults:
                 role.permissions = defaults
                 changed += 1
         if changed:
@@ -1095,7 +1106,11 @@ class WorkspaceService:
         return changed
 
     async def list_roles(self, workspace_id: str) -> list[Role]:
-        stmt = select(Role).where(Role.workspace_id == workspace_id).order_by(Role.created_at.asc())
+        stmt = (
+            select(Role)
+            .where(Role.workspace_id == workspace_id)
+            .order_by(Role.created_at.asc(), Role.name.asc())
+        )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
@@ -1107,13 +1122,15 @@ class WorkspaceService:
 
     async def _single_workspace_role(self, workspace_id: str) -> Role:
         """Auto-join role: SINGLE_WORKSPACE_DEFAULT_ROLE, else
-        viewer/editor/admin/an arbitrary remaining non-owner role.
+        viewer/editor/admin/oldest remaining non-owner role.
 
         Each rung is matched by folded name over the workspace's non-owner roles,
         so a custom role works too and an unknown, blank or "owner" value falls
         through the chain. The wider chain keeps a later login working when the
         viewer role was renamed or removed, instead of bricking every later
-        login.
+        login. The last resort is the oldest remaining role, ties broken by
+        name — the order `list_roles` returns — so the grant does not depend on
+        the query plan.
 
         Raises when the workspace has no non-owner role at all: there is
         nothing to join with, and the caller skips the join rather than
@@ -1134,13 +1151,32 @@ class WorkspaceService:
         for role in result.scalars():
             if not is_owner_role_name(role.name):
                 roles.setdefault(role.name.lower(), role)
-        names = (settings.single_workspace_default_role.strip(), self.SINGLE_WORKSPACE_ROLE)
-        for name in (*names, "editor", "admin"):
-            if role := roles.get(name.lower()):
-                return role
-        if roles:
-            return next(iter(roles.values()))
-        raise WorkspaceError(f"workspace {workspace_id} has no non-owner role to join")
+        configured = settings.single_workspace_default_role.strip()
+        folded = configured.lower()
+        for name in (folded, self.SINGLE_WORKSPACE_FALLBACK_ROLE, "editor", "admin"):
+            if role := roles.get(name):
+                break
+        else:
+            oldest = min(roles.values(), key=lambda r: (r.created_at, r.name), default=None)
+            if oldest is None:
+                raise WorkspaceError(f"workspace {workspace_id} has no non-owner role to join")
+            logger.warning(
+                "SINGLE_WORKSPACE_DEFAULT_ROLE=%r, %r, 'editor' and 'admin' all absent in "
+                "workspace %s; granting oldest remaining role %r",
+                configured,
+                self.SINGLE_WORKSPACE_FALLBACK_ROLE,
+                workspace_id,
+                oldest.name,
+            )
+            role = oldest
+        if folded not in ("", "owner") and folded not in roles:
+            logger.warning(
+                "SINGLE_WORKSPACE_DEFAULT_ROLE=%r not found in workspace %s; granted %r",
+                configured,
+                workspace_id,
+                role.name,
+            )
+        return role
 
     async def _role_by_name(self, workspace_id: str, name: str) -> Role:
         # Folded like the predicates its callers guard on, so a workspace whose
@@ -1224,6 +1260,8 @@ class WorkspaceService:
         ip_address: str | None = None,
     ) -> Role:
         name = name.strip()
+        if not name:
+            raise WorkspaceError("role name cannot be blank")
         _, actor_role = await self._require_active_member(workspace_id, actor)
         is_owner = "*" in actor_role.permissions
         assignable = set(actor_role.permissions)
@@ -1266,6 +1304,8 @@ class WorkspaceService:
         role = await self.get_role(workspace_id, role_id)
         if is_owner_role_name(role.name):
             raise WorkspaceForbidden("the owner role cannot be edited")
+        if name is not None and not name:
+            raise WorkspaceError("role name cannot be blank")
         # Resolve the actor once, before any mutation: a name-only or
         # description-only edit carries no permission set to cap, so without
         # this it wrote — and flipped `system` below — for a suspended caller.
@@ -1282,6 +1322,10 @@ class WorkspaceService:
         if description is not None and description != role.description:
             role.description = description
             changed = True
+        # Compare as sets: stored order is authority-derived for system roles
+        # only (the boot sync), so a PATCH never needs to reorder — and making
+        # this order-sensitive would let a reorder-only PATCH flip a system
+        # role to custom.
         if permissions is not None and sorted(permissions) != sorted(role.permissions or []):
             self._check_permissions_assignable(permissions, assignable, owner=is_owner)
             role.permissions = permissions

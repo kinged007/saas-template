@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     # Secret store driver: "db" (encrypted table) | "vault" (future adapter)
     secret_store_driver: str = "db"
 
+    # bcrypt cost factor for password hashing. Higher is slower to brute-force
+    # and slower to verify; 12 is the current default. Range is bcrypt's 4..31.
+    password_hash_rounds: int = Field(default=12, ge=4, le=31)
+
     # Events
     event_bus_driver: EventBusDriver = EventBusDriver.INPROCESS
     nats_url: str = "nats://localhost:4222"
@@ -101,11 +105,30 @@ class Settings(BaseSettings):
     # discovery_url (or issuer + /.well-known/openid-configuration) covers
     # Google/Microsoft Entra/Okta/GitLab; explicit endpoint URLs cover
     # non-OIDC providers like GitHub. Secrets come from env, never committed.
+    # issuer is pinned when set: a discovery document that names a different
+    # one fails the login, so the value has to track the IdP's issuer.
     oauth_providers: str = ""
 
     # Auth brute-force protection: failures allowed per (IP, account) per window.
     auth_rate_limit_max_attempts: int = 10
     auth_rate_limit_window_seconds: int = 300
+    # Coarse backstop on total mail one IP can trigger through the mail-sending
+    # auth routes (register, forgot-password, resend-verification) across all
+    # recipient addresses, on top of the per-(IP, account) budget above.
+    # #1346. Tradeoff: a shared egress (office/café NAT, CGNAT) where more
+    # than this many people need verification/reset mail in one window gets
+    # 429 + Retry-After; it self-heals as the window slides and nothing locks
+    # out permanently. Genuine bulk onboarding goes through workspace
+    # invitations, which are outside this cap.
+    auth_ip_mail_max_attempts: int = 20
+    auth_ip_mail_window_seconds: int = 300
+
+    # Lockout after the window budget is spent (seconds; 0 disables, the
+    # Retry-After falls back to the window). Also sets the register limiter's
+    # lockout duration; register keeps a separate per-IP budget and never
+    # shares login's account:<email> budget.
+    auth_rate_limit_lockout_seconds: int = Field(default=900, ge=0)
+
     # Registration mail budget (#1343), keyed on the IP alone: distinct from
     # auth_rate_limit_* because the registrant owns every fresh address, and
     # tests that tighten the auth pair must not collapse this window.

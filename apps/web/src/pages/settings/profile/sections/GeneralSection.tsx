@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-
+import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -70,6 +69,20 @@ const profileSchema = z.object({
 });
 
 type ProfileFormData = z.infer<typeof profileSchema>;
+
+/** The PATCH body: the only profile fields this form is allowed to send. */
+const PROFILE_FIELDS: (keyof ProfileFormData)[] = [
+  "first_name",
+  "last_name",
+  "bio",
+  "phone_number",
+  "timezone",
+  "locale",
+  "date_of_birth",
+  "website_url",
+  "location",
+  "avatar_url",
+];
 
 // Developer-defined custom_data keys are not user-editable. The backend Merge Patch
 // remains available for forks that add first-class custom fields via code (types.ts
@@ -147,9 +160,6 @@ export function GeneralSection() {
   const isDeleting = deleteMutation.isPending;
   const { list } = useNavigation();
 
-  const [initialized, setInitialized] = useState(false);
-  // A new target means new values: re-initialize the form for them.
-  useEffect(() => setInitialized(false), [targetId]);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [deletePassword, setDeletePassword] = useState("");
@@ -159,64 +169,50 @@ export function GeneralSection() {
   // Ensure detected timezone is selectable even if fallback list is used.
   const allTimezones = detectedTimezone && !tzOptions.includes(detectedTimezone) ? [detectedTimezone, ...tzOptions] : tzOptions;
 
+  // react-hook-form reads `defaultValues` once, on mount; `values` resyncs the
+  // form whenever the profile query resolves, so no reset-on-first-render latch
+  // (which used to close on the not-yet-loaded profile and blank the form).
+  const values = useMemo<ProfileFormData>(
+    () => ({
+      first_name: (getProfileField(profile, "first_name", "") as string) || "",
+      last_name: (getProfileField(profile, "last_name", "") as string) || "",
+      bio: (getProfileField(profile, "bio", "") as string) || "",
+      phone_number: (getProfileField(profile, "phone_number", "") as string) || "",
+      timezone: (getProfileField(profile, "timezone", "") as string) || detectedTimezone || "",
+      locale: (getProfileField(profile, "locale", "") as string) || "en",
+      date_of_birth: (getProfileField(profile, "date_of_birth", "") as string) || "",
+      website_url: (getProfileField(profile, "website_url", "") as string) || "",
+      location: (getProfileField(profile, "location", "") as string) || "",
+      // The delegated GET returns the target's avatar_url; identity.avatar_url
+      // is the signed-in user's and is only a fallback for the self profile.
+      avatar_url:
+        (getProfileField(profile, "avatar_url", "") as string) ||
+        (targetId ? "" : identity?.avatar_url || ""),
+    }),
+    [profile, identity?.avatar_url, detectedTimezone, targetId],
+  );
+
+  // `values` still runs a full reset, so a profile that arrives after the user
+  // has started typing must not wipe what they typed: the fetch lands late
+  // precisely when the embedded profile was blank.
   const form = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
-    defaultValues: {
-      first_name: "",
-      last_name: "",
-      bio: "",
-      phone_number: "",
-      timezone: "",
-      locale: "",
-      date_of_birth: "",
-      website_url: "",
-      location: "",
-      avatar_url: "",
-    },
+    defaultValues: values,
+    values,
+    resetOptions: { keepDirtyValues: true },
   });
 
-  // Initialize form when profile loads — preselect detected timezone when empty.
-  // Wait for the query to settle: the first render already carries a truthy
-  // empty result object, and initializing on that would blank the form and
-  // never fill it when the real profile lands.
+  // A new target means new values: drop dirty edits from the previous member
+  // so they cannot be saved into the next one. Runs after RHF's own
+  // values-reset (declared inside useForm), so it wins with a clean slate.
   useEffect(() => {
-    if (profile && !initialized && !profileHook.isLoading) {
-      const tzFromProfile = (getProfileField(profile, "timezone", "") as string) || "";
-      const localeFromProfile = (getProfileField(profile, "locale", "") as string) || "";
-      form.reset({
-        first_name: (getProfileField(profile, "first_name", "") as string) || "",
-        last_name: (getProfileField(profile, "last_name", "") as string) || "",
-        bio: (getProfileField(profile, "bio", "") as string) || "",
-        phone_number: (getProfileField(profile, "phone_number", "") as string) || "",
-        timezone: tzFromProfile || detectedTimezone || "",
-        locale: localeFromProfile || "en",
-        date_of_birth: (getProfileField(profile, "date_of_birth", "") as string) || "",
-        website_url: (getProfileField(profile, "website_url", "") as string) || "",
-        location: (getProfileField(profile, "location", "") as string) || "",
-        avatar_url:
-          (getProfileField(profile, "avatar_url", "") as string) ||
-          // identity.avatar_url is the signed-in user's: only a fallback here.
-          (targetId ? "" : ((identity?.avatar_url as string) ?? "")),
-      });
-      setInitialized(true);
-    }
-  }, [profile, identity, initialized, form, detectedTimezone, profileHook.isLoading, targetId]);
+    form.reset(values, { keepDirtyValues: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetId]);
 
   const onSubmit = (data: ProfileFormData) => {
     const payload: Record<string, unknown> = {};
-    const fields: (keyof ProfileFormData)[] = [
-      "first_name",
-      "last_name",
-      "bio",
-      "phone_number",
-      "timezone",
-      "locale",
-      "date_of_birth",
-      "website_url",
-      "location",
-      "avatar_url",
-    ];
-    for (const f of fields) {
+    for (const f of PROFILE_FIELDS) {
       const val = data[f];
       if (val !== undefined) {
         if (val === "") {
@@ -231,11 +227,9 @@ export function GeneralSection() {
     // rendered via dedicated inputs that map to getProfileField keys in forks.
     // For the base template we do not send custom_data at all.
 
+    // The mutation's own successNotification owns the "Profile updated" toast.
     mutate(payload, {
       isPut: false,
-      onSuccess: () => {
-        toast.success("Profile updated");
-      },
       onError: (err: unknown) => {
         toast.error(errorMessage(err));
       },
@@ -268,6 +262,12 @@ export function GeneralSection() {
 
   if (!profile && profileHook.isLoading) {
     return <p className="text-muted-foreground p-4 text-sm">Loading profile…</p>;
+  }
+
+  // A failed fetch with nothing embedded would paint an empty form whose submit
+  // nulls every stored field. Say so instead of offering it.
+  if (profileHook.isError && PROFILE_FIELDS.every((f) => !getProfileField(profile, f, ""))) {
+    return <p className="text-muted-foreground p-4 text-sm">Could not load your profile — reload to try again.</p>;
   }
 
   return (
@@ -347,7 +347,7 @@ export function GeneralSection() {
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue placeholder="Select timezone">
-                              {field.value || undefined}
+                              {field.value ?? ""}
                             </SelectValue>
                           </SelectTrigger>
                         </FormControl>
@@ -376,7 +376,7 @@ export function GeneralSection() {
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue placeholder="Select locale">
-                              {LOCALE_OPTIONS.find((o) => o.value === field.value)?.label}
+                              {LOCALE_OPTIONS.find((o) => o.value === field.value)?.label ?? field.value ?? ""}
                             </SelectValue>
                           </SelectTrigger>
                         </FormControl>

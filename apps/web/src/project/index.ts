@@ -21,7 +21,7 @@ export const projectRoutes: { path: string; element: ReactNode }[] = [
 ];
 
 export const projectMenuItems: MenuItem[] = [
-  { key: "/project-demo", label: "Project Demo", icon: FileText, permission: "member:update" },
+  { id: "project-demo", to: "/project-demo", label: "Project Demo", icon: FileText, permission: "member:update" },
 ];
 
 /**

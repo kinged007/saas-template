@@ -97,6 +97,10 @@ class _StubIdP:
         # Set by a test to make /jwks-broken answer with an unusable set, and
         # UNSET once the set is usable again, so a JSON `null` set is expressible.
         self.broken_jwks: Any = UNSET
+        # Set by a test to make /jwks answer with a body no key set can be read from.
+        self.garbage_jwks = False
+        self.undecodable_jwks = False
+        self.truncated_jwks = False
         # Set by a test to make the well-known document answer with `broken_doc`
         # instead of an object, which a provider should never publish.
         self.broken_doc: Any = UNSET
@@ -175,15 +179,18 @@ class _StubIdP:
             def log_message(self, fmt: str, *args: Any) -> None:
                 pass  # keep the access log out of the test output
 
-            # `raw` sends bytes verbatim; without it the payload is JSON, so a bare
-            # str stays a JSON string rather than becoming an unparseable body.
-            def _send(self, code: int, payload: Any, raw: str | None = None) -> None:
-                body = (raw if raw is not None else json.dumps(payload)).encode()
+            def _send_raw(self, code: int, body: bytes, declared: int | None = None) -> None:
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Content-Length", str(len(body) if declared is None else declared))
                 self.end_headers()
                 self.wfile.write(body)
+
+            # `raw` sends text verbatim; without it the payload is JSON, so a bare
+            # str stays a JSON string rather than becoming an unparseable body.
+            def _send(self, code: int, payload: Any, raw: str | None = None) -> None:
+                body = raw.encode() if raw is not None else json.dumps(payload).encode()
+                self._send_raw(code, body)
 
             def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
                 stub.hits.append(self.path)
@@ -200,7 +207,18 @@ class _StubIdP:
                 elif self.path == "/jwks":
                     if stub.jwks_delay:
                         time.sleep(stub.jwks_delay)
-                    self._send(200, stub.published_jwks())
+                    if stub.garbage_jwks:
+                        # What a proxy or a captive portal in front of the IdP answers.
+                        self._send_raw(200, b"<html>502 Bad Gateway</html>")
+                    elif stub.undecodable_jwks:
+                        # The right byte count, not decodable as UTF-8.
+                        self._send_raw(200, b'{"keys":[{"n":"\xff\xfe"}]}')
+                    elif stub.truncated_jwks:
+                        # A Content-Length the body never fills, as a proxy cutting the
+                        # response off mid-stream does.
+                        self._send_raw(200, b'{"keys":[{"kid":"stub-key-1"}]}', declared=4096)
+                    else:
+                        self._send(200, stub.published_jwks())
                 elif self.path == "/jwks-redirect":
                     self.send_response(302)
                     self.send_header("Location", f"{stub.base}/jwks")
@@ -327,6 +345,74 @@ async def test_claims_from_id_token_rejects_wrong_issuer_without_discovery_doc(
     )
 
 
+async def test_claims_from_id_token_rejects_disagreeing_discovery_issuer(
+    provider, idp, cache, caplog
+):
+    """The config is the pin: a discovery document naming another issuer is
+    refused outright, so a compromised or misconfigured IdP cannot repoint the
+    check even when it also signs the token it wants accepted."""
+    doc = {**idp.doc, "issuer": "http://evil.example"}
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        assert (
+            await claims_from_id_token(provider, doc, idp.mint(iss="http://evil.example"), cache)
+            is None
+        )
+    assert "discovery issuer mismatch" in caplog.text
+
+
+async def test_claims_from_id_token_ignores_trailing_slash_on_issuer(provider, idp, cache):
+    """PyJWT compares `iss` byte for byte, so a cosmetic slash must not decide the
+    outcome — on the config, the discovery-document or the token side. A
+    slash-terminated issuer is a legal OIDC shape (Discovery 1.0 §3)."""
+    slashed = replace(provider, issuer=f"{idp.base}/")
+    slashed_doc = {**idp.doc, "issuer": f"{idp.base}/"}
+    assert (
+        await claims_from_id_token(provider, idp.doc, idp.mint(iss=f"{idp.base}/"), cache)
+        is not None
+    )
+    assert await claims_from_id_token(slashed, idp.doc, idp.mint(), cache) is not None
+    assert (
+        await claims_from_id_token(slashed, slashed_doc, idp.mint(iss=f"{idp.base}/"), cache)
+        is not None
+    )
+    assert (
+        await claims_from_id_token(provider, slashed_doc, idp.mint(iss=f"{idp.base}/"), cache)
+        is not None
+    )
+
+
+async def test_claims_from_id_token_rejects_non_string_issuer(provider, idp, cache):
+    """The document is network-sourced JSON and the config is unvalidated env, so
+    `issuer` is untrusted in type as well as value: anything but a string is
+    refused, not raised. The callback only catches `OAuthError`, so an escaping
+    exception is a 500 with a stack trace. The config-side case is unreachable
+    in production -- `get_provider` coerces `issuer` to `str` -- so it asserts
+    the guard, not that a bad config is caught upstream."""
+    assert (
+        await claims_from_id_token(provider, {**idp.doc, "issuer": ["http://x"]}, idp.mint(), cache)
+        is None
+    )
+    assert (
+        await claims_from_id_token(replace(provider, issuer=12345), idp.doc, idp.mint(), cache)
+        is None
+    )
+
+
+async def test_claims_from_id_token_rejects_unreadable_discovery_issuer(
+    provider, idp, cache, caplog
+):
+    """A non-string document `issuer` is refused even when no `issuer` is configured,
+    where it would otherwise normalize to None and leave the pin presence-only. It
+    logs as unreadable, not as a mismatch, so a malformed document and a takeover
+    stay distinguishable during triage."""
+    for unconfigured in (provider, replace(provider, issuer=None)):
+        bad_doc = {**idp.doc, "issuer": 12345}
+        with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+            assert await claims_from_id_token(unconfigured, bad_doc, idp.mint(), cache) is None
+        assert "unreadable issuer in discovery document" in caplog.text
+        assert "discovery issuer mismatch" not in caplog.text
+
+
 async def test_claims_from_id_token_without_issuer_checks_presence_only(provider, idp, cache):
     """Deliberate ceiling: a provider that names no issuer anywhere (the explicit-URL
     shape, e.g. the GitHub config) has nothing to compare `iss` against, so only
@@ -437,6 +523,42 @@ async def test_claims_from_id_token_rejects_token_signed_by_another_key(provider
 
 async def test_claims_from_id_token_rejects_unsigned_token(provider, idp, cache):
     assert await claims_from_id_token(provider, idp.doc, idp.mint(alg="none"), cache) is None
+
+
+async def test_claims_from_id_token_logs_jwks_fetch_failure(provider, idp, cache, caplog):
+    """An unreachable JWKS is an outage, not a bad token. It refuses either way,
+    but it must not log under the message a signature failure produces, or an
+    IdP key rotation is triaged as a takeover."""
+    doc = {**idp.doc, "jwks_uri": f"http://127.0.0.1:{_closed_port()}/jwks"}
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+    assert "jwks fetch failed" in caplog.text
+    assert "id_token verification failed" not in caplog.text
+
+
+async def test_claims_from_id_token_logs_unknown_kid_as_verification_failure(
+    provider, idp, cache, caplog
+):
+    """The JWKS was fetched and simply does not publish this kid: an attack-shaped
+    probe, not an outage, so it must not land on the jwks-fetch line."""
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        assert (
+            await claims_from_id_token(provider, idp.doc, idp.mint(kid="rotated-away"), cache)
+            is None
+        )
+    assert "jwks fetch failed" not in caplog.text
+    assert "id_token verification failed" in caplog.text
+
+
+async def test_claims_from_id_token_logs_unparseable_token_as_verification_failure(
+    provider, idp, cache, caplog
+):
+    """An unparseable token names no key a fetch could return, so naming a fetch
+    would name an operation that could not have helped."""
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        assert await claims_from_id_token(provider, idp.doc, "not-a-jwt", cache) is None
+    assert "jwks fetch failed" not in caplog.text
+    assert "id_token verification failed" in caplog.text
 
 
 async def test_claims_from_id_token_returns_none_without_jwks_uri(provider, idp, cache):
@@ -638,6 +760,72 @@ async def test_claims_from_id_token_returns_none_when_the_jwks_host_is_down(
     with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
         assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
     assert "could not load signing keys" in caplog.text
+
+
+async def test_claims_from_id_token_lets_a_defect_escape(provider, idp, cache, monkeypatch):
+    """The handler is narrowed to the failures PyJWT and the IdP produce, so a defect
+    in this module or in the provider config has to surface as a traceback rather than
+    as a rejected login."""
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("provider config is malformed")
+
+    monkeypatch.setattr("src.services.oauth.jwt.decode", boom)
+    with pytest.raises(RuntimeError, match="provider config is malformed"):
+        await claims_from_id_token(provider, idp.doc, idp.mint(), cache)
+
+
+async def test_claims_from_id_token_lets_a_defect_escape_from_the_key_lookup(
+    provider, idp, cache, monkeypatch
+):
+    """The same rule on the key side: the handler spans the whole try, so a defect in
+    the key lookup must not be reported as an unverifiable token either."""
+
+    def boom(*_args, **_kwargs):
+        raise AttributeError("signing key has no key attribute")
+
+    monkeypatch.setattr("src.services.oauth._signing_key", boom)
+    with pytest.raises(AttributeError, match="no key attribute"):
+        await claims_from_id_token(provider, idp.doc, idp.mint(), cache)
+
+
+@pytest.mark.parametrize(
+    ("flag", "cause"),
+    [
+        ("garbage_jwks", "JSONDecodeError"),
+        ("undecodable_jwks", "UnicodeDecodeError"),
+        ("truncated_jwks", "RemoteProtocolError"),
+    ],
+    ids=["non-json-body", "non-utf8-body", "body-cut-off-mid-stream"],
+)
+async def test_an_unreadable_jwks_body_names_the_cause(
+    provider, idp, cache, caplog, monkeypatch, flag, cause
+):
+    """A JWKS URL answered with something no key set can be read from is an outage,
+    not a bad signature. Each of these is a different family, and all of them have to
+    degrade to the logged `None` the caller falls back from."""
+    monkeypatch.setattr(idp, flag, True)
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        assert await claims_from_id_token(provider, idp.doc, idp.mint(), cache) is None
+    assert cause in caplog.text
+
+
+async def test_a_rejected_token_names_the_pyjwt_error(provider, idp, cache, caplog):
+    """PyJWT's messages are prose, so the log line carries the class name: an operator
+    separates an expired token from a wrong audience without knowing PyJWT's wording."""
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        expired = idp.mint(exp=int(time.time()) - 10)
+        assert await claims_from_id_token(provider, idp.doc, expired, cache) is None
+    assert "ExpiredSignatureError" in caplog.text
+
+
+async def test_non_http_jwks_uri_is_never_read(provider, idp, cache, caplog):
+    """A `file://` jwks_uri must not read the host's filesystem. httpx refuses the
+    scheme before any I/O, so it degrades like any other unreadable key set."""
+    doc = dict(idp.doc, jwks_uri="file:///etc/passwd")
+    with caplog.at_level(logging.WARNING, logger="src.services.oauth"):
+        assert await claims_from_id_token(provider, doc, idp.mint(), cache) is None
+    assert "UnsupportedProtocol" in caplog.text
 
 
 async def test_discovery_fetches_and_caches(provider, idp, cache):

@@ -2,7 +2,7 @@
 
 Pick up the next open PR, review it, and either fix-and-stop or merge-and-close. Fix majors and minors, report, STOP — the next fresh session re-reviews. You can only merge and close a PR if all issues were fixed in a previous session. You cannot review, fix, and close in one session — if you fix issues in your session, hand off for a new review session to review and close. Run from the repo root. All `gh` commands assume the repo default (current directory) — never hardcode `repos/<owner>/<repo>`.
 
-There is no `backlog` label. `in-progress` is the mandatory claim lock for this workflow; `review-in-progress` is also treated as claimed for compatibility. `needs-human` means blocked, and `agent:done` means reviewed, ready to merge, and no longer to be picked up by step 1. `agent:done` is applied on the approval path in step 7 — if a PR is approved but not yet merged, it must already carry it, otherwise step 1 will hand it to the next agent forever.
+`backlog` means deferred by a person — never touch it. `in-progress` is the mandatory claim lock for this workflow; `review-in-progress` is also treated as claimed for compatibility. `needs-human` means blocked, and `agent:done` means reviewed, ready to merge, and no longer to be picked up by step 1. `agent:done` is applied on the approval path in step 7 — if a PR is approved but not yet merged, it must already carry it, otherwise step 1 will hand it to the next agent forever.
 
 ## Process lifecycle and cleanup (MANDATORY)
 
@@ -47,12 +47,12 @@ Browser: Playwright driving chromium, per `.agents/browser.md`. Read that file b
 
 ## 1. Find the oldest open PR
 
-Skip any PR labelled `wontfix`, `needs-human`, `in-progress`, `review-in-progress`, `invalid`, `duplicate`, or `agent:done` — never touch those, even if open. The rest are ordered oldest first, so the PR that has waited longest is reviewed first:
+Skip any PR labelled `wontfix`, `needs-human`, `backlog`, `in-progress`, `review-in-progress`, `invalid`, `duplicate`, or `agent:done` — never touch those, even if open. The rest are ordered oldest first, so the PR that has waited longest is reviewed first:
 
 ```bash
 gh pr list --state open --limit 50 --search "sort:created-asc" \
   --json number,title,createdAt,labels \
-  -q 'map(select(([.labels[].name] | any(. == "wontfix" or . == "needs-human" or . == "in-progress" or . == "review-in-progress" or . == "invalid" or . == "duplicate" or . == "agent:done")) | not))
+  -q 'map(select(([.labels[].name] | any(. == "wontfix" or . == "needs-human" or . == "backlog" or . == "in-progress" or . == "review-in-progress" or . == "invalid" or . == "duplicate" or . == "agent:done")) | not))
       | .[] | "\(.number) | \(.createdAt) | \(.title)"'
 ```
 
@@ -111,7 +111,7 @@ If a review was submitted since the last code change (compare review `submittedA
 Otherwise review thoroughly against:
 
 - the repo's architecture docs plus related `docs/`; the project's context map / wiki if present, then the actual source files; check blast radius before touching widely-imported files.
-- Correctness, tests, error handling, security, migration safety. Classify every finding as **major** (blocks merge: bugs, data loss, security, broken tests, arch violations) or **minor/deferred** (nits, follow-ups, polish).
+- Correctness, tests, error handling, security, migration safety. Classify every finding as **major** (blocks merge: bugs, data loss, security, broken tests, arch violations = a failed `CONV-*` rule) or **minor/deferred** (nits, follow-ups, polish).
 
 The agent MUST NOT use `gh pr review --request-changes`. To request changes, it MUST post a normal PR comment; this comment is the handoff that the next agent reads before acting. Post the review with this structure — every section is required:
 
@@ -136,7 +136,7 @@ gh pr comment <n> --body "$(cat <<'EOF'
 ## Detailed Analysis
 
 ### Architecture & API Design
-[Findings from the design and interface pass]
+[Findings from the design and interface pass, then one line per relevant rule: `CONV-<AREA>-NN pass|fail|n.a. - <evidence>`]
 
 ### Implementation Quality
 [Findings from the implementation pass]
@@ -154,6 +154,8 @@ gh pr comment <n> --body "$(cat <<'EOF'
 EOF
 )"
 ```
+
+Architecture check: for every `CONV-*` rule in `docs/architecture/CONVENTIONS.md` that the diff can affect, give pass, fail or n.a. in "Architecture & API Design". Run the rule's **Check** yourself; do not rely on the plan's "Conventions touched" list, and read the diff for rules the plan omitted. A fail is a **major** finding (an arch violation) unless `docs/product/DECISIONS.md` has an entry that names the rule. A new deviation that is not in the Known deviations table is also a fail.
 
 Be thorough but focus on the most impactful issues. Every finding needs a `file:line` reference and a concrete suggested fix.
 
@@ -242,21 +244,22 @@ gh pr edit <n> --remove-label in-progress
 
 Then STOP and report why.
 
-## 7. Approval path: file minors, then merge and close
+## 7. Approval path: file minors, then mark ready-to-merge
 
-Only when a review (yours or adopted) approves with all majors complete, and only for non-high-risk PRs (step 3):
+Only when a review (yours or adopted) approves with all majors complete, and only for non-high-risk PRs (step 3). Never merge here — `merge-queue.yml` owns merging; approval only marks the PR ready and records the approved head SHA for audit (check 5 reads the Reviews API):
 
 1. Create one issue per deferred finding (title, repro/context, `enhancement` label). Reference the PR number in each body.
-2. Apply `agent:done` before merging, so a concurrent step-1 run cannot claim the PR mid-merge. This label also survives the merge and keeps the PR out of every later run.
-3. Merge and close:
+2. Apply `agent:done` before marking, so a concurrent step-1 run cannot claim the PR mid-step.
+3. Mark ready-to-merge and record the approved head SHA:
 
 ```bash
 gh pr edit <n> --add-label agent:done
-gh pr merge <n> --merge
+gh pr comment <n> --body "Approved head SHA: $(gh pr view <n> --json headRefOid -q .headRefOid)"
+gh pr edit <n> --add-label agent:merge
 gh pr edit <n> --remove-label in-progress
 ```
 
-Report the merge plus the created issue numbers.
+Report the created issue numbers and the recorded SHA (no merge; the merge queue merges when its gates pass).
 
 ## 8. Commit and push before finishing (MANDATORY)
 

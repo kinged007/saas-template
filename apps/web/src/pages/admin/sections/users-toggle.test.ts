@@ -7,6 +7,7 @@ import {
   asAdminUserDetail,
   canToggleUser,
   pageRange,
+  toggleDisabled,
   type AdminUserDetail,
 } from "./users-toggle.ts";
 
@@ -67,13 +68,31 @@ test("asAdminUserDetail validates every AdminUserDetail field, not just id and w
   assert.equal(asAdminUserDetail(noSuper), undefined);
 });
 
-test("asAdminUserDetail accepts an optional created_at only when it is a string", () => {
+test("asAdminUserDetail accepts a null created_at, which iso_or_none can serialize", () => {
+  const nullDate = detail({ created_at: null });
+  assert.deepEqual(asAdminUserDetail(nullDate), nullDate);
+});
+
+test("asAdminUserDetail accepts an optional created_at only when it is a string or null", () => {
   const withDate = detail({ created_at: "2024-01-01T00:00:00Z" });
   const withNoDate = detail({ created_at: undefined });
   assert.equal(asAdminUserDetail(withDate), withDate);
   assert.equal(asAdminUserDetail(withNoDate), withNoDate);
   const { created_at: _droppedDate, ...badDate } = detail();
   assert.equal(asAdminUserDetail({ ...badDate, created_at: 42 as unknown as string }), undefined);
+});
+
+test("asAdminUserDetail rejects a wrong type for the other guarded fields", () => {
+  assert.equal(asAdminUserDetail({ ...detail(), email: 42 as unknown as string }), undefined);
+  assert.equal(
+    asAdminUserDetail({ ...detail(), display_name: 42 as unknown as string }),
+    undefined,
+  );
+  assert.equal(asAdminUserDetail({ ...detail(), is_active: "yes" as unknown as boolean }), undefined);
+  assert.equal(
+    asAdminUserDetail({ ...detail(), is_superuser: "yes" as unknown as boolean }),
+    undefined,
+  );
 });
 
 test("pageRange clamps the visible window and never reports zero pages", () => {
@@ -91,4 +110,20 @@ test("pageRange clamps the visible window and never reports zero pages", () => {
 test("adminUserPatch's url is built from a row typed as the list item, not the detail", () => {
   const row: AdminUser = { ...detail(), workspaces: undefined };
   assert.equal(adminUserPatch(row, false).url, "admin/users/u-1");
+});
+
+test("the toggle is disabled while the PATCH is in flight", () => {
+  assert.equal(toggleDisabled({ isPending: true }, { isFetching: false, isError: false }), true);
+});
+
+test("the toggle is disabled while the detail refetch is in flight", () => {
+  assert.equal(toggleDisabled({ isPending: false }, { isFetching: true, isError: false }), true);
+});
+
+test("the toggle is disabled when the detail refetch failed", () => {
+  assert.equal(toggleDisabled({ isPending: false }, { isFetching: false, isError: true }), true);
+});
+
+test("the toggle is enabled once the mutation settled and the detail refetched", () => {
+  assert.equal(toggleDisabled({ isPending: false }, { isFetching: false, isError: false }), false);
 });

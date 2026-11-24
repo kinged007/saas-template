@@ -16,6 +16,8 @@
 
 **Required env vars:** DATABASE_URL
 
+Fleet labels: `docs/FLEET_LABELS.md` is the single source for every `agent:*` label — read it before adding, removing, or renaming one.
+
 ## Product direction — read before proposing or building anything
 
 Before opening an issue or PR that adds or changes behaviour, read
@@ -32,6 +34,10 @@ Never:
   line as `old/path → new/path` or `removed`;
 - create a migration without a 14-digit timestamp revision id (D-04; see Migrations below; the squashed 0001 baseline is the only exception);
 - add credits, branding or promotional text.
+
+## Architecture conventions
+
+`docs/architecture/CONVENTIONS.md` holds the normative rules (events, API, auth, data, web, config), each with an ID `CONV-<AREA>-NN` and a check. Build agents list the IDs a change touches in the plan; reviewers give a verdict per ID. A deviation needs an entry in `docs/product/DECISIONS.md`.
 
 ## Dev stack ports
 
@@ -52,57 +58,26 @@ since vite serves both) — open either and the session holds.
 ## Migrations
 
 Models are the source of truth; migrations are generated, reviewed, committed.
-After changing any model, generate the migration with a 14-digit UTC timestamp
-revision id (`docs/product/DECISIONS.md` D-04):
+After changing any model, generate the migration (`make db-new` assigns a
+14-digit UTC timestamp revision id per `docs/product/DECISIONS.md` D-04):
 
 ```bash
-cd apps/api && uv run alembic revision --autogenerate \
-  --rev-id "$(date -u +%Y%m%d%H%M%S)" -m "acme orders"   # → 20261118104500_acme_orders.py
+make db-new m="acme orders"   # → 20261118104500_acme_orders.py
 ```
 
-`make db-new` does not set the id yet, so do not use it for new migrations until it does — it writes Alembic's default random hex id, which violates D-04. Use the `--rev-id` command above.
 Review the diff (watch for accidental drops, wrong nullability, missing server_default),
 commit the file.
 `make db-check` (also in CI) fails on multiple heads or models≠migrations.
-Full workflow: `docs/MIGRATIONS.md`, except its Daily workflow still shows `make db-new`: use the `--rev-id` command above for the id until that file is fixed.
-
----
-
-## Agent Instructions
-
-This project uses codesight for structured AI context. Follow these steps before implementing:
-1. Read `.codesight/wiki/index.md` for project orientation (~200 tokens)
-2. Read `.codesight/wiki/overview.md` for architecture overview (~500 tokens)
-3. Read the relevant domain article, then open the source files listed in it
-4. Read `.codesight/CODESIGHT.md` for the full context map
-
-**Do not explore the file tree blindly.** The codesight context map already contains:
-routes, schema, components, libraries, config, middleware, and dependency graph.
-
-**Before modifying any file:** check `.codesight/graph.md` for blast radius.
-Files with high import counts affect many downstream modules — change carefully.
-
-Routes marked `[inferred]` were detected via regex and may have lower precision.
-If any source file shows ⚠ in a wiki article, re-run `npx codesight --wiki` before proceeding.
+Full workflow: `docs/MIGRATIONS.md`.
 
 ---
 
 ## Frontend
 
-**Skill:** `refine-dev` (itechmeat-llm-code-refine-dev) is installed for opencode (`~/.agents/skills/itechmeat-llm-code-refine-dev/SKILL.md`) and Claude Code (`.claude/skills/itechmeat-llm-code-refine-dev/SKILL.md`). Load it for Refine.dev API details, but the canonical rules below and existing repo patterns take precedence over the skill's generic guidance (e.g. it assumes Mantine; this repo uses shadcn/ui).
+**Skill:** `refine-dev` (itechmeat-llm-code-refine-dev) is installed for opencode (`~/.agents/skills/itechmeat-llm-code-refine-dev/SKILL.md`) and Claude Code (`.claude/skills/itechmeat-llm-code-refine-dev/SKILL.md`). Load it for Refine.dev API details, but the rules in `docs/architecture/CONVENTIONS.md` and existing repo patterns take precedence over the skill's generic guidance (e.g. it assumes Mantine; this repo uses shadcn/ui).
 
 **Stack (apps/web):** Refine **v5** (`@refinedev/core`, `@refinedev/react-router`) + custom `dataProvider` (wraps `@refinedev/simple-rest`) + `accessControlProvider` + sonner `notificationProvider`. shadcn/ui components in `src/components/ui/`; refine primitives (views, buttons, layout) in `src/components/refine-ui/`. Forms use `@refinedev/react-hook-form` + `react-hook-form` + `zod` + `@hookform/resolvers`.
 
-**Refine-canonical rules (apply to all new pages; migrate old ones):**
-- Register `create` on every resource in `src/App.tsx` (`{ name: "x", list: "/x", create: "/x/create" }`). **Create must be a page, never a dialog** on the list page.
-- List pages use `ListView` + `ListViewHeader`. The `canCreate` slot renders the built-in `CreateButton`, which **links** to the create route (it cannot open dialogs) and is ACL-aware via `useCreateButton` (default `hideIfUnauthorized: false` → shows disabled). Do not hand-roll `PageHeader` + dialog; do not modify shared refine-ui components to special-case one page.
-- Create pages use `CreateView` + `CreateViewHeader` (both in `src/components/refine-ui/views/create-view.tsx`) with `useForm` from `@refinedev/react-hook-form` (`refineCoreProps: { resource, action: "create" }`), `zodResolver`, and shadcn `Form` components (`FormField`/`FormItem`/`FormLabel`/`FormControl`/`FormMessage`). `onFinish` returns the created record and invalidates the list cache automatically.
-- Navigation: `useNavigation().list("resource")` / `useGo` — not raw react-router `navigate`.
-- Data fetching: `useList` / `useCustom` / `useCustomMutation`; custom URLs are relative to `/api/v1` (the dataProvider resolves them). Mutations use `useCreate`/`useUpdate`/`useDelete` on resources, not `useCustomMutation`, where possible.
-- Access control: `accessControlProvider` maps (resource, action) → backend permission string (see `PERMISSION_MAP`). Gate UI with `useCan` / `CreateButton` / `<CanAccess>`; the backend is always the final authority.
-- Notifications: set `successNotification` in `refineCoreProps`. Suppress refine's generic error toast (`errorNotification: false`) when showing the server `detail` yourself — the dataProvider already surfaces FastAPI `detail` as `error.message`.
-- Keep API/entity types in `src/types.ts` (high-impact file — change carefully).
-
-**Not yet canonical (migrate to the patterns above when touched):** RolesPage, MembersPage, WorkspaceCreatePage, ReceivedInvitationsPage (use `PageHeader`/`useCreate`/dialogs instead of views + `useForm`).
+**Refine rules and known non-compliant pages:** `docs/architecture/CONVENTIONS.md`, area FE (`CONV-FE-*`), access control (`CONV-AUTH-05`) and Known deviations.
 
 **Dev notes:** Vite's proxy rule is `"/api/"` (trailing slash) — a bare `"/api"` prefix would also swallow SPA routes like `/api-keys` and `/api-keys/create`, forwarding them to the backend as 404s on hard refresh. Frontend validation: `npm run build` (runs `tsc --noEmit` first) and `npm test` (`node --test`, stdlib only). Testable logic lives in a plain `.ts` module with no runtime imports — `node --test` cannot load `.tsx` or resolve the `@/` alias; share types with `import type`, which type stripping erases. CI runs both (`web-build`, `web-test` jobs) on Node 24. No web lint script.

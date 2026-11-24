@@ -1,10 +1,11 @@
 import { useLayoutEffect, useReducer, useRef } from "react";
 import { useCan, useGetIdentity, useList } from "@refinedev/core";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
-import { CheckCircle2, Circle, PlusCircle, X } from "lucide-react";
+import { CheckCircle2, Circle, X } from "lucide-react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
+import { NoWorkspaceCard } from "@/components/NoWorkspaceCard";
 import { WorkspaceSearch } from "@/components/WorkspaceSearch";
 import { useWorkspace } from "../contexts/WorkspaceContext";
 import { onboardingStore } from "@/utils/storage";
@@ -79,32 +80,7 @@ export function DashboardPage() {
   });
 
   if (!workspace) {
-    return (
-      <Card>
-        <CardHeader>
-          {/* CardTitle renders a div, so the title is spelled out as a heading
-              with the classes CardTitle applies; card-title-classes.test.ts
-              keeps the copy in step with the primitive. This branch returns
-              before the page title, so the card title is the page h1. */}
-          <h1 className="font-semibold leading-none tracking-tight">No workspace yet</h1>
-          <CardDescription>
-            Create a workspace to get started with managing your team.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {/* /workspaces/create redirects home while the flag is set, so the
-              button would navigate nowhere. */}
-          {identity?.single_workspace !== true && (
-            <Link to="/workspaces/create">
-              <Button>
-                <PlusCircle className="mr-2 h-4 w-4" />
-                Create workspace
-              </Button>
-            </Link>
-          )}
-        </CardContent>
-      </Card>
-    );
+    return <NoWorkspaceCard single={identity?.single_workspace === true} />;
   }
 
   const keys = keysResult?.data ?? [];

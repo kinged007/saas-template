@@ -13,15 +13,15 @@ from typing import NamedTuple
 from sqlalchemy import select
 
 from src.core.dates import now_utc
+from src.core.routes import INVITATIONS_ROUTE
 from src.db.session import SessionFactory
 from src.models.api_key import ApiKey
 from src.models.core import Invitation, Notification
 from src.models.workspace import Role, User, Workspace, WorkspaceMember
-from src.services.api_keys import ApiKeyService
+from src.services.api_keys import ApiKeyForbidden, ApiKeyService
 from src.services.auth import AuthService
 from src.services.workspaces import WorkspaceService
 from src.settings import settings
-from src.workflows import INVITATIONS_ROUTE
 
 logger = logging.getLogger(__name__)
 
@@ -360,12 +360,22 @@ async def main() -> None:
                 # demo admin, who never auto-joins (no login event yet).
                 logger.info("skipped api key %s in %s: %s is not a member", name, slug, email)
                 continue
-            key, raw = await api_service.create_api_key(
-                workspace_id=workspace.id,
-                name=name,
-                permissions=permissions,
-                actor=user,
-            )
+            try:
+                key, raw = await api_service.create_api_key(
+                    workspace_id=workspace.id,
+                    name=name,
+                    permissions=permissions,
+                    actor=user,
+                )
+            except ApiKeyForbidden as exc:
+                # The guard above is status blind, so a suspended row passes it
+                # while the mint — active members only — refuses. A refusal for
+                # any other reason (the role cannot grant what API_KEYS asks
+                # for) is a fixture bug and stays fatal.
+                if await ws_service.get_membership(workspace.id, user.id) is not None:
+                    raise
+                logger.info("skipped api key %s in %s: %s", name, slug, exc)
+                continue
             api_keys.append((name, slug, raw))
             logger.info("created api key %s in %s", name, slug)
 
@@ -472,4 +482,5 @@ async def _role_by_name(session, workspace_id: str, name: str) -> Role:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)  # nothing else in this path configures it
     asyncio.run(main())
