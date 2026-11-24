@@ -64,6 +64,29 @@ expect_pass "range excluding the historic trailer-less commit passes" dev "$BAD_
 # empty range passes
 expect_pass "empty dev range passes" dev "$LATER_DEV" "$LATER_DEV"
 
+# invalid Area value fails with the want-enum message (issue #1855)
+git commit -q --allow-empty -m "bad area" -m "Area: mobile" -m "Release-note: bad"
+BAD_AREA="$(git rev-parse HEAD)"
+expect_fail "invalid Area value fails" dev "$LATER_DEV" "$BAD_AREA" "invalid Area"
+expect_fail "invalid Area failure names the SHA" dev "$LATER_DEV" "$BAD_AREA" "$BAD_AREA"
+
+# duplicate Area lines fail
+git commit -q --allow-empty -m "dup area" -m "Area: api" -m "Area: web" -m "Release-note: dup"
+DUP_AREA="$(git rev-parse HEAD)"
+expect_fail "duplicate Area lines fail" dev "$BAD_AREA" "$DUP_AREA" "multiple Area"
+expect_fail "duplicate Area failure names the SHA" dev "$BAD_AREA" "$DUP_AREA" "$DUP_AREA"
+
+# every enum value still passes on its own range
+PREV_AREA="$DUP_AREA"
+for AREA in api web db infra; do
+  git commit -q --allow-empty -m "area $AREA" -m "Area: $AREA" -m "Release-note: ok"
+  NEXT_AREA="$(git rev-parse HEAD)"
+  expect_pass "valid Area: $AREA passes" dev "$PREV_AREA" "$NEXT_AREA"
+  PREV_AREA="$NEXT_AREA"
+done
+# re-anchor: later ranges must skip the intentionally-bad commits above
+LATER_DEV="$PREV_AREA"
+
 # revert: commits pass without trailers
 git commit -q --allow-empty -m "revert: broken slice"
 REVERT_DEV="$(git rev-parse HEAD)"
