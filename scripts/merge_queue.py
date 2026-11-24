@@ -177,6 +177,61 @@ def failure_action(gate, detail="", enforce_approval=False):
     return FailureAction(kind="relabel", label=label, comment=comment)
 
 
+# Gate 4 reads Actions check runs, not just the legacy combined-status API:
+# a head with only check runs reports state `pending`, total_count 0 there.
+PASS_CONCLUSIONS = frozenset({"success", "skipped", "neutral"})
+FAIL_CONCLUSIONS = frozenset({"failure", "cancelled", "timed_out", "action_required"})
+
+
+def is_queue_run(name):
+    """True for the merge queue's own `merge` job (pull_request_target).
+
+    While it runs it appears among the head's check runs as in_progress and
+    must not gate the PR it is about to merge.
+    """
+    n = (name or "").strip()
+    return (n == "merge" or n == "merge-queue" or "merge-queue" in n
+            or n.endswith("/ merge"))
+
+
+def classify_checks(status_state, runs):
+    """Fold legacy commit statuses + check runs into pass|fail|wait.
+
+    status_state is None when zero commit statuses exist (the legacy API
+    always says pending then). A fail anywhere wins over a wait; no signal
+    at all means wait (checks have not reported yet).
+    """
+    failed = False
+    waiting = False
+    relevant = [r for r in (runs or [])
+                if isinstance(r, dict) and not is_queue_run(r.get("name"))]
+    for r in relevant:
+        status = (r.get("status") or "").strip()
+        conclusion = r.get("conclusion")
+        conclusion = conclusion.strip() if isinstance(conclusion, str) and conclusion.strip() else None
+        if status and status != "completed":
+            waiting = True
+        elif conclusion in PASS_CONCLUSIONS:
+            continue
+        elif conclusion in FAIL_CONCLUSIONS:
+            failed = True
+        elif conclusion is None:
+            waiting = True
+        else:
+            failed = True  # unknown completed conclusion: fail closed
+    if status_state in ("failure", "error", "failed"):
+        failed = True
+    elif status_state not in ("success", None):
+        waiting = True  # "pending" or anything unexpected: wait, do not fail
+    if failed:
+        return "fail"
+    if waiting:
+        return "wait"
+    if not relevant and status_state is None:
+        return "wait"
+    return "pass"
+
+
 def build_merge_args(n, title, area, note):
     return [
         "gh", "pr", "merge", str(n), "--squash",
@@ -278,6 +333,47 @@ class MergeQueue:
             "gh", "api", "repos/%s/commits/%s/status" % (self.repo, sha),
             "-q", ".state",
         ])
+
+    def commit_status_count(self, sha):
+        out = self._read([
+            "gh", "api", "repos/%s/commits/%s/status" % (self.repo, sha),
+            "-q", ".total_count",
+        ])
+        try:
+            return int((out or "").strip().strip('"') or 0)
+        except ValueError:
+            return 0
+
+    def check_runs(self, sha):
+        """Check runs on a head SHA (one dict per line, pagination-safe)."""
+        out = self._read([
+            "gh", "api", "repos/%s/commits/%s/check-runs" % (self.repo, sha),
+            "--paginate", "-q",
+            ".check_runs[] | {name, status, conclusion}",
+        ])
+        runs = []
+        for line in (out or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                runs.append(obj)
+        return runs
+
+    def head_checks(self, sha):
+        """Gate-4 verdict for a head SHA: pass|fail|wait."""
+        state = (self.commit_status(sha) or "").strip().strip('"') or None
+        try:
+            count = self.commit_status_count(sha)
+        except RuntimeError:
+            count = 1 if state else 0
+        if not count:
+            state = None  # zero commit statuses: the legacy API always says pending
+        return classify_checks(state, self.check_runs(sha))
 
     def approval_at_head(self, n, head_sha):
         out = self._read([
@@ -392,11 +488,13 @@ class MergeQueue:
         trailers = parse_trailers(pr.get("body", ""))
         note, fallback = resolve_note(pr.get("body", ""), pr.get("title", ""))
         head = pr.get("headRefOid", "")
+        checks = self.head_checks(head) if head else "fail"
         return {
             "base_ok": pr.get("baseRefName") == self.base,
             "base": pr.get("baseRefName"),
             "mergeable": pr.get("mergeable") == "MERGEABLE",
-            "checks_ok": self.commit_status(head) == "success" if head else False,
+            "checks_ok": checks == "pass",
+            "checks_pending": checks == "wait",
             "approval_ok": self.approval_at_head(pr["number"], head) if head else False,
             "area": trailers.area,
             "note": note,
@@ -425,6 +523,10 @@ class MergeQueue:
             queue = [p for p in queue if p["number"] != pr["number"]]
             print("candidate: #%d %s" % (pr["number"], pr.get("title", "")))
             inputs = self.pr_gate_inputs(pr)
+            if inputs.get("checks_pending"):
+                print("  gate 4 %s: wait — checks still running, exit, no mark change"
+                      % GATE_NAMES[4])
+                return "gate4-wait"
             results = evaluate_gates(True, inputs, self.enforce_approval)
             for r in results:
                 print("  gate %d %s: %s — %s" % (r.number, GATE_NAMES[r.number], r.status, r.detail))
