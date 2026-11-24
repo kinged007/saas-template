@@ -113,7 +113,7 @@ not need individual sign-off. Only the items in ADMISSION §5 go to the maintain
 commit per PR carrying `Area:` and `Release-note:` lines. A scheduled promotion verifies a
 frozen `dev` SHA with full CI and e2e and merges it into `staging` with a merge commit. The
 maintainer merges `staging` into `main` through one promotion PR, optionally after a
-click-through. `main` is the default branch, is never rewritten, and moves only by a
+click-through. `dev` is the default branch. `main` is never rewritten and moves only by a
 promotion PR; there is no direct push, including for hotfixes. Urgent fixes use the same path
 started by hand.
 
