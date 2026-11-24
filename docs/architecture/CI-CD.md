@@ -61,8 +61,10 @@ Rules:
 
 1. **One writer per branch.** No agent pushes to `dev`, `staging` or `main`. No person pushes to
    `dev` or `staging`.
-2. **`main` stays the default branch.** "Use this template" and the seed path (VISION §4.4) copy
+2. **`main` is the default branch.** "Use this template" and the seed path (VISION §4.4) copy
    the default branch, so it must hold only promoted work. Agents set `--base dev` explicitly.
+   The default is switched to `main` after the first promotion lands (see the §9 build order);
+   until then it is `dev`.
 3. **No fix is committed to `staging` or `main`.** A fix lands on `dev` as a normal PR and is
    promoted. A commit made only on `staging` makes it diverge from `dev`, and the next promotion
    conflicts.
@@ -70,7 +72,8 @@ Rules:
    a bad change is removed with `git revert`.
 5. **Merge commits above `dev`.** `git log --first-parent main` lists promotions;
    `git log --no-merges main` lists slices.
-6. **Only `staging` is merged into `main`; `source-guard.yml` enforces it.** A PR from any
+6. **Only `staging` is merged into `main`; `source-guard.yml` enforces it.** Enforced in Stage 2
+   by the `main` ruleset with `source-guard` as a required check (§8). A PR from any
    other head is retargeted to `dev` with one guidance comment; only a same-repo `staging`
    head passes the check.
 
@@ -271,6 +274,9 @@ same pipeline, run immediately:
 
 There is no direct push to `main`, including for hotfixes.
 
+A fix to a scheduled workflow (`merge-queue.yml`, `promote.yml`) reaches its trigger only by
+promotion to `main`, so it travels this same path.
+
 ---
 
 ## 7. Stage 1 — running without enforcement
@@ -320,7 +326,7 @@ Entered when the repository is made public (DECISIONS O-1). Each step works on i
 
    | Branch | Rules |
    |---|---|
-   | `main` | require a PR; 1 approving review (the promotion PR is opened by the machine user, so the maintainer's approval is the required one); merge commits only; block force push and deletion; require `ci` and `e2e` |
+   | `main` | require a PR; 1 approving review (the promotion PR is opened by the machine user, so the maintainer's approval is the required one); merge commits only; block force push and deletion; require `ci`, `e2e` and `source-guard` (only `staging` merges into `main`) |
    | `staging` | block force push and deletion; restrict updates to the machine user |
    | `dev` | require a PR; squash only; require `ci`; block force push and deletion; allow the machine user to bypass (Stage 2) so §4.4's auto-revert can push `git revert` directly — without a bypass the revert fails and check 1 stalls the queue permanently |
 
@@ -354,7 +360,9 @@ Built in this order. Each row is one PR against the branch named.
 | 10 | Autopilot prompts | explicit assignee (§7); loop brief: WIP limit, staleness, audit, reverts, no merging | 2 | Multica, not this repo |
 
 Pieces 2 and 3 target `main`, because the fleet and CI read their configuration from the
-branch that runs them; until 2 and 3 land, `dev` does not exist as a working base. After 2 and 3 land, fast-forward `dev` (and `staging`) to that `main` head as an explicit step before piece 4, so `dev` carries the updated `ci.yml` (`push` on `dev`), the `--base dev` briefs and the template lines — otherwise `dev` never receives them and check 1 can never see a `ci` run for the current `dev` head. From piece 4 onward, everything goes through the pipeline it builds.
+branch that runs them; until 2 and 3 land, `dev` does not exist as a working base. After 2 and 3 land, fast-forward `dev` (and `staging`) to that `main` head as an explicit step before piece 4, so `dev` carries the updated `ci.yml` (`push` on `dev`), the `--base dev` briefs and the template lines — otherwise `dev` never receives them and check 1 can never see a `ci` run for the current `dev` head. After the first promotion lands on
+`main`, switch the repository default branch to `main`; until then it stays `dev`, so the
+`schedule` and `workflow_run` triggers on `main` start firing only after the switch. From piece 4 onward, everything goes through the pipeline it builds.
 
 Stage 2 (§8) is separate and has no code beyond ruleset settings.
 
@@ -377,7 +385,7 @@ machine until it does not); a CI split into fast and full jobs (the ~8 minute ru
 | e2e flakes | `promote.yml` | no promotion that cycle | `Promotion blocked` issue; rerun with `workflow_dispatch` |
 | An agent pushes to `dev`, `staging` or `main` | `branch-guard.yml` | red run + `needs-human` issue | maintainer reverts the push with a new commit; never force-push |
 | `FLEET_TOKEN` expires | merge queue and promotion fail to push | queue stops; nothing is merged unverified | rotate the secret |
-| The merge queue workflow is broken | PRs stay at `agent:merge` | no merges | the loop reports queue age; fix the workflow on `main` |
+| The merge queue workflow is broken | PRs stay at `agent:merge` | no merges | the loop reports queue age; fix on `dev` and expedite via §6 |
 | A promotion PR is left unmerged | the PR's age | later promotions add to it | none needed; it is one PR whatever its size |
 
 ---
