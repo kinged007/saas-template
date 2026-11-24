@@ -50,6 +50,8 @@ if grep -q "GITHUB_TOKEN" "$WORKFLOW" "$PROMOTE"; then
 fi
 grep -q "FLEET_TOKEN" "$WORKFLOW" \
   || fail "AC-7: promote.yml must authenticate with the FLEET_TOKEN secret"
+test "$(grep -c 'token: ${{ secrets.FLEET_TOKEN }}' "$WORKFLOW")" -eq "$(grep -c 'uses: actions/checkout' "$WORKFLOW")" \
+  || fail "AC-7: every actions/checkout step must pass token: secrets.FLEET_TOKEN"
 test "$(grep -c 'git branch -f' "$WORKFLOW")" -eq "$(grep -c 'else git branch -f' "$WORKFLOW")" \
   || fail "R1: ref sync must never force-update the checked-out branch (guard every git branch -f)"
 grep -q 'release-notes BASE=main HEAD="\$FROZEN_SHA"' "$WORKFLOW" \
