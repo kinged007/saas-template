@@ -27,11 +27,11 @@ versioned in this repository.
 | `agent:retro` | Trigger, issues | Analyse failed runs, propose prompt changes | Fleet issues-planner loop |
 | `agent:area-map` | Trigger, issues | Write or refresh `.agents/areas/` files | Fleet issues-planner loop |
 | `agent:review` | Trigger, PRs | Review the PR and post a verdict | Fleet prs-reviewer loop; mentioned in `.agents/work-on-issues.md:200` |
-| `agent:verify` | Trigger, PRs | Run checks and acceptance-criteria coverage | Fleet prs-light loop, which is not running; see below |
-| `agent:merge` | Trigger, PRs | Merge the PR when its gates pass | Fleet prs-light loop, which is not running; see below |
-| `agent:revise` | Trigger, PRs | Apply review or verify findings on the PR | Fleet prs-builder loop, which is not running; see below |
-| `agent:ci-fix` | Trigger, PRs | Fix failing CI checks on the PR | Fleet prs-builder loop, which is not running; see below |
-| `agent:rebase` | Trigger, PRs | Update the PR from main, resolve conflicts | Fleet prs-builder loop, which is not running; see below |
+| `agent:verify` | Trigger, PRs | Run checks and acceptance-criteria coverage | Fleet prs-light loop |
+| `agent:merge` | Trigger, PRs | Merge the PR when its gates pass | Fleet prs-light loop |
+| `agent:revise` | Trigger, PRs | Apply review or verify findings on the PR | Fleet prs-builder loop |
+| `agent:ci-fix` | Trigger, PRs | Fix failing CI checks on the PR | Fleet prs-builder loop |
+| `agent:rebase` | Trigger, PRs | Update the PR from `dev`, resolve conflicts | Fleet prs-builder loop |
 | `agent:done` | State | Finished and out of every dispatch query | `.agents/work-on-issues.md:30`, `.agents/work-on-issues.md:245`, `.agents/review_pr.md:55`, `.agents/review_pr.md:103` |
 
 Claim and escalation labels are not `agent:*`-prefixed but belong to the same
@@ -45,9 +45,10 @@ query reads it. Several parked PRs carry it alongside a dead PR trigger.
 
 ## Operator actions
 
-When a PR needs work and no running loop covers its trigger, a person does the
-work by hand and removes the dead trigger label so a resumed loop never
-double-acts. Check which loops run before applying any trigger label.
+A fleet loop picks up an issue or PR only when it carries an `agent:*` trigger
+label and `kinged007` as assignee. Without both, nothing starts. When a person
+does the work by hand, follow the matching row, then remove the trigger label
+so a running loop never double-acts.
 
 - Needs rebase: merge the base into the PR branch (never rebase, never
   force-push), resolve conflicts keeping both sides' intent, run the quality
@@ -62,12 +63,7 @@ double-acts. Check which loops run before applying any trigger label.
 
 ## Labels that start no work
 
-Applying one of these starts no agent today, because no running loop consumes
-it. Eighteen PRs were parked this way (#1810); do not apply them to start
-work, and clear them once a person has done the work by hand.
+A fleet loop picks up an issue or PR only when it has an `agent:*` trigger
+label and `kinged007` as assignee. One trigger has no loop behind it:
 
-- `agent:rebase`, `agent:ci-fix`, `agent:revise` (fleet prs-builder loop exists
-  in operator config but is not running)
-- `agent:merge`, `agent:verify` (fleet prs-light loop exists in operator
-  config but is not running)
 - `agent:plan-build` (no loop references it at all)
