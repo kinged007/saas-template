@@ -40,7 +40,11 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin dev staging main --quiet
-          for b in dev staging main; do git branch -f "$b" "origin/$b"; done
+          HEAD_BR="$(git rev-parse --abbrev-ref HEAD)"
+          for b in dev staging main; do
+            if [ "$HEAD_BR" = "$b" ]; then git reset -q --hard "origin/$b";
+            else git branch -f "$b" "origin/$b"; fi
+          done
           SHA="$(git rev-parse dev)"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           if git merge-base --is-ancestor "$SHA" staging; then
@@ -80,7 +84,11 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin dev staging main --quiet
-          for b in dev staging main; do git branch -f "$b" "origin/$b"; done
+          HEAD_BR="$(git rev-parse --abbrev-ref HEAD)"
+          for b in dev staging main; do
+            if [ "$HEAD_BR" = "$b" ]; then git reset -q --hard "origin/$b";
+            else git branch -f "$b" "origin/$b"; fi
+          done
           RELEASE_NOTES="$(make release-notes BASE=main HEAD=staging)"
           RELEASE_NOTES="$RELEASE_NOTES" bash scripts/promote.sh promote "$FROZEN_SHA" "$RUN_URL" "$RUN_URL"
 

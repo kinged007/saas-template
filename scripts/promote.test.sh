@@ -50,6 +50,8 @@ if grep -q "GITHUB_TOKEN" "$WORKFLOW" "$PROMOTE"; then
 fi
 grep -q "FLEET_TOKEN" "$WORKFLOW" \
   || fail "AC-7: promote.yml must authenticate with the FLEET_TOKEN secret"
+test "$(grep -c 'git branch -f' "$WORKFLOW")" -eq "$(grep -c 'else git branch -f' "$WORKFLOW")" \
+  || fail "R1: ref sync must never force-update the checked-out branch (guard every git branch -f)"
 if grep -n "git push" "$WORKFLOW" "$PROMOTE" | grep -v "staging"; then
   fail "AC-8: the only push target may be staging, never main"
 fi
@@ -107,6 +109,22 @@ advance_dev() { # <subject> -> prints the new dev SHA
 }
 
 origin_ref() { git --git-dir="$TMP/origin.git" rev-parse "$1"; }
+
+# --- R1: ref sync must survive the frozen branch being checked out ---
+make_fixture
+cd "$TMP/work"
+SHA_R1="$(advance_dev "r1 slice")"
+git checkout -q dev
+git reset -q --hard HEAD~1 # local dev now stale behind origin/dev
+git fetch origin dev staging main --quiet
+HEAD_BR="$(git rev-parse --abbrev-ref HEAD)"
+for b in dev staging main; do
+  if [ "$HEAD_BR" = "$b" ]; then git reset -q --hard "origin/$b";
+  else git branch -f "$b" "origin/$b"; fi
+done
+[ "$(git rev-parse dev)" = "$SHA_R1" ] \
+  || fail "R1: guarded ref sync must update the checked-out dev branch"
+echo "ok: ref sync updates refs with the frozen branch checked out"
 
 # --- green path: staging advances, one PR created then updated (AC-3, AC-4) ---
 make_fixture
