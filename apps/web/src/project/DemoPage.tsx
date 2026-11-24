@@ -38,7 +38,8 @@ const ROWS: ProjectDemoItem[] = [
 ];
 
 export function DemoPage() {
-  const { data: canView } = useCan({ resource: "project-demo", action: "list" });
+  const { data: canView, isLoading } = useCan({ resource: "project-demo", action: "list" });
+  if (isLoading) return null;
   if (canView && !canView.can) {
     return (
       <div className="mx-auto max-w-2xl py-12 text-center">
