@@ -18,10 +18,12 @@ concurrency:
   cancel-in-progress: false
 
 # The guard never pushes or merges, so the default workflow credential is
-# enough; issues: write lets a red run open or update the needs-human issue.
+# enough; issues: write lets a red run open or update the needs-human issue,
+# and actions: read lets the resolve step list completed guard runs (#1878).
 permissions:
   contents: read
   issues: write
+  actions: read
 
 jobs:
   guard:

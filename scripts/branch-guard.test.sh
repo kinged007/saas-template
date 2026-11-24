@@ -250,6 +250,9 @@ grep -q 'branch-guard.sh "$BRANCH" "$BEFORE" "$AFTER" "$FORCED" "$LAST"' "$WF_YM
   || fail "failure step must pass \$LAST to branch-guard.sh"
 grep -q 'github.event.forced }}" "${{ steps.last.outputs.sha }}"' "$WF_YML" \
   || fail "guard step must pass the last checked head as the 5th arg"
+# --- #1883 review (R1): the resolve step must be able to list runs ---
+grep -q 'actions: read' "$WF_YML" \
+  || fail "workflow must grant actions: read so the resolve step can list runs"
 echo "ok: surviving run resolves and passes the last checked head"
 
 echo "TEST PASS: dev/staging/main good+bad, force-push, deletion, range scoping, issue update, superseded-range widening"
