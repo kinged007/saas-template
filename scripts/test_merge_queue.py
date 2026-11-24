@@ -8,9 +8,12 @@ approval, and the exact merge/revert/close command strings.
 Run: python3 scripts/test_merge_queue.py
 """
 
+import os
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -187,17 +190,59 @@ class HeadChecksTest(unittest.TestCase):
                 self.assertEqual(mq.classify_checks("success", runs), "wait")
 
     def test_only_queue_job_pending_passes(self):
-        runs = [self._run("api-test"),
-                self._run("merge", status="in_progress", conclusion=None)]
-        self.assertEqual(mq.classify_checks(None, runs), "pass")
+        with mock.patch.dict(os.environ, {"GITHUB_RUN_ID": "111"}):
+            runs = [self._run("api-test"),
+                    {"name": "merge", "status": "in_progress", "conclusion": None,
+                     "details_url": "https://github.com/o/r/actions/runs/111/job/7"}]
+            self.assertEqual(mq.classify_checks(None, runs), "pass")
+
+    def test_real_check_named_merge_still_fails(self):
+        # A failing check named `merge` from another workflow run carries a
+        # different run id, so it is not the queue's own job and must count.
+        with mock.patch.dict(os.environ, {"GITHUB_RUN_ID": "111"}):
+            runs = [
+                {"name": "merge", "status": "in_progress", "conclusion": None,
+                 "details_url": "https://github.com/o/r/actions/runs/111/job/7"},
+                {"name": "merge", "status": "completed", "conclusion": "failure",
+                 "details_url": "https://github.com/o/r/actions/runs/999/job/2"},
+            ]
+            self.assertEqual(mq.classify_checks(None, runs), "fail")
+
+    def test_check_named_merge_queue_is_not_skipped(self):
+        runs = [self._run("merge-queue", conclusion="failure")]
+        self.assertEqual(mq.classify_checks("success", runs), "fail")
 
     def test_zero_statuses_with_green_runs_passes(self):
         # The #1840 case: legacy API says pending with total_count 0.
         runs = [self._run("api-test"), self._run("web-build")]
         self.assertEqual(mq.classify_checks(None, runs), "pass")
 
-    def test_no_signals_waits(self):
-        self.assertEqual(mq.classify_checks(None, []), "wait")
+    def test_no_signals_fails(self):
+        # Zero check runs plus zero statuses: no CI ever reported, so fail
+        # instead of waiting forever.
+        self.assertEqual(mq.classify_checks(None, []), "fail")
+
+    def test_only_queue_job_and_no_status_fails(self):
+        with mock.patch.dict(os.environ, {"GITHUB_RUN_ID": "111"}):
+            runs = [{"name": "merge", "status": "in_progress", "conclusion": None,
+                     "details_url": "https://github.com/o/r/actions/runs/111/job/7"}]
+            self.assertEqual(mq.classify_checks(None, runs), "fail")
+
+    def test_stale_pending_fails(self):
+        now = datetime(2026, 11, 24, 12, tzinfo=timezone.utc).timestamp()
+        old = {"name": "api-test", "status": "queued", "conclusion": None,
+               "started_at": "2026-11-24T09:00:00Z"}
+        self.assertEqual(mq.classify_checks("success", [old], now=now), "fail")
+
+    def test_fresh_pending_waits(self):
+        now = datetime(2026, 11, 24, 12, tzinfo=timezone.utc).timestamp()
+        fresh = {"name": "api-test", "status": "in_progress", "conclusion": None,
+                 "started_at": "2026-11-24T11:55:00Z"}
+        self.assertEqual(mq.classify_checks("success", [fresh], now=now), "wait")
+
+    def test_pending_without_started_at_waits(self):
+        runs = [self._run("api-test", status="queued", conclusion=None)]
+        self.assertEqual(mq.classify_checks("success", runs), "wait")
 
     def test_failing_status_fails(self):
         self.assertEqual(mq.classify_checks("failure", [self._run("api-test")]), "fail")
