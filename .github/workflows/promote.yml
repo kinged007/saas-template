@@ -1,0 +1,104 @@
+name: promote
+
+# Moves a verified dev SHA to staging and opens (or refreshes) the staging to
+# main promotion PR (CI-CD.md §4.5). Lives on the default branch: GitHub only
+# evaluates `schedule` there, and the default is dev until the maintainer
+# switches it to main after the first promotion carries this workflow over.
+# Never pushes to main: main moves only when the maintainer merges the
+# promotion PR.
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+# One promotion at a time; a run already going is never cancelled.
+concurrency:
+  group: promote
+  cancel-in-progress: false
+
+# The ephemeral workflow credential only reads. Every push and every gh
+# PR/issue call below authenticates with the fleet credential, never with it:
+# pushes and PRs made with the default token would not trigger ci/e2e, which
+# would silently fake verification (CI-CD.md §7).
+permissions:
+  contents: read
+
+jobs:
+  freeze:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.freeze.outputs.sha }}
+      noop: ${{ steps.freeze.outputs.noop }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ secrets.FLEET_TOKEN }}
+      - id: freeze
+        name: Freeze the dev head
+        run: |
+          set -euo pipefail
+          git fetch origin dev staging main --quiet
+          for b in dev staging main; do git branch -f "$b" "origin/$b"; done
+          SHA="$(git rev-parse dev)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "$SHA" staging; then
+            echo "noop=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "noop=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  verify-ci:
+    needs: freeze
+    if: needs.freeze.outputs.noop != 'true'
+    uses: ./.github/workflows/ci.yml
+    with:
+      sha: ${{ needs.freeze.outputs.sha }}
+
+  verify-e2e:
+    needs: freeze
+    if: needs.freeze.outputs.noop != 'true'
+    uses: ./.github/workflows/e2e.yml
+    with:
+      sha: ${{ needs.freeze.outputs.sha }}
+
+  promote:
+    needs: [freeze, verify-ci, verify-e2e]
+    if: needs.freeze.outputs.noop != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.FLEET_TOKEN }}
+      - name: Move staging to the frozen SHA and refresh the promotion PR
+        env:
+          GH_TOKEN: ${{ secrets.FLEET_TOKEN }}
+          FROZEN_SHA: ${{ needs.freeze.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          git fetch origin dev staging main --quiet
+          for b in dev staging main; do git branch -f "$b" "origin/$b"; done
+          RELEASE_NOTES="$(make release-notes BASE=main HEAD=staging)"
+          RELEASE_NOTES="$RELEASE_NOTES" bash scripts/promote.sh promote "$FROZEN_SHA" "$RUN_URL" "$RUN_URL"
+
+  blocked:
+    needs: [freeze, verify-ci, verify-e2e]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.FLEET_TOKEN }}
+      - name: Open or update the blocked-promotion issue
+        env:
+          GH_TOKEN: ${{ secrets.FLEET_TOKEN }}
+          FROZEN_SHA: ${{ needs.freeze.outputs.sha }}
+          CI_RESULT: ${{ needs.verify-ci.result }}
+          E2E_RESULT: ${{ needs.verify-e2e.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          bash scripts/promote.sh blocked "$FROZEN_SHA" "$CI_RESULT" "$E2E_RESULT" "$RUN_URL"

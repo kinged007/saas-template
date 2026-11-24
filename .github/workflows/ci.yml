@@ -153,6 +153,15 @@ jobs:
       - name: release-notes self-test (fixture repo, no network)
         run: bash scripts/release-notes.test.sh
 
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - name: promote self-test (fixture repo, stubbed gh, no network)
+        run: bash scripts/promote.test.sh
+
   trailing-newline:
     runs-on: ubuntu-latest
     steps:
