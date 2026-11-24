@@ -92,10 +92,23 @@ check_dev() {
     'Revert "'*)
       return 0;;
   esac
-  if ! echo "$body" | grep -qE '^[[:space:]]*(\*\*)?Area:(\*\*)?[[:space:]]+[^[:space:]]'; then
+  local area_count area_value
+  area_count="$(echo "$body" | grep -cE '^[[:space:]]*(\*\*)?Area:(\*\*)?[[:space:]]+[^[:space:]]' || true)"
+  if [ "$area_count" -eq 0 ]; then
     fail "$sha dev rule: missing Area: line (want 'Area: <api|web|db|infra>')"
     return 1
   fi
+  if [ "$area_count" -gt 1 ]; then
+    fail "$sha dev rule: multiple Area: lines (want exactly one 'Area: <api|web|db|infra>')"
+    return 1
+  fi
+  area_value="$(echo "$body" | grep -E '^[[:space:]]*(\*\*)?Area:(\*\*)?[[:space:]]+[^[:space:]]' | sed -E 's/^[[:space:]]*(\*\*)?Area:(\*\*)?[[:space:]]+//; s/[[:space:]]+$//')"
+  case "$(echo "$area_value" | tr '[:upper:]' '[:lower:]')" in
+    api|web|db|infra) ;;
+    *)
+      fail "$sha dev rule: invalid Area: '$area_value' (want 'Area: <api|web|db|infra>')"
+      return 1;;
+  esac
   if ! echo "$body" | grep -qE '^[[:space:]]*(\*\*)?Release-note:(\*\*)?[[:space:]]+[^[:space:]]'; then
     fail "$sha dev rule: missing Release-note: line"
     return 1
