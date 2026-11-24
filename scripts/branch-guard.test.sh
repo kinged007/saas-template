@@ -159,4 +159,20 @@ grep -q "issue comment 42" "$TMP_GH_LOG" || fail "second violation should commen
 grep -q "issue create" "$TMP_GH_LOG" && fail "second violation created a duplicate issue"
 echo "ok: repeat violations update the open issue instead of duplicating"
 
+# --- #1853: the workflow failure step must pass forced through, use real
+# newlines, and fall back when the checkout is missing ---
+WF_YML="${WF_YML:-$HERE/../.github/workflows/branch-guard.yml}"
+[ -f "$WF_YML" ] || fail "branch-guard.yml not found at $WF_YML"
+grep -q 'FORCED: ${{ github.event.forced }}' "$WF_YML" \
+  || fail "failure step must wire FORCED from the push event"
+grep -q 'branch-guard.sh "$BRANCH" "$BEFORE" "$AFTER" "$FORCED"' "$WF_YML" \
+  || fail "failure step must pass \$FORCED to branch-guard.sh (forced wording)"
+grep -q -- '-f scripts/branch-guard.sh' "$WF_YML" \
+  || fail "failure step must guard on scripts/branch-guard.sh (missing checkout)"
+grep -q "printf 'Branch" "$WF_YML" \
+  || fail "failure step must build the body with printf (real newlines)"
+grep -q 'BODY="Branch' "$WF_YML" \
+  && fail "failure step must not use literal \\n in a double-quoted body"
+echo "ok: failure step passes forced through, uses real newlines, falls back without checkout"
+
 echo "TEST PASS: dev/staging/main good+bad, force-push, deletion, range scoping, issue update"

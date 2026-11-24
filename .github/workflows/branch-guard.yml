@@ -30,11 +30,16 @@ jobs:
           BRANCH: ${{ github.ref_name }}
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.event.after }}
+          FORCED: ${{ github.event.forced }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          BODY="$(bash scripts/branch-guard.sh "$BRANCH" "$BEFORE" "$AFTER" 2>&1 || true)"
-          BODY="Branch \`$BRANCH\` broke the branch model in push \`$BEFORE..$AFTER\` ([run]($RUN_URL)):\n\n\`\`\`\n$BODY\n\`\`\`\n\nRecover with a new commit (revert the push); never force-push."
+          if [ -f scripts/branch-guard.sh ]; then
+            DIAG="$(bash scripts/branch-guard.sh "$BRANCH" "$BEFORE" "$AFTER" "$FORCED" 2>&1 || true)"
+          else
+            DIAG="branch-guard.sh not found (the checkout step did not run); see the run log for the guard diagnosis."
+          fi
+          BODY="$(printf 'Branch `%s` broke the branch model in push `%s..%s` ([run](%s)):\n\n```\n%s\n```\n\nRecover with a new commit (revert the push); never force-push.' "$BRANCH" "$BEFORE" "$AFTER" "$RUN_URL" "$DIAG")"
           TITLE="[branch-guard] $BRANCH violation"
           EXISTING="$(gh issue list --search "$TITLE in:title" --state open --json number --jq '.[0].number // empty')"
           if [ -n "$EXISTING" ]; then
