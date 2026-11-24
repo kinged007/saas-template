@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Self-test for release-notes.sh: builds a throwaway git repo with labelled
-# commits, an unlabelled commit, a reverted pair and a lone revert, then
-# asserts the report groups by area, drops the pair, and lists the lone
-# revert under Reverted and the trailer-less commit under Unlabelled.
+# commits, an unlabelled commit, a reverted pair, a revert-of-revert chain and
+# a lone revert, then asserts the report groups by area, drops the pair,
+# restores the chain's slice, and lists the lone revert under Reverted and the
+# trailer-less commit under Unlabelled.
 #
 # Usage: bash scripts/release-notes.test.sh (also run by the `release-notes`
 # CI job in the template repo itself). No network: the fixture repo is local.
@@ -48,6 +49,14 @@ REVERT_PAIR_SHA="$(git rev-parse --short HEAD)"
 # Lone revert: its target (the base commit) is outside base..head.
 git revert --no-edit base >/dev/null
 LONE_REVERT_SHA="$(git rev-parse --short HEAD)"
+# Revert-of-revert chain: F + revert(F) + revert(revert(F)) nets to F live,
+# so F's slice must survive while both reverts stay hidden.
+commit "feat(api): restored slice (#104)" "Area: api
+Release-note: The restored export ships again."
+git revert --no-edit HEAD >/dev/null
+CHAIN_MID_SHA="$(git rev-parse --short HEAD)"
+git revert --no-edit HEAD >/dev/null
+CHAIN_LAST_SHA="$(git rev-parse --short HEAD)"
 git tag head
 
 OUT="$(bash scripts/release-notes.sh base head)"
@@ -69,6 +78,12 @@ echo "$OUT" | grep -q "remove the legacy export" \
   && fail "reverted slice still listed"
 echo "$OUT" | grep -q "$REVERT_PAIR_SHA" \
   && fail "revert commit of an in-range pair still listed"
+echo "$OUT" | grep -q "^- #104 The restored export ships again\." \
+  || fail "revert-of-revert chain dropped the restored slice"
+echo "$OUT" | grep -q "$CHAIN_MID_SHA" \
+  && fail "cancelled revert of the chain still listed"
+echo "$OUT" | grep -q "$CHAIN_LAST_SHA" \
+  && fail "restoring revert of the chain still listed"
 echo "$OUT" | grep -q "^### Reverted" || fail "missing Reverted section"
 echo "$OUT" | grep -q "$LONE_REVERT_SHA" \
   || fail "lone revert (target outside range) not listed under Reverted"
@@ -84,4 +99,4 @@ if bash scripts/release-notes.sh >/dev/null 2>&1; then
   fail "missing args exited 0 instead of failing loudly"
 fi
 
-echo "TEST PASS: grouped by area, pair dropped, lone revert and unlabelled listed, bad refs fail"
+echo "TEST PASS: grouped by area, pair dropped, chain restored, lone revert and unlabelled listed, bad refs fail"
