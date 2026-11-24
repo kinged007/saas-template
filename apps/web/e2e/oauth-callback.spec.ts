@@ -109,13 +109,21 @@ test.describe("oauth callback escape", () => {
     // "Signing you in…" with no error and no escape.
     await page.getByRole("link", { name: "Back to sign-in" }).click();
     await page.waitForURL(/\/login$/);
+    // Gate on the committed unmount before going back: the click above and
+    // goBack below are two history transitions ~50ms apart, and under load
+    // React commits them as one — reconciling (not remounting) this page, so
+    // the retry effect never re-runs and the stale failure DOM below passes
+    // with one POST. A painted login proves the callback unmounted, which
+    // makes goBack a real remount. Same-document transitions never touch the
+    // back/forward cache, so goBack is safe here once the commit has landed.
+    await expect(page.getByText("Sign in to your account")).toBeVisible();
     await page.goBack();
 
     await expect(page.getByText("Signing you in…")).toHaveCount(0);
     await expect(page.getByText("Sign-in failed. The code may have expired.")).toBeVisible();
-    // Polled, not asserted once: the remount's POST is in flight when the two
-    // status assertions above can already pass, so an immediate count read the
-    // race rather than the latch and went red on main intermittently.
-    await expect.poll(() => tokenPosts.length, { timeout: 10_000 }).toBe(2);
+    // Immediate, not polled: on a real remount the failure text is painted by
+    // the .catch that follows the second POST, so a visible failure with one
+    // POST means the remount never happened — exactly what this count guards.
+    expect(tokenPosts).toHaveLength(2);
   });
 });
