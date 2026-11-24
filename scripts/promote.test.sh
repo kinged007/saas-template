@@ -54,6 +54,8 @@ test "$(grep -c 'token: ${{ secrets.FLEET_TOKEN }}' "$WORKFLOW")" -eq "$(grep -c
   || fail "AC-7: every actions/checkout step must pass token: secrets.FLEET_TOKEN"
 test "$(grep -c 'git branch -f' "$WORKFLOW")" -eq "$(grep -c 'else git branch -f' "$WORKFLOW")" \
   || fail "R1: ref sync must never force-update the checked-out branch (guard every git branch -f)"
+test "$(grep -cF 'if [ "$HEAD_BR" = "$b" ]; then git reset -q --hard "origin/$b";' "$WORKFLOW")" -eq "$(grep -c 'for b in dev staging main' "$WORKFLOW")" \
+  || fail "R5: every ref-sync loop must reset the checked-out branch to its own origin ref (a != guard or fixed reset target breaks freeze/promote)"
 grep -q 'release-notes BASE=main HEAD="\$FROZEN_SHA"' "$WORKFLOW" \
   || fail "R2: release notes must cover the frozen SHA, not pre-merge staging"
 grep -q "needs.freeze.outputs.sha != ''" "$WORKFLOW" \
