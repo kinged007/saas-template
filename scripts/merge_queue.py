@@ -408,7 +408,11 @@ class MergeQueue:
             count = 1 if state else 0
         if not count:
             state = None  # zero commit statuses: the legacy API always says pending
-        return classify_checks(state, self.check_runs(sha))
+        try:
+            runs = self.check_runs(sha)
+        except RuntimeError:
+            return "wait"  # checks API down: retry next run, never legacy fallback
+        return classify_checks(state, runs)
 
     def approval_at_head(self, n, head_sha):
         out = self._read([

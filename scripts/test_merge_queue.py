@@ -259,6 +259,17 @@ class HeadChecksTest(unittest.TestCase):
         q.check_runs = lambda sha: [self._run("api-test")]  # noqa: SLF001
         self.assertEqual(q.head_checks("sha1"), "pass")
 
+    def test_head_checks_api_error_waits_without_legacy_fallback(self):
+        q = mq.MergeQueue(repo="o/r", base="dev")
+        q.commit_status = lambda sha: "success"  # noqa: SLF001
+        q.commit_status_count = lambda sha: 1  # noqa: SLF001
+
+        def boom(sha):
+            raise RuntimeError("403")
+        q.check_runs = boom  # noqa: SLF001
+        # Legacy success alone would pass; the checks-API outage must wait.
+        self.assertEqual(q.head_checks("sha1"), "wait")
+
     def test_run_once_waits_without_relabel_on_pending(self):
         q = mq.MergeQueue(repo="o/r", base="dev")
         q.dev_head = lambda: "devsha"  # noqa: SLF001
