@@ -85,6 +85,15 @@ jobs:
               ;;
           esac
 
+  branch-guard-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - name: branch-guard self-test (fixture repo, no network)
+        run: bash scripts/branch-guard.test.sh
+
   # One matrix over the three frontend checks, so the checkout, setup-node and
   # npm ci block exists once instead of three times. The name keeps the
   # previous check names (web-build, web-test, web-e2e) for branch protection.
