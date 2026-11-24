@@ -7,6 +7,16 @@ on:
   push:
     branches: [dev, staging, main]
 
+# Serialize overlapping violating pushes per branch: the open-or-update issue
+# step below is list-then-create (not atomic), so two concurrent red runs on
+# the same branch could both create a violation issue. Queued (never
+# cancelled) so the second run lists after the first run created the issue
+# and comments on it instead. Keyed per branch so different branches still
+# run independently.
+concurrency:
+  group: branch-guard-${{ github.ref_name }}
+  cancel-in-progress: false
+
 # The guard never pushes or merges, so the default workflow credential is
 # enough; issues: write lets a red run open or update the needs-human issue.
 permissions:
