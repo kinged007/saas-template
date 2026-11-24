@@ -270,6 +270,15 @@ class HeadChecksTest(unittest.TestCase):
         # Legacy success alone would pass; the checks-API outage must wait.
         self.assertEqual(q.head_checks("sha1"), "wait")
 
+    def test_head_checks_status_api_error_waits(self):
+        q = mq.MergeQueue(repo="o/r", base="dev")
+
+        def boom(sha):
+            raise RuntimeError("500")
+        q.commit_status = boom  # noqa: SLF001
+        # Status-API outage must wait instead of aborting the queue run.
+        self.assertEqual(q.head_checks("sha1"), "wait")
+
     def test_run_once_waits_without_relabel_on_pending(self):
         q = mq.MergeQueue(repo="o/r", base="dev")
         q.dev_head = lambda: "devsha"  # noqa: SLF001

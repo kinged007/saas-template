@@ -407,7 +407,10 @@ class MergeQueue:
 
     def head_checks(self, sha):
         """Gate-4 verdict for a head SHA: pass|fail|wait."""
-        state = (self.commit_status(sha) or "").strip().strip('"') or None
+        try:
+            state = (self.commit_status(sha) or "").strip().strip('"') or None
+        except RuntimeError:
+            return "wait"  # status API down: retry next run
         try:
             count = self.commit_status_count(sha)
         except RuntimeError:
