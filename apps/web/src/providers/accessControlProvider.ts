@@ -3,6 +3,7 @@ import type { AccessControlBindings } from "@refinedev/core";
 import { activeWorkspacePermissions } from "../utils/permissions";
 import { identityStore } from "../utils/storage";
 import type { Identity } from "../types";
+import { projectPermissionMap } from "../project";
 
 /** Maps refine (resource, action) to backend permission strings. */
 const PERMISSION_MAP: Record<string, Record<string, string>> = {
@@ -66,6 +67,7 @@ const PERMISSION_MAP: Record<string, Record<string, string>> = {
     list: "audit:read",
     show: "audit:read",
   },
+  ...projectPermissionMap,
 };
 
 export const accessControlProvider: AccessControlBindings = {

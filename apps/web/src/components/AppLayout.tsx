@@ -60,11 +60,12 @@ import { isManagerRoleName } from "../pages/role-name";
 import { ThemeToggle } from "./refine-ui/theme/theme-toggle";
 import { NotificationCenter } from "./NotificationCenter";
 import { PendingInvitationsBadge } from "./PendingInvitations";
+import { projectMenuItems } from "../project";
 import { cn } from "@/lib/utils";
 import type { Identity } from "../types";
 import { getDisplayName } from "../types";
 
-type MenuItem = {
+export type MenuItem = {
   key: string;
   label: string;
   icon: LucideIcon;
@@ -123,7 +124,15 @@ function SidebarNav() {
 
   // A group whose items are all filtered out by permissions renders nothing,
   // so a missing permission cannot leave an empty group or a dangling rule.
-  const visibleGroups = SIDEBAR_GROUPS.map((group) => ({
+  // Project-owned menu items render as their own group; with zero project
+  // contributions this adds nothing and the sidebar is unchanged.
+  const allGroups: typeof SIDEBAR_GROUPS = [
+    ...SIDEBAR_GROUPS,
+    ...(projectMenuItems.length > 0
+      ? [{ id: "project", title: "Project", position: "top" as const, items: projectMenuItems }]
+      : []),
+  ];
+  const visibleGroups = allGroups.map((group) => ({
     ...group,
     items: group.items.filter((i) => can(i.permission)),
   })).filter((group) => group.items.length > 0);
