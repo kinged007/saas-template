@@ -6,7 +6,7 @@ import type { Identity } from "../types";
 import { projectPermissionMap } from "../project";
 
 /** Maps refine (resource, action) to backend permission strings. */
-const PERMISSION_MAP: Record<string, Record<string, string>> = {
+const BUILT_IN_PERMISSION_MAP: Record<string, Record<string, string>> = {
   workspaces: {
     list: "workspace:read",
     create: "workspace:update",
@@ -67,6 +67,19 @@ const PERMISSION_MAP: Record<string, Record<string, string>> = {
     list: "audit:read",
     show: "audit:read",
   },
+};
+
+// A project key colliding with a built-in resource would silently replace
+// that resource's action map via the spread below, and dropped actions fall
+// through to the fail-open default in `can`. Fail fast instead.
+for (const key of Object.keys(projectPermissionMap)) {
+  if (key in BUILT_IN_PERMISSION_MAP) {
+    throw new Error(`projectPermissionMap key "${key}" collides with a built-in resource`);
+  }
+}
+
+const PERMISSION_MAP: Record<string, Record<string, string>> = {
+  ...BUILT_IN_PERMISSION_MAP,
   ...projectPermissionMap,
 };
 
