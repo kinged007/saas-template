@@ -61,11 +61,12 @@ import { ThemeToggle } from "./refine-ui/theme/theme-toggle";
 import { ASK_AN_ADMIN, SINGLE_WORKSPACE_LIMIT } from "./NoWorkspaceCard";
 import { NotificationCenter } from "./NotificationCenter";
 import { PendingInvitationsBadge } from "./PendingInvitations";
+import { projectMenuItems } from "../project";
 import { cn } from "@/lib/utils";
 import type { Identity } from "../types";
 import { getDisplayName } from "../types";
 
-type MenuItem = {
+export type MenuItem = {
   /** React key. Independent of `to`, so re-routing an item keeps its identity. */
   id: string;
   /** Route target. `"#"` renders a dead link that goes nowhere. */
@@ -132,7 +133,15 @@ function SidebarNav() {
 
   // A group whose items are all filtered out by permissions renders nothing,
   // so a missing permission cannot leave an empty group or a dangling rule.
-  const visibleGroups = SIDEBAR_GROUPS.map((group) => ({
+  // Project-owned menu items render as their own group; with zero project
+  // contributions this adds nothing and the sidebar is unchanged.
+  const allGroups: typeof SIDEBAR_GROUPS = [
+    ...SIDEBAR_GROUPS,
+    ...(projectMenuItems.length > 0
+      ? [{ id: "project", title: "Project", position: "primary" as const, items: projectMenuItems }]
+      : []),
+  ];
+  const visibleGroups = allGroups.map((group) => ({
     ...group,
     items: group.items.filter((i) => can(i.permission)),
   })).filter((group) => group.items.length > 0);

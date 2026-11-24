@@ -60,6 +60,7 @@ import { JobsSection } from "./pages/settings/workspace/sections/JobsSection";
 import { UsersSection } from "./pages/settings/workspace/sections/UsersSection";
 import { AuditLogSection } from "./pages/settings/workspace/sections/AuditLogSection";
 import { returnToStore } from "./utils/storage";
+import { projectResources, projectRoutes } from "./project";
 
 /**
  * Where the guard sends a signed-out visitor. The destination they asked for is
@@ -161,6 +162,7 @@ export function App() {
           { name: "admin-users", list: "/admin/users", meta: { hide: true } },
           { name: "admin-workspaces", list: "/admin/workspaces", meta: { hide: true } },
           { name: "admin-audit", list: "/admin/audit", meta: { hide: true } },
+          ...projectResources,
         ]}
       >
         <Routes>
@@ -230,6 +232,11 @@ export function App() {
                     RequireWorkspace group above. */}
                 <Route path="roles" element={<Navigate to="/settings/workspace/roles" replace />} />
                 <Route path="jobs" element={<Navigate to="/settings/workspace/jobs" replace />} />
+                {/* Project-owned pages. Workspace-free project pages must map
+                    outside RequireWorkspace; everything here needs a workspace. */}
+                {projectRoutes.map((r) => (
+                  <Route key={r.path} path={r.path} element={r.element} />
+                ))}
               </Route>
               <Route path="settings/profile" element={<ProfileSettingsLayout />}>
                 <Route index element={<Navigate to="general" replace />} />
