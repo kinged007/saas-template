@@ -10,8 +10,8 @@
 ## Branches and settings
 
 - [ ] **CICD-01** `dev` and `staging` exist (§2) — `gh api repos/$REPO/branches/dev --jq .name && gh api repos/$REPO/branches/staging --jq .name`
-- [ ] **CICD-02** the default branch is `dev` before the first release tag and `main` from then on (§2 rule 2) — `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` prints `dev` while `git tag --list 'v*'` is empty, and `main` otherwise
-- [ ] **CICD-03** rebase merge is off; branches delete on merge only once `staging` is excluded (§9 piece 1, §8 step 3) — `gh api repos/$REPO --jq '.allow_rebase_merge'` prints `false`; `.delete_branch_on_merge` prints `false` in Stage 1
+- [ ] **CICD-02** the default branch is `dev` (§2 rule 2) — `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` prints `dev`
+- [ ] **CICD-03** rebase merge is off; `delete_branch_on_merge` stays `false` until `staging` is excluded (§9 piece 1, §8 step 3) — `gh api repos/$REPO --jq '.allow_rebase_merge'` prints `false`; `.delete_branch_on_merge` prints `false`
 - [ ] **CICD-04** `FLEET_TOKEN` secret exists (§7) — `gh secret list | grep -w FLEET_TOKEN`
 
 ## Fleet briefs
