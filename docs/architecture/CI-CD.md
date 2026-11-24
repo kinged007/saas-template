@@ -148,7 +148,8 @@ Each run takes the oldest `P0`-labelled PR with `agent:merge` if any; otherwise 
 | 3 | `mergeable == MERGEABLE` | `agent:rebase` |
 | 4 | Every PR check at the head SHA is green | `agent:ci-fix` |
 | 5 | A GitHub review event approves the current head SHA from an identity distinct from the PR author (Stage 1: advisory — see §7) | `agent:review` (the approval is stale or not a review event) |
-| 6 | The PR body has one `Area:` line with a valid value and one non-empty `Release-note:` line | `agent:revise` |
+| 6 | The PR body has one `Area:` line with a valid value | `agent:revise` |
+| 7 | The PR body has one non-empty `Release-note:` line; when it is missing the merger writes it from the diff and merges anyway — a missing line never blocks a merge (ADMISSION Gate 2) | merger writes it; merge proceeds |
 
 When all pass, it squash-merges with an explicit message, so the trailers reach `git log`
 regardless of the repository's default squash message:
