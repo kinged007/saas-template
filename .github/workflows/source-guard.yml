@@ -1,0 +1,72 @@
+name: source-guard
+
+# CI-CD §2 rule 6: only `staging` is merged into `main`. GitHub rulesets cannot
+# express a head-branch rule, so this check fails PRs from any other head and
+# retargets them to `dev` with one guidance comment. `pull_request_target`
+# runs the workflow from the base branch, so a PR that edits this guard is
+# still evaluated by the trusted version (AC-5). The workflow never checks out
+# the PR head and executes no PR-supplied code.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited]
+    branches: [main]
+
+# Least privilege: the guard only retargets and comments, never pushes or
+# merges. Note: a base change made with GITHUB_TOKEN may not itself start
+# downstream runs (see CI-CD §7), so the rerouted PR gets CI on its next human
+# event; either way there is no loop — after the retarget the base is `dev`,
+# which this trigger ignores.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  source-guard:
+    # Defense in depth with the `branches: [main]` trigger filter above:
+    # already-retargeted PRs (base `dev`) are ignored, so no second comment.
+    if: github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      # Trusted base only (the PR head is never checked out): pins the base
+      # SHA so the checked-in decision script is what runs, even when the PR
+      # itself edits the guard.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+      - name: Evaluate the PR head against the branch model
+        id: guard
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          PR_STATE: ${{ github.event.pull_request.state }}
+        run: |
+          set -euo pipefail
+          # A PR merged or closed before this run lands needs no retarget and
+          # no comment; end quietly instead of leaving misleading state.
+          if [ "$PR_STATE" != "open" ]; then
+            echo "source-guard: PR is $PR_STATE, nothing to do."
+            exit 0
+          fi
+          bash scripts/source-guard.sh "$BASE_REF" "$HEAD_REF" "$HEAD_REPO" "$BASE_REPO"
+      - name: Retarget to dev and comment once
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_STATE: ${{ github.event.pull_request.state }}
+        run: |
+          set -euo pipefail
+          if [ "$PR_STATE" != "open" ]; then
+            echo "source-guard: PR is $PR_STATE, skipping retarget."
+            exit 0
+          fi
+          gh pr edit "$PR_NUMBER" --base dev
+          MARKER='<!-- source-guard -->'
+          if gh pr view "$PR_NUMBER" --json comments --jq '.comments[].body' | grep -qF "$MARKER"; then
+            echo "source-guard: guidance comment already present, skipping."
+          else
+            BODY="$(printf '%s\n\nPRs merge into `dev`; only `staging` merges into `main`. This PR has been retargeted to `dev`.' "$MARKER")"
+            gh pr comment "$PR_NUMBER" --body "$BODY"
+          fi
