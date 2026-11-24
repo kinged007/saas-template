@@ -1,0 +1,59 @@
+name: branch-guard
+
+# Stage 1 check (CI-CD §7): detects a direct push or malformed commit on a
+# protected branch within minutes. It cannot prevent one; Stage 2 rulesets
+# come after it.
+on:
+  push:
+    branches: [dev, staging, main]
+
+# Serialize overlapping violating pushes per branch: the open-or-update issue
+# step below is list-then-create (not atomic), so two concurrent red runs on
+# the same branch could both create a violation issue. Queued (never
+# cancelled) so the second run lists after the first run created the issue
+# and comments on it instead. Keyed per branch so different branches still
+# run independently.
+concurrency:
+  group: branch-guard-${{ github.ref_name }}
+  cancel-in-progress: false
+
+# The guard never pushes or merges, so the default workflow credential is
+# enough; issues: write lets a red run open or update the needs-human issue.
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check the pushed range against the branch model
+        id: guard
+        run: bash scripts/branch-guard.sh "${{ github.ref_name }}" "${{ github.event.before }}" "${{ github.event.after }}" "${{ github.event.forced }}"
+      - name: Open or update the needs-human issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.ref_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+          FORCED: ${{ github.event.forced }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -f scripts/branch-guard.sh ]; then
+            DIAG="$(bash scripts/branch-guard.sh "$BRANCH" "$BEFORE" "$AFTER" "$FORCED" 2>&1 || true)"
+          else
+            DIAG="branch-guard.sh not found (the checkout step did not run); see the run log for the guard diagnosis."
+          fi
+          BODY="$(printf 'Branch `%s` broke the branch model in push `%s..%s` ([run](%s)):\n\n```\n%s\n```\n\nRecover with a new commit (revert the push); never force-push.' "$BRANCH" "$BEFORE" "$AFTER" "$RUN_URL" "$DIAG")"
+          TITLE="[branch-guard] $BRANCH violation"
+          EXISTING="$(gh issue list --search "$TITLE in:title" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --label needs-human --body "$BODY"
+          fi

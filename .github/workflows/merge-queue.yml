@@ -1,0 +1,48 @@
+name: merge-queue
+
+# Lives on `main` after the first promotion lands: GitHub evaluates
+# `schedule` and `workflow_run` only on the default branch. Until then the
+# default is `dev`. Merges into dev; promotion carries dev to main.
+on:
+  pull_request_target:
+    types: [labeled]
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [dev]
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+# At most one merge in flight; a run already going is never cancelled.
+concurrency:
+  group: merge-queue
+  cancel-in-progress: false
+
+# The ephemeral workflow credential only reads. Every push and merge in this
+# workflow authenticates with the fleet credential below, never with it.
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ secrets.FLEET_TOKEN }}
+      - name: Run the merge queue
+        env:
+          GH_TOKEN: ${{ secrets.FLEET_TOKEN }}
+        run: |
+          # Contract (COMPLIANCE-CHECKLIST CICD-23/25/25a): scripts/merge_queue.py
+          # performs the merge as:
+          #   gh pr merge "$N" --squash --subject "$TITLE (#$N)" --body "Area: ... Release-note: ..."
+          # red-dev recovery runs `git revert` on the newest squash commit, and
+          # resolved issues are closed with `gh issue close` naming the squash SHA.
+          # Check 5 (approval at head) is advisory in Stage 1: a mismatch is
+          # logged, never blocks, never relabels. Pass --enforce-approval for
+          # the Stage 2 path, where a mismatch routes the PR to agent:review.
+          python3 scripts/merge_queue.py

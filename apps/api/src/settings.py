@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     # lifespan) and by src/models (their `.models` submodule). The default ships
     # the in-template demo area; empty means no extensions.
     extension_modules: str = "src.project"
+    # bcrypt cost factor for password hashing. Higher is slower to brute-force
+    # and slower to verify; 12 is the current default. Range is bcrypt's 4..31.
+    password_hash_rounds: int = Field(default=12, ge=4, le=31)
 
     # Events
     event_bus_driver: EventBusDriver = EventBusDriver.INPROCESS
@@ -124,6 +127,13 @@ class Settings(BaseSettings):
     # invitations, which are outside this cap.
     auth_ip_mail_max_attempts: int = 20
     auth_ip_mail_window_seconds: int = 300
+
+    # Lockout after the window budget is spent (seconds; 0 disables, the
+    # Retry-After falls back to the window). Also sets the register limiter's
+    # lockout duration; register keeps a separate per-IP budget and never
+    # shares login's account:<email> budget.
+    auth_rate_limit_lockout_seconds: int = Field(default=900, ge=0)
+
     # Registration mail budget (#1343), keyed on the IP alone: distinct from
     # auth_rate_limit_* because the registrant owns every fresh address, and
     # tests that tighten the auth pair must not collapse this window.

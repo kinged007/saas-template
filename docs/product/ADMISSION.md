@@ -53,8 +53,11 @@ Hard rules. Any unchecked box that can be fixed becomes a named condition (**Acc
       why it cannot be split.
 - [ ] **Authorisation** for anything workspace-scoped is enforced on the server. UI gating is
       cosmetic and never the only check.
-- [ ] The change has **one release-note line** an adopter can read to decide whether to take
-      it: what changed, for whom, and anything they must do.
+- [ ] The squash commit into `dev` carries **one release-note line** an adopter can read to
+      decide whether to take it: what changed, for whom, and anything they must do. The author
+      writes it; when it is missing, the merger writes it. A missing line never blocks a merge.
+      A rename, move or deletion under `apps/` that is not listed as `old/path → new/path`
+      does block it.
 
 ### Gate 3 — Shape *(P3 Ownership not hooks, P5 Optional means removable)*
 
@@ -65,9 +68,8 @@ Hard rules. Any unchecked box that can be fixed becomes a named condition (**Acc
       auto-discovery replacing a hand-maintained list) passes — say so in the PR.
 - [ ] If not every adopter needs it, it is **off by default or removable in one sitting**:
       one documented removal, no orphaned imports, tests green afterwards.
-- [ ] It follows the existing pattern for its kind (drivers selected by env, as the event
-      bus, secret store and email already are; Refine views and `useForm` on the web side, per
-      `AGENTS.md`). A new pattern needs a reason a reviewer can check.
+- [ ] It follows `docs/architecture/CONVENTIONS.md`. A deviation from a `CONV-*` rule needs
+      an entry in `docs/product/DECISIONS.md` that names the rule.
 
 ### Gate 4 — Quality *(P2 Never silent, P7 Clear, honest and unbranded)*
 
@@ -176,5 +178,6 @@ line is the record.
 
 When escalating: one question, the options, a recommendation and the gate that triggered it.
 
-The maintainer merges every pull request. A merge is not, by itself, a decision on any of the
-five items above — those are recorded in `DECISIONS.md`.
+The maintainer merges every promotion into `main` ([DECISIONS.md D-07](DECISIONS.md)); fleet
+pull requests are merged into `dev` by the merge queue once their gates pass. A merge is not,
+by itself, a decision on any of the five items above — those are recorded in `DECISIONS.md`.

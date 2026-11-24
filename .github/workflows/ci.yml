@@ -2,8 +2,15 @@ name: ci
 
 on:
   pull_request:
+    branches: [dev, main]
   push:
-    branches: [main]
+    branches: [dev, staging, main]
+  workflow_call:
+    inputs:
+      sha:
+        description: "Commit SHA to check out"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -13,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -24,6 +33,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -35,6 +46,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -53,6 +66,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.sha || github.sha }}
           fetch-depth: 0
           fetch-tags: true
       - name: report template-owned changes (self-test in the template repo)
@@ -71,6 +85,15 @@ jobs:
               ;;
           esac
 
+  branch-guard-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - name: branch-guard self-test (fixture repo, no network)
+        run: bash scripts/branch-guard.test.sh
+
   # One matrix over the three frontend checks, so the checkout, setup-node and
   # npm ci block exists once instead of three times. The name keeps the
   # previous check names (web-build, web-test, web-e2e) for branch protection.
@@ -84,6 +107,8 @@ jobs:
         command: [build, test, e2e]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -123,13 +148,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
       - name: check fleet label contract
         run: ./scripts/check-label-contract.sh
+
+  release-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - name: release-notes self-test (fixture repo, no network)
+        run: bash scripts/release-notes.test.sh
 
   trailing-newline:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
       - name: check trailing newlines
         run: |
           set -eo pipefail
