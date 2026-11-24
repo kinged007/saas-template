@@ -65,9 +65,8 @@ Hard rules. Any unchecked box that can be fixed becomes a named condition (**Acc
       auto-discovery replacing a hand-maintained list) passes — say so in the PR.
 - [ ] If not every adopter needs it, it is **off by default or removable in one sitting**:
       one documented removal, no orphaned imports, tests green afterwards.
-- [ ] It follows the existing pattern for its kind (drivers selected by env, as the event
-      bus, secret store and email already are; Refine views and `useForm` on the web side, per
-      `AGENTS.md`). A new pattern needs a reason a reviewer can check.
+- [ ] It follows `docs/architecture/CONVENTIONS.md`. A deviation from a `CONV-*` rule needs
+      an entry in `docs/product/DECISIONS.md` that names the rule.
 
 ### Gate 4 — Quality *(P2 Never silent, P7 Clear, honest and unbranded)*
 
