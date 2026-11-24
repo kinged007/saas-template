@@ -8,9 +8,12 @@ approval, and the exact merge/revert/close command strings.
 Run: python3 scripts/test_merge_queue.py
 """
 
+import os
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -153,6 +156,156 @@ class GateMappingTest(unittest.TestCase):
         self.assertEqual(g5.status, "fail")
         self.assertEqual(mq.failure_label(5, enforce_approval=True), "agent:review")
         self.assertFalse(mq.gates_allow_merge(results, enforce_approval=True))
+
+
+class HeadChecksTest(unittest.TestCase):
+    """Gate 4 reads check runs (#1840): legacy `pending` with zero statuses
+    must not fail a PR whose check runs are green."""
+
+    def _run(self, name, status="completed", conclusion="success"):
+        return {"name": name, "status": status, "conclusion": conclusion}
+
+    def test_all_green_passes(self):
+        runs = [self._run("api-test"),
+                self._run("web-build", conclusion="skipped"),
+                self._run("web-e2e", conclusion="neutral")]
+        self.assertEqual(mq.classify_checks("success", runs), "pass")
+
+    def test_one_failure_fails(self):
+        runs = [self._run("api-test"),
+                self._run("web-build", conclusion="failure")]
+        self.assertEqual(mq.classify_checks("success", runs), "fail")
+
+    def test_each_failing_conclusion_fails(self):
+        for conclusion in ("failure", "cancelled", "timed_out", "action_required"):
+            with self.subTest(conclusion=conclusion):
+                runs = [self._run("api-test", conclusion=conclusion)]
+                self.assertEqual(mq.classify_checks("success", runs), "fail")
+
+    def test_pending_run_waits(self):
+        for status in ("queued", "in_progress"):
+            with self.subTest(status=status):
+                runs = [self._run("api-test"),
+                        self._run("web-build", status=status, conclusion=None)]
+                self.assertEqual(mq.classify_checks("success", runs), "wait")
+
+    def test_only_queue_job_pending_passes(self):
+        with mock.patch.dict(os.environ, {"GITHUB_RUN_ID": "111"}):
+            runs = [self._run("api-test"),
+                    {"name": "merge", "status": "in_progress", "conclusion": None,
+                     "details_url": "https://github.com/o/r/actions/runs/111/job/7"}]
+            self.assertEqual(mq.classify_checks(None, runs), "pass")
+
+    def test_real_check_named_merge_still_fails(self):
+        # A failing check named `merge` from another workflow run carries a
+        # different run id, so it is not the queue's own job and must count.
+        with mock.patch.dict(os.environ, {"GITHUB_RUN_ID": "111"}):
+            runs = [
+                {"name": "merge", "status": "in_progress", "conclusion": None,
+                 "details_url": "https://github.com/o/r/actions/runs/111/job/7"},
+                {"name": "merge", "status": "completed", "conclusion": "failure",
+                 "details_url": "https://github.com/o/r/actions/runs/999/job/2"},
+            ]
+            self.assertEqual(mq.classify_checks(None, runs), "fail")
+
+    def test_check_named_merge_queue_is_not_skipped(self):
+        runs = [self._run("merge-queue", conclusion="failure")]
+        self.assertEqual(mq.classify_checks("success", runs), "fail")
+
+    def test_zero_statuses_with_green_runs_passes(self):
+        # The #1840 case: legacy API says pending with total_count 0.
+        runs = [self._run("api-test"), self._run("web-build")]
+        self.assertEqual(mq.classify_checks(None, runs), "pass")
+
+    def test_no_signals_fails(self):
+        # Zero check runs plus zero statuses: no CI ever reported, so fail
+        # instead of waiting forever.
+        self.assertEqual(mq.classify_checks(None, []), "fail")
+
+    def test_only_queue_job_and_no_status_fails(self):
+        with mock.patch.dict(os.environ, {"GITHUB_RUN_ID": "111"}):
+            runs = [{"name": "merge", "status": "in_progress", "conclusion": None,
+                     "details_url": "https://github.com/o/r/actions/runs/111/job/7"}]
+            self.assertEqual(mq.classify_checks(None, runs), "fail")
+
+    def test_stale_pending_fails(self):
+        now = datetime(2026, 11, 24, 12, tzinfo=timezone.utc).timestamp()
+        old = {"name": "api-test", "status": "queued", "conclusion": None,
+               "started_at": "2026-11-24T09:00:00Z"}
+        self.assertEqual(mq.classify_checks("success", [old], now=now), "fail")
+
+    def test_fresh_pending_waits(self):
+        now = datetime(2026, 11, 24, 12, tzinfo=timezone.utc).timestamp()
+        fresh = {"name": "api-test", "status": "in_progress", "conclusion": None,
+                 "started_at": "2026-11-24T11:55:00Z"}
+        self.assertEqual(mq.classify_checks("success", [fresh], now=now), "wait")
+
+    def test_pending_without_started_at_waits(self):
+        runs = [self._run("api-test", status="queued", conclusion=None)]
+        self.assertEqual(mq.classify_checks("success", runs), "wait")
+
+    def test_failing_status_fails(self):
+        self.assertEqual(mq.classify_checks("failure", [self._run("api-test")]), "fail")
+        self.assertEqual(mq.classify_checks("error", []), "fail")
+
+    def test_pending_status_waits(self):
+        runs = [self._run("api-test")]
+        self.assertEqual(mq.classify_checks("pending", runs), "wait")
+
+    def test_head_checks_ignores_empty_legacy_status(self):
+        q = mq.MergeQueue(repo="o/r", base="dev")
+        q.commit_status = lambda sha: "pending"  # noqa: SLF001
+        q.commit_status_count = lambda sha: 0  # noqa: SLF001
+        q.check_runs = lambda sha: [self._run("api-test")]  # noqa: SLF001
+        self.assertEqual(q.head_checks("sha1"), "pass")
+
+    def test_head_checks_api_error_waits_without_legacy_fallback(self):
+        q = mq.MergeQueue(repo="o/r", base="dev")
+        q.commit_status = lambda sha: "success"  # noqa: SLF001
+        q.commit_status_count = lambda sha: 1  # noqa: SLF001
+
+        def boom(sha):
+            raise RuntimeError("403")
+        q.check_runs = boom  # noqa: SLF001
+        # Legacy success alone would pass; the checks-API outage must wait.
+        self.assertEqual(q.head_checks("sha1"), "wait")
+
+    def test_run_once_waits_without_relabel_on_pending(self):
+        q = mq.MergeQueue(repo="o/r", base="dev")
+        q.dev_head = lambda: "devsha"  # noqa: SLF001
+        q.latest_ci_run = lambda: {"headSha": "devsha", "conclusion": "success",  # noqa: SLF001
+                                   "status": "completed", "url": "u", "databaseId": 1}
+        q.open_queue = lambda: [{"number": 7, "title": "T", "baseRefName": "dev",  # noqa: SLF001
+                                 "headRefOid": "sha7", "mergeable": "MERGEABLE",
+                                 "body": "Area: infra\nRelease-note: x\n"}]
+        q.head_checks = lambda sha: "wait"  # noqa: SLF001
+        q.approval_at_head = lambda n, sha: True  # noqa: SLF001
+        mutated = []
+        q._mutate = lambda args: mutated.append(args) or ""  # noqa: SLF001
+        self.assertEqual(q.run_once(), "gate4-wait")
+        self.assertEqual(mutated, [])
+
+    def test_run_once_skips_pending_and_merges_next(self):
+        q = mq.MergeQueue(repo="o/r", base="dev", dry_run=True)
+        q.dev_head = lambda: "devsha"  # noqa: SLF001
+        q.latest_ci_run = lambda: {"headSha": "devsha", "conclusion": "success",  # noqa: SLF001
+                                   "status": "completed", "url": "u", "databaseId": 1}
+        q.open_queue = lambda: [  # noqa: SLF001
+            {"number": 7, "title": "Slow", "baseRefName": "dev",
+             "headRefOid": "sha7", "mergeable": "MERGEABLE",
+             "body": "Area: infra\nRelease-note: x\n",
+             "merge_labeled_at": "2026-11-20T10:00:00Z"},
+            {"number": 8, "title": "Green", "baseRefName": "dev",
+             "headRefOid": "sha8", "mergeable": "MERGEABLE",
+             "body": "Area: infra\nRelease-note: y\n",
+             "merge_labeled_at": "2026-11-21T10:00:00Z"},
+        ]
+        q.head_checks = lambda sha: "wait" if sha == "sha7" else "pass"  # noqa: SLF001
+        q.approval_at_head = lambda n, sha: True  # noqa: SLF001
+        relabeled = []
+        q.relabel_failure = lambda n, action: relabeled.append(n)  # noqa: SLF001
+        self.assertEqual(q.run_once(), "merged-dry-run")
+        self.assertEqual(relabeled, [])
 
 
 class CommandStringTest(unittest.TestCase):

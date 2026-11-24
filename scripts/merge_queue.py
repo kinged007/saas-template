@@ -18,6 +18,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 
 INTEGRATION_BRANCH = "dev"
 MERGE_LABEL = "agent:merge"
@@ -177,6 +178,95 @@ def failure_action(gate, detail="", enforce_approval=False):
     return FailureAction(kind="relabel", label=label, comment=comment)
 
 
+# Gate 4 reads Actions check runs, not just the legacy combined-status API:
+# a head with only check runs reports state `pending`, total_count 0 there.
+PASS_CONCLUSIONS = frozenset({"success", "skipped", "neutral"})
+FAIL_CONCLUSIONS = frozenset({"failure", "cancelled", "timed_out", "action_required"})
+
+# A pending check older than this is stuck, not slow: route the PR out.
+STALE_PENDING_S = 3600
+
+
+def _started_at_s(value):
+    """Epoch seconds for a check-run started_at, or None when unknown."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        v = value.strip()
+        if v.endswith("Z"):
+            v = v[:-1] + "+00:00"
+        return datetime.fromisoformat(v).timestamp()
+    except ValueError:
+        return None
+
+
+def is_queue_run(run):
+    """True for the merge queue's own `merge` job (workflow `merge-queue`).
+
+    While it runs it appears among the head's check runs as in_progress and
+    must not gate the PR it is about to merge. Match it exactly: job name
+    `merge` plus, inside Actions, our own workflow run id in details_url.
+    A real check from another workflow that happens to be named `merge`
+    carries a different run id and still counts.
+    """
+    if not isinstance(run, dict):
+        return (run or "").strip() == "merge"
+    if (run.get("name") or "").strip() != "merge":
+        return False
+    own = os.environ.get("GITHUB_RUN_ID", "")
+    if not own:
+        return True  # local/dry-run: the exact name is the only signal
+    return "/actions/runs/%s/" % own in (run.get("details_url") or "")
+
+
+def classify_checks(status_state, runs, now=None):
+    """Fold legacy commit statuses + check runs into pass|fail|wait.
+
+    status_state is None when zero commit statuses exist (the legacy API
+    always says pending then). A fail anywhere wins over a wait. Zero check
+    runs plus zero statuses means no CI ever reported: fail so the PR is
+    routed out instead of waiting forever. A pending check older than
+    STALE_PENDING_S is stuck, not slow, and fails the same way.
+    """
+    if now is None:
+        now = time.time()
+    failed = False
+    waiting = False
+    pending_since = []
+    relevant = [r for r in (runs or [])
+                if isinstance(r, dict) and not is_queue_run(r)]
+    for r in relevant:
+        status = (r.get("status") or "").strip()
+        conclusion = r.get("conclusion")
+        conclusion = conclusion.strip() if isinstance(conclusion, str) and conclusion.strip() else None
+        if status and status != "completed":
+            waiting = True
+            pending_since.append(_started_at_s(r.get("started_at")))
+        elif conclusion in PASS_CONCLUSIONS:
+            continue
+        elif conclusion in FAIL_CONCLUSIONS:
+            failed = True
+        elif conclusion is None:
+            waiting = True
+            pending_since.append(_started_at_s(r.get("started_at")))
+        else:
+            failed = True  # unknown completed conclusion: fail closed
+    if status_state in ("failure", "error", "failed"):
+        failed = True
+    elif status_state not in ("success", None):
+        waiting = True  # "pending" or anything unexpected: wait, do not fail
+    if failed:
+        return "fail"
+    if waiting:
+        if (pending_since and all(
+                s is not None and now - s > STALE_PENDING_S for s in pending_since)):
+            return "fail"  # every pending check is stuck: route the PR out
+        return "wait"
+    if not relevant and status_state is None:
+        return "fail"  # no checks at all: fail, do not wait forever
+    return "pass"
+
+
 def build_merge_args(n, title, area, note):
     return [
         "gh", "pr", "merge", str(n), "--squash",
@@ -278,6 +368,51 @@ class MergeQueue:
             "gh", "api", "repos/%s/commits/%s/status" % (self.repo, sha),
             "-q", ".state",
         ])
+
+    def commit_status_count(self, sha):
+        out = self._read([
+            "gh", "api", "repos/%s/commits/%s/status" % (self.repo, sha),
+            "-q", ".total_count",
+        ])
+        try:
+            return int((out or "").strip().strip('"') or 0)
+        except ValueError:
+            return 0
+
+    def check_runs(self, sha):
+        """Check runs on a head SHA (one dict per line, pagination-safe)."""
+        out = self._read([
+            "gh", "api", "repos/%s/commits/%s/check-runs" % (self.repo, sha),
+            "--paginate", "-q",
+            ".check_runs[] | {name, status, conclusion, details_url, started_at}",
+        ])
+        runs = []
+        for line in (out or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                runs.append(obj)
+        return runs
+
+    def head_checks(self, sha):
+        """Gate-4 verdict for a head SHA: pass|fail|wait."""
+        state = (self.commit_status(sha) or "").strip().strip('"') or None
+        try:
+            count = self.commit_status_count(sha)
+        except RuntimeError:
+            count = 1 if state else 0
+        if not count:
+            state = None  # zero commit statuses: the legacy API always says pending
+        try:
+            runs = self.check_runs(sha)
+        except RuntimeError:
+            return "wait"  # checks API down: retry next run, never legacy fallback
+        return classify_checks(state, runs)
 
     def approval_at_head(self, n, head_sha):
         out = self._read([
@@ -392,11 +527,13 @@ class MergeQueue:
         trailers = parse_trailers(pr.get("body", ""))
         note, fallback = resolve_note(pr.get("body", ""), pr.get("title", ""))
         head = pr.get("headRefOid", "")
+        checks = self.head_checks(head) if head else "fail"
         return {
             "base_ok": pr.get("baseRefName") == self.base,
             "base": pr.get("baseRefName"),
             "mergeable": pr.get("mergeable") == "MERGEABLE",
-            "checks_ok": self.commit_status(head) == "success" if head else False,
+            "checks_ok": checks == "pass",
+            "checks_pending": checks == "wait",
             "approval_ok": self.approval_at_head(pr["number"], head) if head else False,
             "area": trailers.area,
             "note": note,
@@ -420,11 +557,17 @@ class MergeQueue:
         if not queue:
             print("queue empty — nothing to merge")
             return "empty"
+        saw_pending = False
         while queue:
             pr = select_candidate(queue)
             queue = [p for p in queue if p["number"] != pr["number"]]
             print("candidate: #%d %s" % (pr["number"], pr.get("title", "")))
             inputs = self.pr_gate_inputs(pr)
+            if inputs.get("checks_pending"):
+                print("  gate 4 %s: wait — checks still running, skip, no mark change"
+                      % GATE_NAMES[4])
+                saw_pending = True
+                continue
             results = evaluate_gates(True, inputs, self.enforce_approval)
             for r in results:
                 print("  gate %d %s: %s — %s" % (r.number, GATE_NAMES[r.number], r.status, r.detail))
@@ -447,7 +590,7 @@ class MergeQueue:
                     print("  gate %d failed — %s %s" % (r.number, action.kind, action.label or ""))
                     self.relabel_failure(pr["number"], action)
                     break
-        return "no-mergeable-candidate"
+        return "gate4-wait" if saw_pending else "no-mergeable-candidate"
 
 
 def main(argv=None):
