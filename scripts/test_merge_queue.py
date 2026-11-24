@@ -384,6 +384,87 @@ class RedDevRecoveryTest(unittest.TestCase):
         ]
         self.assertEqual(mq.select_candidate(prs)["number"], 2)
 
+    def test_wait_for_run_ignores_stale_completed_attempt(self):
+        # AC-1: the old attempt's completed/failure must not be judged.
+        q = mq.MergeQueue(repo="o/r", base="dev")
+        q._read = lambda args: "completed failure 1"  # noqa: SLF001 - stale attempt
+        self.assertEqual(
+            q.wait_for_run(99, timeout_s=0.05, interval_s=0.01, min_attempt=2),
+            "timed_out",
+        )
+
+    def test_wait_for_rerun_start_waits_for_higher_attempt(self):
+        q = mq.MergeQueue(repo="o/r", base="dev")
+        seen = iter([1, 1, 2])
+        q.run_attempt = lambda run_id: next(seen)  # noqa: SLF001
+        self.assertTrue(
+            q.wait_for_rerun_start(99, before=1, timeout_s=5, interval_s=0.01)
+        )
+
+    def test_wait_for_rerun_start_times_out_without_new_attempt(self):
+        q = mq.MergeQueue(repo="o/r", base="dev")
+        q.run_attempt = lambda run_id: 1  # noqa: SLF001 - rerun never appears
+        self.assertFalse(
+            q.wait_for_rerun_start(99, before=1, timeout_s=0.05, interval_s=0.01)
+        )
+
+    def test_stale_attempt_exits_without_revert(self):
+        # AC-1 full path: no new attempt appears -> exit, never revert.
+        q = mq.MergeQueue(repo="o/r", base="dev")
+        q.run_attempt = lambda run_id: 3  # noqa: SLF001
+        q.rerun_failed = lambda run_id: None  # noqa: SLF001
+        q._read = lambda args: "completed failure 3"  # noqa: SLF001 - stale
+        reverted = []
+        q.revert_newest = lambda *a: reverted.append(a)  # noqa: SLF001
+        run = {"databaseId": 99, "url": "https://run/9", "headSha": "sha1"}
+        self.assertEqual(
+            q.handle_red_dev(run, start_timeout_s=0.05,
+                             run_timeout_s=0.05, poll_interval_s=0.01),
+            "no-revert",
+        )
+        self.assertEqual(reverted, [])
+
+    def test_rerun_failure_exits_without_revert(self):
+        # AC-2: rerun cannot start (e.g. already running) -> no revert.
+        q = mq.MergeQueue(repo="o/r", base="dev")
+        q.run_attempt = lambda run_id: 3  # noqa: SLF001
+        def fail_rerun(run_id):
+            raise RuntimeError("command failed: already running")
+        q.rerun_failed = fail_rerun  # noqa: SLF001
+        q.wait_for_run = lambda run_id, **kw: "failure"  # noqa: SLF001
+        reverted = []
+        q.revert_newest = lambda *a: reverted.append(a)  # noqa: SLF001
+        run = {"databaseId": 99, "url": "https://run/9", "headSha": "sha1"}
+        self.assertEqual(q.handle_red_dev(run), "no-revert")
+        self.assertEqual(reverted, [])
+
+    def test_full_red_path_reverts_with_bot_identity(self):
+        # AC-3/AC-4: rerun -> new attempt red -> revert, bot identity set.
+        q = mq.MergeQueue(repo="o/r", base="dev")
+        q.run_attempt = lambda run_id: 3  # noqa: SLF001
+        calls = {}
+        q.rerun_failed = lambda run_id: calls.setdefault("rerun", run_id)  # noqa: SLF001
+        q.wait_for_rerun_start = lambda run_id, **kw: True  # noqa: SLF001
+        def fake_wait(run_id, **kw):
+            calls["min_attempt"] = kw.get("min_attempt")
+            return "failure"
+        q.wait_for_run = fake_wait  # noqa: SLF001
+        q.dev_head = lambda: "sha1"  # noqa: SLF001
+        q._read = lambda args: "Add thing (#12)"  # noqa: SLF001 - git log subject
+        mutated = []
+        q._mutate = lambda args: mutated.append(args)  # noqa: SLF001 - record only
+        q.closing_issues = lambda n, want="OPEN": []  # noqa: SLF001
+        q.reopen_issues = lambda nums, url: None  # noqa: SLF001
+        run = {"databaseId": 99, "url": "https://run/9", "headSha": "sha1"}
+        self.assertEqual(q.handle_red_dev(run), "reverted")
+        self.assertEqual(calls["rerun"], 99)
+        self.assertEqual(calls["min_attempt"], 4)  # waits for the NEW attempt
+        commits = [a for a in mutated if "commit" in a]
+        self.assertEqual(len(commits), 1)
+        line = " ".join(commits[0])
+        self.assertIn("user.name=github-actions[bot]", line)
+        self.assertIn("41898282+github-actions[bot]@users.noreply.github.com", line)
+
     def test_stale_failed_run_exits_without_red_path(self):
         q = mq.MergeQueue(repo="o/r", base="dev")
         q.dev_head = lambda: "newsha"  # noqa: SLF001
@@ -396,6 +477,22 @@ class RedDevRecoveryTest(unittest.TestCase):
 
 
 class DryRunNoMutationTest(unittest.TestCase):
+    def test_dry_run_red_path_mutates_nothing(self):
+        # AC-4: dry-run covers the red-dev path with zero mutations.
+        calls = []
+
+        def fake_run(args, mutating):
+            calls.append((tuple(args), mutating))
+            if args[:3] == ["gh", "run", "view"]:
+                return "1"  # run_attempt read
+            return ""
+
+        q = mq.MergeQueue(repo="o/r", base="dev", dry_run=True)
+        q._run = fake_run  # noqa: SLF001 - stub the subprocess boundary
+        run = {"databaseId": 99, "url": "https://run/9", "headSha": "sha1"}
+        self.assertEqual(q.handle_red_dev(run), "dry-run")
+        self.assertEqual([c for c in calls if c[1]], [])
+
     def test_dry_run_performs_no_mutation(self):
         calls = []
 

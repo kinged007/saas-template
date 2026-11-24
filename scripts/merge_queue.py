@@ -25,6 +25,12 @@ MERGE_LABEL = "agent:merge"
 P0_LABEL = "P0"
 VALID_AREAS = ("api", "web", "db", "infra")
 
+# Identity for the queue's own commits (reverts). A bot identity, never a
+# person's: the runner has no git config, so `git commit` would fail with
+# "fatal: empty ident name" without it.
+BOT_NAME = "github-actions[bot]"
+BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
+
 AREA_RE = re.compile(r"^\s*(?:\*\*)?Area:(?:\*\*)?\s*(.+?)\s*$", re.MULTILINE)
 NOTE_RE = re.compile(r"^\s*(?:\*\*)?Release-note:(?:\*\*)?\s*(.*?)\s*$", re.MULTILINE)
 
@@ -465,32 +471,55 @@ class MergeQueue:
         self._mutate(["gh", "run", "rerun", "--repo", self.repo,
                       "--failed", str(run_id)])
 
-    def wait_for_run(self, run_id, timeout_s=600, interval_s=30):
+    def run_attempt(self, run_id):
+        """Current attempt number of a workflow run."""
+        out = self._read(["gh", "run", "view", str(run_id), "--repo", self.repo,
+                          "--json", "attempt", "-q", ".attempt"])
+        try:
+            return int(out.strip())
+        except (TypeError, ValueError):
+            return 0
+
+    def wait_for_run(self, run_id, timeout_s=600, interval_s=30, min_attempt=None):
+        """Poll until the run is completed on an attempt worth judging.
+
+        Attempts older than min_attempt are ignored: right after
+        `gh run rerun` the API still reports the previous attempt's
+        completed/failure, and judging it would revert an innocent commit.
+        """
         deadline = time.time() + timeout_s
         while time.time() < deadline:
             out = self._read(["gh", "run", "view", str(run_id), "--repo", self.repo,
-                              "--json", "status,conclusion", "-q",
-                              '"\\(.status) \\(.conclusion)"'])
-            status, _, conclusion = out.partition(" ")
+                              "--json", "status,conclusion,attempt", "-q",
+                              '"\\(.status) \\(.conclusion) \\(.attempt)"'])
+            status, _, rest = out.partition(" ")
+            conclusion, _, attempt = rest.rpartition(" ")
+            try:
+                attempt_n = int(attempt.strip())
+            except (TypeError, ValueError):
+                attempt_n = 0
+            if min_attempt is not None and attempt_n < min_attempt:
+                time.sleep(interval_s)
+                continue
             if status == "completed":
-                return conclusion
+                return conclusion.strip() or "timed_out"
             time.sleep(interval_s)
         return "timed_out"
 
-    def wait_for_rerun_start(self, run_id, timeout_s=120, interval_s=5):
-        """Wait until the rerun leaves `completed` (API lag guard)."""
+    def wait_for_rerun_start(self, run_id, before=0, timeout_s=120, interval_s=5):
+        """Wait until run_attempt exceeds `before` (API lag guard)."""
         deadline = time.time() + timeout_s
         while time.time() < deadline:
-            out = self._read(["gh", "run", "view", str(run_id), "--repo", self.repo,
-                              "--json", "status", "-q", ".status"])
-            if out.strip() != "completed":
+            if self.run_attempt(run_id) > before:
                 return True
             time.sleep(interval_s)
         return False
 
     def revert_newest(self, subject, sha, run_url):
         self._mutate(["git", "revert", "--no-commit", sha])
-        self._mutate(["git", "commit", "-m", build_revert_subject(subject),
+        self._mutate(["git", "-c", "user.name=%s" % BOT_NAME,
+                      "-c", "user.email=%s" % BOT_EMAIL,
+                      "commit", "-m", build_revert_subject(subject),
                       "-m", build_revert_body(sha, run_url)])
         self._mutate(["git", "push", "origin", "HEAD:%s" % self.base])
 
@@ -503,15 +532,44 @@ class MergeQueue:
 
     # -- flows ------------------------------------------------------------
 
-    def handle_red_dev(self, run):
-        """Retry failed jobs once, then revert the newest squash (FR-010/11)."""
+    def handle_red_dev(self, run, start_timeout_s=120, run_timeout_s=600,
+                         poll_interval_s=5):
+        """Retry failed jobs once, then revert the newest squash (FR-010/11).
+
+        The retry is judged only on the NEW attempt: `before` is recorded
+        first and the queue polls until a higher attempt completes. If the
+        rerun cannot start or no new attempt appears, the queue exits with
+        "no-revert" — it never reverts on an attempt it did not see finish.
+        """
         print("dev CI red: %s — rerunning failed jobs once" % run["url"])
-        self.rerun_failed(run["databaseId"])
+        try:
+            before = self.run_attempt(run["databaseId"])
+        except RuntimeError as exc:
+            print("cannot read run attempt (%s) — exit, no revert" % exc)
+            return "no-revert"
+        try:
+            self.rerun_failed(run["databaseId"])
+        except RuntimeError as exc:
+            print("rerun not started (%s) — waiting for the in-flight attempt" % exc)
+            conclusion = self.wait_for_run(run["databaseId"], timeout_s=run_timeout_s,
+                                           interval_s=poll_interval_s,
+                                           min_attempt=before)
+            if conclusion == "success":
+                print("retry green — no revert, resuming")
+                return "green"
+            print("rerun never started — exit, no revert")
+            return "no-revert"
         if self.dry_run:
             print("  [dry-run] gate 1 (red-dev path): would poll, then revert on red")
             return "dry-run"
-        self.wait_for_rerun_start(run["databaseId"])
-        conclusion = self.wait_for_run(run["databaseId"])
+        if not self.wait_for_rerun_start(run["databaseId"], before=before,
+                                         timeout_s=start_timeout_s,
+                                         interval_s=poll_interval_s):
+            print("rerun attempt never appeared — exit, no revert")
+            return "no-revert"
+        conclusion = self.wait_for_run(run["databaseId"], timeout_s=run_timeout_s,
+                                       interval_s=poll_interval_s,
+                                       min_attempt=before + 1)
         if conclusion == "success":
             print("retry green — no revert, resuming")
             return "green"
