@@ -70,6 +70,9 @@ Rules:
    a bad change is removed with `git revert`.
 5. **Merge commits above `dev`.** `git log --first-parent main` lists promotions;
    `git log --no-merges main` lists slices.
+6. **Only `staging` is merged into `main`; `source-guard.yml` enforces it.** A PR from any
+   other head is retargeted to `dev` with one guidance comment; only a same-repo `staging`
+   head passes the check.
 
 ---
 
