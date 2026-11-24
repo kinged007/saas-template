@@ -106,7 +106,8 @@ N="${#FULL[@]}"
 # hidden, and its target is hidden only while an odd number of still-active
 # reverts name it. A revert cancelled by a later revert-of-revert is inactive,
 # so its target comes back. A revert whose target is outside the range
-# survives and is listed under Reverted.
+# survives and is listed under Reverted, unless an odd number of still-active
+# reverts name it — then the pair nets to zero and both stay hidden.
 declare -a TARGET_IDX ACTIVE DROPPED
 for (( i = 0; i < N; i++ )); do TARGET_IDX[$i]=-1; ACTIVE[$i]=0; DROPPED[$i]=0; done
 for (( i = 0; i < N; i++ )); do
@@ -120,11 +121,11 @@ for (( i = 0; i < N; i++ )); do
   done
 done
 # Latest first: a revert's target always predates it, so any later revert that
-# cancels it is already decided.
+# cancels it is already decided. Every revert is measured, including one whose
+# target is outside the range — it stays active while an even number of
+# still-active reverts name it.
 for (( i = N - 1; i >= 0; i-- )); do
-  if [ "${TARGET_IDX[$i]}" -lt 0 ]; then
-    continue
-  fi
+  [ -n "${REVERT_TARGET[$i]}" ] || continue
   n=0
   for (( k = i + 1; k < N; k++ )); do
     if [ "${TARGET_IDX[$k]}" -eq "$i" ] && [ "${ACTIVE[$k]}" -eq 1 ]; then
@@ -139,6 +140,18 @@ for (( i = 0; i < N; i++ )); do
   if [ -n "${REVERT_TARGET[$i]}" ]; then
     if [ "${TARGET_IDX[$i]}" -ge 0 ]; then
       DROPPED[$i]=1
+    else
+      # Out-of-range target: listed under Reverted unless an odd number of
+      # still-active reverts name it (revert-of-revert nets to zero).
+      n=0
+      for (( k = 0; k < N; k++ )); do
+        if [ "${TARGET_IDX[$k]}" -eq "$i" ] && [ "${ACTIVE[$k]}" -eq 1 ]; then
+          n=$((n + 1))
+        fi
+      done
+      if [ $((n % 2)) -eq 1 ]; then
+        DROPPED[$i]=1
+      fi
     fi
   else
     n=0
