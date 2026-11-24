@@ -45,12 +45,25 @@ jobs:
           # range is never validated. Widen this run back to the newest
           # already-checked head so the gap is still covered (#1878). Only
           # completed success/failure runs count: cancelled (superseded) runs
-          # never validated anything. Any lookup failure falls back to empty,
-          # which keeps the pushed range.
+          # never validated anything. A failure run only counts when its guard
+          # step actually reached a verdict: a checkout/runner failure before
+          # the guard step validated nothing, so its head must not become the
+          # anchor. Any lookup failure falls back to empty, which keeps the
+          # pushed range.
           LAST=""
           LIST="$(gh run list --workflow branch-guard.yml --branch "$BRANCH" --status completed --limit 20 --json databaseId,headSha,conclusion 2>/dev/null || true)"
           if [ -n "$LIST" ] && [ "$LIST" != "[]" ]; then
-            LAST="$(echo "$LIST" | jq -r --argjson run "$RUN_ID" '[.[] | select(.databaseId != $run and (.conclusion == "success" or .conclusion == "failure"))][0].headSha // empty' 2>/dev/null || true)"
+            while read -r ID CONCL SHA; do
+              [ -n "$ID" ] || continue
+              if [ "$CONCL" = "success" ]; then
+                LAST="$SHA"
+                break
+              fi
+              if [ -n "$(gh run view "$ID" --json jobs --jq '.jobs[].steps[]? | select(.name == "Check the pushed range against the branch model" and (.conclusion == "success" or .conclusion == "failure")) | .name' 2>/dev/null || true)" ]; then
+                LAST="$SHA"
+                break
+              fi
+            done < <(echo "$LIST" | jq -r --argjson run "$RUN_ID" '.[] | select(.databaseId != $run and (.conclusion == "success" or .conclusion == "failure")) | "\(.databaseId) \(.conclusion) \(.headSha)"' 2>/dev/null || true)
           fi
           echo "sha=$LAST" >> "$GITHUB_OUTPUT"
       - name: Check the pushed range against the branch model

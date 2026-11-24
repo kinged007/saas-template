@@ -253,6 +253,9 @@ grep -q 'github.event.forced }}" "${{ steps.last.outputs.sha }}"' "$WF_YML" \
 # --- #1883 review (R1): the resolve step must be able to list runs ---
 grep -q 'actions: read' "$WF_YML" \
   || fail "workflow must grant actions: read so the resolve step can list runs"
+# --- #1883 review (R2): a failure head only counts when its guard step ran ---
+grep -q 'gh run view' "$WF_YML" \
+  || fail "workflow must confirm the guard step ran before adopting a failure head"
 echo "ok: surviving run resolves and passes the last checked head"
 
 echo "TEST PASS: dev/staging/main good+bad, force-push, deletion, range scoping, issue update, superseded-range widening"
