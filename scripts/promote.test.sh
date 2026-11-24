@@ -52,6 +52,8 @@ grep -q "FLEET_TOKEN" "$WORKFLOW" \
   || fail "AC-7: promote.yml must authenticate with the FLEET_TOKEN secret"
 test "$(grep -c 'git branch -f' "$WORKFLOW")" -eq "$(grep -c 'else git branch -f' "$WORKFLOW")" \
   || fail "R1: ref sync must never force-update the checked-out branch (guard every git branch -f)"
+grep -q 'release-notes BASE=main HEAD="\$FROZEN_SHA"' "$WORKFLOW" \
+  || fail "R2: release notes must cover the frozen SHA, not pre-merge staging"
 if grep -n "git push" "$WORKFLOW" "$PROMOTE" | grep -v "staging"; then
   fail "AC-8: the only push target may be staging, never main"
 fi

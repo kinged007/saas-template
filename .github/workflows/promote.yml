@@ -89,7 +89,7 @@ jobs:
             if [ "$HEAD_BR" = "$b" ]; then git reset -q --hard "origin/$b";
             else git branch -f "$b" "origin/$b"; fi
           done
-          RELEASE_NOTES="$(make release-notes BASE=main HEAD=staging)"
+          RELEASE_NOTES="$(make release-notes BASE=main HEAD="$FROZEN_SHA")"
           RELEASE_NOTES="$RELEASE_NOTES" bash scripts/promote.sh promote "$FROZEN_SHA" "$RUN_URL" "$RUN_URL"
 
   blocked:

@@ -5,7 +5,7 @@
 #
 # Usage (run from the repository root; local refs dev, staging and main must
 # exist — the workflow fetches them before calling):
-#   RELEASE_NOTES="$(make release-notes BASE=main HEAD=staging)" \
+#   RELEASE_NOTES="$(make release-notes BASE=main HEAD=<frozen-sha>)" \
 #     bash scripts/promote.sh promote <frozen-sha> <ci-run-url> <e2e-run-url>
 #   bash scripts/promote.sh blocked <frozen-sha> <ci-result> <e2e-result> <run-url>
 #
