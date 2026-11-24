@@ -54,6 +54,8 @@ test "$(grep -c 'git branch -f' "$WORKFLOW")" -eq "$(grep -c 'else git branch -f
   || fail "R1: ref sync must never force-update the checked-out branch (guard every git branch -f)"
 grep -q 'release-notes BASE=main HEAD="\$FROZEN_SHA"' "$WORKFLOW" \
   || fail "R2: release notes must cover the frozen SHA, not pre-merge staging"
+grep -q "needs.freeze.outputs.sha != ''" "$WORKFLOW" \
+  || fail "R3: the blocked-issue step must only run with a non-empty frozen SHA"
 if grep -n "git push" "$WORKFLOW" "$PROMOTE" | grep -v "staging"; then
   fail "AC-8: the only push target may be staging, never main"
 fi
@@ -207,5 +209,14 @@ if env -u GH_TOKEN bash "$PROMOTE" promote "$SHAX" u u >/dev/null 2>&1; then
   fail "missing GH_TOKEN must fail instead of pushing unverified"
 fi
 echo "ok: missing fleet credential fails closed"
+
+# --- R3: blocked with an empty SHA (freeze failure) files no issue ---
+BEFORE_R3_LINES="$(wc -l < "$TMP_GH_LOG")"
+if bash "$PROMOTE" blocked "" "failure" "failure" "http://example.com/run/0" >/dev/null 2>&1; then
+  fail "R3: blocked with an empty SHA must fail instead of filing a SHA-less issue"
+fi
+[ "$(wc -l < "$TMP_GH_LOG")" = "$BEFORE_R3_LINES" ] \
+  || fail "R3: no issue call may happen without a frozen SHA"
+echo "ok: blocked with an empty SHA fails closed with no issue change"
 
 echo "promote self-test passed"

@@ -60,6 +60,7 @@ ${RELEASE_NOTES:-}"
 
 cmd_blocked() { # <frozen-sha> <ci-result> <e2e-result> <run-url>
   local sha="$1" ci_result="$2" e2e_result="$3" run_url="$4"
+  [ -n "$sha" ] || { echo "blocked: refusing to file a SHA-less blocked issue (freeze produced no SHA)" >&2; return 1; }
   local title="Promotion blocked at $sha"
   local body="Promotion of dev@$(short "$sha") is blocked: verification failed for the frozen commit.
 

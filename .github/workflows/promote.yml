@@ -101,6 +101,7 @@ jobs:
         with:
           token: ${{ secrets.FLEET_TOKEN }}
       - name: Open or update the blocked-promotion issue
+        if: ${{ needs.freeze.outputs.sha != '' }}
         env:
           GH_TOKEN: ${{ secrets.FLEET_TOKEN }}
           FROZEN_SHA: ${{ needs.freeze.outputs.sha }}
@@ -110,3 +111,9 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/promote.sh blocked "$FROZEN_SHA" "$CI_RESULT" "$E2E_RESULT" "$RUN_URL"
+      - name: Report the freeze failure
+        if: ${{ needs.freeze.outputs.sha == '' }}
+        run: |
+          set -euo pipefail
+          echo "freeze produced no SHA (see the freeze job logs); no blocked-promotion issue filed" >&2
+          exit 1
