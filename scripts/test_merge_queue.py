@@ -285,6 +285,28 @@ class HeadChecksTest(unittest.TestCase):
         self.assertEqual(q.run_once(), "gate4-wait")
         self.assertEqual(mutated, [])
 
+    def test_run_once_skips_pending_and_merges_next(self):
+        q = mq.MergeQueue(repo="o/r", base="dev", dry_run=True)
+        q.dev_head = lambda: "devsha"  # noqa: SLF001
+        q.latest_ci_run = lambda: {"headSha": "devsha", "conclusion": "success",  # noqa: SLF001
+                                   "status": "completed", "url": "u", "databaseId": 1}
+        q.open_queue = lambda: [  # noqa: SLF001
+            {"number": 7, "title": "Slow", "baseRefName": "dev",
+             "headRefOid": "sha7", "mergeable": "MERGEABLE",
+             "body": "Area: infra\nRelease-note: x\n",
+             "merge_labeled_at": "2026-11-20T10:00:00Z"},
+            {"number": 8, "title": "Green", "baseRefName": "dev",
+             "headRefOid": "sha8", "mergeable": "MERGEABLE",
+             "body": "Area: infra\nRelease-note: y\n",
+             "merge_labeled_at": "2026-11-21T10:00:00Z"},
+        ]
+        q.head_checks = lambda sha: "wait" if sha == "sha7" else "pass"  # noqa: SLF001
+        q.approval_at_head = lambda n, sha: True  # noqa: SLF001
+        relabeled = []
+        q.relabel_failure = lambda n, action: relabeled.append(n)  # noqa: SLF001
+        self.assertEqual(q.run_once(), "merged-dry-run")
+        self.assertEqual(relabeled, [])
+
 
 class CommandStringTest(unittest.TestCase):
     def test_squash_uses_explicit_subject_and_body(self):

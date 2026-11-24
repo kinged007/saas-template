@@ -557,15 +557,17 @@ class MergeQueue:
         if not queue:
             print("queue empty — nothing to merge")
             return "empty"
+        saw_pending = False
         while queue:
             pr = select_candidate(queue)
             queue = [p for p in queue if p["number"] != pr["number"]]
             print("candidate: #%d %s" % (pr["number"], pr.get("title", "")))
             inputs = self.pr_gate_inputs(pr)
             if inputs.get("checks_pending"):
-                print("  gate 4 %s: wait — checks still running, exit, no mark change"
+                print("  gate 4 %s: wait — checks still running, skip, no mark change"
                       % GATE_NAMES[4])
-                return "gate4-wait"
+                saw_pending = True
+                continue
             results = evaluate_gates(True, inputs, self.enforce_approval)
             for r in results:
                 print("  gate %d %s: %s — %s" % (r.number, GATE_NAMES[r.number], r.status, r.detail))
@@ -588,7 +590,7 @@ class MergeQueue:
                     print("  gate %d failed — %s %s" % (r.number, action.kind, action.label or ""))
                     self.relabel_failure(pr["number"], action)
                     break
-        return "no-mergeable-candidate"
+        return "gate4-wait" if saw_pending else "no-mergeable-candidate"
 
 
 def main(argv=None):
