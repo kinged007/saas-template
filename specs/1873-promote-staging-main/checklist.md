@@ -6,7 +6,7 @@
 - [x] CHK004 Does the plan avoid editing ci.yml/e2e.yml call contracts? (Yes: both already accept workflow_call sha and check out inputs.sha in every job; only a new self-test job is added to ci.yml)
 - [x] CHK005 Does every task name an AC or a polish purpose, with no extra scope? (Verified: no tagging, no rulesets, no release-candidate work — all out of scope per spec)
 - [x] CHK006 Does the workflow land on the right branch first? (Yes: on dev per the issue sequencing note and spec clarification; dev is the current default so schedule fires)
-- [ ] CHK007 Which label routes the blocked-promotion issue — agent:triage (CI-CD.md §4.5 step 3, exists in repo) or loop-triage (spec clarification, does not exist as a label)? Non-blocking question Q-1 asked; plan proceeds on agent:triage.
+- [x] CHK007 Which label routes the blocked-promotion issue — agent:triage (CI-CD.md §4.5 step 3, exists in repo) or loop-triage (spec clarification, does not exist as a label)? Resolved: agent:triage (plan-check F-01); spec clarification corrected in build.
 - [x] CHK008 Can the self-test run hermetically? (Yes: stubbed gh + fixture git repo, same as branch-guard.test.sh; no network needed)
 - [x] CHK009 Is concurrency handled? (Yes: concurrency group promote serializes overlapping scheduled/manual runs — spec edge case)
 - [x] CHK010 Is the smoke test the smallest real run? (Yes: bash scripts/promote.test.sh locally, no network)

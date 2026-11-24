@@ -227,8 +227,9 @@ path.
   workflow to the adopter branch before the default is switched. (chosen by
   agent from the issue body, which overrides the doc's assumption)
 - Q: Which label routes the blocked-promotion issue to the product loop? ->
-  A: The loop-triage label defined in the design doc's promotion section
-  (chosen by agent from docs/architecture/CI-CD.md §4.5 step 3).
+  A: The agent:triage label named in the design doc's promotion section
+  (chosen by agent from docs/architecture/CI-CD.md §4.5 step 3; no
+  loop-triage label exists in the repo).
 - Q: Does the promotion verify the frozen commit or the branch tip? -> A: The
   frozen commit: both invoked suites check out the pinned commit identity in
   every job, so a passing run always proves the exact commit that is moved
