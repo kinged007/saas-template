@@ -96,6 +96,12 @@ def _mail_limit_key(request: Request) -> str:
     return f"mailip:{_client_ip(request) or 'unknown'}"
 
 
+def _account_limit_key(email: str | None = None) -> str:
+    """Account-scoped limiter key: one inbox attacked from many addresses
+    shares one budget even when every request carries a different IP."""
+    return f"account:{(email or '').lower()}"
+
+
 async def _maybe_join_single_workspace(db: AsyncSession, container, user) -> None:
     if not settings.single_workspace:
         return
@@ -321,7 +327,12 @@ async def login(
     container=Depends(get_container),
 ) -> TokenResponse:
     key = _limit_key(request, body.email)
-    get_auth_limiter().check(key)
+    account_key = _account_limit_key(body.email)
+    limiter = get_auth_limiter()
+    limiter.check(key)
+    # Distributed guessing: one inbox attacked from many addresses is still
+    # one account, so it shares one budget on top of the per-IP one.
+    limiter.check(account_key)
     if not settings.auth_password_enabled:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "password login is disabled")
     service = AuthService(db, container.bus)
@@ -330,7 +341,8 @@ async def login(
             body.email, body.password, ip_address=_client_ip(request)
         )
     except AuthError as exc:
-        get_auth_limiter().fail(key)
+        limiter.fail(key)
+        limiter.fail(account_key)
         msg = str(exc)
         if msg in ("password login is disabled",):
             raise HTTPException(status.HTTP_403_FORBIDDEN, msg) from None
@@ -349,9 +361,11 @@ async def login(
         # already; this is the login-level correlation (parity with the
         # refresh flow's #714 fix).
         logger.error("account gone on login (user %s)", user_id)
-        get_auth_limiter().fail(key)
+        limiter.fail(key)
+        limiter.fail(account_key)
         raise
-    get_auth_limiter().reset(key)
+    limiter.reset(key)
+    limiter.reset(account_key)
     if user.totp_enabled:
         # Deliberately uncharged, unlike the 401s above: the password was
         # right and the caller still owes the second factor. The guesses that

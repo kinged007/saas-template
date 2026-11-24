@@ -2,11 +2,18 @@ import bcrypt
 
 
 class PasswordHasher:
-    """bcrypt password hashing (async-safe: bcrypt releases the GIL)."""
+    """bcrypt password hashing (async-safe: bcrypt releases the GIL).
+
+    Cost factor comes from settings.password_hash_rounds, read at call time
+    so tests can monkeypatch it without reimporting this module."""
 
     @staticmethod
     def hash(password: str) -> str:
-        return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+        from src.settings import settings
+
+        return bcrypt.hashpw(
+            password.encode("utf-8"), bcrypt.gensalt(rounds=settings.password_hash_rounds)
+        ).decode("utf-8")
 
     @staticmethod
     def verify(password: str, password_hash: str) -> bool:
