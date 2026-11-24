@@ -1,0 +1,9 @@
+# Checklist: #1846 Storage foundation with local and in-memory drivers
+
+- [x] CHK001 Is every AC (AC-1..AC-8) covered by at least one task? — yes: AC-1/AC-2 T001+T005..T007; AC-3 T006+T007+T011; AC-4 T002+T005; AC-5 T003+T005; AC-6 T004+T008+T009; AC-7 T003+T007+T009+T010; AC-8 T004+T012.
+- [x] CHK002 Is every task tied to an AC or a polish purpose? — yes: T001..T012 name ACs; T013 is the polish smoke/lint task.
+- [x] CHK003 Are parallel (`[P]`) marks safe (different files, no dependency)? — yes: T002/T003 extend the same contract file as T001 but are additive cases; T004 is a separate file. (Flag: T002/T003 share a file with T001, so they parallelize at authoring level only — noted, kept since cases are independent.)
+- [x] CHK004 Does the plan avoid scope in the spec's Out of Scope (S3 driver, stored_files table/migration, full upload/download endpoints, multipart, CDN signing)? — yes: route in T010 is the minimal signed-URL download path the spec assigns to this issue.
+- [x] CHK005 Are all named files/functions confirmed (`ls`/`grep`)? — yes: `apps/api/src/secrets/base.py`, `apps/api/src/secrets/factory.py`, `apps/api/src/email/base.py`, `apps/api/src/email/factory.py`, `apps/api/src/email/console.py`, `apps/api/src/email/smtp.py:41` (`asyncio.to_thread`), `apps/api/src/settings.py`, `apps/api/.env.example`, `apps/api/src/api/routes/`, `apps/api/tests/test_email.py`, `apps/api/tests/test_secrets.py`, `Makefile` (`api-test`, `api-lint`), `pyproject.toml` (`pyjwt`, pytest `asyncio_mode = "auto"`). New files are marked (new) in plan.md.
+- [x] CHK006 Is the quality gate named with its source? — yes: `make api-lint` (ruff check + format check) and `make api-test` (pytest), from `Makefile` and `.github/workflows/ci.yml`.
+- [x] CHK007 Does the test plan include the required smoke test? — yes: adapter import + `make api` boot proving route registration.
