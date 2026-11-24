@@ -144,6 +144,15 @@ jobs:
       - name: check fleet label contract
         run: ./scripts/check-label-contract.sh
 
+  release-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - name: release-notes self-test (fixture repo, no network)
+        run: bash scripts/release-notes.test.sh
+
   trailing-newline:
     runs-on: ubuntu-latest
     steps:
