@@ -295,7 +295,9 @@ or updates a `needs-human` issue, when the pushed range breaks the branch model:
 | `main` | a merge commit whose second parent is the `staging` head at merge time |
 
 Plus: no push may be a non-fast-forward (force push). This detects a violation within minutes;
-it cannot prevent one. Stage 2 adds prevention.
+it cannot prevent one. Stage 2 adds prevention. When pushes overlap, the surviving
+run widens its range back to the last head the guard already checked, so a
+superseded queued run's commits are still validated.
 
 **The product loop's audit.** Each run compares `dev`, `staging` and `main` against the rules
 above and reports any guard failure.
