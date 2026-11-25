@@ -72,8 +72,10 @@ Rules:
    a bad change is removed with `git revert`.
 5. **Merge commits above `dev`.** `git log --first-parent main` lists promotions;
    `git log --no-merges main` lists slices.
-6. **Only `staging` merges into `main`.** Enforced in Stage 2 by the `main` ruleset with
-   `source-guard` as a required check (§8); the workflow that posts it is a separate issue.
+6. **Only `staging` is merged into `main`; `source-guard.yml` enforces it.** Enforced in Stage 2
+   by the `main` ruleset with `source-guard` as a required check (§8). A PR from any
+   other head is retargeted to `dev` with one guidance comment; only a same-repo `staging`
+   head passes the check.
 
 ---
 

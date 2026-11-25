@@ -162,6 +162,15 @@ jobs:
       - name: release-notes self-test (fixture repo, no network)
         run: bash scripts/release-notes.test.sh
 
+  source-guard-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - name: source-guard self-test (stubbed gh, no network)
+        run: bash scripts/source-guard.test.sh
+
   trailing-newline:
     runs-on: ubuntu-latest
     steps:
