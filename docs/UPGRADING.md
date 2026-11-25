@@ -67,8 +67,12 @@ Then review before you merge to your main branch:
    announce one, update your imports to the new path.
 4. If the release adds migrations, they use timestamp ids (`YYYYMMDDHHMMSS`,
    `docs/product/DECISIONS.md` D-04), so a template migration and one of yours
-   never share an id. If `db-check` below reports two heads, join them with
-   `alembic merge heads` and migrate again.
+   never share an id. `db-check` below expects exactly two heads — the
+   `template` head (`apps/api/alembic/versions/`) and your `project` head
+   (`apps/api/alembic/project_versions/`) — so two heads is the passing
+   state, not a conflict. Only merge them if you want one linear history
+   again (`cd apps/api && uv run alembic merge template@head project@head`,
+   which lands the merge revision in `versions/`); see `docs/MIGRATIONS.md`.
 
 ## 3. Verify
 
@@ -76,7 +80,7 @@ Run all four before merging `template-sync/vX.Y.Z` into your main branch.
 Each must exit 0 — exit 0 means the project still builds and still migrates:
 
 ```bash
-make db-check    # single migration head; models match migrations
+make db-check    # exactly two heads (template + project); models match migrations
 make api-test    # backend tests
 make web-build   # type-check + frontend build
 make web-test    # frontend unit tests
@@ -92,13 +96,10 @@ The following are the template's stable API. A change that breaks any of them
 requires a major version bump **and** an entry in this file saying what moved
 and what adopters must do:
 
-- the `register*` hooks,
-- `EXTENSION_MODULES` and `TEMPLATE_PATHS` (`src/project/` loaders),
+- the `register*` hooks (`apps/api/src/project/__init__.py`, loaded via `apps/api/src/extensions.py`),
+- `EXTENSION_MODULES` (env var read by `apps/api/src/extensions.py`, the API extension loader),
+- `TEMPLATE_PATHS` (repo-root ownership manifest read by `scripts/check-template-paths.sh`),
 - the `src/project/index.ts` exports,
 - `job_registry` (`apps/api/src/jobs/registry.py`),
 - `WorkflowRegistry.register` (`apps/api/src/events/factory.py`),
 - `EventBus` (`apps/api/src/events/bus.py`).
-
-Note: the `src/project/` loaders (`EXTENSION_MODULES`, `TEMPLATE_PATHS`,
-`src/project/index.ts`) arrive with the extension-seam issues (#1794, #1795).
-This rule covers them from the release they first appear in.
