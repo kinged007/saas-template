@@ -156,10 +156,10 @@ alembic stamp template@head && alembic upgrade heads
 ```
 
 A database that already applied both branches stamps both (`alembic stamp
-heads`), then upgrades as usual. Never `stamp heads` on a database that
-never applied the project branch: it marks that branch done without running
-it, and the following `upgrade heads` applies nothing. Document the stamp
-target in the release notes.
+heads`), then upgrades as usual. When upgrading past a squash, never
+`stamp heads` on a database that never applied the project branch: it marks
+that branch done without running it, and the following `upgrade heads`
+applies nothing. Document the stamp target in the release notes.
 `make db-squash` itself never changes `project_versions/` content: it only
 moves the files aside for the baseline proof and restores them.
 
