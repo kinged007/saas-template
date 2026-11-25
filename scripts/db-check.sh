@@ -33,13 +33,20 @@ export EMBEDDED_DB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/saas-dbcheck-XXXXXX")"
 trap 'rm -rf "$EMBEDDED_DB_DIR"' EXIT
 
 echo "==> check 1/3: template + project heads"
-HEADS="$(uv run alembic heads 2>/dev/null)"
+ALEMBIC_ERR="$(mktemp "${TMPDIR:-/tmp}/saas-dbcheck-heads-XXXXXX")"
+if ! HEADS="$(uv run alembic heads 2>"$ALEMBIC_ERR")"; then
+  echo "FAIL: alembic heads failed:"
+  cat "$ALEMBIC_ERR"
+  rm -f "$ALEMBIC_ERR"
+  exit 1
+fi
+rm -f "$ALEMBIC_ERR"
 HEAD_COUNT="$(echo "$HEADS" | grep -cE '.' || true)"
 TEMPLATE_HEADS="$(echo "$HEADS" | grep -cF '(template)' || true)"
 PROJECT_HEADS="$(echo "$HEADS" | grep -cF '(project)' || true)"
 if [ "$HEAD_COUNT" -ne 2 ] || [ "$TEMPLATE_HEADS" -ne 1 ] || [ "$PROJECT_HEADS" -ne 1 ]; then
   echo "FAIL: expected exactly the template + project heads, found:"
-  uv run alembic heads 2>/dev/null
+  echo "$HEADS"
   exit 1
 fi
 echo "    ok: template + project"
