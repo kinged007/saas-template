@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Self-test for release-notes.sh: builds a throwaway git repo with labelled
-# commits, an unlabelled commit, a reverted pair, a revert-of-revert chain and
-# a lone revert, then asserts the report groups by area, drops the pair,
-# restores the chain's slice, and lists the lone revert under Reverted and the
-# trailer-less commit under Unlabelled.
+# commits, an unlabelled commit, a reverted pair, a revert-of-revert chain,
+# a lone revert and an out-of-range revert pair, then asserts the report groups
+# by area, drops the pair, restores the chain's slice, hides the out-of-range
+# pair, and lists the lone revert under Reverted and the trailer-less commit
+# under Unlabelled.
 #
 # Usage: bash scripts/release-notes.test.sh (also run by the `release-notes`
 # CI job in the template repo itself). No network: the fixture repo is local.
@@ -22,6 +23,10 @@ git init -q
 git config user.email "test@example.com"
 git config user.name "test"
 git commit -qm init --allow-empty
+echo "out-of-range pair target" > oor-target.txt
+git add oor-target.txt
+git commit -qm "feat(db): out-of-range pair target (#105)"
+OOR_TARGET_SHA="$(git rev-parse HEAD)"
 echo "lone target" > other.txt
 git add other.txt
 git commit -qm "feat(db): seed the audit table (#100)"
@@ -57,6 +62,12 @@ git revert --no-edit HEAD >/dev/null
 CHAIN_MID_SHA="$(git rev-parse --short HEAD)"
 git revert --no-edit HEAD >/dev/null
 CHAIN_LAST_SHA="$(git rev-parse --short HEAD)"
+# Out-of-range revert pair (#1877): reverting a commit outside base..head and
+# then reverting that revert nets to zero, so neither may be listed.
+git revert --no-edit "$OOR_TARGET_SHA" >/dev/null
+OOR_REVERT_SHA="$(git rev-parse --short HEAD)"
+git revert --no-edit HEAD >/dev/null
+OOR_CANCEL_SHA="$(git rev-parse --short HEAD)"
 git tag head
 
 OUT="$(bash scripts/release-notes.sh base head)"
@@ -84,6 +95,10 @@ echo "$OUT" | grep -q "$CHAIN_MID_SHA" \
   && fail "cancelled revert of the chain still listed"
 echo "$OUT" | grep -q "$CHAIN_LAST_SHA" \
   && fail "restoring revert of the chain still listed"
+echo "$OUT" | grep -q "$OOR_REVERT_SHA" \
+  && fail "out-of-range revert still listed after revert-of-revert"
+echo "$OUT" | grep -q "$OOR_CANCEL_SHA" \
+  && fail "cancel of an out-of-range revert still listed"
 echo "$OUT" | grep -q "^### Reverted" || fail "missing Reverted section"
 echo "$OUT" | grep -q "$LONE_REVERT_SHA" \
   || fail "lone revert (target outside range) not listed under Reverted"
@@ -99,4 +114,4 @@ if bash scripts/release-notes.sh >/dev/null 2>&1; then
   fail "missing args exited 0 instead of failing loudly"
 fi
 
-echo "TEST PASS: grouped by area, pair dropped, chain restored, lone revert and unlabelled listed, bad refs fail"
+echo "TEST PASS: grouped by area, pair dropped, chain restored, out-of-range pair hidden, lone revert and unlabelled listed, bad refs fail"
