@@ -51,7 +51,7 @@ jobs:
           fi
           bash scripts/source-guard.sh "$BASE_REF" "$HEAD_REF" "$HEAD_REPO" "$BASE_REPO"
       - name: Retarget to dev and comment once
-        if: failure()
+        if: failure() && steps.guard.conclusion == 'failure'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
