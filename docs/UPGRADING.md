@@ -19,7 +19,10 @@ produces 9–11 add/add conflicts on an unchanged tree only ten commits later
    ```
    GitHub's "Use this template" is not this path: it seeds from the template's
    default branch and offers no ref selector, so it cannot pin a tag. The tag
-   archive download is equivalent to the clone above.
+   archive download is equivalent to the clone above. The seed carries
+   `.template-version` with the template's original value — set it to your
+   seed tag (`echo 'vX.Y.Z' > .template-version`) and commit it, so the
+   path-check script in §2 starts from your seed.
 3. Link the template history, read-only — never push to it:
    ```bash
    git remote add template https://github.com/kinged007/saas-template.git
@@ -47,6 +50,18 @@ no history yet, so add the one-time flag
 `git merge --allow-unrelated-histories vX.Y.Z`. Every later sync is a plain
 merge, because the first sync joined the histories.
 
+Record the tag you just merged — `.template-version` is project-owned
+(`TEMPLATE_PATHS`), so template releases never move it and the file only
+advances when you advance it:
+
+```bash
+echo 'vX.Y.Z' > .template-version
+git add .template-version && git commit -m "record template sync vX.Y.Z"
+```
+
+The next run of `bash scripts/check-template-paths.sh` with no arguments then
+starts from this tag instead of re-reporting releases you already merged.
+
 Then review before you merge to your main branch:
 
 1. Read the release notes for the tag, which are grouped by area (`api` /
@@ -60,7 +75,8 @@ Then review before you merge to your main branch:
    renames announced explicitly, run:
    `bash scripts/check-template-paths.sh <previous-tag> <tag>`
    (skips the project-owned paths in `TEMPLATE_PATHS`:
-   `apps/*/src/project/**`, `apps/api/alembic/project_versions/**`, `.env`).
+   `apps/*/src/project/**`, `apps/api/alembic/project_versions/**`, `.env`,
+   `.template-version`).
    Then verify loudly with the four commands in §3 before merging.
 3. Renames are announced in the release-note line (a silent rename breaks
    imports with exit 0 — see `docs/product/UPDATE-PATH.md` §3). If the notes

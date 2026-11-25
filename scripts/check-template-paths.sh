@@ -5,8 +5,10 @@
 #   scripts/check-template-paths.sh [FROM_REF [TO_REF]]
 #
 # Defaults: FROM_REF is the tag in .template-version (the last synced template
-# tag), TO_REF is HEAD. In a derived project on a `template-sync/<tag>` branch
-# (docs/UPGRADING.md §2), the defaults compare the last sync against the merge.
+# tag), TO_REF is HEAD. The adopter records each merged tag in that file
+# (docs/UPGRADING.md §2) — it is project-owned (TEMPLATE_PATHS), so template
+# releases never move it. On a `template-sync/<tag>` branch the defaults
+# compare the last sync against the merge.
 #
 # What it does: `git diff --find-renames --name-status FROM_REF TO_REF`,
 # skipping the project-owned patterns in TEMPLATE_PATHS, then prints the

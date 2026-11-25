@@ -58,4 +58,25 @@ if bash scripts/check-template-paths.sh v9.9.9 >/dev/null 2>&1; then
   fail "unknown base ref exited 0 instead of failing loudly"
 fi
 
+# Post-sync default base (#1897): the adopter records each merged tag in
+# .template-version (docs/UPGRADING.md §2), so a bare run reports from the last
+# merge — and the version file itself stays out of the report (project-owned).
+git tag v0.2
+echo "v0.2" > .template-version
+git add .template-version && git commit -qm "record sync v0.2"
+echo "app v3" >> apps/web/src/app.ts
+git add -A && git commit -qm "post-sync template change"
+
+OUT_SYNC="$(bash scripts/check-template-paths.sh)"
+echo "$OUT_SYNC"
+
+echo "$OUT_SYNC" | grep -q "between v0.2 and HEAD" \
+  || fail "post-sync default base is not the last merged tag"
+echo "$OUT_SYNC" | grep -q "apps/web/src/app.ts" \
+  || fail "post-sync template change not listed"
+echo "$OUT_SYNC" | grep -qE "accessControlProvider\.ts -> .*accessControl\.ts" \
+  && fail "pre-sync rename leaked into the post-sync report"
+echo "$OUT_SYNC" | grep -q "template-version" \
+  && fail ".template-version leaked into the report (must be project-owned)"
+
 echo "TEST PASS: rename announced, template changes listed, project-owned hidden, bad ref fails"
