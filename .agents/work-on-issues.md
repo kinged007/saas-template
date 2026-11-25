@@ -80,12 +80,12 @@ Do not add `agent:done` when releasing early. It marks finished work and is appl
 
 ## 3b. Apply admission Gate 0 before work (MANDATORY)
 
-Read `docs/product/ADMISSION.md`, then assess every claimed issue against Gate 0: until the first release, only three kinds of change are built — work that delivers the update-path guarantee (VISION §4), a security fix, or a fix restoring already-documented behaviour.
+Read `docs/product/ADMISSION.md`, then assess every claimed issue against Gate 0: only three kinds of change are built — work in a started milestone (the issue is in a GitHub milestone and was dispatched), a security fix, or a fix restoring already-documented behaviour.
 
 An issue that fails Gate 0 but passes Gates 1–4 is deferred, not built. Defer it and move on to the next candidate — never stop the run on the first deferred issue:
 
 ```bash
-gh issue comment <n> --body "Deferred: Gate 0 / <P0|P1|P2|unlabelled> — <one line: which of the three admitted kinds it is not, and the earliest release it waits for>"
+gh issue comment <n> --body "Deferred: Gate 0 / <P0|P1|P2|unlabelled> — <one line: which of the three admitted kinds it is not, and the milestone it waits for>"
 gh issue edit <n> --add-label backlog
 gh issue edit <n> --remove-label in-progress
 ```

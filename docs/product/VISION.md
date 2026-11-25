@@ -195,21 +195,11 @@ are not progress unless the update path carries them.
 
 ---
 
-## 7. Current phase
+## 7. Current focus
 
-**Phase: make it updatable.** In force from 2026-11-18 until the first release.
-
-Agreed 2026-11-18 ([DECISIONS.md D-05](DECISIONS.md)).
-
-Until the first release, the template accepts:
-
-1. Work that delivers the §4 guarantees (seed path, migration-id convention, release slicing,
-   documented edit points).
-2. Security fixes.
-3. Bug fixes that restore already-documented behaviour.
-
-New capabilities are **deferred, not rejected**: they are assessed with
-[ADMISSION.md](ADMISSION.md) now and built after the first release.
+This document does not record the current focus. The focus is the set of milestones that are
+in progress, tracked as milestone issues in the project plan and as GitHub milestones.
+[ADMISSION.md](ADMISSION.md) Gate 0 applies it.
 
 ---
 
@@ -217,7 +207,7 @@ New capabilities are **deferred, not rejected**: they are assessed with
 
 | Risk | Signal | Response |
 |---|---|---|
-| Maintenance work crowds out the update path | Merged PRs since last release that serve none of §7's three categories | Phase rule in §7; reviewers defer, not merge |
+| Maintenance work crowds out the update path | Merged PRs since last release that belong to no started milestone and are not security or documented-behaviour fixes | Gate 0 in ADMISSION; reviewers defer, not merge |
 | The demo app grows into a product | New end-user features on the messages surface | P4; reject |
 | Hooks creep in under another name ("extension point", "registry", "override") | New indirection over an edit point | P3; reject unless it removes edits for every adopter |
 | The position is claimed before it is true | README or docs promising easy updates before §6 targets are met | P7; remove the claim |

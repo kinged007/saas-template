@@ -24,9 +24,9 @@ Before opening an issue or PR that adds or changes behaviour, read
 `docs/product/VISION.md` and apply `docs/product/ADMISSION.md`. Fill in the admission
 section of the PR template; a PR without a verdict line is not ready for review.
 
-Until the first release (`docs/product/VISION.md` §7), build only update-path work, security
-fixes, and fixes that restore documented behaviour. Assess anything else and leave it
-deferred — do not implement it.
+Build only work that belongs to a started milestone (`docs/product/ADMISSION.md` Gate 0),
+security fixes, and fixes that restore documented behaviour. Assess anything else and leave
+it deferred — do not implement it.
 
 Never:
 - add hook, plugin or override layers over template files (`docs/product/DECISIONS.md` D-03);

@@ -4,8 +4,8 @@
 > ID. Changing one needs the maintainer
 > ([ADMISSION.md §5](ADMISSION.md#5-what-needs-the-maintainer)).
 >
-> **Status:** Proposed. D-01 to D-06 are already agreed; D-07 is accepted by merging the PR
-> that adds it. This file becomes their canonical record when merged. Open items are at the
+> **Status:** Proposed. D-01 to D-06 are already agreed; D-07 and D-08 are accepted by merging the PR
+> that adds each. This file becomes their canonical record when merged. Open items are at the
 > bottom and are **not** decided.
 
 ---
@@ -82,14 +82,13 @@ decision exists to remove. Fourteen digits narrows the window to one second. Wid
 
 ## D-05 — Updatable first, then features
 
-**Accepted:** 2026-11-18
+**Accepted:** 2026-11-18 · **Superseded by [D-08](#d-08--focus-is-set-by-milestones-vision-is-static)**
 
 **Decision:** Until the first release, work goes into making the template updatable. New
 feature development resumes after it.
 
-**Means:** VISION §7 and ADMISSION Gate 0. Until the first release: update-path work,
-security fixes and fixes restoring documented behaviour. New capabilities are assessed and
-deferred.
+**Means:** the phase was recorded in VISION §7 and ADMISSION Gate 0. That work is now the
+milestone `00 - Make it updatable` (D-08).
 
 ---
 
@@ -121,6 +120,22 @@ started by hand.
 reads "the maintainer merges every promotion into `main`". Release slices (VISION §4.3) are
 read from `git log`. The design, cadence, enforcement stages and build order are in
 [docs/architecture/CI-CD.md](../architecture/CI-CD.md).
+
+---
+
+## D-08 — Focus is set by milestones; VISION is static
+
+**Accepted:** pending — accepted when the maintainer merges the PR that adds it
+
+**Decision:** The current focus is the set of started milestones. Each milestone is a GitHub
+milestone and one issue in the project plan; the issue's status says whether the milestone is
+started (`todo`, `in_progress`) or not (`backlog`). The maintainer starts a milestone.
+`VISION.md` states the vision and does not record the current focus. The first milestone is
+`00 - Make it updatable`.
+
+**Means:** ADMISSION Gate 0 admits a change that belongs to a started milestone, a security
+fix, or a fix restoring documented behaviour. Work in a milestone that is not started is
+assessed and deferred (`backlog`), not built. This replaces D-05.
 
 ---
 
