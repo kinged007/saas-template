@@ -93,6 +93,12 @@ PERMISSION_DEFINITIONS: dict[str, dict[str, str]] = {
 # scopes stay out: they gate API keys only.
 ALL_PERMISSIONS = [p for p in PERMISSION_DEFINITIONS if p not in KEY_ONLY_PERMISSIONS]
 
+# Template-declared permissions, snapshotted before any extension module can
+# register more below. System-role defaults stay on this set so a project seam
+# never silently grants existing roles new powers; extensions stay assignable
+# through the catalog instead.
+TEMPLATE_PERMISSIONS = [*ALL_PERMISSIONS]
+
 # Full registry including key-only scopes (for API-key validation).
 ALL_PERMISSIONS_INCLUDING_KEY_ONLY = [*ALL_PERMISSIONS, NOTIFICATION_READ, NOTIFICATION_UPDATE]
 
@@ -104,6 +110,8 @@ def register_permission(permission: str, *, resource: str, action: str) -> str:
     New permissions land in the role-assignable registry. If a future scope
     must be API-key-only, add it to KEY_ONLY_PERMISSIONS explicitly and gate
     roles against it — registration alone does not make that decision.
+    Registration does not change system-role defaults either: owner/admin stay
+    on TEMPLATE_PERMISSIONS, so extensions are opt-in through the catalog.
 
     The single catalog endpoint serves the result, so the roles UI picks the
     new permission up without a frontend change. Re-registering the same
@@ -129,13 +137,14 @@ def permissions_for_role(role_name: str) -> list[str]:
     """
     match role_name:
         case "owner":
-            return [*ALL_PERMISSIONS, "*"]
+            return [*TEMPLATE_PERMISSIONS, "*"]
         case "admin":
             # everything except deleting the workspace itself. Adding a
             # capability here also grants it to every existing unedited admin
             # role at the next boot (sync_system_role_permissions), so a
             # takeover-capable scope like profile:update needs a callout.
-            return [p for p in ALL_PERMISSIONS if p not in {WORKSPACE_DELETE}]
+            # Extension permissions stay out: they are opt-in via the catalog.
+            return [p for p in TEMPLATE_PERMISSIONS if p not in {WORKSPACE_DELETE}]
         case "editor":
             return [
                 WORKSPACE_READ,

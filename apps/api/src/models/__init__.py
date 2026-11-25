@@ -54,3 +54,11 @@ __all__ = [
     "Workspace",
     "WorkspaceMember",
 ]
+
+# Project extension models (update-path seam, see src/extensions.py): importing
+# `{module}.models` for each configured extension registers its tables on
+# Base.metadata, so Alembic autogenerate and create_all see them with zero
+# per-feature edits here.
+from src.extensions import load_extension_models as _load_extension_models  # noqa: E402
+
+_load_extension_models()
