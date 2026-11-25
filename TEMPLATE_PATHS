@@ -7,8 +7,9 @@
 # template-owned: a template release may change, move or delete it, and the
 # adopter merges those changes (docs/UPGRADING.md §2).
 #
-# This manifest is not the `src/project/` code loader of the same name
-# (docs/UPGRADING.md §4) — it is the file the path-check script reads.
+# This manifest is not a code loader — `apps/api/src/extensions.py` and
+# `src/project/index.ts` are (docs/UPGRADING.md §4) — it is the file the
+# path-check script reads.
 #
 # Keep in sync with docs/UPGRADING.md §2 and docs/product/ADMISSION.md Gate 2.
 
