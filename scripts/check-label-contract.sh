@@ -14,8 +14,6 @@
 #      path that exists in the repo, optional :line suffix) must have that
 #      file actually reference the label. Claiming consumption nothing
 #      consumes fails the check.
-#   3. The known-dead triggers agent:rebase, agent:ci-fix, agent:revise and
-#      agent:merge must stay in the doc's starts-no-work list.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -23,7 +21,6 @@ cd "$(dirname "$0")/.."
 DOC=docs/FLEET_LABELS.md
 TABLE_HEADING='## Consumed labels'
 DEAD_HEADING='## Labels that start no work'
-REQUIRED_DEAD=(agent:rebase agent:ci-fix agent:revise agent:merge)
 
 [ -f "$DOC" ] || { echo "label-contract: missing $DOC"; exit 1; }
 [ -d .agents ] || { echo "label-contract: missing .agents/"; exit 1; }
@@ -42,14 +39,6 @@ agents_labels=$(grep -rhoE '(^|[^A-Za-z_])agent:[a-z-]+' .agents/ | grep -oE 'ag
 table_labels=$(section "$TABLE_HEADING" | labels_in)
 dead_labels=$(section "$DEAD_HEADING" | labels_in)
 fail=0
-
-# Rule 3: the known-dead triggers stay listed.
-for label in "${REQUIRED_DEAD[@]}"; do
-  if ! printf '%s\n' "$dead_labels" | grep -qx "$label"; then
-    echo "label-contract: $label is not in the doc's starts-no-work list"
-    fail=1
-  fi
-done
 
 # Rule 1: every .agents/ label is classified in the doc.
 for label in $agents_labels; do

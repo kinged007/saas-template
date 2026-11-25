@@ -193,8 +193,8 @@ async def test_seeded_system_rows_store_registry_ordered_permissions(app_client)
     rows = {
         r["name"]: r["permissions"] for r in await _roles(app_client, ws_headers(owner, ws["id"]))
     }
-    assert rows["owner"] == [*perms.ALL_PERMISSIONS, "*"]
-    assert rows["admin"] == [p for p in perms.ALL_PERMISSIONS if p != perms.WORKSPACE_DELETE]
+    assert rows["owner"] == [*perms.TEMPLATE_PERMISSIONS, "*"]
+    assert rows["admin"] == [p for p in perms.TEMPLATE_PERMISSIONS if p != perms.WORKSPACE_DELETE]
 
 
 async def test_sync_system_role_permissions_rewrites_shuffled_system_rows(app_client):
@@ -203,7 +203,7 @@ async def test_sync_system_role_permissions_rewrites_shuffled_system_rows(app_cl
     second call reports nothing to do."""
     owner = await register_user(app_client, "shuffled-admin@example.com")
     ws = await create_workspace(app_client, owner)
-    expected = [p for p in perms.ALL_PERMISSIONS if p != perms.WORKSPACE_DELETE]
+    expected = [p for p in perms.TEMPLATE_PERMISSIONS if p != perms.WORKSPACE_DELETE]
     shuffled = list(reversed(expected))
     assert shuffled != expected
 

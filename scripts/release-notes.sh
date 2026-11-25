@@ -8,11 +8,13 @@
 # What it does: reads `Area:` and `Release-note:` trailers from
 # `git log --no-merges BASE..HEAD` and prints markdown shaped like the
 # promotion PR body (`## Slices` / `### api` / `### web` …), one bullet per
-# commit grouped by area. A commit whose body has git's
-# `This reverts commit <sha>.` line naming another in-range commit drops both
-# commits; a revert whose target is outside the range is listed under
-# `### Reverted`. A commit with no `Release-note:` line is listed under
-# `### Unlabelled` with its subject and SHA — never dropped silently.
+# commit grouped by area. A revert whose target is another in-range commit is
+# hidden, and its target is hidden while an odd number of still-active reverts
+# name it — a revert cancelled by a later revert-of-revert no longer hides its
+# target, so F + revert(F) + revert(revert(F)) still lists F. A revert whose
+# target is outside the range is listed under `### Reverted`. A commit with no
+# `Release-note:` line is listed under `### Unlabelled` with its subject and
+# SHA — never dropped silently.
 #
 # Exit 0 when the report prints (even when the range is empty — that is review
 # input, an empty promotion). Exit non-zero only when the report cannot run:
@@ -100,20 +102,68 @@ for (( i = 0; i < N; i++ )); do
 done
 N="${#FULL[@]}"
 
-# Drop revert pairs: a revert and its in-range target both vanish. A revert
-# whose target is outside the range survives and is listed under Reverted.
-declare -a DROPPED
-for (( i = 0; i < N; i++ )); do DROPPED[$i]=0; done
+# Hide reverted commits by parity: a revert whose target is in range is always
+# hidden, and its target is hidden only while an odd number of still-active
+# reverts name it. A revert cancelled by a later revert-of-revert is inactive,
+# so its target comes back. A revert whose target is outside the range
+# survives and is listed under Reverted, unless an odd number of still-active
+# reverts name it — then the pair nets to zero and both stay hidden.
+declare -a TARGET_IDX ACTIVE DROPPED
+for (( i = 0; i < N; i++ )); do TARGET_IDX[$i]=-1; ACTIVE[$i]=0; DROPPED[$i]=0; done
 for (( i = 0; i < N; i++ )); do
   t="${REVERT_TARGET[$i]}"
   [ -n "$t" ] || continue
   for (( j = 0; j < N; j++ )); do
     if [[ "${FULL[$j]}" == "$t"* ]]; then
-      DROPPED[$i]=1
-      DROPPED[$j]=1
+      TARGET_IDX[$i]="$j"
       break
     fi
   done
+done
+# Latest first: a revert's target always predates it, so any later revert that
+# cancels it is already decided. Every revert is measured, including one whose
+# target is outside the range — it stays active while an even number of
+# still-active reverts name it.
+for (( i = N - 1; i >= 0; i-- )); do
+  [ -n "${REVERT_TARGET[$i]}" ] || continue
+  n=0
+  for (( k = i + 1; k < N; k++ )); do
+    if [ "${TARGET_IDX[$k]}" -eq "$i" ] && [ "${ACTIVE[$k]}" -eq 1 ]; then
+      n=$((n + 1))
+    fi
+  done
+  if [ $((n % 2)) -eq 0 ]; then
+    ACTIVE[$i]=1
+  fi
+done
+for (( i = 0; i < N; i++ )); do
+  if [ -n "${REVERT_TARGET[$i]}" ]; then
+    if [ "${TARGET_IDX[$i]}" -ge 0 ]; then
+      DROPPED[$i]=1
+    else
+      # Out-of-range target: listed under Reverted unless an odd number of
+      # still-active reverts name it (revert-of-revert nets to zero).
+      n=0
+      for (( k = 0; k < N; k++ )); do
+        if [ "${TARGET_IDX[$k]}" -eq "$i" ] && [ "${ACTIVE[$k]}" -eq 1 ]; then
+          n=$((n + 1))
+        fi
+      done
+      if [ $((n % 2)) -eq 1 ]; then
+        DROPPED[$i]=1
+      fi
+    fi
+  else
+    n=0
+    for (( k = 0; k < N; k++ )); do
+      if [ "${TARGET_IDX[$k]}" -eq "$i" ] && [ "${ACTIVE[$k]}" -eq 1 ]; then
+        n=$((n + 1))
+      fi
+    done
+    if [ $((n % 2)) -eq 1 ]; then
+      DROPPED[$i]=1
+    fi
+  fi
 done
 
 pr_number() {

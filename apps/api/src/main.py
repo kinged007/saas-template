@@ -31,6 +31,11 @@ from src.container import Container
 from src.core.request_id import RequestIdMiddleware
 from src.db.session import SessionFactory
 from src.events.factory import WorkflowRegistry
+from src.extensions import (
+    register_extension_jobs,
+    register_extension_routes,
+    register_extension_workflows,
+)
 from src.jobs.capture import install_run_capture, uninstall_run_capture
 from src.jobs.scheduler import JobScheduler
 from src.services.jobs import JobService
@@ -65,6 +70,9 @@ async def lifespan(app: FastAPI):
     container: Container = app.state.container
     registry = WorkflowRegistry(container.bus)
     build_workflows(registry, container.bus, container.connection_manager, container.cipher)
+    register_extension_workflows(
+        registry, container.bus, container.connection_manager, container.cipher
+    )
     await registry.wire()
     await registry.start()
 
@@ -175,3 +183,8 @@ app.include_router(conversations.router, prefix=API)
 app.include_router(profiles.router, prefix=API)
 app.include_router(audit.router, prefix=API)
 app.include_router(ws.router, prefix=API)
+
+# Project extensions (update-path seam, see src/extensions.py): routers serve
+# and job specs register here at import time; workflows load in the lifespan.
+register_extension_routes(app)
+register_extension_jobs()

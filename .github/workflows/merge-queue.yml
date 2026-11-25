@@ -1,7 +1,8 @@
 name: merge-queue
 
-# Lives on the default branch (dev): GitHub evaluates `schedule` and
-# `workflow_run` only there. Merges into dev; promotion carries dev to main.
+# Lives on `main` after the first promotion lands: GitHub evaluates
+# `schedule` and `workflow_run` only on the default branch. Until then the
+# default is `dev`. Merges into dev; promotion carries dev to main.
 on:
   pull_request_target:
     types: [labeled]

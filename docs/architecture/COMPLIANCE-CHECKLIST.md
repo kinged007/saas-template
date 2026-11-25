@@ -35,6 +35,7 @@
 - [ ] **CICD-27** promotion verifies the frozen SHA before it moves `staging` (§4.5 step 2) — the job that pushes `staging` has `needs:` on the jobs that call `ci.yml` and `e2e.yml` **and** both called workflows check out `inputs.sha` (`grep -n 'inputs.sha' .github/workflows/ci.yml` and the same in `e2e.yml`)
 - [ ] **CICD-28** no workflow that pushes or opens a PR uses `GITHUB_TOKEN` for it (§7) — `grep -n 'secrets.GITHUB_TOKEN' .github/workflows/merge-queue.yml .github/workflows/promote.yml` returns nothing
 - [ ] **CICD-29** branch guard covers all three branches (§7) — `grep -nE 'dev|staging|main' .github/workflows/branch-guard.yml`
+- [ ] **CICD-33** only `staging` merges into `main` (§2 rule 6) — `grep -n 'source-guard' .github/workflows/source-guard.yml` and `grep -n 'Only .*staging.* is merged into' docs/architecture/CI-CD.md` both match
 
 ## Scripts
 
