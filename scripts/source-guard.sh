@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Source guard for main (CI-CD §2 rule 6).
+# Source guard for main (docs/FLEET.md, Branch model rule 6).
 #
 # Usage:
 #   bash scripts/source-guard.sh <base_ref> <head_ref> <head_repo> <base_repo>

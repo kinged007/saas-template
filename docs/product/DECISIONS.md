@@ -120,7 +120,7 @@ started by hand.
 **Means:** the maintainer reviews one promotion per cadence instead of every PR. ADMISSION §5
 reads "the maintainer merges every promotion into `main`". Release slices (VISION §4.3) are
 read from `git log`. The design, cadence, enforcement stages and build order are in
-[docs/architecture/CI-CD.md](../architecture/CI-CD.md).
+[docs/FLEET.md](../FLEET.md).
 
 ---
 

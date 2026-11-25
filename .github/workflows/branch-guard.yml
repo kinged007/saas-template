@@ -1,8 +1,8 @@
 name: branch-guard
 
-# Stage 1 check (CI-CD §7): detects a direct push or malformed commit on a
-# protected branch within minutes. It cannot prevent one; Stage 2 rulesets
-# come after it.
+# docs/FLEET.md (Branch model): detects a direct push or malformed commit on a
+# protected branch within minutes. It cannot prevent one; branch rulesets
+# would (see docs/FLEET.md, Merge rules).
 on:
   push:
     branches: [dev, staging, main]

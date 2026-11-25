@@ -12,7 +12,7 @@ Release-note: <one line an adopter reads to decide whether to take this change>
 
 <!-- Area is one of api / web / db / infra. If more, say why it can't be split. -->
 
-## Admission ([docs/product/ADMISSION.md](https://github.com/kinged007/saas-template/blob/main/docs/product/ADMISSION.md))
+## Admission ([docs/product/ADMISSION.md](../docs/product/ADMISSION.md))
 
 **Gate 0 — phase** (until the first release, one of):
 - [ ] update-path guarantee · [ ] security fix · [ ] restores documented behaviour

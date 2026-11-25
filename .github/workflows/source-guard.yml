@@ -1,6 +1,6 @@
 name: source-guard
 
-# CI-CD §2 rule 6: only `staging` is merged into `main`. GitHub rulesets cannot
+# docs/FLEET.md (Branch model, rule 6): only `staging` is merged into `main`. GitHub rulesets cannot
 # express a head-branch rule, so this check fails PRs from any other head and
 # retargets them to `dev` with one guidance comment. `pull_request_target`
 # runs the workflow from the base branch, so a PR that edits this guard is
@@ -13,7 +13,7 @@ on:
 
 # Least privilege: the guard only retargets and comments, never pushes or
 # merges. Note: a base change made with GITHUB_TOKEN may not itself start
-# downstream runs (see CI-CD §7), so the rerouted PR gets CI on its next human
+# downstream runs (see docs/FLEET.md, Credentials), so the rerouted PR gets CI on its next human
 # event; either way there is no loop — after the retarget the base is `dev`,
 # which this trigger ignores.
 # Serialize overlapping runs per PR: the retarget/comment step is

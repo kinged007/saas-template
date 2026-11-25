@@ -1,9 +1,9 @@
-# Plan — #1817 merge-queue.yml (CI-CD piece 5)
+# Plan — #1817 merge-queue.yml (fleet pieces)
 
 **Spec:** `specs/1817-merge-queue-dev/spec.md` (Status: Clarified; 14 FRs, 12 ACs).
-Requirements come from the spec; strategy background is `docs/architecture/CI-CD.md`
-§§4.3, 4.4, 7, 9 and `docs/architecture/COMPLIANCE-CHECKLIST.md`
-(CICD-22, 23, 24, 25, 25a, 28 — all grep-based, so the plan pins exact strings).
+Requirements come from the spec; strategy background is `docs/FLEET.md`
+(Merge rules, Red dev, Credentials) and `docs/FLEET.md`
+(merge-queue checks, all grep-based, so the plan pins exact strings).
 
 ## Approach
 
@@ -62,7 +62,7 @@ Key design points (all from the spec, not new decisions):
   mutations). All `gh`/*git* calls go through one helper so dry-run can stub it.
 - **New** `scripts/test_merge_queue.py` — stdlib `unittest`, runnable with
   `python3 scripts/test_merge_queue.py`; imports `merge_queue` directly.
-- No edits to existing files. `docs/FLEET_LABELS.md` already lists
+- No edits to existing files. `docs/FLEET.md` already lists
   `agent:merge`/`agent:ci-fix`/`agent:rebase`/`agent:revise`/`agent:review` in
   the starts-no-work list, and `make label-contract` only inspects `.agents/`,
   so no doc change is needed (verified by running it).
@@ -89,7 +89,7 @@ Tests first (T001–T002), then implementation (T003–T006):
 ## Risks
 
 - **Default branch is `dev`, not `main`.** `gh repo view` shows the default
-  branch is `dev` and no `main`/`staging` branches exist yet. CI-CD.md assumes
+  branch is `dev` and no `main`/`staging` branches exist yet. docs/FLEET.md assumes
   `main`-as-default, but the spec (FR-001) is branch-agnostic ("evaluated from
   the default branch"), so the workflow simply lives on the default branch —
   today that is `dev`. If piece 1 later makes `main` the default, the file
@@ -99,10 +99,10 @@ Tests first (T001–T002), then implementation (T003–T006):
   `agent:merge` + `Area:`/`Release-note:` lines) for selection and gates 2/6
   to have inputs. Until both land, dry-run gates fail loudly rather than
   silently.
-- **CICD-24 wording vs FR-007:** the checklist says check 5 "fails on a
+- **Approval-check wording vs FR-007:** the old checklist said check 5 "fails on a
   mismatch and sets `agent:review`", but the spec (FR-007 + resolved
   clarification) is explicit that Stage 1 approval is record-only. The plan
-  follows the spec; the manual CICD-24 read will need that context.
+  follows the spec; the manual approval-check read will need that context.
 - **Label-time pagination:** FIFO ordering depends on issue-events API results;
   implementation must paginate and filter `LabeledEvent`s for `agent:merge`.
 
@@ -110,5 +110,5 @@ Tests first (T001–T002), then implementation (T003–T006):
 
 This change is purely additive (one workflow + one script + tests). Rollback
 is `git revert` of the landing squash commit; with the workflow gone the queue
-stalls at `agent:merge` (the known failure mode in CI-CD.md §10: "fix the
+stalls at `agent:merge` (the known failure mode in docs/FLEET.md: "fix the
 workflow", nothing merges unverified). No data migration to undo.
