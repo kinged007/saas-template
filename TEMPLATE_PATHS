@@ -16,3 +16,4 @@
 apps/*/src/project/**
 apps/api/alembic/project_versions/**
 .env
+.template-version
