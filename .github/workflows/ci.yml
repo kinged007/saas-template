@@ -171,6 +171,15 @@ jobs:
       - name: source-guard self-test (stubbed gh, no network)
         run: bash scripts/source-guard.test.sh
 
+  db-check-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - name: db-check self-test (stubbed uv, no network)
+        run: bash scripts/db-check.test.sh
+
   trailing-newline:
     runs-on: ubuntu-latest
     steps:
