@@ -16,6 +16,14 @@ on:
 # downstream runs (see CI-CD §7), so the rerouted PR gets CI on its next human
 # event; either way there is no loop — after the retarget the base is `dev`,
 # which this trigger ignores.
+# Serialize overlapping runs per PR: the retarget/comment step is
+# list-then-act (not atomic), so two concurrent red runs could both miss the
+# marker and post duplicate guidance. Queued (never cancelled) so the second
+# run sees the marker (or the `dev` base) and skips the comment.
+concurrency:
+  group: source-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   pull-requests: write
