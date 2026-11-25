@@ -86,9 +86,9 @@ Then review before you merge to your main branch:
    never share an id. `db-check` below expects exactly two heads — the
    `template` head (`apps/api/alembic/versions/`) and your `project` head
    (`apps/api/alembic/project_versions/`) — so two heads is the passing
-   state, not a conflict. Only merge them if you want one linear history
-   again (`cd apps/api && uv run alembic merge template@head project@head`,
-   which lands the merge revision in `versions/`); see `docs/MIGRATIONS.md`.
+   state, not a conflict. Do not merge the branches into one linear history:
+   the merged revision is a single head carrying both labels, which fails
+   `db-check` check 1 below; see `docs/MIGRATIONS.md`.
 
 ## 3. Verify
 
