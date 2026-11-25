@@ -120,6 +120,14 @@ retarget_step "16" "merged"
 [ -s "$TMP_GH_LOG" ] && fail "closed/merged PRs must cause no gh calls"
 echo "ok: closed/merged PRs cause no retarget and no comment"
 
+# --- AC-2 pass path: no gh side effects (the failure gate skips retarget) ---
+: > "$TMP_GH_LOG"
+if ! bash "$GUARD" main staging "$REPO" "$REPO" >/dev/null 2>&1; then
+  fail "pass-path fixture should pass the decision"
+fi
+[ -s "$TMP_GH_LOG" ] && fail "pass path must cause no gh calls"
+echo "ok: pass path causes no gh calls"
+
 # --- AC-5: trusted evaluation — the workflow never checks out the PR head
 # and never executes PR-supplied code ---
 WF="$REPO_ROOT/.github/workflows/source-guard.yml"
@@ -133,6 +141,20 @@ fi
 grep -qE 'eval |source \$|checkout.*head' "$WF" \
   && fail "workflow must not eval, source, or check out PR content"
 echo "ok: AC-5 trusted evaluation, no PR-head checkout, no PR-code execution"
+
+# --- failure gate: retarget runs only on the guard verdict, not any failure ---
+grep -qF "steps.guard.conclusion == 'failure'" "$WF" \
+  || fail "retarget step must gate on steps.guard.conclusion == 'failure'"
+grep -qF 'if: failure() && steps.guard.conclusion' "$WF" \
+  || fail "retarget step must keep failure() alongside the guard gate"
+echo "ok: retarget gated on the guard verdict"
+
+# --- serialization: overlapping runs queue per PR so the marker holds ---
+grep -qF 'group: source-guard-${{ github.event.pull_request.number }}' "$WF" \
+  || fail "workflow must serialize runs per PR number"
+grep -qF 'cancel-in-progress: false' "$WF" \
+  || fail "concurrency must queue (cancel-in-progress: false)"
+echo "ok: per-PR concurrency serializes overlapping runs"
 
 # --- AC-6: the verdict is one named, selectable required check ---
 grep -q '^name: source-guard' "$WF" || fail "workflow name must be source-guard"
