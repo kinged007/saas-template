@@ -50,7 +50,9 @@ into a single head carrying both labels, which fails `db-check` check 1
 (it requires exactly two heads — one `template`, one `project`). The merge
 is not easily undone, so do not run it as a routine step. If you merged by
 mistake, restore two heads by deleting the generated merge revision file
-from `versions/` (provided no later migration descends from it), then confirm
+from `versions/` (provided no later migration descends from it). On every
+database that already applied the merge, run `alembic stamp heads` so its
+`alembic_version` no longer references the deleted revision, then confirm
 `alembic heads` reports the `template` and `project` heads again.
 
 ## Checks
