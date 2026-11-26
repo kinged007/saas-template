@@ -14,8 +14,8 @@ Release-note: <one line an adopter reads to decide whether to take this change>
 
 ## Admission ([docs/product/ADMISSION.md](https://github.com/kinged007/saas-template/blob/main/docs/product/ADMISSION.md))
 
-**Gate 0 — phase** (until the first release, one of):
-- [ ] update-path guarantee · [ ] security fix · [ ] restores documented behaviour
+**Gate 0 — milestone** (one of):
+- [ ] in a started milestone · [ ] security fix · [ ] restores documented behaviour
 
 **Gate 1 — scope** (plumbing, not a domain feature; no demo-surface growth):
 - [ ] Plumbing every multi-tenant B2B SaaS needs (ADMISSION Gate 1 list)

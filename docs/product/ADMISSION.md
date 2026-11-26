@@ -15,16 +15,22 @@ in §5.
 
 Stop at the first gate a change fails. Each gate names the principle it enforces.
 
-### Gate 0 — Phase *(VISION §7)*
+### Gate 0 — Milestone
 
-Until the first release, only three kinds of change are built:
+A change is built only when one of these holds:
 
-- [ ] delivers an update-path guarantee (VISION §4), **or**
-- [ ] fixes a security problem, **or**
-- [ ] restores behaviour that is already documented (README, `docs/`, or a test).
+- [ ] it belongs to a started milestone: the issue or PR is in that GitHub milestone, and the
+      milestone's issue in the project plan is `todo` or `in_progress`, **or**
+- [ ] it fixes a security problem, **or**
+- [ ] it restores behaviour that is already documented (README, `docs/`, or a test).
+
+Milestones are started by the maintainer, in order unless the maintainer says otherwise.
+Fleet agents read "started" from the dispatch: an issue is dispatched, with an `agent:*`
+label and the fleet assignee, only when its milestone is started. A change with no milestone,
+or in a milestone that is not started, fails Gate 0.
 
 Gate 0 is the one exception to §1 stop-at-the-first-failure rule: a change that fails it is still assessed through Gates 1–4, so the verdict names every gate it fails. Only a change that fails Gate 0 and passes Gates 1–4 is **deferred**, not built; a change that also fails a later gate gets that gate verdict (**Reject**, or **Maintainer** under §5).
-A "small obvious improvement" is a new capability: it fails Gate 0, and is deferred only if it survives Gates 1–4.
+A "small obvious improvement" is a new capability: it fails Gate 0 unless it is in a started milestone, and is deferred only if it survives Gates 1–4.
 
 ### Gate 1 — Scope *(P4 Plumbing, not product)*
 
@@ -88,7 +94,7 @@ Hard rules. Any unchecked box that can be fixed becomes a named condition (**Acc
 |---|---|---|
 | **Accept** | Passes every applicable gate | Built and merged in the normal flow |
 | **Accept with conditions** | Passes, provided named conditions are met | Conditions go into the issue as acceptance criteria |
-| **Defer** | Passes Gates 1–4, blocked only by Gate 0 | Stays open, labelled for after the first release; conditions recorded now |
+| **Defer** | Passes Gates 1–4, blocked only by Gate 0 | Stays open, labelled `backlog`, until its milestone is started; conditions recorded now |
 | **Reject** | Fails Gate 1, or Gate 2/3 with no way to fix it | Closed with the gate and principle cited |
 | **Maintainer** | Hits anything in §5 | Escalated with a recommendation; nothing is built until answered |
 
@@ -132,22 +138,22 @@ These calibrate the gates against real proposals. **They are illustrations of ho
 this file, not rulings on those issues** — the issue tracker is managed separately.
 
 **#1714 — Support derived projects that keep taking template updates.**
-Gate 0 ✅ (it *is* the phase). Gate 1 ✅ (deployment/maintenance plumbing). Gates 2–4 apply to
-its implementation. → **Accept.** The current priority.
+Gate 0 ✅ (it is in milestone `00 - Make it updatable`). Gate 1 ✅ (deployment/maintenance plumbing). Gates 2–4 apply to
+its implementation. → **Accept.** The priority of that milestone.
 
 **#18 — File storage abstraction (S3 + local drivers).**
-Gate 0 ❌ new capability. Gate 1 ✅ files are on the plumbing list. Gate 2 ✅ if it ships its own
+Gate 0 ❌ its milestone (`04 - Data & Files`) is not started. Gate 1 ✅ files are on the plumbing list. Gate 2 ✅ if it ships its own
 migrations under D-04 and its own slice. Gate 3 ✅ the issue already proposes the existing
 env-selected driver pattern; condition: local driver is the default, so nothing breaks for an
 adopter without S3. → **Defer**, conditions recorded.
 
 **#549 — OpenTelemetry integration.**
-Gate 0 ❌. Gate 1 ✅ observability. Gate 3: condition — inert unless configured by env; no
+Gate 0 ❌ no started milestone. Gate 1 ✅ observability. Gate 3: condition — inert unless configured by env; no
 change to edit points beyond `settings.py`; removable in one sitting. → **Defer**, conditions
 recorded.
 
 **#1715 — MCP server for AI-assisted access.**
-Gate 0 ❌. Gate 1 ✅ machine access, alongside API keys. Gate 2: condition — it must use the
+Gate 0 ❌ no started milestone. Gate 1 ✅ machine access, alongside API keys. Gate 2: condition — it must use the
 same server-side permission enforcement as every route (P6); pruning tools by permission is a
 requirement, not a nice-to-have. Gate 3 ✅ — building the tool catalogue from existing routes
 *removes* a per-feature edit point rather than adding one; that is the exception in Gate 3
