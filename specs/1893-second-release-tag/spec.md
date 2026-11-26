@@ -1,6 +1,6 @@
 # Feature Specification: Second release tag carrying the update path
 
-**Issue**: #1893  **Status**: Draft  **Areas**: area:docs
+**Issue**: #1893  **Status**: Clarified  **Areas**: area:docs
 
 ## User Scenarios and Testing
 
@@ -36,16 +36,16 @@ The maintainer publishes the new release on a commit that is an ancestor of the 
 
 ## Requirements
 
-- **FR-001**: The release process MUST place the new tag on a commit that is an ancestor of the branch adopters pull [NEEDS CLARIFICATION: q-release-branch — tag the integration branch head now and say so, or wait until the promotion pipeline lands and tag the adopter branch].
+- **FR-001**: The release process MUST place the new tag on a commit that is an ancestor of the branch adopters pull; until the promotion pipeline lands, that branch is the integration branch and the release notes MUST say so.
 - **FR-002**: The changelog MUST gain a dated entry for the new release covering the update-path work, leaving the previous tag's section exactly as published.
-- **FR-003**: A published release record MUST exist for the new tag, and its notes MUST state the fate of the first tag and which commit a seed from each tag gets [NEEDS CLARIFICATION: q-v010-fate — leave the first tag untouched and document per-tag seed commits, or re-point the first tag at its merged commit].
+- **FR-003**: A published release record MUST exist for the new tag; the first tag MUST be left exactly as published, and the new release's notes MUST state that decision plus which commit a seed from each tag gets.
 - **FR-004**: A copy seeded from the previous tag MUST reach the new tag by following the upgrade guide alone, with the guide's four verification commands each exiting 0, and the commands plus their exit codes MUST be pasted in a comment.
 - **FR-005**: The change MUST carry one area line and one release-note line as the admission gate requires.
 - **FR-006**: The new tag version SHOULD be v0.2.0 (new update-path capability on top of the first release, pre-1.0 minor).
 
 ## Acceptance Criteria
 
-- **AC-1**: The new tag is an ancestor of the branch adopters pull, shown by an ancestry check (covers FR-001).
+- **AC-1**: The new tag is an ancestor of the branch adopters pull (the integration branch until the promotion pipeline lands), shown by an ancestry check (covers FR-001).
 - **AC-2**: The changelog has a dated new-release entry covering the update-path work and the previous tag's section is byte-identical to what was published (covers FR-002).
 - **AC-3**: One published release record exists for the new tag and its notes state the first-tag decision plus the seed commit of each tag (covers FR-003).
 - **AC-4**: A seeded copy takes the new tag using only the upgrade guide, all four verification commands exit 0, and the commands with exit codes are pasted in a comment (covers FR-004).
@@ -68,4 +68,6 @@ The maintainer publishes the new release on a commit that is an ancestor of the 
 
 ## Clarifications
 
+- Q: Which branch is the new tag cut from — the integration branch now, or the adopter branch after the promotion pipeline lands? -> A: Tag the integration branch head now and state in the release notes that adopters pull that branch until the first promotion lands; the milestone acceptance criterion is blocked on a second tag existing and the promotion item has no landing date. Chosen by person (repository owner, 2026-11-26).
+- Q: Is the first tag re-pointed at its merged commit or left exactly as published? -> A: Left exactly as published; the release notes document which commit a seed from each tag gets. Re-pointing rewrites a published tag adopters may have pinned and needs a force-push; documenting is reversible. Chosen by person (repository owner, 2026-11-26). No conventions-decision entry is needed since this preserves the settled convention.
 - Q: Which version number does the new tag take? -> A: v0.2.0 (new capability on a pre-1.0 line; patch would imply a fix-only release, which this is not). Chosen by agent as a non-blocking assumption; correct it if the maintainer wants otherwise.
