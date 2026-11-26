@@ -150,10 +150,19 @@ A squash replaces the template chain, so every project revision's
 `depends_on` dangles afterwards — until it is repointed, every alembic
 command fails while loading the revision map. Repoint each `depends_on` to
 the new baseline in the same change. Consumers upgrading past a squash stamp
-to the baseline, then upgrade both heads (`alembic stamp heads &&
-alembic upgrade heads`), stamping only the branches their database already
-reflects — a database that never applied the project branch upgrades it
-instead of stamping it. Document the stamp target in the release notes.
+only the branches their database already reflects, then upgrade both heads.
+A database that applied only the template branch stamps just that branch and
+lets the upgrade apply the project branch:
+
+```bash
+alembic stamp template@head && alembic upgrade heads
+```
+
+A database that already applied both branches stamps both (`alembic stamp
+heads`), then upgrades as usual. When upgrading past a squash, never
+`stamp heads` on a database that never applied the project branch: it marks
+that branch done without running it, and the following `upgrade heads`
+applies nothing. Document the stamp target in the release notes.
 `make db-squash` itself never changes `project_versions/` content: it only
 moves the files aside for the baseline proof and restores them.
 
