@@ -30,10 +30,14 @@ repository. The fleet workflows and fleet jobs run only when the repository vari
 
    `merge-queue.yml` is the only workflow that needs it.
 
-3. **Branches.** Create `dev` and `staging` from `main`:
+3. **Branches.** Create `dev` and `staging` from the default branch of a clone, skipping
+   any that exist:
 
    ```bash
-   git push origin main:dev main:staging
+   for b in dev staging; do
+     git ls-remote --exit-code --heads origin "$b" >/dev/null ||
+       git push origin "origin/HEAD:refs/heads/$b"
+   done
    ```
 
    GitHub starts `schedule` and `workflow_run` triggers only from the workflow files on the
@@ -173,8 +177,9 @@ flowchart LR
 | `staging` | the release candidate | the promotion workflow only | merge commit from a `dev` commit |
 | `main` | what adopters pull | the maintainer only | merge commit through the promotion PR |
 
-The promotion workflow (`promote.yml`) is not built yet; it is tracked in issue #1873. Until
-it exists, the maintainer moves `dev` to `staging` by hand with a merge commit.
+The promotion workflow (`promote.yml`) is not built yet; it is tracked in issue #1873. It is
+planned to run daily at 04:00 UTC and on `workflow_dispatch`. Until it exists, the maintainer
+moves `dev` to `staging` by hand with a merge commit.
 
 Rules:
 
@@ -302,13 +307,13 @@ operator configuration on the fleet host and are not versioned in this repositor
 | `agent:research` | Trigger, issues | Explore code and sources to answer the issue | Fleet issues-planner loop |
 | `agent:retro` | Trigger, issues | Analyse failed runs, propose prompt changes | Fleet issues-planner loop |
 | `agent:area-map` | Trigger, issues | Write or refresh `.agents/areas/` files | Fleet issues-planner loop |
-| `agent:review` | Trigger, PRs | Review the PR and post a verdict | Fleet prs-reviewer loop; mentioned in `.agents/work-on-issues.md:200`; set by `scripts/merge_queue.py` when approval is enforced |
+| `agent:review` | Trigger, PRs | Review the PR and post a verdict | Fleet prs-reviewer loop; mentioned in `.agents/work-on-issues.md` (PR body section); set by `scripts/merge_queue.py` when approval is enforced |
 | `agent:verify` | Trigger, PRs | Run checks and acceptance-criteria coverage | Fleet prs-light loop |
 | `agent:merge` | Trigger, PRs | Approved; waits in the merge queue | `merge-queue.yml`; set by `.agents/review_pr.md` on approval |
 | `agent:revise` | Trigger, PRs | Apply review or verify findings on the PR | Fleet prs-builder loop |
 | `agent:ci-fix` | Trigger, PRs | Fix failing CI checks on the PR, or on the issue of a reverted change | Fleet prs-builder loop; set by `scripts/merge_queue.py` |
 | `agent:rebase` | Trigger, PRs | Update the PR from `dev`, resolve conflicts | Fleet prs-builder loop |
-| `agent:done` | State | Finished and out of every dispatch query | `.agents/work-on-issues.md:30`, `.agents/work-on-issues.md:245`, `.agents/review_pr.md:55`, `.agents/review_pr.md:103` |
+| `agent:done` | State | Finished and out of every dispatch query | `.agents/work-on-issues.md` (step 1 query, final step), `.agents/review_pr.md` (queue query, completion step) |
 
 A PR carries at most one trigger label at a time.
 
