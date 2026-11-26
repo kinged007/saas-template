@@ -15,6 +15,7 @@ trust client input for column names). Total count is returned via the
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,6 +23,7 @@ from fastapi import Request
 from sqlalchemy import Select
 from sqlalchemy.sql import ColumnElement
 
+from src.db.base import StringUUID
 from src.services.profile_helpers import escape_like
 
 _COMPARATORS = {
@@ -185,12 +187,34 @@ def parse_query(request: Request, *, max_limit: int = 100) -> QuerySpec:
 
 def _coerce(column: ColumnElement, value: str) -> Any:
     """Best-effort type coercion so comparisons work on typed columns."""
+    if isinstance(column.type, StringUUID):
+        return value
     for candidate in (int, float):
         try:
             return candidate(value)
         except (ValueError, TypeError):
             continue
     return value
+
+
+def _validate_uuid_bind(column: ColumnElement, field_name: str, values: list[str]) -> None:
+    """Reject values that cannot bind to a StringUUID column.
+
+    StringUUID.process_bind_param calls uuid.UUID() on every str bind, so a
+    malformed filter/ids value reaching the query raises StatementError -> 500;
+    a query id is a client error (422), not a crash.
+    """
+    if not isinstance(column.type, StringUUID):
+        return
+    for value in values:
+        try:
+            uuid.UUID(value)
+        except (TypeError, ValueError):
+            raise InvalidQuery(f"{field_name} requires UUID values") from None
+
+
+# Ops whose value is bound as-is; isnull/isnotnull never bind their value.
+_VALUE_OPS = set(_COMPARATORS) - {"isnull", "isnotnull"}
 
 
 # The common "newest first" list order, for routes that want one.
@@ -217,8 +241,21 @@ def apply_query(
         column = getattr(model, fname)
         if op not in _COMPARATORS:
             raise InvalidQuery(f"unsupported filter operator: {op}")
+        if isinstance(column.type, StringUUID) and op in (
+            "contains",
+            "ncontains",
+            "startswith",
+            "endswith",
+        ):
+            raise InvalidQuery(f"{fname} does not support text operators")
+        if op in _VALUE_OPS:
+            # The in/nin comparator splits on comma and drops empty terms, so
+            # validate exactly the terms it would bind.
+            bound = [x for x in value.split(",") if x] if op in ("in", "nin") else [value]
+            _validate_uuid_bind(column, fname, bound)
         stmt = stmt.where(_COMPARATORS[op](column, _coerce(column, value)))
     if spec.ids:
+        _validate_uuid_bind(model.id, "id", spec.ids)
         stmt = stmt.where(model.id.in_(spec.ids))
     # A caller that sent no sort gets the route default whole: a stray
     # `order[]` with no `sort[]` cannot desynchronise the `zip(strict=True)`

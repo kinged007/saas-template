@@ -532,6 +532,15 @@ class WorkspaceService:
         current_role = await self._session.get(Role, member.role_id)
         if current_role is not None and is_owner_role_name(current_role.name):
             raise WorkspaceConflict("cannot change the workspace owner's role")
+        # A malformed body role_id must keep the status a valid-but-unknown id
+        # gets (404), not a bind error inside the lookup. role_id may already
+        # be a UUID (MemberRoleUpdate schema validates it with 422), so only
+        # str values need the explicit check.
+        if isinstance(role_id, str):
+            try:
+                uuid.UUID(role_id)
+            except ValueError:
+                raise WorkspaceError("role not found in workspace") from None
         role = await self._session.get(Role, role_id)
         if role is None or role.workspace_id != workspace_id:
             raise WorkspaceError("role not found in workspace")
@@ -744,6 +753,12 @@ class WorkspaceService:
         if membership is None or not is_owner_role_name(membership[1].name):
             raise WorkspaceForbidden("only the workspace owner can transfer ownership")
         actor_member, _ = membership
+        # A malformed body membership id must keep the status a valid-but-unknown
+        # id gets (404), not a bind error inside the lookup.
+        try:
+            uuid.UUID(new_owner_membership_id)
+        except ValueError:
+            raise WorkspaceError("member not found in workspace") from None
         target = await self._session.get(WorkspaceMember, new_owner_membership_id)
         if target is None or target.workspace_id != workspace_id:
             raise WorkspaceError("member not found in workspace")
@@ -806,7 +821,7 @@ class WorkspaceService:
         ip_address: str | None = None,
     ) -> Invitation:
         await self._require_manager(workspace_id, actor)
-        invite = await self._session.get(Invitation, invitation_id)
+        invite = await self._invitation_or_not_found(invitation_id)
         if invite is None or invite.workspace_id != workspace_id:
             raise WorkspaceError("invitation not found")
         if invite.status in ("accepted", "revoked"):
@@ -965,10 +980,24 @@ class WorkspaceService:
         result = await self._session.execute(stmt)
         return list(result.all())
 
+    async def _invitation_or_not_found(self, invitation_id: str) -> Invitation | None:
+        """get(Invitation, ...) with the malformed-id check at the same point.
+
+        A non-UUID id must raise the same WorkspaceError a miss raises, not a
+        StatementError from the bind processor. Callers keep their own
+        authorization order — the manager check runs before this lookup — so
+        a caller who may not see invitations gets 403 for a malformed id too.
+        """
+        try:
+            uuid.UUID(invitation_id)
+        except ValueError:
+            return None
+        return await self._session.get(Invitation, invitation_id)
+
     async def decline_invitation(
         self, invitation_id: str, user: User, *, ip_address: str | None = None
     ) -> Invitation:
-        invite = await self._session.get(Invitation, invitation_id)
+        invite = await self._invitation_or_not_found(invitation_id)
         if invite is None or invite.email != user.email.lower():
             raise WorkspaceError("invitation not found")
         if invite.status != "pending":
@@ -1000,7 +1029,7 @@ class WorkspaceService:
         ip_address: str | None = None,
     ) -> Invitation:
         await self._require_manager(workspace_id, actor)
-        invite = await self._session.get(Invitation, invitation_id)
+        invite = await self._invitation_or_not_found(invitation_id)
         if invite is None or invite.workspace_id != workspace_id:
             raise WorkspaceError("invitation not found")
         if invite.status != "pending":

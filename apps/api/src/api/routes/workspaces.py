@@ -269,6 +269,7 @@ async def transfer_ownership(
     # Session-only: the authority here is the owner *role*, which an API key
     # would inherit from its creator and could use to demote the real owner.
     user=Depends(require_session_user),
+    _=Depends(require_existing_workspace),
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):

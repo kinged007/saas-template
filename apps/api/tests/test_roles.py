@@ -252,7 +252,22 @@ async def test_permission_catalog_requires_auth(app_client):
         "/api/v1/roles/permission-catalog",
         headers={"X-Workspace-ID": "00000000-0000-0000-0000-000000000000"},
     )
+    # Well-formed (unknown) header passes UUID validation, so the request
+    # reaches auth and is rejected as unauthenticated.
     assert resp.status_code in (401, 403)
+
+
+async def test_permission_catalog_rejects_malformed_workspace_header(app_client):
+    tokens = await register_user(app_client, "malformed-header@example.com")
+    resp = await app_client.get(
+        "/api/v1/roles/permission-catalog",
+        headers={**auth_headers(tokens), "X-Workspace-ID": "ws-does-not-exist"},
+    )
+    # 422: the UUID-annotated header dependency rejects a malformed value
+    # (same contract as test_deps.py). Unauthenticated + malformed answers
+    # 401 since auth resolves first — covered by the requires_auth test with
+    # a well-formed id instead.
+    assert resp.status_code == 422, resp.text
 
 
 async def test_permission_catalog_filtered_to_assignable(app_client):

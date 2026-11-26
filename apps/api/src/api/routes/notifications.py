@@ -15,6 +15,7 @@ from src.api.deps import (
     get_optional_workspace_id,
     require_key_permission,
     resolve_auth_principal,
+    uuid_or_404,
 )
 from src.core.permissions import NOTIFICATION_READ, NOTIFICATION_UPDATE
 from src.db.session import get_db
@@ -174,6 +175,7 @@ async def acknowledge(
     container=Depends(get_container),
 ):
     service = NotificationService(db, container.bus)
+    uuid_or_404(notification_id, "notification")
     ip = request.client.host if request.client else None
     ws = workspace_id  # already optional; when provided, enforce workspace scoping
     if body.acknowledged:
@@ -199,6 +201,7 @@ async def delete_notification(
     db: AsyncSession = Depends(get_db),
     container=Depends(get_container),
 ):
+    uuid_or_404(notification_id, "notification")
     stmt = select(Notification).where(
         Notification.id == notification_id, Notification.user_id == user.id
     )

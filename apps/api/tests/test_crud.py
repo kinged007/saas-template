@@ -15,8 +15,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 
-from src.api.crud import InvalidQuery
+from src.api.crud import InvalidQuery, QuerySpec, apply_query
+from src.models.workspace import Role
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 CRUD = SRC / "api" / "crud.py"
@@ -73,6 +75,30 @@ def _tree(tmp_path, crud_src, siblings=None):
     for name, body in (siblings or {}).items():
         (src / f"{name}.py").write_text(body, encoding="utf-8")
     return src
+
+
+@pytest.mark.parametrize("op", ["contains", "ncontains", "startswith", "endswith"])
+def test_uuid_filters_reject_text_operators(op):
+    with pytest.raises(InvalidQuery, match="does not support text operators"):
+        apply_query(
+            select(Role),
+            Role,
+            QuerySpec(filters=[("id", op, "00000000000000000000000000000001")]),
+            sortable=set(),
+            filterable={"id"},
+        )
+
+
+def test_uuid_filter_preserves_numeric_uuid_string():
+    value = "00000000000000000000000000000001"
+    stmt = apply_query(
+        select(Role),
+        Role,
+        QuerySpec(filters=[("id", "eq", value)]),
+        sortable=set(),
+        filterable={"id"},
+    )
+    assert value in stmt.compile().params.values()
 
 
 def test_no_uncalled_public_helpers_in_crud():

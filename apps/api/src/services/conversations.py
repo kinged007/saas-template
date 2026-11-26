@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Literal
 
 from sqlalchemy import and_, func, or_, select
@@ -126,6 +127,15 @@ class ConversationService:
         """Reject ids that are not active members of the workspace."""
         if not user_ids:
             return
+        # A malformed participant id must stay the same client error as a
+        # non-member id (400), not a bind error inside the lookup.
+        for uid in user_ids:
+            try:
+                uuid.UUID(uid)
+            except ValueError:
+                raise ConversationError(
+                    "one or more participants are not members of this workspace"
+                ) from None
         result = await self._session.execute(
             select(WorkspaceMember.user_id).where(
                 WorkspaceMember.workspace_id == workspace_id,
@@ -827,7 +837,13 @@ class ConversationService:
         now = now_utc()
         part.last_read_at = now
         if last_read_message_id:
-            # Validate message exists in conversation
+            # Validate message exists in conversation. A malformed body id must
+            # stay a client error (400 like a missing message id), not a bind
+            # error inside the lookup.
+            try:
+                uuid.UUID(last_read_message_id)
+            except ValueError:
+                raise ConversationError("message not found in this conversation") from None
             msg = await self._session.get(Message, last_read_message_id)
             if msg is None or msg.conversation_id != conversation_id:
                 raise ConversationError("message not found in this conversation")
