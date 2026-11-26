@@ -293,9 +293,11 @@ Known deviation.
   Why: one toast per outcome, with the server's message.
   Check: read: a form or mutation that renders its own error also sets `errorNotification: false`.
 - **CONV-FE-07** API and entity types are in `apps/web/src/types.ts`. Testable logic is in a
-  plain `.ts` module with no runtime imports, tested by `node --test`; shared types are imported
-  with `import type`.
-  Why: `node --test` cannot load `.tsx` or the `@/` alias; `types.ts` is imported by 12 files.
+  plain `.ts` module tested by `node --test`. Its runtime imports are relative paths with the
+  `.ts` extension (`../lib/role-cap.ts`); shared types are imported with `import type`, which
+  may use `@/`. Modules that no test imports (`.tsx` files) use `@/` for all imports.
+  Why: `node --test` cannot load `.tsx` or resolve the `@/` alias (it is defined only in
+  `tsconfig.json` and `vite.config.ts`); `types.ts` is imported by 12 files.
   Check: `cd apps/web && npm test` passes; read: a new API shape is added to `types.ts`, not declared in a page.
 
 ## CFG — configuration
