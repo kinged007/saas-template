@@ -30,13 +30,14 @@ repository. The fleet workflows and fleet jobs run only when the repository vari
 
    `merge-queue.yml` is the only workflow that needs it.
 
-3. **Branches.** Create `dev` and `staging` from the default branch of a clone, skipping
+3. **Branches.** Create `dev` and `staging` from a fresh clone (where `HEAD` is the
+   default branch), skipping
    any that exist:
 
    ```bash
    for b in dev staging; do
      git ls-remote --exit-code --heads origin "$b" >/dev/null ||
-       git push origin "origin/HEAD:refs/heads/$b"
+       git push origin "HEAD:refs/heads/$b"
    done
    ```
 
