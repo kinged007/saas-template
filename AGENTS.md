@@ -83,7 +83,7 @@ Full workflow: `docs/MIGRATIONS.md`.
 
 ## Frontend
 
-**Skill:** `refine-dev` (itechmeat-llm-code-refine-dev) is installed for opencode (`~/.agents/skills/itechmeat-llm-code-refine-dev/SKILL.md`) and Claude Code (`.claude/skills/itechmeat-llm-code-refine-dev/SKILL.md`). Load it for Refine.dev API details, but the rules in `docs/architecture/CONVENTIONS.md` and existing repo patterns take precedence over the skill's generic guidance (e.g. it assumes Mantine; this repo uses shadcn/ui).
+**Skill:** `refine-dev` (itechmeat-llm-code-refine-dev) is at `.agents/skills/itechmeat-llm-code-refine-dev/SKILL.md` in the repo (`.claude/skills` is a symlink to `.agents/skills`). Load it for Refine.dev API details, but the rules in `docs/architecture/CONVENTIONS.md` and existing repo patterns take precedence over the skill's generic guidance (e.g. it assumes Mantine; this repo uses shadcn/ui).
 
 **Stack (apps/web):** Refine **v5** (`@refinedev/core`, `@refinedev/react-router`) + custom `dataProvider` (wraps `@refinedev/simple-rest`) + `accessControlProvider` + sonner `notificationProvider`. shadcn/ui components in `src/components/ui/`; refine primitives (views, buttons, layout) in `src/components/refine-ui/`. Forms use `@refinedev/react-hook-form` + `react-hook-form` + `zod` + `@hookform/resolvers`.
 
