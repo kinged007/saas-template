@@ -36,6 +36,6 @@ body:
         - Delivers an update-path guarantee (VISION section 4)
         - Fixes a security problem
         - Restores behaviour that is already documented (README, docs/, or a test)
-        - None of these (new capability)
+        - None of these (deferred until the first release, see ADMISSION Gate 0)
     validations:
       required: true
