@@ -16,24 +16,33 @@
 
 **Required env vars:** DATABASE_URL
 
+## Process
+
 Fleet labels: `docs/FLEET.md` is the single source for every `agent:*` label — read it before adding, removing, or renaming one.
 
-## Product direction — read before proposing or building anything
+Template admission rules: `docs/product/ADMISSION.md`. Optional fleet workflows: `docs/FLEET.md`.
 
-Before opening an issue or PR that adds or changes behaviour, read
-`docs/product/VISION.md` and apply `docs/product/ADMISSION.md`. Fill in the admission
-section of the PR template; a PR without a verdict line is not ready for review.
+## Enforced rules
 
-Until the first release (`docs/product/VISION.md` §7), build only update-path work, security
-fixes, and fixes that restore documented behaviour. Assess anything else and leave it
-deferred — do not implement it.
+"Fleet" rows run only when the repository variable `FLEET_WORKFLOWS` is `true` (`docs/FLEET.md`, Opt in).
 
-Never:
-- add hook, plugin or override layers over template files (`docs/product/DECISIONS.md` D-03);
-- rename, move or delete a file under `apps/` without listing it in the PR's release-note
-  line as `old/path → new/path` or `removed`;
-- create a migration without a 14-digit timestamp revision id (D-04; see Migrations below; the squashed 0001 baseline is the only exception);
-- add credits, branding or promotional text.
+| Rule | Check | Active |
+|---|---|---|
+| API lint and format (`ruff check`, `ruff format --check`) | `api-lint` | always |
+| API tests pass | `api-test` | always |
+| One template head and one project head; models match migrations; check-constraint names | `db-check` | always |
+| Web type check and build | `web-build` | always |
+| Web unit tests run and pass | `web-test` | always |
+| Web end-to-end tests pass | `web-e2e`, `e2e` | always |
+| Template-owned files changed (advisory in derived projects; script self-test in the template repository) | `template-paths` | always |
+| Tracked `.ts`, `.tsx`, `.py`, `.sh` and `.md` files end with a newline | `trailing-newline` | always |
+| A PR body has one `Area:` line with the value api, web, db or infra | `merge_queue.py` (gate 6) | fleet |
+| A commit on `dev` has one valid `Area:` line and a `Release-note:` line, or is a revert | `branch-guard` | fleet |
+| Branch model: `dev` takes single-parent commits, `staging` takes merges of `dev`, `main` takes merges of `staging` | `branch-guard` | fleet |
+| A PR into `main` comes from the same-repository `staging` branch | `source-guard` | fleet |
+| Fleet labels used in `.agents/` are documented in `docs/FLEET.md` | `label-contract` | fleet |
+| The `branch-guard`, `source-guard` and release-notes scripts pass their self-tests | `branch-guard-test`, `source-guard-test`, `release-notes` | fleet |
+| 14-digit migration ids, renames listed in the release note, `CONV-*` IDs, admission verdict | review only | n/a |
 
 ## Architecture conventions
 
