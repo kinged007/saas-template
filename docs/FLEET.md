@@ -12,7 +12,28 @@ repository. The fleet workflows and fleet jobs run only when the repository vari
 
 ## Opt in
 
-1. **Variable.** Set the repository variable `FLEET_WORKFLOWS` to `true`
+1. **Branches.** Create `dev` and `staging` from the remote default branch, skipping any that
+   exist. Run this from any checkout:
+
+   ```bash
+   git fetch origin
+   base=$(git ls-remote origin HEAD | awk '$2 == "HEAD" {print $1}')
+   for b in dev staging; do
+     git ls-remote --exit-code --heads origin "$b" >/dev/null ||
+       git push origin "$base:refs/heads/$b"
+   done
+   ```
+
+   Create the branches before the variable. `branch-guard.yml` runs only when
+   `FLEET_WORKFLOWS` is `true`, and a branch-creation push contains the whole inherited
+   history, which the guard would report as violations.
+
+   GitHub starts `schedule` and `workflow_run` triggers only from the workflow files on the
+   default branch. `merge-queue.yml` uses both, so it must exist on the default branch.
+   Until promotion to `main` is running, the default branch is `dev`. After the first
+   promotion lands, switch the default branch to `main`.
+
+2. **Variable.** Set the repository variable `FLEET_WORKFLOWS` to `true`
    (Settings, Secrets and variables, Actions, Variables), or:
 
    ```bash
@@ -22,29 +43,13 @@ repository. The fleet workflows and fleet jobs run only when the repository vari
    Every fleet job has `if: vars.FLEET_WORKFLOWS == 'true'`. Without the variable the jobs are
    skipped and the repository behaves as a plain CI repository.
 
-2. **Secret.** Create the repository secret `FLEET_TOKEN` (see [Credentials](#credentials)):
+3. **Secret.** Create the repository secret `FLEET_TOKEN` (see [Credentials](#credentials)):
 
    ```bash
    gh secret set FLEET_TOKEN
    ```
 
    `merge-queue.yml` is the only workflow that needs it.
-
-3. **Branches.** Create `dev` and `staging` from a fresh clone (where `HEAD` is the
-   default branch), skipping
-   any that exist:
-
-   ```bash
-   for b in dev staging; do
-     git ls-remote --exit-code --heads origin "$b" >/dev/null ||
-       git push origin "HEAD:refs/heads/$b"
-   done
-   ```
-
-   GitHub starts `schedule` and `workflow_run` triggers only from the workflow files on the
-   default branch. `merge-queue.yml` uses both, so it must exist on the default branch.
-   Until promotion to `main` is running, the default branch is `dev`. After the first
-   promotion lands, switch the default branch to `main`.
 
 4. **Labels.** Create every label the fleet reads or sets:
 
