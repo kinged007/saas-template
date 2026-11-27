@@ -18,6 +18,8 @@
 
 ## Process
 
+Fleet labels: `docs/FLEET.md` is the single source for every `agent:*` label — read it before adding, removing, or renaming one.
+
 Template admission rules: `docs/product/ADMISSION.md`. Optional fleet workflows: `docs/FLEET.md`.
 
 ## Enforced rules
@@ -87,4 +89,4 @@ Full workflow: `docs/MIGRATIONS.md`.
 
 **Refine rules and known non-compliant pages:** `docs/architecture/CONVENTIONS.md`, area FE (`CONV-FE-*`), access control (`CONV-AUTH-05`) and Known deviations.
 
-**Dev notes:** Vite's proxy rule is `"/api/"` (trailing slash) — a bare `"/api"` prefix would also swallow SPA routes like `/api-keys` and `/api-keys/create`, forwarding them to the backend as 404s on hard refresh. Frontend validation: `npm run build` (runs `tsc --noEmit` first) and `npm test` (`node --test`, stdlib only). Testable logic lives in a plain `.ts` module with no runtime imports — `node --test` cannot load `.tsx` or resolve the `@/` alias; share types with `import type`, which type stripping erases. CI runs both (`web-build`, `web-test` jobs) on Node 24. No web lint script.
+**Dev notes:** Vite's proxy rule is `"/api/"` (trailing slash) — a bare `"/api"` prefix would also swallow SPA routes like `/api-keys` and `/api-keys/create`, forwarding them to the backend as 404s on hard refresh. Frontend validation: `npm run build` (runs `tsc --noEmit` first) and `npm test` (`node --test`, stdlib only). Testable logic lives in a plain `.ts` module — `node --test` cannot load `.tsx` or resolve the `@/` alias, so its runtime imports are relative with the `.ts` extension (`../lib/role-cap.ts`); share types with `import type`, which type stripping erases and which may use `@/` (CONV-FE-07). CI runs both (`web-build`, `web-test` jobs) on Node 24. No web lint script.

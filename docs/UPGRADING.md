@@ -19,7 +19,10 @@ produces 9–11 add/add conflicts on an unchanged tree only ten commits later
    ```
    GitHub's "Use this template" is not this path: it seeds from the template's
    default branch and offers no ref selector, so it cannot pin a tag. The tag
-   archive download is equivalent to the clone above.
+   archive download is equivalent to the clone above. The seed carries
+   `.template-version` with the template's original value — set it to your
+   seed tag (`echo 'vX.Y.Z' > .template-version`) and commit it, so the
+   path-check script in §2 starts from your seed.
 3. Link the template history, read-only — never push to it:
    ```bash
    git remote add template https://github.com/kinged007/saas-template.git
@@ -47,6 +50,18 @@ no history yet, so add the one-time flag
 `git merge --allow-unrelated-histories vX.Y.Z`. Every later sync is a plain
 merge, because the first sync joined the histories.
 
+Record the tag you just merged — `.template-version` is project-owned
+(`TEMPLATE_PATHS`), so template releases never move it and the file only
+advances when you advance it:
+
+```bash
+echo 'vX.Y.Z' > .template-version
+git add .template-version && git commit -m "record template sync vX.Y.Z"
+```
+
+The next run of `bash scripts/check-template-paths.sh` with no arguments then
+starts from this tag instead of re-reporting releases you already merged.
+
 Then review before you merge to your main branch:
 
 1. Read the release notes for the tag, which are grouped by area (`api` /
@@ -60,15 +75,20 @@ Then review before you merge to your main branch:
    renames announced explicitly, run:
    `bash scripts/check-template-paths.sh <previous-tag> <tag>`
    (skips the project-owned paths in `TEMPLATE_PATHS`:
-   `apps/*/src/project/**`, `apps/api/alembic/project_versions/**`, `.env`).
+   `apps/*/src/project/**`, `apps/api/alembic/project_versions/**`, `.env`,
+   `.template-version`).
    Then verify loudly with the four commands in §3 before merging.
 3. Renames are announced in the release-note line (a silent rename breaks
    imports with exit 0 — see `docs/product/UPDATE-PATH.md` §3). If the notes
    announce one, update your imports to the new path.
 4. If the release adds migrations, they use timestamp ids (`YYYYMMDDHHMMSS`,
    `docs/product/DECISIONS.md` D-04), so a template migration and one of yours
-   never share an id. If `db-check` below reports two heads, join them with
-   `alembic merge heads` and migrate again.
+   never share an id. `db-check` below expects exactly two heads — the
+   `template` head (`apps/api/alembic/versions/`) and your `project` head
+   (`apps/api/alembic/project_versions/`) — so two heads is the passing
+   state, not a conflict. Do not merge the branches into one linear history:
+   the merged revision is a single head carrying both labels, which fails
+   `db-check` check 1 below; see `docs/MIGRATIONS.md`.
 
 ## 3. Verify
 
@@ -76,7 +96,7 @@ Run all four before merging `template-sync/vX.Y.Z` into your main branch.
 Each must exit 0 — exit 0 means the project still builds and still migrates:
 
 ```bash
-make db-check    # single migration head; models match migrations
+make db-check    # exactly two heads (template + project); models match migrations
 make api-test    # backend tests
 make web-build   # type-check + frontend build
 make web-test    # frontend unit tests
@@ -92,13 +112,10 @@ The following are the template's stable API. A change that breaks any of them
 requires a major version bump **and** an entry in this file saying what moved
 and what adopters must do:
 
-- the `register*` hooks,
-- `EXTENSION_MODULES` and `TEMPLATE_PATHS` (`src/project/` loaders),
+- the `register*` hooks (`apps/api/src/project/__init__.py`, loaded via `apps/api/src/extensions.py`),
+- `EXTENSION_MODULES` (env var read by `apps/api/src/extensions.py`, the API extension loader),
+- `TEMPLATE_PATHS` (repo-root ownership manifest read by `scripts/check-template-paths.sh`),
 - the `src/project/index.ts` exports,
 - `job_registry` (`apps/api/src/jobs/registry.py`),
 - `WorkflowRegistry.register` (`apps/api/src/events/factory.py`),
 - `EventBus` (`apps/api/src/events/bus.py`).
-
-Note: the `src/project/` loaders (`EXTENSION_MODULES`, `TEMPLATE_PATHS`,
-`src/project/index.ts`) arrive with the extension-seam issues (#1794, #1795).
-This rule covers them from the release they first appear in.

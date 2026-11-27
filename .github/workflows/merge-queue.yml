@@ -26,6 +26,7 @@ permissions:
 
 jobs:
   merge:
+    if: vars.FLEET_WORKFLOWS == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

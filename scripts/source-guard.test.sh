@@ -145,7 +145,7 @@ echo "ok: AC-5 trusted evaluation, no PR-head checkout, no PR-code execution"
 # --- AC-3 workflow layers: trigger filter plus base.ref gate pin the ignore ---
 grep -qF '    branches: [main]' "$WF" \
   || fail "trigger must filter branches: [main] so non-main bases never start the guard"
-grep -qF "if: github.event.pull_request.base.ref == 'main'" "$WF" \
+grep -qE "^    if: .*github\.event\.pull_request\.base\.ref == 'main'" "$WF" \
   || fail "job must gate on github.event.pull_request.base.ref == 'main'"
 echo "ok: AC-3 trigger filter and base.ref gate pinned"
 

@@ -86,6 +86,7 @@ jobs:
           esac
 
   branch-guard-test:
+    if: vars.FLEET_WORKFLOWS == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -145,6 +146,7 @@ jobs:
           if-no-files-found: error
 
   label-contract:
+    if: vars.FLEET_WORKFLOWS == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -154,6 +156,7 @@ jobs:
         run: ./scripts/check-label-contract.sh
 
   release-notes:
+    if: vars.FLEET_WORKFLOWS == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -162,7 +165,17 @@ jobs:
       - name: release-notes self-test (fixture repo, no network)
         run: bash scripts/release-notes.test.sh
 
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - name: promote self-test (fixture repo, stubbed gh, no network)
+        run: bash scripts/promote.test.sh
+
   source-guard-test:
+    if: vars.FLEET_WORKFLOWS == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -170,6 +183,15 @@ jobs:
           ref: ${{ inputs.sha || github.sha }}
       - name: source-guard self-test (stubbed gh, no network)
         run: bash scripts/source-guard.test.sh
+
+  db-check-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - name: db-check self-test (stubbed uv, no network)
+        run: bash scripts/db-check.test.sh
 
   trailing-newline:
     runs-on: ubuntu-latest

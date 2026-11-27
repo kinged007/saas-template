@@ -45,12 +45,15 @@ from `project@head`, which already carries that ordering transitively).
 `alembic upgrade heads` applies both branches, template first.
 
 `make db-check` passes with exactly those two heads and fails on one or on
-three or more. If you ever want one linear history again, merge the branches
-— the merge revision lands in `versions/`:
-
-```bash
-cd apps/api && uv run alembic merge template@head project@head
-```
+three or more. Keep both branches unmerged: `alembic merge` collapses them
+into a single head carrying both labels, which fails `db-check` check 1
+(it requires exactly two heads — one `template`, one `project`). The merge
+is not easily undone, so do not run it as a routine step. If you merged by
+mistake, restore two heads by deleting the generated merge revision file
+from `versions/` (provided no later migration descends from it). On every
+database that already applied the merge, run `alembic stamp heads` so its
+`alembic_version` no longer references the deleted revision, then confirm
+`alembic heads` reports the `template` and `project` heads again.
 
 ## Checks
 
@@ -147,10 +150,19 @@ A squash replaces the template chain, so every project revision's
 `depends_on` dangles afterwards — until it is repointed, every alembic
 command fails while loading the revision map. Repoint each `depends_on` to
 the new baseline in the same change. Consumers upgrading past a squash stamp
-to the baseline, then upgrade both heads (`alembic stamp heads &&
-alembic upgrade heads`), stamping only the branches their database already
-reflects — a database that never applied the project branch upgrades it
-instead of stamping it. Document the stamp target in the release notes.
+only the branches their database already reflects, then upgrade both heads.
+A database that applied only the template branch stamps just that branch and
+lets the upgrade apply the project branch:
+
+```bash
+alembic stamp template@head && alembic upgrade heads
+```
+
+A database that already applied both branches stamps both (`alembic stamp
+heads`), then upgrades as usual. When upgrading past a squash, never
+`stamp heads` on a database that never applied the project branch: it marks
+that branch done without running it, and the following `upgrade heads`
+applies nothing. Document the stamp target in the release notes.
 `make db-squash` itself never changes `project_versions/` content: it only
 moves the files aside for the baseline proof and restores them.
 

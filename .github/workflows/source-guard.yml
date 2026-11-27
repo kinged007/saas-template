@@ -32,7 +32,7 @@ jobs:
   source-guard:
     # Defense in depth with the `branches: [main]` trigger filter above:
     # already-retargeted PRs (base `dev`) are ignored, so no second comment.
-    if: github.event.pull_request.base.ref == 'main'
+    if: vars.FLEET_WORKFLOWS == 'true' && github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     steps:
       # Trusted base only (the PR head is never checked out): pins the base
