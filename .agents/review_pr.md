@@ -246,7 +246,7 @@ Then STOP and report why.
 
 ## 7. Approval path: file minors, then mark ready-to-merge
 
-Only when a review (yours or adopted) approves with all majors complete, and only for non-high-risk PRs (step 3). Never merge here — `merge-queue.yml` owns merging; approval only marks the PR ready and records the approved head SHA for audit (check 5 reads the Reviews API):
+Only when a review (yours or adopted) approves with all majors complete, and only for non-high-risk PRs (step 3). Never merge here — `merge-queue.yml` owns merging; approval only marks the PR ready and records the approved head SHA for audit (merge queue gate 5 reads the Reviews API; see `docs/FLEET.md`):
 
 1. Create one issue per deferred finding (title, repro/context, `enhancement` label). Reference the PR number in each body.
 2. Apply `agent:done` before marking, so a concurrent step-1 run cannot claim the PR mid-step.

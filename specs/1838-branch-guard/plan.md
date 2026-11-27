@@ -1,4 +1,4 @@
-# Plan: branch-guard.yml (issue #1838, CI-CD piece 7)
+# Plan: branch-guard.yml (issue #1838, fleet merge-queue piece)
 
 Source: spec at `specs/1838-branch-guard/spec.md` (Status: Clarified). No
 `plan-check` revise verdict exists, so this is a fresh plan, not a fixup.
@@ -33,8 +33,8 @@ fixture-repo precedent (confirmed in repo; triage comment settles this).
 - Issue mechanics: title prefix `[branch-guard] <branch> violation`, found via
   `gh issue list --search`; update the open one, else create with label
   `needs-human` (label confirmed to exist). Guard never pushes, so the default
-  workflow credential is enough (no `FLEET_TOKEN`, no CICD-28 conflict).
-- First run: piece 7 bases on `dev` (CI-CD §9 table, confirmed); the
+  workflow credential is enough (no `FLEET_TOKEN`, no conflict with the rule that the merge queue never uses `GITHUB_TOKEN`).
+- First run: piece 7 bases on `dev` (docs/FLEET.md, confirmed); the
   introducing PR squash-merges with `Area: infra` + one `Release-note:` line,
   so its own range passes the `dev` rule and the post-merge push shows green.
 
@@ -73,7 +73,7 @@ existing template-paths self-test that `ci.yml` runs):
   real violation.
 - AC-8: suite passes as a whole (`bash` exit 0).
 - AC-9: `grep -nE 'dev|staging|main' .github/workflows/branch-guard.yml`
-  matches (the exact CICD-29 command).
+  matches (the exact coverage command).
 - Smoke test: run the script against a real range in this checkout
   (e.g. `bash scripts/branch-guard.sh dev <before> <after>` on recent `dev`
   history) plus the full test file; no app boot or preview needed (spec

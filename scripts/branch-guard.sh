@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Branch guard for dev, staging and main (CI-CD piece 7, §7).
+# Branch guard for dev, staging and main (docs/FLEET.md, Branch model).
 #
 # Usage:
 #   bash scripts/branch-guard.sh <branch> <before> <after> [forced] [last-checked]

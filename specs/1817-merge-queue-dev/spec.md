@@ -197,7 +197,7 @@ repository state unchanged.
 - Q: On a gate failure, does the run stop or move to the next PR, given the
   description says "move on" while the gate table says gate 1 exits? -> A:
   Gate 1 exits with no mark changed (chosen by agent from the strategy
-  document §4.3 gate-1 row); all other gates re-mark, comment once, and
+  document, gate 1 row); all other gates re-mark, comment once, and
   evaluate the next candidate (chosen by agent from the issue description and
   the gate table).
 - Q: Does one scheduler run merge at most one PR, or drain the whole queue?
@@ -211,4 +211,4 @@ repository state unchanged.
 - Q: Does the advisory approval gate change any mark when it mismatches? ->
   A: No mark change and no block in the current stage; the outcome is only
   recorded, and review routing applies when the gate becomes enforcing
-  (chosen by agent from the strategy document §7).
+  (chosen by agent from the strategy document, approval rules).

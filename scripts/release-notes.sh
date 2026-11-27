@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Print the release-notes slice list for a promotion PR (CI-CD.md §4.5).
+# Print the release-notes slice list for a promotion PR (docs/FLEET.md, Branch model).
 #
 # Usage:
 #   scripts/release-notes.sh BASE HEAD   # e.g. scripts/release-notes.sh main staging

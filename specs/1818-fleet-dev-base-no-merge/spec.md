@@ -59,10 +59,10 @@ As a fleet operator, I want the label contract to describe the merge trigger lab
 
 ## Acceptance Criteria
 
-- **AC-1**: Compliance check CICD-10 passes: the build brief references the integration branch as base and contains no default-branch lookup. (covers FR-001)
-- **AC-2**: Compliance check CICD-11 passes: no agent brief merges a pull request. (covers FR-005)
-- **AC-3**: Compliance check CICD-12 passes: the review brief sets the merge-queue trigger label and references the approved head commit. (covers FR-002, FR-003, FR-004)
-- **AC-4**: Compliance check CICD-13 passes: the pull request template contains both machine-read lines. (covers FR-007)
+- **AC-1**: The matching `docs/FLEET.md` check passes: the build brief references the integration branch as base and contains no default-branch lookup. (covers FR-001)
+- **AC-2**: The matching `docs/FLEET.md` check passes: no agent brief merges a pull request. (covers FR-005)
+- **AC-3**: The matching `docs/FLEET.md` check passes: the review brief sets the merge-queue trigger label and references the approved head commit. (covers FR-002, FR-003, FR-004)
+- **AC-4**: The matching `docs/FLEET.md` check passes: the pull request template contains both machine-read lines. (covers FR-007)
 - **AC-5**: The label-contract check from #1811 passes with the updated merge-trigger row. (covers FR-008)
 - **AC-6**: A dry walk of the review brief's approval path on a sample non-high-risk pull request produces an approval review, a verdict-plus-commit comment, the trigger label set, the claim label removed, and no merge. (covers FR-002, FR-003, FR-004, FR-005)
 - **AC-7**: A dry walk of the high-risk path still ends with the human merge decision and no agent merge. (covers FR-006)
@@ -85,4 +85,4 @@ As a fleet operator, I want the label contract to describe the merge trigger lab
 
 ## Clarifications
 
-- No open scope points. Every behaviour is settled by the issue description, the owner sequencing comment, and the referenced CI-CD contract (§4.2) with its compliance checklist (CICD-10–13). Nothing required a human decision at spec time; the sequencing gate (FR-009 / AC-8) is recorded as a requirement, not a question.
+- No open scope points. Every behaviour is settled by the issue description, the owner sequencing comment, and the referenced `docs/FLEET.md` contract. Nothing required a human decision at spec time; the sequencing gate (FR-009 / AC-8) is recorded as a requirement, not a question.

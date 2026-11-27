@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Fleet label contract check: docs/FLEET_LABELS.md must classify every
+# Fleet label contract check: docs/FLEET.md must classify every
 # agent:* label used in .agents/ and must not claim in-repo consumers that
 # do not reference the label.
 #
 # Usage:
 #   scripts/check-label-contract.sh   # from repo root (see `make label-contract`)
 #
-# What it does (see docs/FLEET_LABELS.md for the contract itself):
+# What it does (see docs/FLEET.md for the contract itself):
 #   1. Every agent:* label in .agents/ must appear in the doc's consumed
 #      table or its starts-no-work list. Adding a label to .agents/ prose
 #      without documenting it fails the check.
@@ -18,7 +18,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-DOC=docs/FLEET_LABELS.md
+DOC=docs/FLEET.md
 TABLE_HEADING='## Consumed labels'
 DEAD_HEADING='## Labels that start no work'
 

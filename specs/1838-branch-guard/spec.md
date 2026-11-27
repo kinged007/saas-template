@@ -87,7 +87,7 @@ whose issue says the push was a non-fast-forward.
 - **AC-6**: A push whose range contains no new commits beyond the two historic `dev` commits without trailer lines (`462dfea2d`, `2f1e27fd7`) produces a green run (covers FR-006).
 - **AC-7**: Two consecutive violations on one branch with the first issue still open result in one updated issue, not two (covers FR-007).
 - **AC-8**: The automated suite passes and includes, at minimum, a good and a bad fixture case per branch rule plus a force-push case (covers FR-008).
-- **AC-9**: `COMPLIANCE-CHECKLIST.md` **CICD-29** passes: the workflow definition references all three branches (covers FR-001).
+- **AC-9**: The `docs/FLEET.md` branch-guard coverage check passes: the workflow definition references all three branches (covers FR-001).
 - **AC-10**: The introducing PR shows one green guard run on `dev` after its merge, or records the alternative first-run verification (covers FR-009).
 
 ## Edge Cases

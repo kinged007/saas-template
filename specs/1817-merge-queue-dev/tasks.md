@@ -1,4 +1,4 @@
-# Tasks — #1817 merge-queue.yml (CI-CD piece 5)
+# Tasks — #1817 merge-queue.yml (fleet pieces)
 
 ## Phase 1 — Setup and tests first
 

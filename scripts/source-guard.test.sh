@@ -173,13 +173,11 @@ grep -q 'source-guard.test.sh' "$REPO_ROOT/.github/workflows/ci.yml" \
   || fail "ci.yml must run scripts/source-guard.test.sh"
 echo "ok: AC-7 self-test wired into ci.yml"
 
-# --- AC-8: the docs state the rule and the checklist matches it ---
-grep -q 'Only `staging` is merged into `main`' "$REPO_ROOT/docs/architecture/CI-CD.md" \
-  || fail "CI-CD.md §2 must state the staging-into-main rule"
-grep -q 'source-guard.yml' "$REPO_ROOT/docs/architecture/CI-CD.md" \
-  || fail "CI-CD.md §2 must name source-guard.yml as the enforcer"
-grep -q 'CICD-33' "$REPO_ROOT/docs/architecture/COMPLIANCE-CHECKLIST.md" \
-  || fail "COMPLIANCE-CHECKLIST.md must gain the CICD-33 item"
-echo "ok: AC-8 docs rule plus checklist item"
+# --- AC-8: the docs state the rule and name the enforcer ---
+grep -q 'Only `staging` is merged into `main`' "$REPO_ROOT/docs/FLEET.md" \
+  || fail "docs/FLEET.md must state the staging-into-main rule"
+grep -q 'source-guard.yml' "$REPO_ROOT/docs/FLEET.md" \
+  || fail "docs/FLEET.md must name source-guard.yml as the enforcer"
+echo "ok: AC-8 docs rule and enforcer"
 
 echo "TEST PASS: retarget with one comment, staging pass, ignored bases, fork retarget, comment-once"

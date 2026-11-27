@@ -15,6 +15,6 @@
 
 ## Phase 3 — Polish
 
-- [x] T008 [P] [AC-9] docs/architecture/COMPLIANCE-CHECKLIST.md — verify the CICD-29 grep passes against branch-guard.yml (no doc edit unless the wording drifts from §7).
+- [x] T008 [P] [AC-9] docs/FLEET.md — verify the branch-guard coverage grep in `docs/FLEET.md` passes against branch-guard.yml (no doc edit unless the wording drifts).
 - [x] T009 [P] [AC-8, AC-10] scripts/branch-guard.test.sh + live repo — smoke test: bash scripts/branch-guard.test.sh green plus one script run against a real pushed range; record first-run verification for the PR body; AC-7 update-not-duplicate covered by a stub-gh dry run of the workflow issue step inside the suite (plan-check F1).
 - [ ] T010 [polish] repo quality gate — run make api-lint, make api-test, make db-check, make web-build, make web-test (from Makefile/ci.yml); shell scripts have no repo linter, so bash -n plus the test suite is the gate for the new files.

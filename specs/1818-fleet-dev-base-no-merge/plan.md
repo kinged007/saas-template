@@ -1,7 +1,7 @@
 # Plan: Fleet builds target dev, review stops merging (#1818)
 
 Spec: `specs/1818-fleet-dev-base-no-merge/spec.md` (Draft; written from the issue
-description + owner sequencing comment + `docs/architecture/CI-CD.md` §4.2/§9 —
+description + owner sequencing comment + `docs/FLEET.md` (Branch model) —
 no spec-stage questions were needed). This is round 2: a fix-up addressing
 the `plan-check` revise verdict (round 1) — critical F1 (script change needs
 coverage: T005 + CHK005 + non-blocking `q-label-script`, unanswered so taken
@@ -26,10 +26,10 @@ change surface:
    `review_pr.md:5` true. Delete `gh pr merge` from the brief. High-risk path
    (step 3, `needs-human`) and escalation (§6) stay byte-identical.
 3. `.github/pull_request_template.md`: add literal `Area: ` and `Release-note: `
-   lines at line start in the Release-note section. The CICD-13 check greps
+   lines at line start in the Release-note section. The template check greps
    `^Area: |^Release-note: `, so the existing bold `**Area:**` line alone does
    not satisfy it — the machine-read lines must be plain line-start text.
-4. `docs/FLEET_LABELS.md`: `agent:merge` row becomes "approved, waiting for
+4. `docs/FLEET.md`: `agent:merge` row becomes "approved, waiting for
    `merge-queue.yml`", moved from the starts-no-work list to the consumed
    table citing `.agents/review_pr.md` (sets the label; exists) and
    `merge-queue.yml` (consumes it; skipped by rule 2 until piece 5 lands).
@@ -38,7 +38,7 @@ change surface:
    the starts-no-work list, which contradicts FR-008's new meaning. This is the
    only file outside the four the issue names, and only AC-5 requires it.
 
-Base of the built PR is `main` per `docs/architecture/CI-CD.md` §9 Table row 2;
+Base of the built PR is `main` per `docs/FLEET.md`;
 fleet config is read from `main`. Sequencing is a build-stage gate, not a code
 gate: the PR must carry `needs-human` and must not merge before #1817 (piece 5,
 per the owner sequencing comment "Depends on #1817 (piece 5, merge queue). Do
@@ -50,7 +50,7 @@ not merge before it.").
 - `.agents/review_pr.md` §7 (lines 245-259) — approve+comment+label, no merge.
 - `.github/pull_request_template.md` Release-note section (line ~10) — two
   machine-read lines.
-- `docs/FLEET_LABELS.md` `agent:merge` row (line 31) + starts-no-work list
+- `docs/FLEET.md` `agent:merge` row (line 31) + starts-no-work list
   (lines 69-72) — new meaning.
 - `scripts/check-label-contract.sh` `REQUIRED_DEAD` (line ~24) — drop
   `agent:merge` so the AC-5 check can pass.
@@ -65,15 +65,14 @@ PR-template machine lines (`Area:` / `Release-note:`).
 
 ## Test plan
 
-The compliance checks in `docs/architecture/COMPLIANCE-CHECKLIST.md` (lines
-19-22) are the tests; run them red-before / green-after, plus:
+The compliance checks in `docs/FLEET.md` (lines 19-22) are the tests; run them red-before / green-after, plus:
 
-- AC-1: CICD-10 greps (`--base dev` present, `defaultBranchRef` absent).
-- AC-2: CICD-11 grep (`gh pr merge` absent from `.agents/`).
-- AC-3: CICD-12 greps (`agent:merge` + head-SHA mention in `review_pr.md`).
-- AC-4: CICD-13 grep (`^Area: ` and `^Release-note: ` in the template).
+- AC-1: `--base dev` greps (`--base dev` present, `defaultBranchRef` absent).
+- AC-2: `gh pr merge` grep (`gh pr merge` absent from `.agents/`).
+- AC-3: approval-handoff greps (`agent:merge` + head-SHA mention in `review_pr.md`).
+- AC-4: template grep (`^Area: ` and `^Release-note: ` in the template).
 - AC-5: `make label-contract` (the #1811 check; source: `Makefile:144`,
-  `docs/FLEET_LABELS.md:5`, CI job `ci.yml:122`).
+  `docs/FLEET.md:5`, CI job `ci.yml:122`).
 - AC-6/AC-7: manual dry-walk trace of the new §7 approval path and the
   unchanged high-risk path; record the trace in the PR body (docs-only change,
   no live PR to exercise).
@@ -90,7 +89,7 @@ The compliance checks in `docs/architecture/COMPLIANCE-CHECKLIST.md` (lines
   hence the `needs-human` sequencing gate (FR-009). Mitigation is process, not
   code: do not merge early.
 - `review_pr.md:5` stays true because the rewritten §7 keeps applying
-  `agent:done`; `docs/FLEET_LABELS.md:59-61` ("Ready to merge ... then merge")
+  `agent:done`; `docs/FLEET.md:59-61` ("Ready to merge ... then merge")
   needs only its "then merge" tail reworded to the queue handoff, since
   `agent:done` still arrives via the approval path. The build sweeps remaining
   `agent:merge`/`agent:done` references for contradictions (T006).

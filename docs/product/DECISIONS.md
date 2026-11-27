@@ -119,8 +119,8 @@ started by hand.
 
 **Means:** the maintainer reviews one promotion per cadence instead of every PR. ADMISSION §5
 reads "the maintainer merges every promotion into `main`". Release slices (VISION §4.3) are
-read from `git log`. The design, cadence, enforcement stages and build order are in
-[docs/architecture/CI-CD.md](../architecture/CI-CD.md).
+read from `git log`. The design and enforcement are in [docs/FLEET.md](../FLEET.md). The promotion
+workflow and its cadence are tracked in issue #1873.
 
 ---
 
