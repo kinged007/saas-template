@@ -14,7 +14,7 @@ as a coherent, tested reference implementation you can build a product on.
 apps/api        FastAPI service: auth, workspaces, members, roles, invitations,
                 API keys, notifications, scheduled jobs, outbound webhooks,
                 WS realtime.
-apps/web        Refine.dev SPA (React + Antd).
+apps/web        Refine.dev SPA (React + shadcn/ui).
 infra/          docker-compose, Dockerfiles, Helm chart, Terraform.
 ```
 

@@ -5,7 +5,7 @@ and a Refine.dev (React) frontend, with workspaces, RBAC, invitations, API
 keys, notifications, an event bus and framework-level scheduled jobs.
 
 - **apps/api** — FastAPI backend (auth, workspaces, members, roles, invitations, API keys, notifications, scheduled jobs, events, WebSocket)
-- **apps/web** — Refine.dev + Ant Design frontend
+- **apps/web** — Refine.dev + shadcn/ui frontend
 - **infra** — Dockerfiles, Helm chart, Terraform (for production / prod-like testing)
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.

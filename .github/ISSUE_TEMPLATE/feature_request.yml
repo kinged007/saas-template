@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a change to the template.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-change
+    attributes:
+      label: Proposed change
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: Observable conditions that show the change is done.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [api, web, db, infra]
+    validations:
+      required: true
+  - type: dropdown
+    id: gate-0-basis
+    attributes:
+      label: Gate 0 basis
+      description: See docs/product/ADMISSION.md, Gate 0.
+      options:
+        - Delivers an update-path guarantee (VISION section 4)
+        - Fixes a security problem
+        - Restores behaviour that is already documented (README, docs/, or a test)
+        - None of these (deferred until the first release, see ADMISSION Gate 0)
+    validations:
+      required: true

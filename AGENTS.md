@@ -1,20 +1,76 @@
-# saas-template — Project Context
+# saas-template
 
-**Stack:** fastapi | sqlalchemy | typescript
-**Monorepo:** api, saas-template-web
+## What it is
 
-26 routes | 10 models | 17 env vars | 247 import links
+A multi-tenant B2B SaaS template, organised as a monorepo. `apps/api` is a FastAPI backend with SQLAlchemy and Alembic, managed with uv. `apps/web` is a Refine v5 frontend with shadcn/ui, managed with npm. See `README.md` for the feature list and `docs/ARCHITECTURE.md` for the design.
 
-**API areas:** , /effective-permissions, /{api_key_id}, /register, /login, /refresh, /logout, /me, /{invitation_id}, /accept
+## Setup
 
-**High-impact files** (change carefully):
-- apps/api/src/db/session.py (imported by 17 files)
-- apps/api/src/models/workspace.py (imported by 13 files)
-- apps/web/src/types.ts (imported by 12 files)
-- apps/api/src/settings.py (imported by 9 files)
-- apps/api/src/services/workspaces.py (imported by 9 files)
+Run all commands from the repository root.
 
-**Required env vars:** DATABASE_URL
+- Python: use `uv`, not pip. Python 3.12 (`apps/api/.python-version`, `.github/workflows/ci.yml`).
+- Web: use `npm`, not pnpm or yarn. Node 24 (`apps/web/.nvmrc`, `.github/workflows/ci.yml`).
+- Web unit tests use `node --test`, not vitest or jest.
+- Copy `apps/api/.env.example` to `apps/api/.env` and `apps/web/.env.example` to `apps/web/.env` (`README.md`).
+- `make setup` installs uv and Node if missing. `make api-install` and `make web-install` install dependencies (`Makefile`).
+
+## How to run checks
+
+| Stage | Command |
+|---|---|
+| API lint and format | `make api-lint` |
+| API type check | none |
+| API tests | `make api-test` |
+| Migrations | `make db-check` |
+| Web type check and build | `make web-build` |
+| Web unit tests | `make web-test` |
+| Web lint | none |
+
+Optional or slower:
+
+- `make web-test-e2e` runs the Playwright suite. CI runs it as `web-e2e` (`docs/architecture/CI-CD.md`).
+- `make api-test-nats` runs the real-NATS integration test. It starts NATS with docker (`make nats-up`).
+
+Smoke test of the API without docker or embedded Postgres:
+
+```bash
+USE_SQLITE=1 make api-migrate
+USE_SQLITE=1 make api API_PORT=8011   # in a second terminal
+curl http://localhost:8011/api/v1/healthz   # {"status":"ok","service":"saas-template-api"}
+```
+
+Stop the API with Ctrl-C in its terminal.
+
+## Single test
+
+```bash
+cd apps/api && uv run --extra dev pytest tests/test_auth.py::test_login_wrong_password -q
+cd apps/web && node --test src/hooks/query-keys.test.ts
+```
+
+## Boundaries
+
+Allowed without asking:
+
+- Code and tests under `apps/`.
+- Documentation.
+
+A person must approve:
+
+- `apps/api/alembic/versions/**` and `apps/api/alembic/project_versions/**`.
+- `apps/api/src/core/security/**`.
+- `infra/**`.
+- `.github/workflows/**`.
+- `scripts/db-*.sh`.
+- Adding or upgrading a dependency.
+
+Never:
+
+- Commit `.env` files or secrets.
+- Edit generated `.codesight/` files.
+- Edit `node_modules` or `.venv`.
+
+Admission rules for changes are in `docs/product/ADMISSION.md`.
 
 ## Process
 
@@ -83,7 +139,7 @@ Full workflow: `docs/MIGRATIONS.md`.
 
 ## Frontend
 
-**Skill:** `refine-dev` (itechmeat-llm-code-refine-dev) is installed for opencode (`~/.agents/skills/itechmeat-llm-code-refine-dev/SKILL.md`) and Claude Code (`.claude/skills/itechmeat-llm-code-refine-dev/SKILL.md`). Load it for Refine.dev API details, but the rules in `docs/architecture/CONVENTIONS.md` and existing repo patterns take precedence over the skill's generic guidance (e.g. it assumes Mantine; this repo uses shadcn/ui).
+**Skill:** `refine-dev` (itechmeat-llm-code-refine-dev) is at `.agents/skills/itechmeat-llm-code-refine-dev/SKILL.md` in the repo (`.claude/skills` is a symlink to `.agents/skills`). Load it for Refine.dev API details, but the rules in `docs/architecture/CONVENTIONS.md` and existing repo patterns take precedence over the skill's generic guidance (e.g. it assumes Mantine; this repo uses shadcn/ui).
 
 **Stack (apps/web):** Refine **v5** (`@refinedev/core`, `@refinedev/react-router`) + custom `dataProvider` (wraps `@refinedev/simple-rest`) + `accessControlProvider` + sonner `notificationProvider`. shadcn/ui components in `src/components/ui/`; refine primitives (views, buttons, layout) in `src/components/refine-ui/`. Forms use `@refinedev/react-hook-form` + `react-hook-form` + `zod` + `@hookform/resolvers`.
 
