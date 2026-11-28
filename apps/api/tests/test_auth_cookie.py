@@ -13,7 +13,12 @@ def _cookie_name() -> str:
 
 
 def _attrs(raw: str) -> str:
-    """Attributes after the first ";": the JWT value can contain "Secure"."""
+    """Attributes after the first ";": the JWT value can contain "Secure".
+
+    Assumes the value holds no ";" (base64url JWTs cannot), so the first ";"
+    always starts the attribute section; a ";" in the value would clip the
+    split inside it and every attribute check on the result is wrong.
+    """
     return raw.split(";", 1)[1] if ";" in raw else ""
 
 
