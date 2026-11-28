@@ -145,7 +145,7 @@ def test_reads_are_utf8_under_an_ascii_locale(tmp_path):
             "PYTHONCOERCECLOCALE": "0",
         },
         capture_output=True,
-        text=True,
+        encoding="utf-8",
     )
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == "[]"

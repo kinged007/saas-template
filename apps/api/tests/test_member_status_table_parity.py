@@ -40,7 +40,7 @@ def _table(source: Path, name: str, row: re.Pattern) -> dict[str, bool]:
     text and the rows are read out of the captured body; the pairs are compared
     as data, not evaluated.
     """
-    text = source.read_text()
+    text = source.read_text(encoding="utf-8")
     declared = re.search(rf"\b_?{name}\b[^\n]*=\s*\{{", text)
     assert declared is not None, f"{name} table not found in {source}"
     body = text[declared.end() : text.index("}", declared.end())]

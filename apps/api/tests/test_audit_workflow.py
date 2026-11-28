@@ -387,7 +387,7 @@ def test_prod_compose_trusts_only_the_pinned_proxy_network():
     _TrustedHosts so the guard cannot drift from what uvicorn actually does
     with it (uv.lock pins the version).
     """
-    compose = yaml.safe_load(COMPOSE.read_text())
+    compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
     command = compose["services"]["api"]["command"]
     default = re.search(r"--forwarded-allow-ips=\$\{FORWARDED_ALLOW_IPS:-([^}]+)\}", command)
     assert default, f"no --forwarded-allow-ips default in: {command}"
@@ -417,7 +417,7 @@ def test_image_cmd_carries_proxy_flags():
     with a loopback-only default: outside compose nothing remote is trusted
     until the operator names the proxy.
     """
-    cmd = re.search(r"^CMD (.+)$", DOCKERFILE_API.read_text(), re.MULTILINE)
+    cmd = re.search(r"^CMD (.+)$", DOCKERFILE_API.read_text(encoding="utf-8"), re.MULTILINE)
     assert cmd, "no CMD line in Dockerfile.api"
     line = cmd.group(1)
     default = re.search(r'--forwarded-allow-ips=\\"\$\{FORWARDED_ALLOW_IPS:-([^}]+)\}\\"', line)
@@ -441,7 +441,7 @@ def test_nginx_ws_location_forwards_client_ip():
     headers keep future client-IP-dependent ws code correct rather than fix a
     live misattribution.
     """
-    ws = re.search(r"location /api/v1/ws \{([^}]*)\}", NGINX_CONF.read_text())
+    ws = re.search(r"location /api/v1/ws \{([^}]*)\}", NGINX_CONF.read_text(encoding="utf-8"))
     assert ws, "no /api/v1/ws location in nginx.conf"
     for header in ("X-Forwarded-For", "X-Forwarded-Proto"):
         assert f"proxy_set_header {header}" in ws.group(1), (
@@ -455,7 +455,7 @@ def _nginx_block_body(kind: str, anchor: str) -> str:
     Non-greedy so it stops at the block's own closing brace; the geo/map
     blocks carry no nested braces. `anchor` is regex-safe.
     """
-    body = NGINX_CONF.read_text()
+    body = NGINX_CONF.read_text(encoding="utf-8")
     match = re.search(rf"{kind}\s+{anchor}\s*\{{(.*?)\}}", body, re.DOTALL)
     assert match, f"no {kind} {anchor} {{...}} block in nginx.conf"
     return match.group(1)
@@ -534,7 +534,7 @@ def test_nginx_geo_and_map_blocks_are_at_http_level():
     the guards above read the conf as plain text and would still pass, so an
     indented or misplaced edit goes unnoticed.
     """
-    lines = NGINX_CONF.read_text().splitlines()
+    lines = NGINX_CONF.read_text(encoding="utf-8").splitlines()
     server_line = next(i for i, ln in enumerate(lines) if ln.startswith("server {"))
     directives = ("geo $trusted_proxy", 'map "$trusted_proxy:$http_x_forwarded_proto"')
     for directive in directives:
@@ -549,7 +549,9 @@ def test_nginx_locations_forward_the_trusted_proto_variable():
     """Both proxied locations send X-Forwarded-Proto from the mapped
     variable, never the always-http $scheme."""
     for loc in (r"/api/", r"/api/v1/ws"):
-        match = re.search(rf"location {re.escape(loc)} \{{([^}}]*)\}}", NGINX_CONF.read_text())
+        match = re.search(
+            rf"location {re.escape(loc)} \{{([^}}]*)\}}", NGINX_CONF.read_text(encoding="utf-8")
+        )
         assert match, f"no {loc} location in nginx.conf"
         body = match.group(1)
         assert "proxy_set_header X-Forwarded-Proto $scheme" not in body, (
@@ -568,7 +570,7 @@ def test_nginx_trusted_proxy_set_is_not_everyone():
     assert "0.0.0.0/0" not in block and "::/0" not in block, (
         f"geo trusts every peer via a default route:\n{block}"
     )
-    pinned = re.search(r"subnet:\s*(\S+)", COMPOSE.read_text())
+    pinned = re.search(r"subnet:\s*(\S+)", COMPOSE.read_text(encoding="utf-8"))
     assert pinned, "no pinned subnet in docker-compose.prod.yml"
     pinned_net = ipaddress.ip_network(pinned.group(1).strip().strip('"'))
     cidrs = re.findall(r"(\d+\.\d+\.\d+\.\d+/\d+)", block)
@@ -953,7 +955,7 @@ def test_every_workflow_audit_publish_carries_a_source_event_id():
     pinned = {"publish_audit", "_create_notification"}
     missing = [
         node.lineno
-        for node in ast.walk(ast.parse(WORKFLOWS.read_text()))
+        for node in ast.walk(ast.parse(WORKFLOWS.read_text(encoding="utf-8")))
         if isinstance(node, ast.Call)
         and (
             (isinstance(node.func, ast.Name) and node.func.id in pinned)

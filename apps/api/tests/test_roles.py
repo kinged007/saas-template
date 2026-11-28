@@ -26,7 +26,7 @@ def _guarded_permissions() -> set[str]:
     found: set[str] = set()
     pattern = re.compile(r"require_(?:key_)?permission\((\w+)\)")
     for path in ROUTES_DIR.glob("*.py"):
-        for name in pattern.findall(path.read_text()):
+        for name in pattern.findall(path.read_text(encoding="utf-8")):
             value = getattr(perms, name, None)
             assert value is not None, f"{path.name}: unknown permission constant {name}"
             found.add(value)

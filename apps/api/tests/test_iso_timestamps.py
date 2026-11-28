@@ -87,7 +87,7 @@ def test_no_bare_isoformat_on_a_datetime_remains():
     matches = 0
     for path in sorted(SRC.rglob("*.py")):
         rel = path.relative_to(SRC).as_posix()
-        for node in ast.walk(ast.parse(path.read_text())):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if (
                 not isinstance(node, ast.Call)
                 or not isinstance(node.func, ast.Attribute)

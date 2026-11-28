@@ -136,7 +136,7 @@ def test_no_open_member_status_comparison_remains():
     offenders = [
         f"{path.relative_to(SRC_ROOT.parent)}:{lineno}"
         for path in sorted(SRC_ROOT.rglob("*.py"))
-        for lineno, line in enumerate(path.read_text().splitlines(), 1)
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
         if _OPEN_STATUS_COMPARISON.search(line) and not line.lstrip().startswith("#")
     ]
     assert offenders == [], f"member status compared against a bare literal at {offenders}"

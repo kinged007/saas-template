@@ -38,15 +38,15 @@ def _check_node(tmp_path, version=None):
         cwd=ROOT,
         env=env,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
     )
 
 
 def test_makefile_floor_matches_engines():
     """The Makefile constants must track apps/web/package.json engines, or the warning lies."""
-    engines = json.loads((ROOT / "apps/web/package.json").read_text())["engines"]["node"]
-    major, minor = engines.removeprefix(">=").split(".")
-    makefile = (ROOT / "Makefile").read_text()
+    package = json.loads((ROOT / "apps/web/package.json").read_text(encoding="utf-8"))
+    major, minor = package["engines"]["node"].removeprefix(">=").split(".")
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     assert f"WEB_NODE_MAJOR := {major}\n" in makefile
     assert f"WEB_NODE_MINOR := {minor}\n" in makefile
 
