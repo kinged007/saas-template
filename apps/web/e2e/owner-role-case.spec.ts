@@ -93,14 +93,16 @@ test.describe("owner role named in another case", () => {
     // The same viewer keeps full control over a non-owner row, so what is under
     // test is the owner name and not a page-wide lockout.
     await expect(adminRow.getByRole("combobox")).toBeVisible();
-    await expect(adminRow.getByRole("button", { name: /suspend/i })).toBeVisible();
-    await expect(adminRow.getByRole("button", { name: /delete/i })).toBeVisible();
+    // Moderation moved to the member's settings page: the table keeps Edit
+    // (via the editor link) and Remove only.
+    await expect(adminRow.getByRole("button", { name: /remove/i })).toBeVisible();
+    await expect(adminRow.getByRole("button", { name: /suspend/i })).toHaveCount(0);
 
-    // set_member_role, suspend_member and remove_member each refuse the owner
-    // with 409, so the row carries no combobox and no action button.
+    // set_member_role and remove_member each refuse the owner with 409, so the
+    // row carries no combobox and no action button.
     await expect(ownerRow.getByRole("combobox")).toHaveCount(0);
     await expect(ownerRow.getByRole("button", { name: /suspend/i })).toHaveCount(0);
-    await expect(ownerRow.getByRole("button", { name: /delete/i })).toHaveCount(0);
+    await expect(ownerRow.getByRole("button", { name: /remove/i })).toHaveCount(0);
   });
 
   test("an `Owner` viewer still gets the role picker", async ({ page }) => {

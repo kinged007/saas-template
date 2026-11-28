@@ -31,7 +31,6 @@ import { UserProfileDialog } from "@/components/UserProfileDialog";
 import { IDENTITY_QUERY_OPTIONS, useWorkspace } from "../contexts/WorkspaceContext";
 import { canResendInvitation, canRevokeInvitation, invitationStatus } from "./invitation-actions";
 import { resolveInviteRole } from "./invite-role";
-import { canReactivateMember, canSuspendMember } from "./member-actions";
 import { assignableRoles, rolePickerCapNotice } from "./role-picker-cap";
 import { isWorkspaceAdmin } from "./settings/workspace/WorkspaceSettingsLayout";
 import { isManagerRoleName, isOwnerRoleName } from "./role-name";
@@ -147,19 +146,6 @@ export function MembersPage() {
   // it stays null until the role page is short.
   const memberRoleCapId = canManageRoles && roleCapNotice ? MEMBERS_ROLE_CAP_ID : undefined;
   const inviteRoleCapId = canInvite?.can && roleCapNotice ? INVITE_ROLE_CAP_ID : undefined;
-  const { mutate: memberAction } = useCustomMutation();
-
-  const suspend = (m: Member, suspendIt: boolean) => {
-    memberAction(
-      {
-        url: `members/${m.membership_id}/${suspendIt ? "suspend" : "reactivate"}`,
-        method: "post",
-        values: {},
-        successNotification: { message: suspendIt ? "Member suspended" : "Member reactivated", type: "success" },
-      },
-      { onSuccess: () => invalidate({ resource: "members", invalidates: ["list"] }) },
-    );
-  };
 
   const roleName = (roleId: string) => roleOptions.find((r) => r.id === roleId)?.name;
   // Resolved against the picker's own list: an id the picker no longer offers
@@ -270,7 +256,9 @@ export function MembersPage() {
                   <div className="flex justify-end gap-1">
                     {/* The editor targets other members: your own profile lives
                         in Settings → Profile, where the delegated session and
-                        password routes would refuse to act on you. */}
+                        password routes would refuse to act on you. Moderation
+                        (suspend, MFA reset, removal) lives on the member's
+                        settings page behind a confirmation. */}
                     {canEditProfiles?.can && m.id !== identity?.id && (
                       <Button
                         variant="ghost"
@@ -280,22 +268,15 @@ export function MembersPage() {
                         Edit
                       </Button>
                     )}
-                    {canManageRoles && !isOwnerRoleName(m.role) && canSuspendMember(m) && (
-                      <Button variant="ghost" size="sm" onClick={() => suspend(m, true)}>
-                        Suspend
-                      </Button>
-                    )}
-                    {canManageRoles && canReactivateMember(m) && (
-                      <Button variant="ghost" size="sm" onClick={() => suspend(m, false)}>
-                        Reactivate
-                      </Button>
-                    )}
                     {canDelete?.can && !isOwnerRoleName(m.role) && (
                       <DeleteButton
                         resource="members"
                         recordItemId={m.membership_id}
                         variant="ghost"
                         size="sm"
+                        label="Remove"
+                        confirmTitle={`Remove ${name} from this workspace? They lose access immediately.`}
+                        confirmOkLabel="Remove"
                       />
                     )}
                   </div>

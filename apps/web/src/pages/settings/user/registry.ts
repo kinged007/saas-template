@@ -1,9 +1,10 @@
-import { Bell, ShieldCheck, User } from "lucide-react";
+import { Bell, ShieldCheck, User, UserCog } from "lucide-react";
 
 import { createSettingsRegistry } from "../types";
 import { GeneralSection } from "../profile/sections/GeneralSection";
 import { NotificationsSection } from "../profile/sections/NotificationsSection";
 import { SecuritySection } from "./sections/SecuritySection";
+import { MembershipSection } from "./sections/MembershipSection";
 
 /**
  * Member settings registry — the tabs available when a caller holding
@@ -21,6 +22,14 @@ export const userSettings = createSettingsRegistry([
   { key: "general", label: "General", icon: User, component: GeneralSection, order: 10 },
   { key: "notifications", label: "Notifications", icon: Bell, component: NotificationsSection, order: 20 },
   { key: "security", label: "Security", icon: ShieldCheck, component: SecuritySection, order: 30 },
+  {
+    key: "membership",
+    label: "Membership",
+    icon: UserCog,
+    component: MembershipSection,
+    order: 40,
+    permission: "member:update",
+  },
 ]);
 
 export type UserSettingsKey = (typeof userSettings.sections)[number]["key"];
