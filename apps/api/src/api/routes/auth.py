@@ -34,6 +34,8 @@ from src.schemas.api import (
     RegisterRequest,
     ResetPasswordRequest,
     SessionRead,
+    SignInMethodRequest,
+    SignInMethodResponse,
     TokenResponse,
     TwoFactorDisable,
     TwoFactorLogin,
@@ -136,6 +138,7 @@ async def auth_config() -> dict:
     return {
         "registration_enabled": settings.auth_allow_registration,
         "password_enabled": settings.auth_password_enabled,
+        "mfa_required": settings.mfa_required,
         "oauth_enabled": bool(settings.oauth_provider_list),
         "providers": [
             {
@@ -316,6 +319,25 @@ async def resend_verification(
     get_auth_limiter().fail(key)
     get_mail_limiter().fail(mail_key)
     return {"detail": "if unverified, a verification link was sent"}
+
+
+@router.post("/sign-in/method", response_model=SignInMethodResponse)
+async def sign_in_method(body: SignInMethodRequest, request: Request) -> SignInMethodResponse:
+    """The provider an email signs in with, from its domain and SIGN_IN_DOMAINS only.
+
+    The users table is never read, so the answer cannot tell whether an
+    account exists. Each lookup spends one unit of the auth-limiter budget
+    keyed on the IP alone (like registration mail, the caller owns the
+    address they ask about).
+    """
+    key = f"sign-in-method:{_client_ip(request) or 'unknown'}"
+    limiter = get_auth_limiter()
+    limiter.check(key)
+    limiter.fail(key)
+    domain = body.email.rsplit("@", 1)[1].lower()
+    provider = settings.sign_in_domain_map.get(domain)
+    available = {p.get("id") for p in settings.oauth_provider_list}
+    return SignInMethodResponse(provider=provider if provider in available else None)
 
 
 @router.post("/login", response_model=TokenResponse)

@@ -27,7 +27,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { EmptyRow, formatDate } from "@/components/ui";
+import { useAuthConfig } from "@/components/AuthConfig";
 import { errorMessage } from "@/utils/errorMessage";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { MFA_NOTICE_KEY, MFA_REQUIRED_MESSAGE } from "@/utils/mfaRequired";
 
 export type AuthSession = {
   id: string;
@@ -78,6 +81,8 @@ function SessionRevokeButton({
 export function SecuritySection() {
   const sessions = useCustom<AuthSession[]>({ url: "auth/sessions", method: "get" });
   const status = useCustom<{ enabled: boolean }>({ url: "auth/2fa/status", method: "get" });
+  const config = useAuthConfig();
+  const { workspace } = useWorkspace();
   const { mutateAsync: changePasswordMutate, mutation: changePasswordMutation } = useCustomMutation();
   const { mutateAsync: setupMutate, mutation: setupMutation } = useCustomMutation();
   const { mutateAsync: enableMutate, mutation: enableMutation } = useCustomMutation();
@@ -93,6 +98,22 @@ export function SecuritySection() {
 
   const list: AuthSession[] = Array.isArray(sessions.result?.data) ? (sessions.result.data as AuthSession[]) : [];
   const enabled = (status.result?.data as { enabled?: boolean } | undefined)?.enabled ?? false;
+  // The MFA gate redirects here with the reason stashed in sessionStorage
+  // (the redirect is a hard navigation, so the toast cannot be shown from
+  // the failing page). Consume it once, on arrival.
+  useEffect(() => {
+    let flagged = false;
+    try {
+      flagged = window.sessionStorage.getItem(MFA_NOTICE_KEY) === "1";
+      if (flagged) window.sessionStorage.removeItem(MFA_NOTICE_KEY);
+    } catch {
+      flagged = false;
+    }
+    if (flagged) toast.error(MFA_REQUIRED_MESSAGE);
+  }, []);
+  // The deployment or the active workspace can require MFA; either one blocks
+  // workspace access for accounts without an enrolled authenticator.
+  const mfaRequired = config?.mfa_required === true || workspace?.require_mfa === true;
 
   const [setupUri, setSetupUri] = useState<string | null>(null);
   const [setupSecret, setSetupSecret] = useState<string | null>(null);
@@ -246,6 +267,15 @@ export function SecuritySection() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          {mfaRequired && !enabled && (
+            <p className="rounded-md border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-sm">
+              Two-factor authentication is required
+              {config?.mfa_required === true
+                ? " for this deployment"
+                : ` for ${workspace?.name ?? "your workspace"}`}
+              {" "}— set up your authenticator to keep workspace access.
+            </p>
+          )}
           {!enabled && !setupUri && (
             <div>
               <Button variant="outline" onClick={startSetup} disabled={setupMutation.isPending}>

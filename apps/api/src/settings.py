@@ -104,6 +104,32 @@ class Settings(BaseSettings):
     # Auth methods: registration kill-switch and password kill-switch (SSO-only mode).
     auth_allow_registration: bool = True
     auth_password_enabled: bool = True
+    # Email domains whose users sign in at an OAuth provider, as
+    # comma-separated `domain:provider-id` pairs
+    # (`contoso.com:microsoft,acme.com:okta`). Sign-in looks the domain up
+    # and redirects to that provider instead of asking for a password. The
+    # users table is never read, so the answer cannot tell whether an
+    # account exists. Provider ids must exist in OAUTH_PROVIDERS.
+    sign_in_domains: str = ""
+
+    @field_validator("sign_in_domains")
+    @classmethod
+    def _parse_sign_in_domains(cls, value: str) -> str:
+        for part in value.split(","):
+            if not part.strip():
+                continue
+            domain, _, provider = part.strip().partition(":")
+            if not domain.strip() or "@" in domain or not provider.strip():
+                raise ValueError(
+                    f"SIGN_IN_DOMAINS entry {part.strip()!r} is not domain:provider-id"
+                )
+        return value
+
+    # Global MFA requirement: when true, every workspace-scoped request needs
+    # the caller to have TOTP enrolled, whatever the workspace's own
+    # mfa_required flag says. Enrollment itself stays reachable: login and the
+    # /auth/2fa/* setup routes are not workspace-scoped and are never gated.
+    mfa_required: bool = False
     # Generic OIDC/OAuth2 providers as a JSON list. Each entry:
     # {id, display_name?, discovery_url?, issuer?, authorize_url?, token_url?,
     #  userinfo_url?, jwks_uri?, client_id, client_secret, scopes?}.
@@ -244,6 +270,17 @@ class Settings(BaseSettings):
                 f"{re.escape(host).replace(re.escape('*'), '[^/]+')}(?::[0-9]+)?"
             )
         return "|".join(patterns) or None
+
+    @property
+    def sign_in_domain_map(self) -> dict[str, str]:
+        """Lower-cased domain → provider id from SIGN_IN_DOMAINS."""
+        mapping: dict[str, str] = {}
+        for part in self.sign_in_domains.split(","):
+            if not part.strip():
+                continue
+            domain, _, provider = part.strip().partition(":")
+            mapping[domain.strip().lower()] = provider.strip()
+        return mapping
 
     @property
     def oauth_provider_list(self) -> list[dict]:

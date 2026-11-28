@@ -16,6 +16,7 @@ const returnTo = (page: Page) => page.evaluate(() => window.localStorage.getItem
 
 const signIn = async (page: Page) => {
   await page.getByLabel("Email").fill("e2e@example.com");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByLabel("Password").fill("Passw0rd!23");
   await page.getByRole("button", { name: "Sign in" }).click();
 };

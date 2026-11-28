@@ -84,6 +84,16 @@ class LoginRequest(BaseModel):
     use_cookies: bool = False
 
 
+class SignInMethodRequest(BaseModel):
+    email: EmailStr
+
+
+class SignInMethodResponse(BaseModel):
+    """The provider an email signs in with, if its domain maps to one."""
+
+    provider: str | None = None
+
+
 class RegisterRequest(BaseModel):
     email: EmailStr
     first_name: str | None = Field(default=None, min_length=1, max_length=100)
@@ -192,6 +202,8 @@ class WorkspaceUpdate(BaseModel):
     # StrictBool so a string/int is rejected with 422 rather than coerced.
     # None = leave the flag alone; the flag itself is default-on.
     onboarding_enabled: StrictBool | None = None
+    # Same strictness; None = leave alone. Default-off, unlike onboarding.
+    require_mfa: StrictBool | None = None
 
 
 class InvitationCreate(BaseModel):

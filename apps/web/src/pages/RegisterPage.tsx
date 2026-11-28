@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SsoButtons, fetchAuthConfig } from "@/components/AuthConfig";
+import { SsoButtons, fetchAuthConfig, type AuthConfig } from "@/components/AuthConfig";
 
 export function RegisterPage() {
   const { mutate: register, isPending } = useRegister();
@@ -15,7 +15,7 @@ export function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [config, setConfig] = useState<{ registration_enabled: boolean; password_enabled: boolean; providers: Array<{ id: string; display_name: string }> } | null>(null);
+  const [config, setConfig] = useState<AuthConfig | null>(null);
   useEffect(() => {
     fetchAuthConfig().then(setConfig);
   }, []);
@@ -31,7 +31,7 @@ export function RegisterPage() {
   };
 
   return (
-    <div className="bg-background flex min-h-screen items-center justify-center p-4">
+    <div className="bg-gradient-to-br from-primary/10 via-background to-muted flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-2xl">Create account</CardTitle>

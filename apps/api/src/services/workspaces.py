@@ -290,6 +290,7 @@ class WorkspaceService:
         name: str | None = None,
         description: str | None = None,
         onboarding_enabled: bool | None = None,
+        require_mfa: bool | None = None,
         # Required: every write names its actor for the audit trail; a system
         # caller passes an explicit actor instead (see create_custom_role).
         actor: User,
@@ -324,6 +325,9 @@ class WorkspaceService:
                 if not onboarding_enabled:
                     flags[ONBOARDING_ENABLED_FLAG] = False
                 workspace.flags = flags
+        if require_mfa is not None and require_mfa != workspace.require_mfa:
+            changes["require_mfa"] = {"from": workspace.require_mfa, "to": require_mfa}
+            workspace.require_mfa = require_mfa
         await self._session.commit()
         if changes:
             await publish_audit(
@@ -700,6 +704,48 @@ class WorkspaceService:
             action="member.suspended",
             actor_user_id=actor.id,
             details={"user_id": member.user_id},
+            ip_address=ip_address,
+        )
+        return member
+
+    async def reset_member_mfa(
+        self,
+        workspace_id: str,
+        member_id: str,
+        *,
+        actor: User,
+        ip_address: str | None = None,
+    ) -> WorkspaceMember:
+        """Clear a member's TOTP enrollment (account recovery).
+
+        Manager-only (owner/admin), audited as mfa.reset. Idempotent:
+        resetting a member with nothing enrolled still succeeds. Self-reset is
+        refused — use POST /auth/2fa/disable, which re-checks the password.
+        """
+        from src.models.two_factor import UserTotpCredential
+
+        await self._require_manager(workspace_id, actor)
+        member = await self._session.get(WorkspaceMember, member_id)
+        if member is None or member.workspace_id != workspace_id:
+            raise WorkspaceError("member not found in workspace")
+        if member.user_id == actor.id:
+            raise WorkspaceConflict("cannot reset your own MFA, disable it instead")
+        target = await self._session.get(User, member.user_id)
+        if target is None:
+            raise WorkspaceError("member not found in workspace")
+        cred = await self._session.get(UserTotpCredential, member.user_id)
+        if cred is not None:
+            await self._session.delete(cred)
+        target.totp_enabled = False
+        await self._session.commit()
+        await publish_audit(
+            self._bus,
+            workspace_id=workspace_id,
+            resource_type="member",
+            resource_id=member.id,
+            action="mfa.reset",
+            actor_user_id=actor.id,
+            details={"reset_by_user_id": actor.id, "target_user_id": member.user_id},
             ip_address=ip_address,
         )
         return member

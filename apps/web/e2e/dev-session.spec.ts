@@ -17,6 +17,7 @@ test("a session survives the refresh call and a hard navigation", async ({ page 
 
   await page.goto("/login");
   await page.getByLabel("Email").fill(EMAIL);
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByLabel("Password").fill(PASSWORD);
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page).not.toHaveURL(/\/login/);
