@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -325,8 +326,6 @@ async def export_my_data(
     bundle = await service.export_bundle(user.id)
     # Return JSON with attachment disposition
     # Use Response to set headers
-    import json
-
     body = json.dumps(bundle)
     safe_ts = bundle["exported_at"].replace(":", "-").replace('"', "")
     headers = {"Content-Disposition": f'attachment; filename="export-{user.id}-{safe_ts}.json"'}
@@ -343,8 +342,6 @@ async def export_user_data(
     service = ProfileService(db, container.bus)
     uuid_or_404(user_id, "user")
     bundle = await service.export_bundle(user_id)
-    import json
-
     body = json.dumps(bundle)
     safe_ts = bundle["exported_at"].replace(":", "-").replace('"', "")
     headers = {"Content-Disposition": f'attachment; filename="export-{user_id}-{safe_ts}.json"'}
