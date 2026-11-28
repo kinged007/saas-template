@@ -66,13 +66,15 @@ async def _add_member(client, owner_tokens, ws, email: str, role_name: str):
         json={"email": email, "role_id": role["id"]},
         headers=ws_headers(owner_tokens, ws["id"]),
     )
+    assert resp.status_code == 201, resp.text
     invite = resp.json()
     user = await register_user(client, email)
-    await client.post(
+    resp = await client.post(
         "/api/v1/invitations/accept",
         params={"token": invite["token"]},
         headers=auth_headers(user),
     )
+    assert resp.status_code == 200, resp.text
     return user
 
 
