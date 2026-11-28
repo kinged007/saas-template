@@ -14,16 +14,21 @@ import pytest
 from src.core.dates import iso_or_none
 from src.db.session import SessionFactory
 from src.events.subjects import Subjects
-from src.services.api_keys import ApiKeyService
+from src.services.api_keys import ApiKeyForbidden, ApiKeyService
 from src.services.auth import AuthService
-from src.services.workspaces import WorkspaceService
-from tests.bus_doubles import RecordingBus
+from src.services.workspaces import WorkspaceForbidden, WorkspaceService
+from tests.bus_doubles import CommitProbeBus, RecordingBus
 from tests.conftest import expire_invitation
 
 
 @pytest.fixture
 async def bus():
     return RecordingBus()
+
+
+@pytest.fixture
+async def probe_bus():
+    return CommitProbeBus()
 
 
 async def _register(bus, email, display_name, *, ip_address=None):
@@ -268,6 +273,38 @@ async def test_revoke_invitation_emits_audit(bus, owner):
     assert bus.audit()[0][0]["actor_user_id"] == owner.id
 
 
+async def test_resend_invitation_rejects_non_member_actor(bus, owner):
+    """The route maps this to 403; the dependency shadows it for HTTP callers."""
+    outsider = await _register(bus, "outsider@example.com", "Outsider")
+    workspace = await _create_workspace(bus, owner.id, slug="acme-outsider")
+    invite = await _invite_member(bus, owner.id, workspace, "stranger@example.com")
+    async with SessionFactory() as session:
+        with pytest.raises(WorkspaceForbidden):
+            await WorkspaceService(session, bus).resend_invitation(
+                workspace.id, invite.id, actor=outsider
+            )
+
+
+async def test_create_invitation_commits_before_publishing(probe_bus, owner):
+    """Publishing before committing would hand the handler an invisible row."""
+    workspace = await _create_workspace(probe_bus, owner.id, slug="acme-probe-c")
+    invite = await _invite_member(probe_bus, owner.id, workspace, "stranger@example.com")
+    assert probe_bus.committed_token_at_publish == [invite.token]
+
+
+async def test_resend_invitation_commits_before_publishing(probe_bus, owner):
+    """The committed snapshot must already show the rotated token."""
+    workspace = await _create_workspace(probe_bus, owner.id, slug="acme-probe-r")
+    invite = await _invite_member(probe_bus, owner.id, workspace, "stranger@example.com")
+    async with SessionFactory() as session:
+        service = WorkspaceService(session, probe_bus)
+        await expire_invitation(invite.id)
+        probe_bus.committed_token_at_publish.clear()
+        resent = await service.resend_invitation(workspace.id, invite.id, actor=owner)
+    assert resent.token != invite.token
+    assert probe_bus.committed_token_at_publish == [resent.token]
+
+
 # ------------------------------------------------------------------ members
 
 
@@ -363,6 +400,27 @@ async def test_member_removed_emits_event_and_audit(bus, owner):
 
 
 # ----------------------------------------------------------------- api keys
+
+
+async def test_suspended_member_cannot_mint_api_key(bus, owner):
+    """`active_only` guard on minting — unreachable over HTTP, so call the service."""
+    member = await _register(bus, "suspended@example.com", "Suspended")
+    workspace = await _create_workspace(bus, owner.id, slug="acme-suspend")
+    invite = await _invite_member(bus, owner.id, workspace, "suspended@example.com")
+    await _accept_invitation(bus, invite.token, member)
+    async with SessionFactory() as session:
+        service = WorkspaceService(session, bus)
+        membership, _ = await service.get_membership(workspace.id, member.id)
+        await service.suspend_member(workspace.id, membership.id, actor=owner)
+
+    async with SessionFactory() as session:
+        with pytest.raises(ApiKeyForbidden):
+            await ApiKeyService(session, bus).create_api_key(
+                workspace_id=workspace.id,
+                name="dead-key",
+                permissions=["workspace:read"],
+                actor=member,
+            )
 
 
 async def test_api_key_create_and_revoke_emit_events_and_audit(bus, owner):

@@ -264,6 +264,55 @@ async def test_resend_rejects_revoked_invitation(app_client):
     assert next(r for r in rows if r["id"] == invite.json()["id"])["status"] == "revoked"
 
 
+async def test_resend_by_api_key_then_suspended_owner_is_rejected(app_client):
+    """Resend is session-only: an admin's key is rejected before the service runs.
+
+    Main made the route session-only (`require_session_user`), so a key never
+    reaches the service layer — suspended or not. The suspend half stays as
+    the regression half of the original key-carries-creator-access coverage.
+    """
+    client = app_client
+    owner = await register_user(client, "own9@example.com")
+    ws = await create_workspace(client, owner)
+    owner_headers = ws_headers(owner, ws["id"])
+    invite = await client.post(
+        "/api/v1/invitations",
+        json={
+            "email": "stray@example.com",
+            "role_id": await _role_id(client, owner_headers, "viewer"),
+        },
+        headers=owner_headers,
+    )
+    assert invite.status_code == 201, invite.text
+    invite_id = invite.json()["id"]
+
+    # `editor`/`viewer` lack member:create, so the key needs an `admin` owner.
+    admin_tokens = await _invite_and_join(client, owner, ws, "adm9@example.com", "admin")
+    key = await client.post(
+        "/api/v1/api-keys",
+        json={"name": "admin-key", "permissions": ["member:create"]},
+        headers=ws_headers(admin_tokens, ws["id"]),
+    )
+    assert key.status_code == 201, key.text
+    key_headers = {"Authorization": f"Bearer {key.json()['key']}", "X-Workspace-ID": ws["id"]}
+
+    # Session-only gate rejects the key even for a resendable (expired) invite.
+    await expire_invitation(invite_id)
+    assert (
+        await client.post(f"/api/v1/invitations/{invite_id}/resend", headers=key_headers)
+    ).status_code == 403
+
+    admin_row = await _member_by_email(client, owner_headers, "adm9@example.com")
+    suspended = await client.post(
+        f"/api/v1/members/{admin_row['membership_id']}/suspend", headers=owner_headers
+    )
+    assert suspended.status_code == 200, suspended.text
+
+    assert (
+        await client.post(f"/api/v1/invitations/{invite_id}/resend", headers=key_headers)
+    ).status_code == 403
+
+
 async def test_member_status_constraint_rejects_unknown_value(app_client):
     client = app_client
     owner = await register_user(client, "own8@example.com")
