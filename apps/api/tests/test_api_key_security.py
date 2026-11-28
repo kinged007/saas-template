@@ -789,8 +789,9 @@ async def test_key_reaches_only_its_creators_notifications(app_client):
 
     # the list is filtered per user, not per workspace. Alice also has the
     # notifications her own membership produced, so the assertion is about
-    # whose rows these are, not about how many there are.
-    listed = await client.get("/api/v1/notifications", headers=kh)
+    # whose rows these are, not about how many there are. The explicit `limit`
+    # keeps that out of reach of `parse_query`'s default page size.
+    listed = await client.get("/api/v1/notifications", headers=kh, params={"limit": 100})
     assert listed.status_code == 200, listed.text
     ids = {n["id"] for n in listed.json()}
     assert mine in ids
@@ -803,6 +804,9 @@ async def test_key_reaches_only_its_creators_notifications(app_client):
     ]:
         resp = await client.request(method, url, json=body, headers=kh)
         assert resp.status_code == 404, (method, url, resp.status_code, resp.text)
+        # the two verbs answer through different code paths; the message is the
+        # contract, and it must not say "row missing" for a row that is there
+        assert resp.json()["detail"] == "notification not found", (method, url, resp.text)
 
     # The refusals left Bob's notification untouched, and Bob's own session
     # still reaches it — so the 404s above are the user predicate, not a row
