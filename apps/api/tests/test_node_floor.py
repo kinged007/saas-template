@@ -1,4 +1,9 @@
-"""`make check-node` must warn below the Node floor apps/web declares in engines."""
+"""`make check-node` must warn below the Node floor apps/web declares in engines.
+
+Skip shape for missing optional tooling: a `requires_make` marker, so a make-less
+runner names the tests that shell out and still collects the file-only test below.
+The convention is stated once in `conftest.py`; `allow_module_level=True` there instead
+collapsed the whole module into one file-level skip, hiding that test (issue #1238)."""
 
 import json
 import os
@@ -9,7 +14,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-MAKE = shutil.which("make") or pytest.skip("make not installed", allow_module_level=True)
+MAKE = shutil.which("make")
+requires_make = pytest.mark.skipif(MAKE is None, reason="make not installed")
 
 
 @pytest.fixture(autouse=True)
@@ -20,6 +26,7 @@ async def _clean_db():
 
 def _check_node(tmp_path, version=None):
     """Run `make check-node` with a `node` shim reporting `version` (None: no node at all)."""
+    assert MAKE is not None, "requires_make skips every caller when make is absent"
     bindir = tmp_path / "bin"
     bindir.mkdir()
     if version is None:
@@ -52,6 +59,7 @@ def test_makefile_floor_matches_engines():
 
 
 @pytest.mark.parametrize("version", ["18.20.4", "20.11.0", "22.17.9"])
+@requires_make
 def test_warns_below_floor(tmp_path, version):
     out = _check_node(tmp_path, version)
     assert out.returncode == 0, out.stderr
@@ -60,6 +68,7 @@ def test_warns_below_floor(tmp_path, version):
 
 
 @pytest.mark.parametrize("version", ["22.18.0", "24.19.0"])
+@requires_make
 def test_quiet_at_or_above_floor(tmp_path, version):
     out = _check_node(tmp_path, version)
     assert out.returncode == 0, out.stderr
@@ -67,6 +76,7 @@ def test_quiet_at_or_above_floor(tmp_path, version):
 
 
 @pytest.mark.parametrize("version", ["weird", "22.x"])
+@requires_make
 def test_unparseable_version_is_silent(tmp_path, version):
     out = _check_node(tmp_path, version)
     assert out.returncode == 0, out.stderr
@@ -74,6 +84,7 @@ def test_unparseable_version_is_silent(tmp_path, version):
     assert "integer" not in out.stderr
 
 
+@requires_make
 def test_silent_without_node(tmp_path):
     out = _check_node(tmp_path)
     assert out.returncode == 0, out.stderr
