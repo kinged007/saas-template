@@ -386,8 +386,8 @@ async def test_oauth_callback_joins_before_issuing_tokens(app_client, oauth_on, 
 
     async def rec_join(db, container, user):
         order.append("join")
-        # A real failed join re-reads the user in another session, so mimic that
-        # here: a distinct instance makes the identity assertion below bite.
+        # A real failed join re-reads the user, which yields a different
+        # instance; a separate session makes that identity difference explicit.
         async with SessionFactory() as other:
             handed.append(await AuthService(other).get_user(user.id))
         return handed[-1]
@@ -440,6 +440,30 @@ async def test_oauth_2fa_user_is_joined(app_client, oauth_on, monkeypatch):
     )
     assert done.status_code == 200, done.text
     me = await app_client.get("/api/v1/auth/me", headers=auth_headers(done.json()))
+    assert [w["id"] for w in me.json()["workspaces"]] == [ws_id]
+
+
+async def test_oauth_user_joins_single_workspace(app_client, oauth_on, monkeypatch):
+    # The non-2FA branch must land in the single workspace too, not just the 2FA
+    # one: the ordering test above stubs the join out, so nothing else covers the
+    # plain path end to end.
+    monkeypatch.setattr(settings, "single_workspace", True)
+    owner = await register_user(app_client, "owner@example.com")
+    ws_id = (await app_client.get("/api/v1/auth/me", headers=auth_headers(owner))).json()[
+        "workspaces"
+    ][0]["id"]
+    # Register outside the single-workspace window so only the OAuth callback can join.
+    monkeypatch.setattr(settings, "single_workspace", False)
+    await register_user(app_client, "sso@example.com")
+    monkeypatch.setattr(settings, "single_workspace", True)
+
+    _mock_oauth(monkeypatch, email="sso@example.com")
+    _, resp = await _callback(app_client, monkeypatch)
+    assert resp.status_code == 302, resp.text
+    tokens = await app_client.post(
+        "/api/v1/auth/oauth/token", json={"code": resp.headers["location"].split("code=")[1]}
+    )
+    me = await app_client.get("/api/v1/auth/me", headers=auth_headers(tokens.json()))
     assert [w["id"] for w in me.json()["workspaces"]] == [ws_id]
 
 
