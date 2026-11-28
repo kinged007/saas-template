@@ -77,9 +77,12 @@ export type MenuItem = {
 };
 
 /**
- * Sidebar groups, rendered in `position` order with a separator between the
- * two sides. Omit `title` for an unlabelled group. Adding a group is a data
- * change only; `SidebarNav` does not need to know about it.
+ * Sidebar groups, rendered grouped by `position`: every `top` group in
+ * declaration order, then every `bottom` group, with a separator between the
+ * two sides. Each `id` must be unique — it is the group's React key, so a
+ * duplicate surfaces only as a dev-mode React warning. Omit `title` for an
+ * unlabelled group. Adding a group is a data change only; `SidebarNav` does
+ * not need to know about it.
  */
 const SIDEBAR_GROUPS: {
   id: string;
