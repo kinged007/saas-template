@@ -97,9 +97,12 @@ async def _audit_email_failure(
     """Log and audit one notification email that was not delivered.
 
     `reason` is `no_recipient`, `no_email` or `send_failed`. Published after
-    the attempt, so a failing publish nacks the message and the handler runs
-    again — the notification row is then reused (see `_create_notification`),
-    so this still files one audit row for the source event.
+    the attempt, so the audit entry records the send, not the intent. Retry
+    semantics differ per driver: only the NATS driver nacks on a failed
+    publish and redelivers — the redelivered run then reuses the notification
+    (see `_create_notification`). On the default in-process driver there is
+    no ack or redelivery: `_consume` logs the exception and moves on, so the
+    failure record is lost with it.
     """
     logger.error(
         "notification email failed for %s (notification %s, reason=%s)",
