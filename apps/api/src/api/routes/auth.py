@@ -111,6 +111,16 @@ async def _maybe_join_single_workspace(db: AsyncSession, container, user) -> Non
 async def _join_single_workspace_best_effort(db: AsyncSession, container, user) -> User:
     """Join the single workspace; on failure log, roll back, return a usable user.
 
+    Join-before-2FA is the deliberate invariant (#936): login and the SSO
+    callback run this before the TOTP branch, so an enrolled user holds a
+    membership row while still owing the challenge. That row grants nothing —
+    no token is issued before the challenge clears, and workspace routes 403
+    without a session — and joining after would reintroduce #806 (2FA users
+    memberless until their first refresh). The bootstrap-as-owner side effect
+    is accepted: the row is inert without a session, the join is idempotent,
+    and existing roles are preserved. POST /auth/refresh needs no decision:
+    a valid refresh token proves full authentication already happened.
+
     A failed join does not fail authentication: the caller gets a valid session
     with no membership, and every workspace-scoped route still 403s without one.
     The rollback expires every loaded instance, so the user is re-read instead
@@ -351,6 +361,7 @@ async def login(
     # so reading attributes in the handler would lazy-load.
     user_id = user.id
     try:
+        # Join runs before the TOTP branch by design; see the helper docstring (#936).
         # The only HTTPException in here is the helper's account-gone guard, so
         # charging the limiter for it is always a 401 charge, nothing else.
         # Below the reset because this key is ip:email and stays reusable, so a
